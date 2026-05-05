@@ -353,6 +353,17 @@ impl JsonSchemaGenerator {
                 field_obj.insert("x-is-datetime".to_string(), Value::Bool(true));
             }
 
+            // Add is_bytes flag to metadata so codegen can emit
+            // `Uint8Array` instead of `string` for the runtime type. The
+            // base JSON-schema `type` stays `string` (with
+            // contentEncoding: base64) for spec consumers; this flag is
+            // the sp00ky-runtime extension.
+            if matches!(field_def.field_type, FieldType::Bytes)
+                || Self::is_field_bytes(&field_def.field_type)
+            {
+                field_obj.insert("x-is-bytes".to_string(), Value::Bool(true));
+            }
+
             // Add annotation metadata (e.g., x-crdt from -- @crdt text)
             for ann in &field_def.annotations {
                 let key = format!("x-{}", ann.name);
@@ -436,6 +447,16 @@ impl JsonSchemaGenerator {
                 "type": "string",
                 "description": "ISO 8601 duration"
             }),
+            FieldType::Bytes => json!({
+                "type": "string",
+                "contentEncoding": "base64",
+                "description": "Binary blob (transported as base64 in JSON)"
+            }),
+            FieldType::Object => json!({
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Free-form object (FLEXIBLE on the SurrealDB side)"
+            }),
             FieldType::Array(inner) => {
                 let items = self.generate_field_schema(inner);
                 json!({
@@ -482,6 +503,15 @@ impl JsonSchemaGenerator {
             FieldType::Datetime => true,
             FieldType::Option(inner) => Self::is_field_datetime(inner),
             FieldType::Array(inner) => Self::is_field_datetime(inner),
+            _ => false,
+        }
+    }
+
+    fn is_field_bytes(field_type: &FieldType) -> bool {
+        match field_type {
+            FieldType::Bytes => true,
+            FieldType::Option(inner) => Self::is_field_bytes(inner),
+            FieldType::Array(inner) => Self::is_field_bytes(inner),
             _ => false,
         }
     }

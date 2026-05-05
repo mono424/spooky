@@ -104,6 +104,7 @@ impl TestHarness {
             scheduler_url: None,
             start_time: self.start_time,
             crdt_cache: Arc::clone(&self.crdt_cache),
+            view_metrics: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         };
         create_app(state)
     }

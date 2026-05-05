@@ -3,9 +3,11 @@ import { useNavigate } from '@solidjs/router';
 import { useAuth } from '../lib/auth';
 import { Uuid, useDb } from '@spooky-sync/client-solid';
 import { RecordId } from 'surrealdb';
+import { CrdtField } from '@spooky-sync/core';
 import type { schema } from '../schema.gen';
 import { createHotkey } from '../lib/keyboard';
 import { Tooltip } from './Tooltip';
+import { CollaborativeEditor } from './CollaborativeEditor';
 
 interface CreateThreadDialogProps {
   isOpen: boolean;
@@ -17,13 +19,33 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
   const navigate = useNavigate();
   const auth = useAuth();
   const [title, setTitle] = createSignal('');
-  const [content, setContent] = createSignal('');
+  const [contentText, setContentText] = createSignal('');
   const [error, setError] = createSignal('');
   const [isLoading, setIsLoading] = createSignal(false);
+  // Fresh CRDT-backed doc for `content` per dialog open. The LoroDoc
+  // accumulates ProseMirror state via LoroSyncPlugin; on submit we
+  // snapshot it and hand the bytes straight to `db.create`. `title` is a
+  // plain `TYPE string` column (no `@crdt`) so it ships as the typed
+  // text directly — no LoroDoc ceremony.
+  const [contentField, setContentField] = createSignal<CrdtField | null>(null);
+
+  createEffect(() => {
+    if (props.isOpen) {
+      // `content` is `@crdt @cursor` → cursors=true, on-disk shape is
+      // `{ state, cursors }` — matched by `extractSnapshot` on the
+      // receiving end.
+      setContentField(new CrdtField('content', true));
+      setTitle('');
+      setContentText('');
+      setError('');
+    } else {
+      setContentField(null);
+    }
+  });
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
-    if (!title().trim() || !content().trim() || isLoading()) return;
+    if (!title().trim() || !contentText().trim() || isLoading()) return;
 
     setError('');
     setIsLoading(true);
@@ -34,11 +56,16 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
         throw new Error('You must be logged in to create a thread');
       }
 
+      const cField = contentField();
+      if (!cField) throw new Error('Editor not ready');
+
       const genId = Uuid.v4().toString().replace(/-/g, '');
       const threadId = `thread:${genId}`;
       await db.create(threadId, {
         title: title().trim(),
-        content: content().trim(),
+        // `content` is `@crdt @cursor` — wrap in `{ state, cursors }`. No
+        // collaborators yet during a draft, so we set just `state`.
+        content: { state: cField.exportSnapshot() },
         author: new RecordId('user', user.id.toString().split(':')[1]),
         active: true,
         published: false,
@@ -56,7 +83,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
 
   const handleClose = () => {
     setTitle('');
-    setContent('');
+    setContentText('');
     setError('');
     props.onClose();
   };
@@ -77,7 +104,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
   const handleKeyDown = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
-      if (title().trim() && content().trim() && !isLoading()) {
+      if (title().trim() && contentText().trim() && !isLoading()) {
         handleSubmit(e);
       }
     }
@@ -115,9 +142,7 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
                   <label for="create-title" class="text-sm font-medium text-zinc-400">
                     Title
                   </label>
-                  <span class="text-xs text-zinc-600">
-                    {title().length}/200
-                  </span>
+                  <span class="text-xs text-zinc-600">{title().length}/200</span>
                 </div>
                 <input
                   ref={(el) => titleInputRef = el}
@@ -134,18 +159,20 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
               </div>
 
               <div>
-                <label for="create-content" class="block text-sm font-medium text-zinc-400 mb-1.5">
-                  Content
-                </label>
-                <textarea
-                  id="create-content"
-                  value={content()}
-                  onInput={(e) => setContent(e.currentTarget.value)}
-                  required
-                  rows="10"
-                  class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg p-4 text-white focus:outline-none focus:border-zinc-600 transition-colors duration-150 placeholder-zinc-600 text-sm resize-none leading-relaxed block"
-                  placeholder="What's on your mind?"
-                />
+                <label class="block text-sm font-medium text-zinc-400 mb-1.5">Content</label>
+                <Show when={contentField()}>
+                  {(field) => (
+                    <div class="w-full bg-zinc-950 border border-white/[0.06] rounded-lg p-4 focus-within:border-zinc-600 transition-colors duration-150">
+                      <CollaborativeEditor
+                        field={field()}
+                        placeholder="What's on your mind?"
+                        class="text-sm text-white leading-relaxed [&_.ProseMirror]:outline-none [&_.ProseMirror]:min-h-[10rem] [&_.ProseMirror_p.is-editor-empty:first-child::before]:text-zinc-600 [&_.ProseMirror_p.is-editor-empty:first-child::before]:content-[attr(data-placeholder)] [&_.ProseMirror_p.is-editor-empty:first-child::before]:float-left [&_.ProseMirror_p.is-editor-empty:first-child::before]:pointer-events-none [&_.ProseMirror_p.is-editor-empty:first-child::before]:h-0"
+                        username={auth.user()?.username}
+                        onUpdate={setContentText}
+                      />
+                    </div>
+                  )}
+                </Show>
               </div>
 
               <Show when={error()}>
@@ -164,10 +191,10 @@ export function CreateThreadDialog(props: CreateThreadDialogProps) {
                     Cancel
                   </button>
                 </Tooltip>
-                <Tooltip text="Publish" kbd={`${navigator.platform.includes('Mac') ? '\u2318' : 'Ctrl'}+\u21B5`} position="top">
+                <Tooltip text="Publish" kbd={`${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}+↵`} position="top">
                   <button
                     type="submit"
-                    disabled={isLoading() || !title().trim() || !content().trim()}
+                    disabled={isLoading() || !title().trim() || !contentText().trim()}
                     class="bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-6 py-2.5 rounded-lg font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                   >
                     {isLoading() ? 'Publishing...' : 'Publish'}

@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
 

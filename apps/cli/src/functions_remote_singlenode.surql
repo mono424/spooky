@@ -14,7 +14,15 @@ DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
     -- per-user. Without this, predicates that reference $auth fail closed
     -- (Predicate::False) at packages/ssp/src/policy.rs:184-194.
     LET $params_in = $config.params OR {};
-    LET $params_with_auth = object::extend($params_in, { auth: { id: <string>($auth.id OR '') } });
+    -- Inject both `$auth.id` and `$access` so the SSP's permission
+    -- evaluator can substitute either when applying the table's SELECT
+    -- predicate. Predicates like `published = true OR $access = "account"
+    -- AND author.id = $auth.id` evaluate to "only published rows" if
+    -- $access is missing — invisible-by-default for record-access users.
+    LET $params_with_auth = object::extend($params_in, {
+        auth: { id: <string>($auth.id OR '') },
+        access: <string>($access OR '')
+    });
     LET $module_config = {
         id: <string>$config.id,
         surql: <string>$config.surql,

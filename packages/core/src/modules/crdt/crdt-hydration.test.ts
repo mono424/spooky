@@ -2,21 +2,23 @@ import { describe, it, expect, vi } from 'vitest';
 import { LoroDoc } from 'loro-crdt';
 import type { SchemaStructure } from '@spooky-sync/query-builder';
 import { CrdtManager } from './index';
-import { encodeBase64 } from './crdt-field';
 import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
 import type { Logger } from '../../services/logger/index';
 
-// Regression test for the offline-reload formatting-loss bug.
+// Regression test for the offline-reload formatting-loss class of bug.
 //
-// Repro: app uses `store: 'memory'` for the local SurrealDB (or any
-// scenario where the local row exists without a `_00_crdt` snapshot —
-// fresh device, post-sync-down REPLACE, etc.). On reload, the editor
-// mounts but stays empty until some unrelated edit fires the parent
-// LIVE feed. From the user's POV, formatting is gone.
+// Repro pattern: app uses `store: 'memory'` for the local SurrealDB (or
+// any scenario where the local row exists without a CRDT snapshot —
+// fresh device, post-sync-down with stale meta, …). On reload, the
+// editor mounts but stays empty until some unrelated edit fires the
+// parent LIVE feed. From the user's POV, formatting is gone.
 //
 // Fix: when `CrdtManager.open` finds no local snapshot, it must fetch
-// the remote `_00_crdt` row eagerly and import it into the freshly-
-// created CrdtField. This test pins that behavior.
+// the parent row from remote (the snapshot lives inline on the row in
+// the consolidated design) and dispatch its CRDT field. This test pins
+// that behavior across both shapes — `@crdt`-only fields where the
+// snapshot IS the field value, and `@crdt @cursor` fields where the
+// snapshot lives at `<field>.state`.
 
 function silentLogger(): Logger {
   const noop = () => {};
@@ -30,13 +32,18 @@ function silentLogger(): Logger {
   return fake as Logger;
 }
 
-function singleTableSchema(): SchemaStructure {
+function singleTableSchema(opts: { cursor?: boolean } = {}): SchemaStructure {
   return {
     tables: [
       {
         name: 'thread',
         columns: {
-          body: { type: 'string', optional: false, crdt: 'text' },
+          body: {
+            type: 'string',
+            optional: false,
+            crdt: 'text',
+            ...(opts.cursor ? { cursor: true } : {}),
+          },
         },
         primaryKey: ['id'],
       },
@@ -46,54 +53,53 @@ function singleTableSchema(): SchemaStructure {
   };
 }
 
-describe('CrdtManager.open hydration', () => {
-  it('fetches remote _00_crdt when local snapshot is missing', async () => {
-    // Build a real Loro snapshot that the "remote" will return.
-    const seedDoc = new LoroDoc();
-    seedDoc.getText('text').insert(0, 'hello world');
-    const remoteSnapshot = encodeBase64(seedDoc.export({ mode: 'snapshot' }));
+function buildSnapshot(text: string): Uint8Array {
+  const doc = new LoroDoc();
+  doc.getText('text').insert(0, text);
+  return doc.export({ mode: 'snapshot' });
+}
 
-    // Local is empty: every SELECT/UPDATE resolves harmlessly.
-    // The lookup `SELECT VALUE _00_crdt[$field] FROM ONLY $id` returns
-    // `[null]` to signal no persisted snapshot.
+function makeRemote(handlers: {
+  selectRow?: () => unknown;
+}): RemoteDatabaseService {
+  const remote = {
+    query: vi.fn().mockImplementation(async (sql: string) => {
+      if (sql.includes('LIVE SELECT')) return ['live-uuid'];
+      if (sql.includes('SELECT * FROM ONLY')) {
+        return [handlers.selectRow ? handlers.selectRow() : null];
+      }
+      return [];
+    }),
+    getClient: () =>
+      ({
+        liveOf: async () => ({
+          subscribe: () => () => {},
+        }),
+      }) as any,
+  } satisfies Partial<RemoteDatabaseService> as unknown as RemoteDatabaseService;
+  return remote;
+}
+
+describe('CrdtManager.open hydration', () => {
+  it('@crdt-only: fetches the parent row from remote when local is empty', async () => {
+    const remoteSnapshot = buildSnapshot('hello world');
+
     const local = {
       query: vi.fn().mockImplementation(async (sql: string) => {
-        if (sql.includes('_00_crdt[$field]')) return [null];
+        if (sql.includes('SELECT VALUE body FROM ONLY')) return [null];
         return [];
       }),
     } satisfies Partial<LocalDatabaseService> as unknown as LocalDatabaseService;
 
-    // Remote answers two queries:
-    //  1. The `LIVE SELECT * FROM thread` from `ensureTableSubscription`.
-    //  2. The combined `SELECT field, state FROM _00_crdt … ; SELECT … FROM _00_cursor …`
-    //     from `fetchAndDispatchMeta`.
-    const remote = {
-      query: vi.fn().mockImplementation(async (sql: string) => {
-        if (sql.includes('LIVE SELECT')) return ['live-uuid'];
-        if (sql.includes('FROM _00_crdt')) {
-          return [
-            [{ field: 'body', state: remoteSnapshot }],
-            [],
-          ];
-        }
-        return [];
-      }),
-      getClient: () => ({
-        liveOf: async () => ({
-          subscribe: () => () => {},
-        }),
-      }),
-    } satisfies Partial<RemoteDatabaseService> as unknown as RemoteDatabaseService;
+    const remote = makeRemote({
+      selectRow: () => ({ id: 'thread:abc', body: remoteSnapshot }),
+    });
 
     const manager = new CrdtManager(singleTableSchema(), local, remote, silentLogger());
     manager.setSessionId('session-under-test');
 
     const field = await manager.open('thread', 'thread:abc', 'body');
 
-    // The remote meta fetch is fire-and-forget inside `open()`, so wait
-    // for the import to land. `vi.waitFor` polls until the assertion
-    // passes (or times out), which is the cheapest reliable wait without
-    // wiring promise plumbing into production code.
     await vi.waitFor(() => {
       expect(field.getDoc().getText('text').toString()).toBe('hello world');
     });
@@ -101,35 +107,52 @@ describe('CrdtManager.open hydration', () => {
     const sqls = (remote.query as ReturnType<typeof vi.fn>).mock.calls.map(
       (c) => c[0] as string
     );
-    expect(sqls.some((s) => s.includes('FROM _00_crdt'))).toBe(true);
+    expect(sqls.some((s) => s.includes('SELECT * FROM ONLY'))).toBe(true);
+  });
+
+  it('@crdt @cursor: extracts the snapshot from the object shape', async () => {
+    const remoteSnapshot = buildSnapshot('object shape');
+
+    const local = {
+      query: vi.fn().mockImplementation(async () => [null]),
+    } satisfies Partial<LocalDatabaseService> as unknown as LocalDatabaseService;
+
+    // Cursor-enabled field stores `{ state, cursors }`. The remote row
+    // returns this shape; the manager must drill into `.state` for the
+    // snapshot bytes.
+    const remote = makeRemote({
+      selectRow: () => ({
+        id: 'thread:abc',
+        body: { state: remoteSnapshot, cursors: {} },
+      }),
+    });
+
+    const manager = new CrdtManager(
+      singleTableSchema({ cursor: true }),
+      local,
+      remote,
+      silentLogger()
+    );
+    manager.setSessionId('session-under-test');
+
+    const field = await manager.open('thread', 'thread:abc', 'body');
+
+    await vi.waitFor(() => {
+      expect(field.getDoc().getText('text').toString()).toBe('object shape');
+    });
   });
 
   it('skips the remote fetch when a local snapshot already exists', async () => {
-    // Local has a real snapshot already — open() must NOT trigger the
-    // remote round-trip. This is the cache-warm path that we don't want
-    // to slow down with an unnecessary network hop.
-    const seedDoc = new LoroDoc();
-    seedDoc.getText('text').insert(0, 'cached');
-    const localSnapshot = encodeBase64(seedDoc.export({ mode: 'snapshot' }));
+    const localSnapshot = buildSnapshot('cached');
 
     const local = {
       query: vi.fn().mockImplementation(async (sql: string) => {
-        if (sql.includes('_00_crdt[$field]')) return [localSnapshot];
+        if (sql.includes('SELECT VALUE body FROM ONLY')) return [localSnapshot];
         return [];
       }),
     } satisfies Partial<LocalDatabaseService> as unknown as LocalDatabaseService;
 
-    const remote = {
-      query: vi.fn().mockImplementation(async (sql: string) => {
-        if (sql.includes('LIVE SELECT')) return ['live-uuid'];
-        return [];
-      }),
-      getClient: () => ({
-        liveOf: async () => ({
-          subscribe: () => () => {},
-        }),
-      }),
-    } satisfies Partial<RemoteDatabaseService> as unknown as RemoteDatabaseService;
+    const remote = makeRemote({});
 
     const manager = new CrdtManager(singleTableSchema(), local, remote, silentLogger());
     manager.setSessionId('session-under-test');
@@ -144,6 +167,6 @@ describe('CrdtManager.open hydration', () => {
     const sqls = (remote.query as ReturnType<typeof vi.fn>).mock.calls.map(
       (c) => c[0] as string
     );
-    expect(sqls.some((s) => s.includes('FROM _00_crdt'))).toBe(false);
+    expect(sqls.some((s) => s.includes('SELECT * FROM ONLY'))).toBe(false);
   });
 });

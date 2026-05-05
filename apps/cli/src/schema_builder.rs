@@ -64,10 +64,15 @@ pub fn build_remote_functions_schema(
 /// This builds the full schema that should be present in SurrealDB:
 /// user schema + backend schemas + meta tables + remote functions + buckets.
 pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
-    let mut content = fs::read_to_string(&config.input_path).context(format!(
+    let raw_content = fs::read_to_string(&config.input_path).context(format!(
         "Failed to read input schema file: {:?}",
         config.input_path
     ))?;
+
+    // Apply the `@crdt @cursor` TYPE rewrite to user DEFINE FIELDs before
+    // any of the meta tables / functions are appended. Both client and
+    // server emit the same shape for these fields.
+    let mut content = rewrite_crdt_cursor_fields(&raw_content);
 
     // Process sp00ky config/backends
     let mut backend_processor = BackendProcessor::new();
@@ -209,6 +214,37 @@ pub fn build_crdt_update_rule_from(source: &str, parser: &SchemaParser) -> Strin
 pub fn substitute_crdt_update_rule(content: &str, source: &str, parser: &SchemaParser) -> String {
     let rule = build_crdt_update_rule_from(source, parser);
     content.replace("{{CRDT_UPDATE_RULE}}", &rule)
+}
+
+/// Rewrite each `DEFINE FIELD` line whose annotations include both
+/// `@crdt` and `@cursor` so its TYPE clause becomes
+/// `option<object> FLEXIBLE`. Other lines pass through unchanged. This is
+/// applied to both client (in `main.rs::filter_schema_for_client`) and
+/// server (in `build_server_schema`) so the two schemas agree on the
+/// field's storage shape.
+pub fn rewrite_crdt_cursor_fields(content: &str) -> String {
+    let field_annotations = annotations::extract_field_annotations(content);
+    let define_field_re = Regex::new(
+        r"(?i)DEFINE\s+FIELD\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(?:TABLE\s+)?(\w+)",
+    )
+    .expect("static regex");
+    let mut out_lines: Vec<String> = Vec::with_capacity(content.lines().count());
+    for line in content.lines() {
+        if let Some(caps) = define_field_re.captures(line) {
+            let field_name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let table_name = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            if let Some(anns) =
+                field_annotations.get(&(table_name.to_string(), field_name.to_string()))
+            {
+                if let Some(rewritten) = annotations::rewrite_crdt_cursor_type(line, anns) {
+                    out_lines.push(rewritten);
+                    continue;
+                }
+            }
+        }
+        out_lines.push(line.to_string());
+    }
+    out_lines.join("\n")
 }
 
 /// Prefix bare field references with `record_id.` and re-anchor `$parent`

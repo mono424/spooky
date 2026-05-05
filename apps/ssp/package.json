@@ -3,7 +3,7 @@
   "version": "0.0.1-canary.66",
   "private": true,
   "scripts": {
-    "build": "docker build -f Dockerfile -t ssp ../..",
+    "build": "docker buildx build --target ssp -t mono424/spooky-ssp:dev -f ../../Dockerfile ../..",
     "dev:build": "cargo build -p ssp-server"
   }
 }

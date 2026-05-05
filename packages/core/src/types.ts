@@ -185,7 +185,20 @@ export interface QueryState {
   ttlDurationMs: number;
   /** Number of times the query has been updated. */
   updateCount: number;
+  /**
+   * Rolling window of the most recent materialization-step latencies (ms).
+   * Capped at MATERIALIZATION_SAMPLE_WINDOW; used to recompute p55/p90/p99
+   * before each persist to `_00_query`. Samples themselves are not persisted.
+   */
+  materializationSamples: number[];
+  /** Most recent end-to-end ingest latency in ms, or null until the first ingest. */
+  lastIngestLatencyMs: number | null;
+  /** Cumulative count of ingest/materialization errors observed for this query. */
+  errorCount: number;
 }
+
+/** Cap on the rolling materialization-sample window kept per query in memory. */
+export const MATERIALIZATION_SAMPLE_WINDOW = 100;
 
 // Callback types
 export type QueryUpdateCallback = (records: Record<string, any>[]) => void;

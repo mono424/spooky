@@ -28,6 +28,12 @@ export interface StreamUpdate {
   queryHash: string;
   localArray: RecordVersionArray;
   op?: 'CREATE' | 'UPDATE' | 'DELETE'; // Operation type for conditional debouncing
+  /**
+   * End-to-end ingest latency for the WASM call that produced this update,
+   * in milliseconds. Populated by StreamProcessorService.ingest. Undefined
+   * for the initial register_view snapshot.
+   */
+  materializationTimeMs?: number;
 }
 
 // Define events map (kept for DevTools compatibility)
@@ -205,13 +211,16 @@ export class StreamProcessorService {
     try {
       const normalizedRecord = this.normalizeValue(record);
 
+      const t0 = performance.now();
       const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord);
+      const materializationTimeMs = performance.now() - t0;
       this.logger.debug(
         {
           table,
           op,
           id,
           rawUpdates: rawUpdates.length,
+          materializationTimeMs,
           Category: 'sp00ky-client::StreamProcessorService::ingest',
         },
         'Ingesting into ssp done'
@@ -222,6 +231,7 @@ export class StreamProcessorService {
           queryHash: u.query_id,
           localArray: u.result_data,
           op: op,
+          materializationTimeMs,
         }));
         // Direct handler call instead of event
         this.notifyUpdates(updates);

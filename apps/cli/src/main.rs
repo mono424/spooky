@@ -140,6 +140,13 @@ enum Commands {
         /// SurrealDB volume — user data is preserved.
         #[arg(long)]
         clean: bool,
+        /// Wipe the SurrealDB volume too — start with a completely empty
+        /// database. Implies `--clean` since the SSP/scheduler caches would
+        /// otherwise rebootstrap inconsistent state. Pair with this for a
+        /// full reset; use `--clean` alone if you only need to recover from
+        /// SSP/scheduler corruption.
+        #[arg(long)]
+        clean_db: bool,
     },
     /// Verify the SSP/scheduler snapshot matches the upstream SurrealDB
     Verify {
@@ -700,6 +707,7 @@ struct ConnectionArgs {
 /// Filter schema content to remove field definitions with FOR select WHERE false
 /// and make all fields (except 'id') nullable by wrapping their types in option<>
 fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<String> {
+    let field_annotations = annotations::extract_field_annotations(content);
     let lines: Vec<&str> = content.lines().collect();
     let mut result = Vec::new();
     let mut modified_lines: Vec<String> = Vec::new(); // Store owned strings
@@ -740,10 +748,24 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                 }
             }
 
-            // Make all fields (except 'id') nullable by wrapping TYPE in option<>
-            if let Some((_table_name, field_name)) = extract_table_and_field_name(trimmed) {
+            // Make all fields (except 'id') nullable by wrapping TYPE in option<>.
+            // Then, for `@crdt @cursor` fields, override the resulting TYPE
+            // with `option<object> FLEXIBLE` so the row carries `{ state,
+            // cursors }`. The override runs AFTER the nullable wrap so a
+            // user-declared `string` becomes `option<object> FLEXIBLE`, not
+            // `option<string>`.
+            if let Some((table_name, field_name)) = extract_table_and_field_name(trimmed) {
                 if field_name != "id" {
-                    let modified_line = make_field_nullable(line);
+                    let mut modified_line = make_field_nullable(line);
+                    if let Some(anns) =
+                        field_annotations.get(&(table_name.clone(), field_name.clone()))
+                    {
+                        if let Some(rewritten) =
+                            annotations::rewrite_crdt_cursor_type(&modified_line, anns)
+                        {
+                            modified_line = rewritten;
+                        }
+                    }
                     modified_lines.push(modified_line.clone());
                     result.push(modified_line);
                     i += 1;
@@ -1230,6 +1252,71 @@ fn run_codegen(
         }
     }
 
+    // Validate @crdt fields' TYPE matches their on-disk shape:
+    //
+    //   `@crdt`             → TYPE bytes  (raw LoroDoc snapshot)
+    //   `@crdt` + `@cursor` → TYPE object (`{ state: bytes, cursors: { … } }`)
+    //
+    // The schema-builder rewrites `@crdt @cursor` to `option<object>
+    // FLEXIBLE` regardless of source TYPE, but we still want the source
+    // TYPE to reflect intent — otherwise readers see e.g. `TYPE bytes`
+    // for a field that's actually stored as an object. Fail loudly so
+    // mistakes surface at codegen time, not via a confusing runtime
+    // shape mismatch later.
+    let mut crdt_errors: Vec<String> = Vec::new();
+    for (table_name, table_schema) in &parser.tables {
+        for (field_name, field_def) in &table_schema.fields {
+            let has_crdt = annotations::has_annotation(&field_def.annotations, "crdt");
+            if !has_crdt {
+                continue;
+            }
+            let has_cursor = annotations::has_annotation(&field_def.annotations, "cursor");
+
+            // Unwrap option<inner> once so authors can choose `option<bytes>`
+            // / `option<object>` if they want explicit nullability — same
+            // effective shape since the schema-builder wraps non-option
+            // fields in option<> anyway when emitting the client schema.
+            let inner: &crate::parser::FieldType = match &field_def.field_type {
+                crate::parser::FieldType::Option(inner) => inner,
+                other => other,
+            };
+
+            if has_cursor {
+                let is_object = matches!(inner, crate::parser::FieldType::Object);
+                if !is_object {
+                    crdt_errors.push(format!(
+                        "  - `{table}.{field}` is annotated `@crdt @cursor` but its TYPE is \
+                         `{ty:?}`. Cursored CRDT fields carry `{{ state, cursors }}`, so the \
+                         source TYPE must be `object` (the schema-builder rewrites it to \
+                         `option<object> FLEXIBLE` on emit). Change the DEFINE FIELD line to \
+                         `TYPE object`.",
+                        table = table_name,
+                        field = field_name,
+                        ty = field_def.field_type,
+                    ));
+                }
+            } else {
+                let is_bytes = matches!(inner, crate::parser::FieldType::Bytes);
+                if !is_bytes {
+                    crdt_errors.push(format!(
+                        "  - `{table}.{field}` is annotated `@crdt` but its TYPE is `{ty:?}`. \
+                         CRDT fields must be `TYPE bytes` so the LoroDoc snapshot can be stored \
+                         verbatim. Change the DEFINE FIELD line to `TYPE bytes`.",
+                        table = table_name,
+                        field = field_name,
+                        ty = field_def.field_type,
+                    ));
+                }
+            }
+        }
+    }
+    if !crdt_errors.is_empty() {
+        anyhow::bail!(
+            "Schema validation failed for @crdt fields:\n{}",
+            crdt_errors.join("\n")
+        );
+    }
+
     // Extract buckets from separate bucket files (if any)
     if !backend_processor.bucket_schema.is_empty() {
         parser.extract_buckets(&backend_processor.bucket_schema);
@@ -1251,46 +1338,6 @@ fn run_codegen(
             "\nDEFINE FIELD _00_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
             table_name
         ));
-    }
-
-    // Inject `_00_crdt` and `_00_cursor` as FLEXIBLE object fields on every
-    // CRDT-bearing parent — CLIENT (local cache) ONLY. The local DB is
-    // single-tenant by construction and stripped of permissions, so we
-    // sidestep the cross-table dereference rules that the remote design
-    // needs. The parent row owns its CRDT state directly:
-    //
-    //   record._00_crdt   = { <field_name>: <base64 LoroDoc snapshot>, ... }
-    //   record._00_cursor = { <session_id>: { <field_name>: <base64 cursor blob>, ... } }
-    //
-    // This rides the parent record's normal local sync (one row per thread,
-    // not one row per field), keeps reads on the same query the editor
-    // already issues for the parent, and lets the user reload offline
-    // because the snapshot lives on the row that's already in cache.
-    //
-    // Server side keeps the separate `_00_crdt` / `_00_cursor` tables (see
-    // meta_tables_remote.surql) — they need their own row identity to enforce
-    // dereferenced UPDATE permissions per parent.
-    {
-        let mut crdt_tables = std::collections::BTreeSet::new();
-        for ((table_name, _field_name), anns) in &field_annotations {
-            if anns.iter().any(|a| a.name == "crdt") {
-                crdt_tables.insert(table_name.clone());
-            }
-        }
-        for table_name in &crdt_tables {
-            println!(
-                "  + Injecting _00_crdt + _00_cursor object fields on '{}' for local cache",
-                table_name
-            );
-            filtered_schema_content.push_str(&format!(
-                "\nDEFINE FIELD _00_crdt ON TABLE {} TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;",
-                table_name
-            ));
-            filtered_schema_content.push_str(&format!(
-                "\nDEFINE FIELD _00_cursor ON TABLE {} TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;",
-                table_name
-            ));
-        }
     }
 
     // Choose which content to use based on format
@@ -1732,8 +1779,9 @@ fn main() -> Result<()> {
             apply_migrations,
             fix_checksums,
             clean,
+            clean_db,
         }) => {
-            return dev::run(skip_migrations, apply_migrations, fix_checksums, clean);
+            return dev::run(skip_migrations, apply_migrations, fix_checksums, clean, clean_db);
         }
         Some(Commands::Verify { fix }) => {
             return verify::run(fix);

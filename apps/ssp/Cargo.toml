@@ -32,6 +32,9 @@ loro = "1"
 lru = "0.12"
 base64 = "0.22"
 
+[build-dependencies]
+chrono = "0.4"
+
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

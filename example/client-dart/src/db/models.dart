@@ -23,7 +23,6 @@ class Schema {
     ShareLink shareLink;
     Thread thread;
     User user;
-    UserKeypair userKeypair;
 
     Schema({
         required this.the00PendingMutations,
@@ -37,7 +36,6 @@ class Schema {
         required this.shareLink,
         required this.thread,
         required this.user,
-        required this.userKeypair,
     });
 
     factory Schema.fromJson(Map<String, dynamic> json) => Schema(
@@ -52,7 +50,6 @@ class Schema {
         shareLink: ShareLink.fromJson(json["share_link"]),
         thread: Thread.fromJson(json["thread"]),
         user: User.fromJson(json["user"]),
-        userKeypair: UserKeypair.fromJson(json["user_keypair"]),
     );
 
     Map<String, dynamic> toJson() => {
@@ -67,7 +64,6 @@ class Schema {
         "share_link": shareLink.toJson(),
         "thread": thread.toJson(),
         "user": user.toJson(),
-        "user_keypair": userKeypair.toJson(),
     };
 }
 
@@ -152,7 +148,7 @@ class Job {
     ///Record ID of table: thread
     String assignedTo;
     DateTime? createdAt;
-    List<dynamic> errors;
+    List<Map<String, dynamic>> errors;
     
     ///Record ID
     String id;
@@ -187,7 +183,7 @@ class Job {
     factory Job.fromJson(Map<String, dynamic> json) => Job(
         assignedTo: json["assigned_to"],
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        errors: List<dynamic>.from(json["errors"].map((x) => x)),
+        errors: List<Map<String, dynamic>>.from(json["errors"].map((x) => Map.from(x).map((k, v) => MapEntry<String, dynamic>(k, v)))),
         id: json["id"],
         maxRetries: json["max_retries"],
         path: json["path"],
@@ -201,7 +197,7 @@ class Job {
     Map<String, dynamic> toJson() => {
         "assigned_to": assignedTo,
         "created_at": createdAt?.toIso8601String(),
-        "errors": List<dynamic>.from(errors.map((x) => x)),
+        "errors": List<dynamic>.from(errors.map((x) => Map.from(x).map((k, v) => MapEntry<String, dynamic>(k, v)))),
         "id": id,
         "max_retries": maxRetries,
         "path": path,
@@ -261,8 +257,8 @@ class ShareLink {
 
 class The00PendingMutations {
     
-    ///Any type
-    String? data;
+    ///Free-form object (FLEXIBLE on the SurrealDB side)
+    Map<String, dynamic>? data;
     String id;
     String mutationType;
     
@@ -277,14 +273,14 @@ class The00PendingMutations {
     });
 
     factory The00PendingMutations.fromJson(Map<String, dynamic> json) => The00PendingMutations(
-        data: json["data"],
+        data: Map.from(json["data"]!).map((k, v) => MapEntry<String, dynamic>(k, v)),
         id: json["id"],
         mutationType: json["mutationType"],
         recordId: json["recordId"],
     );
 
     Map<String, dynamic> toJson() => {
-        "data": data,
+        "data": Map.from(data!).map((k, v) => MapEntry<String, dynamic>(k, v)),
         "id": id,
         "mutationType": mutationType,
         "recordId": recordId,
@@ -292,48 +288,84 @@ class The00PendingMutations {
 }
 
 class The00Query {
+    DateTime createdAt;
+    int errorCount;
     
     ///Record ID
     String id;
     DateTime lastActiveAt;
+    double? lastIngestLatency;
     
     ///Any type
     dynamic localArray;
+    double? materializationP55;
+    double? materializationP90;
+    double? materializationP99;
+    double? registrationTime;
     
     ///Any type
     dynamic remoteArray;
+    int rowCount;
     String surql;
     String tableName;
     String ttl;
+    int updateCount;
 
     The00Query({
+        required this.createdAt,
+        required this.errorCount,
         required this.id,
         required this.lastActiveAt,
+        this.lastIngestLatency,
         required this.localArray,
+        this.materializationP55,
+        this.materializationP90,
+        this.materializationP99,
+        this.registrationTime,
         required this.remoteArray,
+        required this.rowCount,
         required this.surql,
         required this.tableName,
         required this.ttl,
+        required this.updateCount,
     });
 
     factory The00Query.fromJson(Map<String, dynamic> json) => The00Query(
+        createdAt: DateTime.parse(json["createdAt"]),
+        errorCount: json["errorCount"],
         id: json["id"],
         lastActiveAt: DateTime.parse(json["lastActiveAt"]),
+        lastIngestLatency: json["lastIngestLatency"]?.toDouble(),
         localArray: json["localArray"],
+        materializationP55: json["materializationP55"]?.toDouble(),
+        materializationP90: json["materializationP90"]?.toDouble(),
+        materializationP99: json["materializationP99"]?.toDouble(),
+        registrationTime: json["registrationTime"]?.toDouble(),
         remoteArray: json["remoteArray"],
+        rowCount: json["rowCount"],
         surql: json["surql"],
         tableName: json["tableName"],
         ttl: json["ttl"],
+        updateCount: json["updateCount"],
     );
 
     Map<String, dynamic> toJson() => {
+        "createdAt": createdAt.toIso8601String(),
+        "errorCount": errorCount,
         "id": id,
         "lastActiveAt": lastActiveAt.toIso8601String(),
+        "lastIngestLatency": lastIngestLatency,
         "localArray": localArray,
+        "materializationP55": materializationP55,
+        "materializationP90": materializationP90,
+        "materializationP99": materializationP99,
+        "registrationTime": registrationTime,
         "remoteArray": remoteArray,
+        "rowCount": rowCount,
         "surql": surql,
         "tableName": tableName,
         "ttl": ttl,
+        "updateCount": updateCount,
     };
 }
 
@@ -394,8 +426,8 @@ class Thread {
     ///Reverse relationship: array of comment records
     List<String>? comments;
     
-    ///Assert: $value != NONE AND string::len($value) > 0
-    String content;
+    ///Free-form object (FLEXIBLE on the SurrealDB side)
+    Map<String, dynamic> content;
     String? contentSuggestion;
     DateTime? createdAt;
     
@@ -409,7 +441,7 @@ class Thread {
     ///Reverse relationship: array of share_link records
     List<String>? shareLinks;
     
-    ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
+    ///Binary blob (transported as base64 in JSON)
     String title;
     String? titleSuggestion;
 
@@ -432,7 +464,7 @@ class Thread {
         active: json["active"],
         author: json["author"],
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
-        content: json["content"],
+        content: Map.from(json["content"]).map((k, v) => MapEntry<String, dynamic>(k, v)),
         contentSuggestion: json["content_suggestion"],
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
         id: json["id"],
@@ -447,7 +479,7 @@ class Thread {
         "active": active,
         "author": author,
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
-        "content": content,
+        "content": Map.from(content).map((k, v) => MapEntry<String, dynamic>(k, v)),
         "content_suggestion": contentSuggestion,
         "created_at": createdAt?.toIso8601String(),
         "id": id,
@@ -470,13 +502,11 @@ class User {
     
     ///Reverse relationship: array of share_link records
     List<String>? shareLinks;
+    String? sharePrivkey;
     String? sharePubkey;
     
     ///Reverse relationship: array of thread records
     List<String>? threads;
-    
-    ///Reverse relationship: array of user_keypair records
-    List<String>? userKeypairs;
     
     ///Assert: $value != NONE AND string::len($value) > 3
     String username;
@@ -486,9 +516,9 @@ class User {
         required this.id,
         this.profilePicture,
         this.shareLinks,
+        this.sharePrivkey,
         this.sharePubkey,
         this.threads,
-        this.userKeypairs,
         required this.username,
     });
 
@@ -497,9 +527,9 @@ class User {
         id: json["id"],
         profilePicture: json["profile_picture"],
         shareLinks: json["share_links"] == null ? [] : List<String>.from(json["share_links"]!.map((x) => x)),
+        sharePrivkey: json["share_privkey"],
         sharePubkey: json["share_pubkey"],
         threads: json["threads"] == null ? [] : List<String>.from(json["threads"]!.map((x) => x)),
-        userKeypairs: json["user_keypairs"] == null ? [] : List<String>.from(json["user_keypairs"]!.map((x) => x)),
         username: json["username"],
     );
 
@@ -508,38 +538,10 @@ class User {
         "id": id,
         "profile_picture": profilePicture,
         "share_links": shareLinks == null ? [] : List<dynamic>.from(shareLinks!.map((x) => x)),
+        "share_privkey": sharePrivkey,
         "share_pubkey": sharePubkey,
         "threads": threads == null ? [] : List<dynamic>.from(threads!.map((x) => x)),
-        "user_keypairs": userKeypairs == null ? [] : List<dynamic>.from(userKeypairs!.map((x) => x)),
         "username": username,
-    };
-}
-
-class UserKeypair {
-    
-    ///Record ID
-    String id;
-    
-    ///Record ID of table: user
-    String owner;
-    String privkey;
-
-    UserKeypair({
-        required this.id,
-        required this.owner,
-        required this.privkey,
-    });
-
-    factory UserKeypair.fromJson(Map<String, dynamic> json) => UserKeypair(
-        id: json["id"],
-        owner: json["owner"],
-        privkey: json["privkey"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "id": id,
-        "owner": owner,
-        "privkey": privkey,
     };
 }
 
@@ -561,7 +563,7 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD username ON TABLE user TYPE option<string>
 ASSERT \$value != NONE AND string::len(\$value) > 3
 PERMISSIONS FOR select, create, update WHERE true;
-    
+
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 
@@ -574,16 +576,10 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD share_pubkey ON TABLE user TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
--- The matching private key lives in the `user_keypair` table so its
--- table-level SELECT rule scopes it to the owner. Field-level rules
--- aren't enough: SurrealDB v3 only enforces field SELECT permissions on
--- record-id queries, so a free-form WHERE scan would leak the key
--- otherwise.
-DEFINE TABLE user_keypair SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-DEFINE FIELD owner    ON TABLE user_keypair TYPE option<record<user>>;
-DEFINE FIELD privkey  ON TABLE user_keypair TYPE option<string>;
-DEFINE INDEX unique_keypair_owner ON TABLE user_keypair FIELDS owner UNIQUE;
+-- Matching Ed25519 private key (PEM PKCS8). Readable only by the owning
+-- user, like `password` but author-scoped instead of always-denied.
+DEFINE FIELD share_privkey ON TABLE user TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
 
 -- ##################################################################
 -- THREAD TABLE
@@ -605,12 +601,16 @@ PERMISSIONS FOR select, create, update, delete WHERE true
 ;
 
 -- @crdt text
-DEFINE FIELD title ON TABLE thread TYPE option<string>
-    ASSERT \$value != NONE AND string::len(\$value) > 0 AND string::len(\$value) <= 200;
+-- Stored as the raw LoroDoc snapshot bytes. The CRDT manager owns writes;
+-- never `db.update({ title: <string> })` — the type system would catch it
+-- but the editor would lose the in-flight LoroDoc state.
+DEFINE FIELD title ON TABLE thread TYPE option<bytes>;
 
 -- @crdt text
-DEFINE FIELD content ON TABLE thread TYPE option<string>
-    ASSERT \$value != NONE AND string::len(\$value) > 0;
+-- @cursor
+-- Stored as `{ state: bytes, cursors: ... }`. The CRDT manager owns
+-- writes — never `db.update({ content: <string> })`.
+DEFINE FIELD content ON TABLE thread TYPE option<object> FLEXIBLE;
 
 DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
 
@@ -685,6 +685,7 @@ PERMISSIONS FOR select, create, update, delete WHERE true
     FOR update WHERE false;
 
 DEFINE INDEX unique_collab ON TABLE collaborates_on FIELDS in, out UNIQUE;
+
 
 -- Backend Schema: api
 -- ##################################################################
@@ -794,6 +795,38 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD tableName ON TABLE _00_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
+-- Metrics: lifecycle and per-query observability. Rolling-window percentiles
+-- are computed in the client (DataModule) from the last N materialization
+-- samples and persisted on each ingest so devtools can read them without
+-- re-running the query.
+
+DEFINE FIELD createdAt ON TABLE _00_query TYPE option<datetime> DEFAULT time::now() READONLY
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD registrationTime ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP55 ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP90 ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP99 ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD lastIngestLatency ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD updateCount ON TABLE _00_query TYPE option<int> DEFAULT 0
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD rowCount ON TABLE _00_query TYPE option<int> DEFAULT 0
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD errorCount ON TABLE _00_query TYPE option<int> DEFAULT 0
+PERMISSIONS FOR select, create, update WHERE true;
+
 -- ==================================================
 -- SPOOKY EVENTS
 -- Stores create, update, and delete events
@@ -815,13 +848,11 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
 
--- CRDT and cursor state for the local cache live as `_00_crdt` and
--- `_00_cursor` FLEXIBLE object fields on each CRDT-bearing parent table
--- (injected by apps/cli/src/main.rs alongside the `_00_rv` version
--- field). They're not separate tables here — the local DB is
--- single-tenant, so we don't need the cross-table permission gate the
--- server-side design uses. See meta_tables_remote.surql for the remote
--- shape (separate tables with dereferenced rules).
+-- CRDT state lives inline on the parent record itself (the `@crdt`-
+-- annotated field). `@crdt`-only fields hold the base64 LoroDoc
+-- snapshot directly; `@crdt @cursor` fields hold an
+-- `option<object> FLEXIBLE` of shape `{ state, cursors }` (rewritten
+-- by the schema-builder). Same shape on client and server.
 DEFINE FIELD _00_rv ON TABLE _00_pending_mutations TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
@@ -833,9 +864,6 @@ DEFINE FIELD _00_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, crea
 DEFINE FIELD _00_rv ON TABLE share_link TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_rv ON TABLE user_keypair TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_crdt ON TABLE thread TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_cursor ON TABLE thread TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
 
 
 -- ==================================================
@@ -907,20 +935,6 @@ THEN {
 
 -- Table: user Client Deletion
 DEFINE EVENT OVERWRITE _00_user_client_delete ON TABLE user
-WHEN \$event = \"DELETE\"
-THEN {
-    -- No-op for now.
-};
-
--- Table: user_keypair Client Mutation
-DEFINE EVENT OVERWRITE _00_user_keypair_client_mutation ON TABLE user_keypair
-WHEN \$before != \$after AND \$event != \"DELETE\"
-THEN {
-    -- No-op for now. Client mutation sync logic moved to DBSP.
-};
-
--- Table: user_keypair Client Deletion
-DEFINE EVENT OVERWRITE _00_user_keypair_client_delete ON TABLE user_keypair
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.

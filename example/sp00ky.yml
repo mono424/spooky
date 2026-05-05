@@ -11,7 +11,14 @@ surrealdb:
   # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
 schema: ./schema
 version:
-  dev: dev
+  # Run host-built binaries in dev so `cargo build -p ssp-server -p scheduler`
+  # is what actually runs under `pnpm dev:example`. Switch either entry back
+  # to a tag (e.g. `ssp: dev`) to fall back to the published Docker image.
+  dev:
+    ssp:
+      path: ../target/debug/ssp-server
+    scheduler:
+      path: ../target/debug/scheduler
   cloud: canary
 buckets:
   - ./schema/src/buckets/profile.surql

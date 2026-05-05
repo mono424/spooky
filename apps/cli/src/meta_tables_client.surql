@@ -59,6 +59,38 @@ DEFINE FIELD ttl ON TABLE _00_query TYPE string
 DEFINE FIELD tableName ON TABLE _00_query TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
+-- Metrics: lifecycle and per-query observability. Rolling-window percentiles
+-- are computed in the client (DataModule) from the last N materialization
+-- samples and persisted on each ingest so devtools can read them without
+-- re-running the query.
+
+DEFINE FIELD createdAt ON TABLE _00_query TYPE datetime DEFAULT time::now() READONLY
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD registrationTime ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP55 ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP90 ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP99 ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD lastIngestLatency ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD updateCount ON TABLE _00_query TYPE int DEFAULT 0
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD rowCount ON TABLE _00_query TYPE int DEFAULT 0
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD errorCount ON TABLE _00_query TYPE int DEFAULT 0
+    PERMISSIONS FOR select, create, update WHERE true;
+
 -- ==================================================
 -- SPOOKY EVENTS
 -- Stores create, update, and delete events
@@ -80,10 +112,8 @@ DEFINE FIELD IF NOT EXISTS recordId ON _00_pending_mutations TYPE option<record>
 DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLEXIBLE
     PERMISSIONS FOR select, create, update WHERE true;
 
--- CRDT and cursor state for the local cache live as `_00_crdt` and
--- `_00_cursor` FLEXIBLE object fields on each CRDT-bearing parent table
--- (injected by apps/cli/src/main.rs alongside the `_00_rv` version
--- field). They're not separate tables here — the local DB is
--- single-tenant, so we don't need the cross-table permission gate the
--- server-side design uses. See meta_tables_remote.surql for the remote
--- shape (separate tables with dereferenced rules).
+-- CRDT state lives inline on the parent record itself (the `@crdt`-
+-- annotated field). `@crdt`-only fields hold the base64 LoroDoc
+-- snapshot directly; `@crdt @cursor` fields hold an
+-- `option<object> FLEXIBLE` of shape `{ state, cursors }` (rewritten
+-- by the schema-builder). Same shape on client and server.

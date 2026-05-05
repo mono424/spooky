@@ -1,4 +1,5 @@
 use crate::backend::DeployMode;
+use crate::annotations::has_annotation;
 use crate::parser::{FieldType, TableSchema};
 use std::collections::BTreeMap;
 
@@ -125,6 +126,16 @@ pub fn generate_sp00ky_events(
 
         for field_name in all_fields {
             let field_def = table.fields.get(field_name).unwrap();
+            // Skip @crdt fields from the ingest payload. Their value is a
+            // raw LoroDoc snapshot (TYPE bytes) and JSON has no native
+            // bytes encoding, so SurrealDB's http::post would either drop
+            // the field or shape-shift it depending on transport. The SSP
+            // doesn't filter or join on CRDT contents anyway — its job is
+            // membership tracking — so omitting them keeps the payload
+            // clean and saves bandwidth on every keystroke debounce push.
+            if has_annotation(&field_def.annotations, "crdt") {
+                continue;
+            }
             match field_def.field_type {
                 FieldType::Record(_) | FieldType::Datetime => {
                     events.push_str(&format!(
@@ -171,12 +182,10 @@ pub fn generate_sp00ky_events(
         events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
 
         // --- Versioning Logic ---
-        events.push_str("    DELETE _00_version WHERE record_id = $before.id;\n");
-        // CRDT and cursor rows are scoped to the parent by `record_id`. The
-        // server cleans them up here because the meta tables have no FOR
-        // delete rule (record-token callers can't address them directly).
-        events.push_str("    DELETE _00_crdt   WHERE record_id = $before.id;\n");
-        events.push_str("    DELETE _00_cursor WHERE record_id = $before.id;\n\n");
+        events.push_str("    DELETE _00_version WHERE record_id = $before.id;\n\n");
+        // CRDT and cursor state live inline on the parent row itself, so
+        // there is no sidecar table to clean up here — the row deletion
+        // takes the snapshot with it.
 
         // --- Ingestion Logic ---
         events.push_str("    LET $plain_before = {\n");
@@ -187,6 +196,11 @@ pub fn generate_sp00ky_events(
 
         for field_name in all_fields_del {
             let field_def = table.fields.get(field_name).unwrap();
+            // See the matching skip in the mutation event above for why
+            // CRDT bytes don't go through the JSON ingest payload.
+            if has_annotation(&field_def.annotations, "crdt") {
+                continue;
+            }
             match field_def.field_type {
                 FieldType::Record(_) | FieldType::Datetime => {
                     events.push_str(&format!(

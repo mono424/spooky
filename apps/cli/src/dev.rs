@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, Sp00kyConfig, DEFAULT_CONFIG_PATH};
+use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, RuntimeSource, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
 use crate::schema_builder::{self, SchemaBuilderConfig};
 use crate::schema_diff;
@@ -44,7 +44,7 @@ fn surreal_connection_url(resolved: &ResolvedSurrealDb, local_port: u16) -> Stri
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
-pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, clean: bool) -> Result<()> {
+pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, clean: bool, clean_db: bool) -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
     ctrlc::set_handler(move || {
@@ -54,9 +54,26 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
 
     println!("{} Starting development environment...", PREFIX);
 
-    if clean {
+    // `--clean-db` implies `--clean`: wiping the DB while keeping SSP/
+    // scheduler caches would leave them rebootstrapping into stale state.
+    let clean_state = clean || clean_db;
+
+    if clean_state || clean_db {
         let project_dir = std::env::current_dir().context("Failed to get current directory")?;
-        for sub in ["ssp_data", "scheduler_data"] {
+
+        let mut subs: Vec<&str> = Vec::new();
+        if clean_state {
+            subs.extend_from_slice(&["ssp_data", "scheduler_data"]);
+        }
+        if clean_db {
+            // Stop the existing SurrealDB container first so the running
+            // process doesn't hold the volume open while we delete it.
+            // Best-effort: ignored if the container doesn't exist.
+            let _ = docker(&["rm", "-f", SURREAL_CONTAINER]);
+            subs.push("surrealdb_data");
+        }
+
+        for sub in subs {
             let path = project_dir.join(".sp00ky").join(sub);
             if path.exists() {
                 std::fs::remove_dir_all(&path)
@@ -64,13 +81,23 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
                 println!("{} --clean: removed {}", PREFIX, path.display());
             }
         }
-        println!("{} --clean: SurrealDB volume preserved (use rm -rf .sp00ky/surrealdb_data for a hard reset)", PREFIX);
+
+        if !clean_db {
+            println!("{} --clean: SurrealDB volume preserved (pass --clean-db for a full reset)", PREFIX);
+        } else {
+            println!("{} --clean-db: SurrealDB volume wiped — starting from an empty database", PREFIX);
+        }
     }
 
     // Read config from sp00ky.yml
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let mode = config.mode.clone().unwrap_or(DeployMode::Singlenode);
-    let versions = ResolvedVersions::from_config(&config, DeployEnv::Dev);
+    // Anchor any relative `version: { ssp: { path: ... } }` entries against
+    // the project directory (where sp00ky.yml lives), not the user's cwd.
+    // Otherwise `../../target/debug/ssp-server` from inside `example/`
+    // would only work when invoked from that exact dir.
+    let project_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let versions = ResolvedVersions::from_config_with_dir(&config, DeployEnv::Dev, &project_dir);
     let resolved = config.resolved_schema();
     let resolved_surreal = config.resolved_surrealdb();
     let migrations_path = resolved.migrations.to_string_lossy().to_string();
@@ -90,6 +117,15 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
     let compose_file = format!("docker-compose.{}.yml", mode.to_string());
     if Path::new(&compose_file).exists() {
         println!("{} Found compose file: {}", PREFIX, compose_file);
+        // Compose mode is driven by the YAML, not by `version.{ssp,scheduler}`.
+        // A `path:` entry can't take effect there, so flag it loudly so the
+        // user doesn't silently keep hitting the published image.
+        if versions.ssp.is_local() || versions.scheduler.is_local() {
+            eprintln!(
+                "{} Warning: `version: {{ ssp/scheduler: {{ path: ... }} }}` is ignored in compose mode. The {} file controls those services. Either delete it (to use direct Docker mode with the path) or remove the path entry.",
+                PREFIX, compose_file
+            );
+        }
         run_compose_mode(&compose_file, &mode, &config, &resolved_surreal, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
     } else {
         println!("{} No compose file found — using direct Docker mode", PREFIX);
@@ -202,9 +238,89 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
 
 // ── Direct Docker mode ──────────────────────────────────────────────────────
 
+/// Collapses the SSP/scheduler networking matrix into named getters.
+///
+/// SurrealDB and the rest of the dev infrastructure stay containerized, so
+/// each side has to choose between docker-network DNS (`surrealdb:8000`,
+/// `scheduler:9667`, `ssp:8667`) and host-side mapped ports
+/// (`localhost:{SURREAL,SSP,SCHEDULER}_PORT`). When SSP and scheduler split
+/// across host/container, the container side reaches the host via
+/// `host.docker.internal`. See the table in the implementation plan.
+struct RuntimeUrls {
+    ssp_local: bool,
+    scheduler_local: bool,
+}
+
+impl RuntimeUrls {
+    fn new(ssp_local: bool, scheduler_local: bool) -> Self {
+        Self { ssp_local, scheduler_local }
+    }
+
+    fn ssp_db_url(&self) -> String {
+        if self.ssp_local {
+            format!("http://localhost:{}", SURREAL_PORT)
+        } else {
+            "http://surrealdb:8000".to_string()
+        }
+    }
+
+    fn ssp_db_ws(&self) -> String {
+        if self.ssp_local {
+            format!("ws://localhost:{}", SURREAL_PORT)
+        } else {
+            "ws://surrealdb:8000".to_string()
+        }
+    }
+
+    fn scheduler_db_url(&self) -> String {
+        if self.scheduler_local {
+            format!("http://localhost:{}", SURREAL_PORT)
+        } else {
+            "http://surrealdb:8000".to_string()
+        }
+    }
+
+    fn scheduler_db_ws(&self) -> String {
+        if self.scheduler_local {
+            format!("ws://localhost:{}", SURREAL_PORT)
+        } else {
+            "ws://surrealdb:8000".to_string()
+        }
+    }
+
+    /// Where the SSP reaches the scheduler (cluster mode only).
+    fn ssp_scheduler_url(&self) -> String {
+        match (self.ssp_local, self.scheduler_local) {
+            // SSP host: localhost works whether the scheduler is host (direct)
+            // or in a container (mapped port).
+            (true, _) => format!("http://localhost:{}", SCHEDULER_PORT),
+            // SSP container, scheduler host: container reaches host.
+            (false, true) => format!("http://host.docker.internal:{}", SCHEDULER_PORT),
+            // Both in containers: docker DNS.
+            (false, false) => format!("http://scheduler:{}", SCHEDULER_PORT),
+        }
+    }
+
+    /// Address the SSP advertises to the scheduler. The scheduler stores it
+    /// and reuses it as the SSP endpoint for ingest forwarding.
+    fn ssp_advertise(&self) -> String {
+        match (self.ssp_local, self.scheduler_local) {
+            // SSP host, scheduler host: localhost loops back.
+            (true, true) => format!("localhost:{}", SSP_PORT),
+            // SSP host, scheduler container: container side reaches host.
+            (true, false) => format!("host.docker.internal:{}", SSP_PORT),
+            // SSP container: existing behaviour, advertise the container alias.
+            (false, _) => format!("{}:{}", SSP_CONTAINER, SSP_PORT),
+        }
+    }
+}
+
 fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00kyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
     let surreal_image = versions.surrealdb_image();
-    let ssp_image = versions.ssp_image();
+    // Networking matrix between SSP and scheduler shifts based on whether
+    // each runs in a container or on the host. RuntimeUrls collapses that
+    // matrix into named getters so the launch blocks below stay readable.
+    let urls = RuntimeUrls::new(versions.ssp.is_local(), versions.scheduler.is_local());
 
     // Clean up any stale resources from a previous run
     let _ = docker(&["rm", "-f", SURREAL_CONTAINER]);
@@ -268,6 +384,26 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         return cleanup_direct(stop);
     }
 
+    // Phase 3a: Ensure namespace + database exist. Idempotent (the SurrealQL
+    // uses IF NOT EXISTS) so it's safe to run on every boot, and required
+    // after a `--clean-db` wipe — without it the migration engine's first
+    // write hits "Couldn't write to a read only transaction" (SurrealDB's
+    // way of saying the target NS/DB is missing) and the internal-schema
+    // apply later fails with "database '...' does not exist".
+    if use_local_surreal {
+        println!("{} Phase 3a: Ensuring namespace/database...", PREFIX);
+        let bootstrap_client = SurrealClient::new(
+            &surreal_url,
+            &resolved_surreal.namespace,
+            &resolved_surreal.database,
+            &resolved_surreal.username,
+            &resolved_surreal.password,
+        );
+        bootstrap_client
+            .ensure_ns_db()
+            .context("Failed to bootstrap SurrealDB namespace/database")?;
+    }
+
     // Phase 4: Apply migrations
     if skip_migrations {
         println!("{} Phase 4: Skipping migrations (--skip-migrations).", PREFIX);
@@ -282,7 +418,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
     // Phase 4a: Apply internal Sp00ky schema (meta tables + events)
     println!("{} Phase 4a: Applying internal Sp00ky schema...", PREFIX);
-    apply_internal_sp00ky_schema(&surreal_url, mode, resolved_surreal)?;
+    apply_internal_sp00ky_schema(&surreal_url, mode, versions, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_direct(stop);
@@ -290,7 +426,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
     // Phase 4b: Apply remote functions with Docker-internal endpoints
     println!("{} Phase 4b: Applying remote functions...", PREFIX);
-    apply_remote_functions(&surreal_url, mode, resolved_surreal)?;
+    apply_remote_functions(&surreal_url, mode, versions, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_direct(stop);
@@ -303,61 +439,115 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     let dev_log_env = format!("RUST_LOG={}", dev_log);
 
     // Phase 5 (cluster only): Start scheduler before SSP so SSP can register
-    let scheduler_log;
+    // `scheduler_guard` is the lifecycle handle: in Image mode it owns the
+    // `docker logs -f` tail, in LocalBinary mode it owns the spawned host
+    // process directly. Both kill on Drop.
+    let scheduler_guard: Option<LogTailGuard>;
     if *mode == DeployMode::Cluster {
-        let scheduler_image = versions.scheduler_image();
-        let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
-
-        let scheduler_db_url_env = "SPKY_DB_URL=http://surrealdb:8000".to_string();
-        let scheduler_db_ws_env = "SPKY_DB_WS=ws://surrealdb:8000".to_string();
-        let scheduler_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
-        let scheduler_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
-        let scheduler_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
-        let scheduler_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
-
         // Persist the scheduler replica + WAL to the host so `--clean` can
         // wipe it and so it survives container restarts.
         let scheduler_data_dir = std::env::current_dir()
             .context("Failed to get current directory")?
             .join(".sp00ky/scheduler_data");
         std::fs::create_dir_all(&scheduler_data_dir).ok();
-        let scheduler_data_mount = format!("{}:/data", scheduler_data_dir.display());
 
-        println!("{} Phase 5: Starting scheduler...", PREFIX);
-        docker(&[
-            "run", "-d",
-            "--name", SCHEDULER_CONTAINER,
-            "--network", NETWORK_NAME,
-            "--network-alias", "scheduler",
-            "-p", &scheduler_port_mapping,
-            "-v", &scheduler_data_mount,
-            "-e", &dev_log_env,
-            "-e", &scheduler_db_url_env,
-            "-e", &scheduler_db_ws_env,
-            "-e", &scheduler_ns_env,
-            "-e", &scheduler_db_env,
-            "-e", &scheduler_user_env,
-            "-e", &scheduler_pass_env,
-            "-e", "SPKY_AUTH_SECRET=mysecret",
-            &scheduler_image,
-        ])?;
+        scheduler_guard = match &versions.scheduler {
+            RuntimeSource::Image(_) => {
+                let scheduler_image = versions.scheduler_image()
+                    .expect("scheduler_image is Some when RuntimeSource::Image");
+                let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
+                let scheduler_db_url_env = format!("SPKY_DB_URL={}", urls.scheduler_db_url());
+                let scheduler_db_ws_env = format!("SPKY_DB_WS={}", urls.scheduler_db_ws());
+                let scheduler_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
+                let scheduler_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
+                let scheduler_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
+                let scheduler_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
+                let scheduler_data_mount = format!("{}:/data", scheduler_data_dir.display());
 
-        // Wait for /health/ready, which only flips to 200 after the scheduler
-        // finishes cloning the upstream SurrealDB into its replica. Without
-        // this gate, SSP boots in Phase 6 against an empty replica and
-        // computes wrong list_refs.
-        println!("{} Waiting for scheduler to clone replica from SurrealDB...", PREFIX);
-        wait_for_health(
-            &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
-            HEALTH_MAX_RETRIES,
-            HEALTH_RETRY_INTERVAL,
-            stop,
-            "Scheduler",
-        )?;
+                println!("{} Phase 5: Starting scheduler (docker)...", PREFIX);
+                docker(&[
+                    "run", "-d",
+                    "--name", SCHEDULER_CONTAINER,
+                    "--network", NETWORK_NAME,
+                    "--network-alias", "scheduler",
+                    "-p", &scheduler_port_mapping,
+                    "-v", &scheduler_data_mount,
+                    "-e", &dev_log_env,
+                    "-e", &scheduler_db_url_env,
+                    "-e", &scheduler_db_ws_env,
+                    "-e", &scheduler_ns_env,
+                    "-e", &scheduler_db_env,
+                    "-e", &scheduler_user_env,
+                    "-e", &scheduler_pass_env,
+                    "-e", "SPKY_AUTH_SECRET=mysecret",
+                    // Default 300s makes records take 5 minutes to land
+                    // in the replica/SSP — unusable in dev.
+                    "-e", "SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS=2",
+                    &scheduler_image,
+                ])?;
 
-        scheduler_log = Some(spawn_log_tail(SCHEDULER_CONTAINER, "scheduler"));
+                // Wait for /health/ready, which only flips to 200 after the scheduler
+                // finishes cloning the upstream SurrealDB into its replica. Without
+                // this gate, SSP boots in Phase 6 against an empty replica and
+                // computes wrong list_refs.
+                println!("{} Waiting for scheduler to clone replica from SurrealDB...", PREFIX);
+                wait_for_health(
+                    &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
+                    HEALTH_MAX_RETRIES,
+                    HEALTH_RETRY_INTERVAL,
+                    stop,
+                    "Scheduler",
+                )?;
+
+                Some(spawn_log_tail(SCHEDULER_CONTAINER, "scheduler"))
+            }
+            RuntimeSource::LocalBinary(path) => {
+                if !path.exists() {
+                    bail!(
+                        "Scheduler binary not found at {}.\n  Hint: run `cargo build -p scheduler` (or set version.dev.scheduler back to a Docker tag).",
+                        path.display()
+                    );
+                }
+                println!("{} Phase 5: Starting scheduler (host process: {})...", PREFIX, path.display());
+                let prefix = format!("{}[scheduler]{}", infra_color("scheduler"), ANSI_RESET);
+                let mut cmd = Command::new(path);
+                // The scheduler defaults `replica_db_path: ./data/replica`
+                // and `wal_path: ./data/event_wal.log` (config.rs:72,79),
+                // both relative to cwd. Run from `.sp00ky/scheduler_data`
+                // so the host paths land where `--clean` already wipes.
+                cmd.current_dir(&scheduler_data_dir);
+                cmd.env("RUST_LOG", &dev_log)
+                    .env("SPKY_DB_URL", urls.scheduler_db_url())
+                    .env("SPKY_DB_WS", urls.scheduler_db_ws())
+                    .env("SPKY_DB_NS", &resolved_surreal.namespace)
+                    .env("SPKY_DB_NAME", &resolved_surreal.database)
+                    .env("SPKY_DB_USER", &resolved_surreal.username)
+                    .env("SPKY_DB_PASS", &resolved_surreal.password)
+                    .env("SPKY_AUTH_SECRET", "mysecret")
+                    // Default 300s makes records take 5 minutes to land
+                    // in the replica/SSP — unusable in dev.
+                    .env("SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS", "2");
+                let guard = spawn_prefixed(&mut cmd, &prefix);
+
+                // Spawned host process already streams its own stdio, so
+                // we don't tail docker logs. Use the no-container variant
+                // of `wait_for_health` so it doesn't bail on the missing
+                // `sp00ky-dev-scheduler` container before the first probe.
+                println!("{} Waiting for scheduler to clone replica from SurrealDB...", PREFIX);
+                wait_for_health_with_container(
+                    &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
+                    HEALTH_MAX_RETRIES,
+                    HEALTH_RETRY_INTERVAL,
+                    stop,
+                    "Scheduler",
+                    false,
+                )?;
+
+                Some(guard)
+            }
+        };
     } else {
-        scheduler_log = None;
+        scheduler_guard = None;
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -373,49 +563,87 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     // Ensure data dir exists
     std::fs::create_dir_all(&data_dir).ok();
 
-    let port_mapping = format!("{}:8667", SSP_PORT);
-    let data_mount_str = format!("{}:/data", data_dir.display());
-
-    let ssp_db_url_env = "SPKY_DB_URL=http://surrealdb:8000".to_string();
-    let ssp_db_ws_env = "SPKY_DB_WS=ws://surrealdb:8000".to_string();
-    let ssp_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
-    let ssp_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
-    let ssp_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
-    let ssp_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
-    let scheduler_url_env = format!("SPKY_SCHEDULER_URL=http://scheduler:{}", SCHEDULER_PORT);
-    let advertise_addr_env = format!("SPKY_SSP_ADVERTISE_ADDR={}:{}", SSP_CONTAINER, SSP_PORT);
-
-    // Build SPKY_JOB_CONFIG from backend apps with outbox method
+    // Build SPKY_JOB_CONFIG from backend apps with outbox method (mode-agnostic)
     let job_config_json = build_job_config_json(config);
-    let job_config_env = format!("SPKY_JOB_CONFIG={}", job_config_json);
 
-    let mut ssp_args = vec![
-        "run", "-d",
-        "--name", SSP_CONTAINER,
-        "--network", NETWORK_NAME,
-        "--network-alias", "ssp",
-        "-p", &port_mapping,
-        "-e", &dev_log_env,
-        "-e", &ssp_db_url_env,
-        "-e", &ssp_db_ws_env,
-        "-e", &ssp_ns_env,
-        "-e", &ssp_db_env,
-        "-e", &ssp_user_env,
-        "-e", &ssp_pass_env,
-        "-e", "SPKY_AUTH_SECRET=mysecret",
-        "-e", &job_config_env,
-    ];
+    let ssp_guard: LogTailGuard = match &versions.ssp {
+        RuntimeSource::Image(_) => {
+            let ssp_image = versions.ssp_image()
+                .expect("ssp_image is Some when RuntimeSource::Image");
+            let port_mapping = format!("{}:8667", SSP_PORT);
+            let data_mount_str = format!("{}:/data", data_dir.display());
 
-    if *mode == DeployMode::Cluster {
-        ssp_args.extend(["-e", &scheduler_url_env]);
-        ssp_args.extend(["-e", "SPKY_SSP_ID=ssp-1"]);
-        ssp_args.extend(["-e", &advertise_addr_env]);
-    }
+            let ssp_db_url_env = format!("SPKY_DB_URL={}", urls.ssp_db_url());
+            let ssp_db_ws_env = format!("SPKY_DB_WS={}", urls.ssp_db_ws());
+            let ssp_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
+            let ssp_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
+            let ssp_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
+            let ssp_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
+            let scheduler_url_env = format!("SPKY_SCHEDULER_URL={}", urls.ssp_scheduler_url());
+            let advertise_addr_env = format!("SPKY_SSP_ADVERTISE_ADDR={}", urls.ssp_advertise());
+            let job_config_env = format!("SPKY_JOB_CONFIG={}", job_config_json);
 
-    ssp_args.extend(["-v", &data_mount_str]);
-    ssp_args.push(&ssp_image);
+            let mut ssp_args = vec![
+                "run", "-d",
+                "--name", SSP_CONTAINER,
+                "--network", NETWORK_NAME,
+                "--network-alias", "ssp",
+                "-p", &port_mapping,
+                "-e", &dev_log_env,
+                "-e", &ssp_db_url_env,
+                "-e", &ssp_db_ws_env,
+                "-e", &ssp_ns_env,
+                "-e", &ssp_db_env,
+                "-e", &ssp_user_env,
+                "-e", &ssp_pass_env,
+                "-e", "SPKY_AUTH_SECRET=mysecret",
+                "-e", &job_config_env,
+            ];
 
-    docker(&ssp_args)?;
+            if *mode == DeployMode::Cluster {
+                ssp_args.extend(["-e", &scheduler_url_env]);
+                ssp_args.extend(["-e", "SPKY_SSP_ID=ssp-1"]);
+                ssp_args.extend(["-e", &advertise_addr_env]);
+            }
+
+            ssp_args.extend(["-v", &data_mount_str]);
+            ssp_args.push(&ssp_image);
+
+            docker(&ssp_args)?;
+            spawn_log_tail(SSP_CONTAINER, "ssp")
+        }
+        RuntimeSource::LocalBinary(path) => {
+            if !path.exists() {
+                bail!(
+                    "SSP binary not found at {}.\n  Hint: run `cargo build -p ssp-server` (or set version.dev.ssp back to a Docker tag).",
+                    path.display()
+                );
+            }
+            println!("{} Starting SSP (host process: {})...", PREFIX, path.display());
+            let prefix = format!("{}[ssp]{}", infra_color("ssp"), ANSI_RESET);
+            let mut cmd = Command::new(path);
+            cmd.current_dir(&data_dir);
+            cmd.env("RUST_LOG", &dev_log)
+                .env("SPKY_DB_URL", urls.ssp_db_url())
+                .env("SPKY_DB_WS", urls.ssp_db_ws())
+                .env("SPKY_DB_NS", &resolved_surreal.namespace)
+                .env("SPKY_DB_NAME", &resolved_surreal.database)
+                .env("SPKY_DB_USER", &resolved_surreal.username)
+                .env("SPKY_DB_PASS", &resolved_surreal.password)
+                .env("SPKY_AUTH_SECRET", "mysecret")
+                .env("SPKY_JOB_CONFIG", &job_config_json)
+                // The container Dockerfile binds 0.0.0.0:8667; on host we
+                // need the same port reachable from frontend dev servers
+                // and (optionally) the docker-side scheduler.
+                .env("SPKY_SSP_LISTEN_ADDR", format!("0.0.0.0:{}", SSP_PORT));
+            if *mode == DeployMode::Cluster {
+                cmd.env("SPKY_SCHEDULER_URL", urls.ssp_scheduler_url())
+                    .env("SPKY_SSP_ID", "ssp-1")
+                    .env("SPKY_SSP_ADVERTISE_ADDR", urls.ssp_advertise());
+            }
+            spawn_prefixed(&mut cmd, &prefix)
+        }
+    };
 
     // Ready!
     println!("\n{} Development environment ready!", PREFIX);
@@ -426,9 +654,9 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     }
     println!("{} Press Ctrl+C to stop.\n", PREFIX);
 
-    // Tail logs from containers
+    // Tail logs from infra containers (SurrealDB always; SSP is already
+    // captured inside `ssp_guard`).
     let surreal_log = spawn_log_tail(SURREAL_CONTAINER, "surrealdb");
-    let ssp_log = spawn_log_tail(SSP_CONTAINER, "ssp");
 
     // Start app dev servers (frontend + backends)
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
@@ -444,8 +672,8 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     drop(backend_devs);
     drop(app_dev);
     drop(surreal_log);
-    drop(ssp_log);
-    drop(scheduler_log);
+    drop(ssp_guard);
+    drop(scheduler_guard);
 
     cleanup_direct(stop)
 }
@@ -538,7 +766,11 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
 
     // Phase 3a: Apply internal Sp00ky schema (meta tables + events)
     println!("{} Phase 3a: Applying internal Sp00ky schema...", PREFIX);
-    apply_internal_sp00ky_schema(&surreal_url, mode, resolved_surreal)?;
+    // Compose mode launches both services in docker per the YAML, so the
+    // SurrealDB-side endpoints stay at the docker-DNS aliases. Default
+    // versions (Image-variants) selects exactly that.
+    let compose_versions = ResolvedVersions::default();
+    apply_internal_sp00ky_schema(&surreal_url, mode, &compose_versions, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_compose(compose_file);
@@ -546,7 +778,7 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
 
     // Phase 3b: Apply remote functions with Docker-internal endpoints
     println!("{} Phase 3b: Applying remote functions...", PREFIX);
-    apply_remote_functions(&surreal_url, mode, resolved_surreal)?;
+    apply_remote_functions(&surreal_url, mode, &compose_versions, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
         return cleanup_compose(compose_file);
@@ -829,15 +1061,30 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
 
 // ── Remote functions helper ─────────────────────────────────────────────────
 
+/// Pick the URL SurrealDB (in its container) should use to call out to
+/// the SSP/scheduler. Container DNS aliases when the target also runs in
+/// docker; `host.docker.internal` when it's a host process.
+fn surreal_to_target_endpoint(mode: &DeployMode, versions: &ResolvedVersions) -> String {
+    if *mode == DeployMode::Cluster {
+        if versions.scheduler.is_local() {
+            format!("http://host.docker.internal:{}", SCHEDULER_PORT)
+        } else {
+            format!("http://scheduler:{}", SCHEDULER_PORT)
+        }
+    } else {
+        if versions.ssp.is_local() {
+            format!("http://host.docker.internal:{}", SSP_PORT)
+        } else {
+            format!("http://ssp:{}", SSP_PORT)
+        }
+    }
+}
+
 /// Apply the remote functions with Docker-internal endpoints so that
 /// SurrealDB (running inside the Docker network) can reach the SSP/scheduler
 /// via container names instead of `localhost`.
-fn apply_remote_functions(surreal_url: &str, mode: &DeployMode, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
-    let endpoint = if *mode == DeployMode::Cluster {
-        format!("http://scheduler:{}", SCHEDULER_PORT)
-    } else {
-        format!("http://ssp:{}", SSP_PORT)
-    };
+fn apply_remote_functions(surreal_url: &str, mode: &DeployMode, versions: &ResolvedVersions, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
+    let endpoint = surreal_to_target_endpoint(mode, versions);
     let secret = "mysecret";
 
     let functions_sql = schema_builder::build_remote_functions_schema(mode, &endpoint, secret);
@@ -1021,7 +1268,7 @@ fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path, resolved_surrea
 
 /// Apply the internal Sp00ky schema (meta tables + per-table events) so that
 /// record versioning and DBSP ingest work after migrations are applied.
-fn apply_internal_sp00ky_schema(surreal_url: &str, mode: &DeployMode, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
+fn apply_internal_sp00ky_schema(surreal_url: &str, mode: &DeployMode, versions: &ResolvedVersions, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let resolved = config.resolved_schema();
 
@@ -1030,11 +1277,7 @@ fn apply_internal_sp00ky_schema(surreal_url: &str, mode: &DeployMode, resolved_s
         return Ok(());
     }
 
-    let endpoint = if *mode == DeployMode::Cluster {
-        format!("http://scheduler:{}", SCHEDULER_PORT)
-    } else {
-        format!("http://ssp:{}", SSP_PORT)
-    };
+    let endpoint = surreal_to_target_endpoint(mode, versions);
     let secret = "mysecret";
 
     let config_path = Path::new(DEFAULT_CONFIG_PATH);

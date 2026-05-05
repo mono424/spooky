@@ -4,21 +4,15 @@
 
 DEFINE ACCESS account ON DATABASE TYPE RECORD
   SIGNUP {
-    -- The private key lives in `user_keypair` so its table-level SELECT
-    -- rule (`owner = $auth`) gates it consistently — field-level rules in
-    -- SurrealDB v3 only enforce on record-id queries, not table scans.
     -- When the browser fails to generate a keypair (e.g. WebCrypto Ed25519
     -- not yet available) we still let signup succeed; the user can rotate
     -- a key in via UPDATE later, they just can't issue share links until
     -- they do.
-    LET $u = CREATE ONLY user SET
-      username     = $username,
-      password     = crypto::argon2::generate($password),
-      share_pubkey = $share_pubkey;
-    IF $share_privkey != NONE THEN
-      CREATE user_keypair SET owner = $u.id, privkey = $share_privkey
-    END;
-    RETURN $u;
+    RETURN CREATE ONLY user SET
+      username      = $username,
+      password      = crypto::argon2::generate($password),
+      share_pubkey  = $share_pubkey,
+      share_privkey = $share_privkey;
   }
   SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
   DURATION FOR TOKEN 15m, FOR SESSION 30d
@@ -39,7 +33,7 @@ PERMISSIONS
     FOR select WHERE true
     FOR create WHERE true
     FOR update WHERE $access = "account" AND id = $auth.id;
-    
+
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 DEFINE FIELD password ON TABLE user TYPE string
@@ -69,19 +63,13 @@ PERMISSIONS
     FOR create WHERE true
     FOR update WHERE $access = "account" AND id = $auth.id;
 
--- The matching private key lives in the `user_keypair` table so its
--- table-level SELECT rule scopes it to the owner. Field-level rules
--- aren't enough: SurrealDB v3 only enforces field SELECT permissions on
--- record-id queries, so a free-form WHERE scan would leak the key
--- otherwise.
-DEFINE TABLE user_keypair SCHEMAFULL
+-- Matching Ed25519 private key (PEM PKCS8). Readable only by the owning
+-- user, like `password` but author-scoped instead of always-denied.
+DEFINE FIELD share_privkey ON TABLE user TYPE option<string>
 PERMISSIONS
-    FOR select, update WHERE owner = $auth
+    FOR select WHERE $access = "account" AND id = $auth.id
     FOR create WHERE true
-    FOR delete WHERE false;
-DEFINE FIELD owner    ON TABLE user_keypair TYPE record<user>;
-DEFINE FIELD privkey  ON TABLE user_keypair TYPE string;
-DEFINE INDEX unique_keypair_owner ON TABLE user_keypair FIELDS owner UNIQUE;
+    FOR update WHERE $access = "account" AND id = $auth.id;
 
 -- ##################################################################
 -- THREAD TABLE
@@ -105,13 +93,13 @@ DEFINE TABLE thread SCHEMAFULL
     FOR delete WHERE $access = "account" AND author.id = $auth.id
 ;
 
--- @crdt text
-DEFINE FIELD title ON TABLE thread TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
+DEFINE FIELD title ON TABLE thread TYPE string;
 
 -- @crdt text
-DEFINE FIELD content ON TABLE thread TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0;
+-- @cursor
+-- Stored as `{ state: bytes, cursors: ... }`. The CRDT manager owns
+-- writes — never `db.update({ content: <string> })`.
+DEFINE FIELD content ON TABLE thread TYPE object;
 
 DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
 

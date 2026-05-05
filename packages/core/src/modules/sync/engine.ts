@@ -129,6 +129,17 @@ export class SyncEngine {
 
   /**
    * Handle records that exist locally but not in remote array.
+   *
+   * "Removed" here is a derived signal: the SSP's `_00_list_ref` array no
+   * longer references a record that exists locally. That can mean the row
+   * was genuinely deleted upstream — but it can also be a benign race
+   * (e.g. a record we just created hasn't propagated into the SSP's
+   * incantation list yet). Before deleting locally we verify against
+   * upstream SurrealDB: if the row still exists there, skip the delete.
+   *
+   * On verification failure we skip deletion too. Losing a stale local
+   * row to a later sync round is recoverable; deleting a fresh row that
+   * upstream still has is not.
    */
   private async handleRemovedRecords(removed: RecordId[]): Promise<void> {
     this.logger.debug(
@@ -139,19 +150,44 @@ export class SyncEngine {
       'Checking removed records'
     );
 
-    let existingRemoteIds = new Set<string>();
+    // Group by table so we can issue `SELECT id FROM type::table($t)
+    // WHERE id IN $ids` per table. The earlier shape `SELECT id FROM
+    // $ids` returns Internal/0 in SurrealDB 3.0 when `$ids` is bound as
+    // an array of RecordIds; this form works because the array shows up
+    // only in the WHERE clause, not as the FROM target.
+    const byTable = new Map<string, RecordId[]>();
+    for (const r of removed) {
+      const list = byTable.get(r.table.name) ?? [];
+      list.push(r);
+      byTable.set(r.table.name, list);
+    }
+
+    let existingRemoteIds: Set<string>;
     try {
-      const [existingRemote] = await this.remote.query<[{ id: RecordId }[]]>('SELECT id FROM $ids', {
-        ids: removed,
-      });
-      existingRemoteIds = new Set(existingRemote.map((r) => encodeRecordId(r.id)));
-    } catch {
-      // If remote check fails (e.g., SurrealDB parameter serialization issue),
-      // proceed with deletion — the caller has already determined these should be removed
-      this.logger.debug(
-        { Category: 'sp00ky-client::SyncEngine::handleRemovedRecords' },
-        'Remote existence check failed, proceeding with deletion'
+      existingRemoteIds = new Set();
+      for (const [table, ids] of byTable) {
+        const [existing] = await this.remote.query<[{ id: RecordId }[]]>(
+          'SELECT id FROM type::table($table) WHERE id IN $ids',
+          { table, ids }
+        );
+        for (const row of existing) {
+          existingRemoteIds.add(encodeRecordId(row.id));
+        }
+      }
+    } catch (err) {
+      // Verification failed. Skip deletion entirely — the next sync
+      // round re-derives the diff and we get another shot. The
+      // alternative (delete on uncertainty) destroys freshly-created
+      // rows when the SSP hasn't yet refreshed `_00_list_ref`.
+      this.logger.warn(
+        {
+          err,
+          removed: removed.map((r) => r.toString()),
+          Category: 'sp00ky-client::SyncEngine::handleRemovedRecords',
+        },
+        'Remote existence check failed, skipping deletion to avoid clobbering fresh data'
       );
+      return;
     }
 
     for (const recordId of removed) {

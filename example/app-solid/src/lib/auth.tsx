@@ -69,8 +69,8 @@ export function AuthProvider(props: { children: JSX.Element }) {
       console.warn('[auth] Ed25519 keypair generation failed; signing up without one.', e);
     }
     // The codegen types the keypair fields as required strings; null is
-    // accepted by the SIGNUP block at runtime (it skips the `user_keypair`
-    // create when privkey is NONE), but TypeScript doesn't know that.
+    // accepted by the SIGNUP block at runtime (the field is option<string>),
+    // but TypeScript doesn't know that.
     await db.auth.signUp('account', { username, password, share_pubkey, share_privkey } as any);
   };
 

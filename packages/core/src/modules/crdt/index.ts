@@ -72,6 +72,7 @@ export class CrdtManager {
     fallbackText?: string,
   ): Promise<CrdtField> {
     this.assertCrdtField(table, field);
+    const cursorsEnabled = this.fieldHasCursor(table, field);
     const key = this.makeKey(table, recordId, field);
     let crdtField = this.fields.get(key);
 
@@ -79,22 +80,20 @@ export class CrdtManager {
       return crdtField;
     }
 
-    // Load the existing CRDT snapshot from the LOCAL cache. In local the
-    // state lives as an object field on the parent row itself (injected
-    // by apps/cli/src/main.rs alongside `_00_rv`), not as a separate
-    // table — the local DB is single-tenant so we don't need the
-    // cross-table permission gate the remote design uses. This lets the
-    // editor mount offline because the snapshot rides the parent's
-    // normal local sync.
-    let initialCrdtState: string | undefined;
+    // Read the snapshot directly off the parent row. `@crdt`-only fields
+    // hold the base64 snapshot inline; `@crdt @cursor` fields hold a
+    // `{ state, cursors }` object so we drill into `.state`. The query
+    // always selects the local row — sync-down already populated it
+    // (the snapshot is a column on the parent, not a sidecar table) so
+    // there is no separate fetch on the happy path.
+    let initialCrdtState: Uint8Array | undefined;
     try {
-      const [result] = await this.local.query<[string | null]>(
-        'SELECT VALUE _00_crdt[$field] FROM ONLY $id',
-        { id: parseRecordIdString(recordId), field },
+      const [result] = await this.local.query<[unknown]>(
+        `SELECT VALUE ${field} FROM ONLY $id`,
+        { id: parseRecordIdString(recordId) },
       );
-      if (typeof result === 'string' && result.length > 0) {
-        initialCrdtState = result;
-      }
+      const snapshot = this.extractSnapshot(result, cursorsEnabled);
+      if (snapshot) initialCrdtState = snapshot;
     } catch (e) {
       this.logger.info(
         { error: String(e), recordId, field, Category: 'sp00ky-client::CrdtManager::open' },
@@ -102,7 +101,7 @@ export class CrdtManager {
       );
     }
 
-    crdtField = new CrdtField(field, initialCrdtState, this.logger);
+    crdtField = new CrdtField(field, cursorsEnabled, initialCrdtState, this.logger);
     crdtField.startSync(this.local, this.remote, recordId, this.sessionId, this.debounceMs);
     this.fields.set(key, crdtField);
 
@@ -112,18 +111,16 @@ export class CrdtManager {
     );
 
     // Fire-and-forget: the LIVE subscription receives *future* updates;
-    // the initial snapshot is already in hand. Awaiting this used to add
-    // a network round-trip to every thread open. `ensureTableSubscription`
+    // the initial snapshot is already in hand. `ensureTableSubscription`
     // coalesces concurrent calls via `pendingLive`, so this is safe.
     void this.ensureTableSubscription(table);
 
-    // No local snapshot — could be a first-ever open on this device, a
-    // memory-backed local DB after reload, or a record that hasn't been
-    // touched since `_00_crdt` started being persisted. Pull the remote
-    // snapshot now; otherwise the editor sits empty until the parent's
-    // LIVE feed happens to fire on a future edit.
+    // Local was empty — a fresh device, a memory-backed local DB after
+    // reload, or a record that hasn't been sync'd locally yet. Pull the
+    // parent row from remote and dispatch its CRDT field; otherwise the
+    // editor sits empty until the parent's LIVE feed happens to fire.
     if (!initialCrdtState) {
-      void this.fetchAndDispatchMeta(table, recordId);
+      void this.fetchAndDispatchRow(table, recordId);
     }
 
     return crdtField;
@@ -202,59 +199,88 @@ export class CrdtManager {
     }
   }
 
-  /** Route a freshly-arrived row to the currently-open CrdtFields. The
-   *  parent LIVE feed only carries the parent row itself (the meta tables
-   *  are separate), so we follow up with a single round-trip subquery to
-   *  pull the matching `_00_crdt` and `_00_cursor` rows and dispatch each
-   *  one. */
+  /** Dispatch a parent-row LIVE event to every open CrdtField on that
+   *  record. Each open field reads its slice of the row directly — the
+   *  CRDT snapshot is a column on the parent now, so there is no
+   *  follow-up subquery. */
   private dispatchRow(table: string, row: Record<string, unknown>): void {
     const id = row.id != null ? String(row.id) : '';
     if (!id) return;
 
-    // Skip the round-trip when we have no open editors for this row — there
-    // is nothing to deliver to anyway. Keys are `${table}:${recordId}:${field}`,
-    // and `id` already includes the table prefix (e.g. "thread:abc").
     const rowKeyPrefix = `${table}:${id}:`;
-    const anyOpen = Array.from(this.fields.keys()).some((k) => k.startsWith(rowKeyPrefix));
-    if (!anyOpen) return;
+    for (const [key, crdtField] of this.fields) {
+      if (!key.startsWith(rowKeyPrefix)) continue;
+      const fieldName = key.slice(rowKeyPrefix.length);
+      const cursorsEnabled = this.fieldHasCursor(table, fieldName);
+      const slice = row[fieldName];
+      const snapshot = this.extractSnapshot(slice, cursorsEnabled);
+      if (snapshot) crdtField.importRemote(snapshot);
 
-    void this.fetchAndDispatchMeta(table, id);
+      if (cursorsEnabled && slice && typeof slice === 'object') {
+        const cursors = (slice as { cursors?: unknown }).cursors;
+        if (cursors && typeof cursors === 'object') {
+          for (const [sid, blob] of Object.entries(cursors as Record<string, unknown>)) {
+            if (sid === this.sessionId) continue;
+            if (typeof blob === 'string' && blob.length > 0) {
+              crdtField.importRemoteCursor(blob);
+            }
+          }
+        }
+      }
+    }
   }
 
-  private async fetchAndDispatchMeta(table: string, id: string): Promise<void> {
+  /** One-shot remote fetch for a row whose CRDT field hasn't synced
+   *  locally yet (fresh device, memory-backed local DB after reload, …).
+   *  Used by `open()` when the local read came up empty. Subsequent
+   *  cross-browser updates ride `dispatchRow` via the parent LIVE feed. */
+  private async fetchAndDispatchRow(table: string, id: string): Promise<void> {
     try {
       const recordId = parseRecordIdString(id);
-      const [crdtRows, cursorRows] = await this.remote.query<[
-        Array<{ field: string; state: string | null }>,
-        Array<{ session_id: string; field: string; state: string | null }>,
-      ]>(
-        `SELECT field, state FROM _00_crdt WHERE record_id = $id;
-         SELECT session_id, field, state FROM _00_cursor WHERE record_id = $id;`,
+      const [row] = await this.remote.query<[Record<string, unknown> | null]>(
+        `SELECT * FROM ONLY $id`,
         { id: recordId },
       );
-
-      if (Array.isArray(crdtRows)) {
-        for (const r of crdtRows) {
-          if (!r || typeof r.state !== 'string' || r.state.length === 0) continue;
-          const key = this.makeKey(table, id, r.field);
-          this.fields.get(key)?.importRemote(r.state);
-        }
-      }
-
-      if (Array.isArray(cursorRows)) {
-        for (const r of cursorRows) {
-          if (!r || typeof r.state !== 'string' || r.state.length === 0) continue;
-          if (r.session_id === this.sessionId) continue;
-          const key = this.makeKey(table, id, r.field);
-          this.fields.get(key)?.importRemoteCursor(r.state);
-        }
-      }
+      if (!row || typeof row !== 'object') return;
+      this.dispatchRow(table, row as Record<string, unknown>);
     } catch (e) {
       this.logger.warn(
-        { error: e, table, id, Category: 'sp00ky-client::CrdtManager::fetchAndDispatchMeta' },
-        'Failed to fetch CRDT/cursor meta rows after parent LIVE event'
+        { error: e, table, id, Category: 'sp00ky-client::CrdtManager::fetchAndDispatchRow' },
+        'Failed to fetch parent row for CRDT hydration'
       );
     }
+  }
+
+  /** Schema lookup: does `<table>.<field>` carry a `@cursor` annotation?
+   *  Determines the on-disk shape (plain snapshot vs. `{ state, cursors }`). */
+  private fieldHasCursor(table: string, field: string): boolean {
+    const tableSchema = this.schema.tables.find((t) => t.name === table);
+    return !!tableSchema?.columns[field]?.cursor;
+  }
+
+  /** Pull the LoroDoc snapshot bytes out of a row slice. For `@crdt`-only
+   *  the slice IS the snapshot (Uint8Array); for `@crdt @cursor` it's
+   *  `{ state, cursors }` where `state` carries the snapshot bytes. */
+  private extractSnapshot(value: unknown, cursorsEnabled: boolean): Uint8Array | undefined {
+    const asBytes = (v: unknown): Uint8Array | undefined => {
+      if (v instanceof Uint8Array) return v.length > 0 ? v : undefined;
+      // SurrealDB sometimes ferries bytes through ArrayBuffer / typed
+      // array variants depending on transport; widen accordingly.
+      if (v instanceof ArrayBuffer) return new Uint8Array(v);
+      if (ArrayBuffer.isView(v)) {
+        const view = v as ArrayBufferView;
+        return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+      }
+      return undefined;
+    };
+
+    if (cursorsEnabled) {
+      if (value && typeof value === 'object' && !(value instanceof Uint8Array)) {
+        return asBytes((value as { state?: unknown }).state);
+      }
+      return undefined;
+    }
+    return asBytes(value);
   }
 
   private killTableSubscription(table: string): void {
@@ -275,6 +301,11 @@ export class CrdtManager {
    * of silently producing a non-CRDT writer.
    */
   private assertCrdtField(table: string, field: string): void {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(field)) {
+      throw new Error(
+        `openCrdtField: refusing unsafe field identifier '${field}' — must match [a-zA-Z_][a-zA-Z0-9_]*`
+      );
+    }
     const tableSchema = this.schema.tables.find((t) => t.name === table);
     if (!tableSchema) {
       throw new Error(

@@ -28,8 +28,10 @@ use tracing::{Span, debug, error, info, instrument, warn};
 pub mod crdt;
 pub mod metrics;
 pub mod open_telemetry;
+pub mod view_metrics;
 
 use metrics::Metrics;
+use view_metrics::{ViewMetrics, ViewMetricsState};
 
 use job_runner::{JobConfig, JobEntry, JobRunner};
 use tokio::sync::mpsc;
@@ -67,6 +69,10 @@ pub struct AppState {
     pub scheduler_url: Option<String>,
     pub start_time: std::time::Instant,
     pub crdt_cache: Arc<crdt::CrdtCache>,
+    /// Per-view rolling materialization-latency samples plus running
+    /// update/error counters. Persisted onto `_00_query` after each
+    /// affected ingest step.
+    pub view_metrics: Arc<ViewMetrics>,
 }
 
 // --- Request/Response DTOs ---
@@ -199,7 +205,14 @@ impl BootstrapSource {
                     .with_context(|| format!("Query failed: {}", surql))?;
                 let val: surrealdb::types::Value = response.take(0)
                     .context("Failed to parse query response")?;
-                Ok(serde_json::to_value(&val).unwrap_or_default())
+                // `into_json_value()` flattens RecordId/Datetime to plain
+                // strings and unwraps SurrealDB's tagged Value enum into
+                // ordinary JSON. `serde_json::to_value(&val)` (the previous
+                // implementation) emitted the tagged shape `{"Object": {
+                // "tables": {"Object": {...}}}}`, which broke
+                // `info_json.get("tables")` and made the bootstrap report
+                // an empty table list against a populated DB.
+                Ok(val.into_json_value())
             }
             BootstrapSource::Proxy { client, proxy_url } => {
                 let url = format!("{}/query", proxy_url);
@@ -324,7 +337,11 @@ pub async fn run_server() -> anyhow::Result<()> {
         metrics::init_metrics().context("Failed to initialize metrics")?;
     let metrics = Arc::new(metrics);
 
-    info!("\n ____  ____  ____\n/ ___)/ ___)(  _ \\\n\\___ \\\\___ \\ ) __/\n(____/(____/(__)    v{}\n\nSp00ky Sync Provider — streaming mode", env!("CARGO_PKG_VERSION"));
+    info!(
+        "\n ____  ____  ____\n/ ___)/ ___)(  _ \\\n\\___ \\\\___ \\ ) __/\n(____/(____/(__)    v{}\n\nSp00ky Sync Provider — streaming mode\nBuilt: {}",
+        env!("CARGO_PKG_VERSION"),
+        env!("SPOOKY_BUILD_TIMESTAMP"),
+    );
 
     let config = load_config();
     let db = connect_database(&config).await?;
@@ -371,6 +388,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         scheduler_url: config.scheduler_url.clone(),
         start_time: std::time::Instant::now(),
         crdt_cache,
+        view_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };
 
     let app = create_app(state);
@@ -393,8 +411,12 @@ pub async fn run_server() -> anyhow::Result<()> {
         let advertise_addr = config.advertise_addr.clone();
 
         tokio::spawn(async move {
-            // Choose bootstrap source based on mode
-            let (source, expected_hashes) = if let Some(ref scheduler_url) = scheduler_url {
+            // Choose bootstrap source based on mode. The metadata source
+            // (INFO FOR DB → permissions) is always upstream SurrealDB
+            // regardless of mode, because the scheduler's replica is
+            // records-only and won't carry DEFINE TABLE strings.
+            let metadata_source = BootstrapSource::Direct(db.clone());
+            let (data_source, expected_hashes) = if let Some(ref scheduler_url) = scheduler_url {
                 // Cluster mode: register with scheduler, then bootstrap from proxy
                 let client = reqwest::Client::new();
                 let scheduler_base = scheduler_url.trim_end_matches('/');
@@ -441,7 +463,7 @@ pub async fn run_server() -> anyhow::Result<()> {
             let mut attempt = 0;
             loop {
                 attempt += 1;
-                match self_bootstrap(&source, &processor).await {
+                match self_bootstrap_with_metadata(&metadata_source, &data_source, &processor).await {
                     Ok(()) => {
                         // Integrity check: only when the scheduler handed us
                         // expected hashes (cluster mode). Mismatch ⇒ wipe
@@ -522,8 +544,9 @@ pub async fn run_server() -> anyhow::Result<()> {
         let scheduler_url_clone = scheduler_url.clone();
         let heartbeat_interval = config.heartbeat_interval_ms;
         let processor_clone = processor_for_scheduler.clone();
-        let listen_addr = config.listen_addr.clone();
-        let advertise_addr = config.advertise_addr.clone();
+        // listen_addr / advertise_addr aren't read here — the heartbeat
+        // path no longer self-registers; if the scheduler 404s us, we
+        // exit and the supervisor reruns the full register handshake.
         let status_for_heartbeat = status.clone();
 
         tokio::spawn(async move {
@@ -668,14 +691,26 @@ async fn shutdown_signal(
 
 /// Bootstrap the circuit by loading all table data and view definitions.
 /// Works with either a direct SurrealDB connection or the scheduler's HTTP proxy.
-async fn self_bootstrap(
-    source: &BootstrapSource,
+/// Bootstrap with separate sources for metadata (INFO FOR DB) and data
+/// (record SELECTs). In cluster mode the scheduler's proxy backs onto its
+/// RocksDB replica, which only stores records — DEFINE TABLE / PERMISSIONS
+/// strings never land there, so `INFO FOR DB` against the proxy returns
+/// at most an empty or schemaless view of each table. That breaks the
+/// SSP's policy bootstrap (every table comes back without a registered
+/// permission and gets default-denied at view-register time). Upstream
+/// SurrealDB is the source of truth for schema, so callers in cluster
+/// mode pass it explicitly here as `metadata_source`.
+async fn self_bootstrap_with_metadata(
+    metadata_source: &BootstrapSource,
+    data_source: &BootstrapSource,
     processor: &Arc<RwLock<Circuit>>,
 ) -> anyhow::Result<()> {
     info!("Starting self-bootstrap");
+    let source = data_source;
 
-    // Step 1: Discover tables via INFO FOR DB
-    let info_json = source.query("INFO FOR DB").await
+    // Step 1: Discover tables via INFO FOR DB (against upstream so we get
+    // the real DEFINE TABLE strings with PERMISSIONS clauses).
+    let info_json = metadata_source.query("INFO FOR DB").await
         .context("Failed to query INFO FOR DB")?;
 
     // INFO FOR DB returns `tables: { name: "DEFINE TABLE ... PERMISSIONS ...;" }`.
@@ -1218,10 +1253,12 @@ async fn ingest_handler(
         Operation::Update => Change::update(&payload.table, &payload.id, clean),
         Operation::Delete => Change::delete(&payload.table, &payload.id),
     };
+    let step_start = std::time::Instant::now();
     let deltas = {
         let mut circuit = state.processor.write().await;
         circuit.step(ChangeSet { changes: vec![change] })
     };
+    let materialization_time_ms = step_start.elapsed().as_secs_f64() * 1000.0;
 
     // Record metrics
     state.metrics.inc_ingest(
@@ -1242,8 +1279,22 @@ async fn ingest_handler(
 
         // Update edges in database
         let delta_refs: Vec<&ViewDelta> = deltas.iter().collect();
-        let circuit = state.processor.read().await;
-        update_all_edges(&state.db, &delta_refs, &state.metrics, &circuit).await;
+        {
+            let circuit = state.processor.read().await;
+            update_all_edges(&state.db, &delta_refs, &state.metrics, &circuit).await;
+        }
+
+        // Persist per-view metrics for every affected view. The same step
+        // duration is recorded against every view touched by this change
+        // (going finer-grained would require per-view timing inside the
+        // circuit). Best-effort: log on failure rather than fail the ingest.
+        persist_view_metrics(
+            &state,
+            deltas.iter().map(|d| d.records.len()).collect::<Vec<_>>(),
+            deltas.iter().map(|d| d.query_id.clone()).collect::<Vec<_>>(),
+            materialization_time_ms,
+        )
+        .await;
     }
 
     // Record duration
@@ -1354,6 +1405,7 @@ async fn register_view_handler(
     debug!("Registering view: {}", data.plan.id);
 
     // Register view with Streaming format
+    let register_start = std::time::Instant::now();
     let update = {
         let mut circuit = state.processor.write().await;
         circuit.add_query(
@@ -1362,8 +1414,18 @@ async fn register_view_handler(
             Some(OutputFormat::Streaming),
         )
     };
+    let registration_time_ms = register_start.elapsed().as_secs_f64() * 1000.0;
 
     state.metrics.view_count.add(1, &[]);
+
+    // Seed an empty per-view metrics state so the first ingest doesn't have
+    // to take the write lock to insert.
+    {
+        let mut metrics_map = state.view_metrics.write().await;
+        metrics_map
+            .entry(data.plan.id.clone())
+            .or_insert_with(ViewMetricsState::default);
+    }
 
     // Extract metadata fields
     let client_id = data
@@ -1396,8 +1458,21 @@ async fn register_view_handler(
         .cloned()
         .unwrap_or(Value::Null);
 
-    // Store incantation metadata
-    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surql = <string>$surql, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    // Capture initial row count from the snapshot delta so `_00_query.rowCount`
+    // reflects the materialized view's content immediately after register,
+    // not just after the first per-ingest update. Without this the row
+    // count stays at the schema default 0 until something mutates the
+    // upstream tables — confusing when the view actually has rows
+    // already, e.g. on page reload.
+    let initial_row_count: i64 = update
+        .as_ref()
+        .map(|d| d.records.len() as i64)
+        .unwrap_or(0);
+
+    // Store incantation metadata. createdAt has DEFAULT time::now() and is
+    // READONLY so it's only set on the inserting branch of the UPSERT;
+    // counters default to 0 if absent.
+    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surql = <string>$surql, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt, registrationTime = <float>$registrationTime, rowCount = <int>$rowCount";
 
     if let Err(e) = state
         .db
@@ -1408,6 +1483,8 @@ async fn register_view_handler(
         .bind(("params", params))
         .bind(("ttl", ttl))
         .bind(("lastActiveAt", last_active_at))
+        .bind(("registrationTime", registration_time_ms))
+        .bind(("rowCount", initial_row_count))
         .await
     {
         error!("Failed to upsert incantation metadata: {}", e);
@@ -1449,6 +1526,13 @@ async fn unregister_view_handler(
     {
         let mut circuit = state.processor.write().await;
         circuit.remove_query(&payload.id);
+    }
+
+    // Drop the per-view metrics state alongside the circuit entry so the
+    // map doesn't grow unbounded across the lifetime of the SSP.
+    {
+        let mut metrics_map = state.view_metrics.write().await;
+        metrics_map.remove(&payload.id);
     }
 
     state.metrics.view_count.add(-1, &[]);
@@ -1990,4 +2074,81 @@ async fn update_incantation_edges<C: Connection>(
     circuit: &Circuit,
 ) {
     update_all_edges(db, &[delta], metrics, circuit).await;
+}
+
+/// Push the same materialization-step latency sample onto every affected
+/// view's rolling window, then persist `_00_query.{materializationP55,
+/// materializationP90, materializationP99, lastIngestLatency, updateCount,
+/// rowCount}` for each view. Best-effort: logs but does not surface
+/// failures to the ingest caller.
+async fn persist_view_metrics(
+    state: &AppState,
+    row_counts: Vec<usize>,
+    view_ids: Vec<String>,
+    materialization_time_ms: f64,
+) {
+    if view_ids.is_empty() {
+        return;
+    }
+
+    // Update the in-memory rolling window once per affected view, computing
+    // the new percentiles and update_count under the same lock acquisition.
+    let snapshots: Vec<_> = {
+        let mut metrics_map = state.view_metrics.write().await;
+        view_ids
+            .iter()
+            .zip(row_counts.iter())
+            .map(|(view_id, row_count)| {
+                let entry = metrics_map
+                    .entry(view_id.clone())
+                    .or_insert_with(ViewMetricsState::default);
+                entry.record_sample(materialization_time_ms);
+                entry.update_count = entry.update_count.saturating_add(1);
+                let percentiles = entry.percentiles();
+                (
+                    view_id.clone(),
+                    *row_count,
+                    entry.update_count,
+                    materialization_time_ms,
+                    percentiles,
+                )
+            })
+            .collect()
+    };
+
+    for (view_id, row_count, update_count, last_ingest_latency, percentiles) in snapshots {
+        let incantation_id = format_incantation_id(&view_id);
+        let query = "UPDATE <record>$id SET \
+            rowCount = <int>$rowCount, \
+            updateCount = <int>$updateCount, \
+            lastIngestLatency = <float>$lastIngestLatency, \
+            materializationP55 = $p55, \
+            materializationP90 = $p90, \
+            materializationP99 = $p99";
+
+        let (p55, p90, p99) = match percentiles {
+            Some(t) => (Some(t.0), Some(t.1), Some(t.2)),
+            None => (None, None, None),
+        };
+
+        if let Err(e) = state
+            .db
+            .query(query)
+            .bind(("id", incantation_id.clone()))
+            .bind(("rowCount", row_count as i64))
+            .bind(("updateCount", update_count as i64))
+            .bind(("lastIngestLatency", last_ingest_latency))
+            .bind(("p55", p55))
+            .bind(("p90", p90))
+            .bind(("p99", p99))
+            .await
+        {
+            warn!(
+                target: "ssp::view_metrics",
+                error = %e,
+                view_id = %incantation_id,
+                "Failed to persist per-view metrics"
+            );
+        }
+    }
 }

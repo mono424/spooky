@@ -6,6 +6,7 @@ import type { schema } from '../schema.gen';
 import { ProfilePicture } from './ProfilePicture';
 import { ArrowDownAZ, ArrowUpZA, CalendarArrowDown, CalendarArrowUp, Plus } from 'lucide-solid';
 import { Tooltip } from './Tooltip';
+import { loroPreview } from '../lib/crdt-text';
 
 // Scroll the selected thread card into view
 function scrollSelectedIntoView(index: number) {
@@ -200,12 +201,12 @@ export function ThreadList() {
 
                   {/* Title */}
                   <h2 class="text-[15px] font-semibold text-white group-hover:text-zinc-300 transition-colors duration-150 mb-1.5">
-                    {thread.title}
+                    {loroPreview(thread.title) || 'Untitled'}
                   </h2>
 
                   {/* Content preview */}
                   <p class="text-sm text-zinc-500 line-clamp-2 leading-relaxed">
-                    {thread.content}
+                    {loroPreview(thread.content)}
                   </p>
                 </div>
               </div>

@@ -13,6 +13,7 @@ import { ProfilePicture } from './ProfilePicture';
 import { Tooltip } from './Tooltip';
 import { CollaborativeEditor } from './CollaborativeEditor';
 import { ShareDialog } from './ShareDialog';
+import { loroPreview } from '../lib/crdt-text';
 import { Lock, MoreVertical } from 'lucide-solid';
 
 interface CollaboratorRow {
@@ -154,7 +155,13 @@ export function ThreadDetail() {
     const threadData = thread();
     const currentUser = auth.user();
     if (!threadData?.author?.id || !currentUser?.id) return false;
-    return threadData.author.id === currentUser.id;
+    // RecordId values can come through as either a RecordId instance or
+    // its string form depending on whether the record came from a local
+    // query, a remote query, or a subquery join. Compare via stringifyId
+    // so identity-vs-value mismatches don't make the author silently
+    // lose edit permission on their own thread (the editor reads
+    // `editable={canEdit()}` and goes readonly otherwise).
+    return stringifyId(threadData.author.id) === stringifyId(currentUser.id);
   };
 
   const [collaborators, setCollaborators] = createSignal<CollaboratorRow[]>([]);
@@ -242,41 +249,42 @@ export function ThreadDetail() {
     }
   };
 
-  // CRDT fields for collaborative editing
+  // CRDT fields for collaborative editing. The 4th arg (fallbackText) is
+  // intentionally omitted: with `@crdt` fields stored as raw bytes /
+  // `{ state, cursors }`, the `thread.title` / `thread.content` columns
+  // *are* the LoroDoc snapshots — there's no human-readable string to
+  // hand the editor as a seed anymore. The CrdtField hydrates from the
+  // local row directly via `SELECT VALUE <field>`.
   const titleCrdtField = useCrdtField(
     'thread',
     () => thread()?.id ? `thread:${params.id}` : undefined,
     'title',
-    () => thread()?.title
   );
   const contentCrdtField = useCrdtField(
     'thread',
     () => thread()?.id ? `thread:${params.id}` : undefined,
     'content',
-    () => thread()?.content
   );
 
-  const handleTitleChange = async (newTitle: string) => {
-    const threadData = thread();
-    if (!threadData || !threadData.id || !canEdit()) return;
-    await db.update('thread', threadData.id, { title: newTitle }, { debounced: true });
-  };
+  // Both `title` (`@crdt text`) and `content` (`@crdt @cursor`) are
+  // CRDT-backed fields. The CollaborativeEditor drives the LoroDoc
+  // directly and `CrdtField.pushToRemote` is the only writer for the
+  // stored bytes / `{ state, cursors }` shape — calling `db.update` here
+  // with a plain string would race the snapshot push and SurrealDB would
+  // reject it on the bytes/object column anyway. So `onUpdate` from the
+  // editor is intentionally a no-op now; keep the callback so the editor
+  // contract stays the same.
+  const handleTitleChange = (_newTitle: string) => { /* CRDT pushes itself */ };
+  const handleContentChange = (_newContent: string) => { /* CRDT pushes itself */ };
 
-  const handleContentChange = async (newContent: string) => {
+  const handleAcceptTitle = async (_suggestion: string) => {
+    // TODO: apply the suggestion text into the title CrdtField's LoroDoc
+    // (insert + push) and then clear `title_suggestion`. For now we just
+    // drop the suggestion so the UI gets out of the way; the user can
+    // retype manually.
     const threadData = thread();
     if (!threadData || !threadData.id || !canEdit()) return;
-    await db.update(
-      'thread',
-      threadData.id,
-      { content: newContent },
-      { debounced: { delay: 2000, key: 'recordId_x_fields' } }
-    );
-  };
-
-  const handleAcceptTitle = async (suggestion: string) => {
-    const threadData = thread();
-    if (!threadData || !threadData.id || !canEdit()) return;
-    await db.update('thread', threadData.id, { title: suggestion, title_suggestion: '' });
+    await db.update('thread', threadData.id, { title_suggestion: '' });
   };
 
   const handleDeclineTitle = async () => {
@@ -285,10 +293,12 @@ export function ThreadDetail() {
     await db.update('thread', threadData.id, { title_suggestion: '' });
   };
 
-  const handleAcceptContent = async (suggestion: string) => {
+  const handleAcceptContent = async (_suggestion: string) => {
+    // TODO: same as handleAcceptTitle — apply the suggestion through the
+    // content CrdtField, then clear `content_suggestion`.
     const threadData = thread();
     if (!threadData || !threadData.id || !canEdit()) return;
-    await db.update('thread', threadData.id, { content: suggestion, content_suggestion: '' });
+    await db.update('thread', threadData.id, { content_suggestion: '' });
   };
 
   const handleDeclineContent = async () => {
@@ -514,14 +524,13 @@ export function ThreadDetail() {
                         when={titleCrdtField()}
                         fallback={
                           <div class="text-2xl font-semibold mb-4 leading-tight">
-                            <p>{threadData().title || 'Untitled'}</p>
+                            <p>Untitled</p>
                           </div>
                         }
                       >
                         {(field) => (
                           <CollaborativeEditor
                             field={field()}
-                            content={threadData().title}
                             placeholder="Untitled"
                             class="text-2xl font-semibold mb-4 leading-tight [&_.ProseMirror]:outline-none"
                             editable={canEdit()}
@@ -581,14 +590,13 @@ export function ThreadDetail() {
                         when={contentCrdtField()}
                         fallback={
                           <div class="text-[15px] text-zinc-300 leading-relaxed min-h-[120px]">
-                            <p class="whitespace-pre-wrap">{threadData().content ?? ''}</p>
+                            <p class="whitespace-pre-wrap">{loroPreview(threadData().content)}</p>
                           </div>
                         }
                       >
                         {(field) => (
                           <CollaborativeEditor
                             field={field()}
-                            content={threadData().content}
                             placeholder="Write something..."
                             class="text-[15px] text-zinc-300 focus-within:text-white leading-relaxed min-h-[120px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:min-h-[120px]"
                             editable={canEdit()}

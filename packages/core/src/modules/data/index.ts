@@ -21,6 +21,7 @@ import type {
   QueryConfigRecord,
   UpdateOptions,
   RunOptions} from '../../types';
+import { MATERIALIZATION_SAMPLE_WINDOW } from '../../types';
 import {
   parseRecordIdString,
   extractIdPart,
@@ -207,7 +208,7 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   private async processStreamUpdate(update: StreamUpdate): Promise<void> {
-    const { queryHash, localArray } = update;
+    const { queryHash, localArray, materializationTimeMs } = update;
     const queryState = this.activeQueries.get(queryHash);
     if (!queryState) {
       this.logger.warn(
@@ -216,6 +217,18 @@ export class DataModule<S extends SchemaStructure> {
       );
       return;
     }
+
+    // Update the rolling materialization-sample window before the work that
+    // could throw, so the percentiles still move when the downstream local
+    // query fails (the materialization step itself ran).
+    if (typeof materializationTimeMs === 'number') {
+      queryState.materializationSamples.push(materializationTimeMs);
+      if (queryState.materializationSamples.length > MATERIALIZATION_SAMPLE_WINDOW) {
+        queryState.materializationSamples.shift();
+      }
+      queryState.lastIngestLatencyMs = materializationTimeMs;
+    }
+    const percentiles = this.computeMaterializationPercentiles(queryState.materializationSamples);
 
     try {
       // Fetch updated records
@@ -227,24 +240,50 @@ export class DataModule<S extends SchemaStructure> {
       // Update state
       const newRecords = records || [];
       queryState.config.localArray = localArray;
-      await this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
-        id: queryState.config.id,
-        localArray,
-      });
 
-      // Skip notification if records haven't changed
       const prevJson = JSON.stringify(queryState.records);
       const newJson = JSON.stringify(newRecords);
       queryState.records = newRecords;
-      if (prevJson === newJson) {
+      const recordsChanged = prevJson !== newJson;
+
+      // updateCount counts user-visible updates (matches the prior semantic),
+      // while the materialization sample/percentiles already moved above for
+      // every observed engine step.
+      if (recordsChanged) {
+        queryState.updateCount++;
+      }
+
+      await this.local.query(
+        surql.seal(
+          surql.updateSet('id', [
+            'localArray',
+            'rowCount',
+            'updateCount',
+            'lastIngestLatency',
+            'materializationP55',
+            'materializationP90',
+            'materializationP99',
+          ])
+        ),
+        {
+          id: queryState.config.id,
+          localArray,
+          rowCount: localArray.length,
+          updateCount: queryState.updateCount,
+          lastIngestLatency: queryState.lastIngestLatencyMs,
+          materializationP55: percentiles.p55,
+          materializationP90: percentiles.p90,
+          materializationP99: percentiles.p99,
+        }
+      );
+
+      if (!recordsChanged) {
         this.logger.debug(
           { queryHash, Category: 'sp00ky-client::DataModule::onStreamUpdate' },
           'Query records unchanged, skipping notification'
         );
         return;
       }
-
-      queryState.updateCount++;
 
       // Notify subscribers
       const subscribers = this.subscriptions.get(queryHash);
@@ -263,11 +302,50 @@ export class DataModule<S extends SchemaStructure> {
         'Query updated from stream'
       );
     } catch (err) {
+      queryState.errorCount++;
       this.logger.error(
         { err, queryHash, Category: 'sp00ky-client::DataModule::onStreamUpdate' },
         'Failed to fetch records for stream update'
       );
+      // Best-effort persist of the bumped errorCount; swallow secondary
+      // failures to avoid masking the original error in logs.
+      try {
+        await this.local.query(surql.seal(surql.updateSet('id', ['errorCount'])), {
+          id: queryState.config.id,
+          errorCount: queryState.errorCount,
+        });
+      } catch (persistErr) {
+        this.logger.warn(
+          {
+            err: persistErr,
+            queryHash,
+            Category: 'sp00ky-client::DataModule::onStreamUpdate',
+          },
+          'Failed to persist incremented errorCount'
+        );
+      }
     }
+  }
+
+  /**
+   * Compute p55/p90/p99 from a rolling window of materialization samples.
+   * Returns nulls for any percentile that has no samples yet so SurrealDB
+   * `option<float>` columns stay NONE rather than 0 before the first ingest.
+   */
+  private computeMaterializationPercentiles(samples: number[]): {
+    p55: number | null;
+    p90: number | null;
+    p99: number | null;
+  } {
+    if (samples.length === 0) {
+      return { p55: null, p90: null, p99: null };
+    }
+    const sorted = [...samples].sort((a, b) => a - b);
+    const pick = (q: number) => {
+      const idx = Math.min(sorted.length - 1, Math.floor(q * sorted.length));
+      return sorted[idx]!;
+    };
+    return { p55: pick(0.55), p90: pick(0.90), p99: pick(0.99) };
   }
 
   /**
@@ -731,6 +809,7 @@ export class DataModule<S extends SchemaStructure> {
       tableName,
     });
 
+    const t0 = performance.now();
     const { localArray } = this.cache.registerQuery({
       queryHash: hash,
       surql: surqlString,
@@ -738,12 +817,18 @@ export class DataModule<S extends SchemaStructure> {
       ttl: new Duration(ttl),
       lastActiveAt: new Date(),
     });
+    const registrationTime = performance.now() - t0;
 
     await withRetry(this.logger, () =>
-      this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
-        id: recordId,
-        localArray,
-      })
+      this.local.query(
+        surql.seal(surql.updateSet('id', ['localArray', 'registrationTime', 'rowCount'])),
+        {
+          id: recordId,
+          localArray,
+          registrationTime,
+          rowCount: localArray.length,
+        }
+      )
     );
 
     this.activeQueries.set(hash, queryState);
@@ -795,8 +880,12 @@ export class DataModule<S extends SchemaStructure> {
             localArray: [],
             remoteArray: [],
             lastActiveAt: new Date(),
+            createdAt: new Date(),
             ttl,
             tableName,
+            updateCount: 0,
+            rowCount: 0,
+            errorCount: 0,
           },
         })
       );
@@ -820,12 +909,26 @@ export class DataModule<S extends SchemaStructure> {
       );
     }
 
+    // Persisted counters survive a restart even though the rolling
+    // sample window is rebuilt from scratch in memory.
+    const persistedUpdateCount =
+      typeof (configRecord as any)?.updateCount === 'number'
+        ? (configRecord as any).updateCount
+        : 0;
+    const persistedErrorCount =
+      typeof (configRecord as any)?.errorCount === 'number'
+        ? (configRecord as any).errorCount
+        : 0;
+
     return {
       config,
       records,
       ttlTimer: null,
       ttlDurationMs: parseDuration(ttl),
-      updateCount: 0,
+      updateCount: persistedUpdateCount,
+      materializationSamples: [],
+      lastIngestLatencyMs: null,
+      errorCount: persistedErrorCount,
     };
   }
 

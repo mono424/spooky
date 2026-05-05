@@ -71,6 +71,8 @@ pub enum FieldType {
     Bool,
     Datetime,
     Duration,
+    Bytes,
+    Object,
     Array(Box<FieldType>),
     Record(String),
     Option(Box<FieldType>),
@@ -446,6 +448,8 @@ impl SchemaParser {
             Kind::Bool => FieldType::Bool,
             Kind::Datetime => FieldType::Datetime,
             Kind::Duration => FieldType::Duration,
+            Kind::Bytes => FieldType::Bytes,
+            Kind::Object => FieldType::Object,
             Kind::Array(inner, _) => FieldType::Array(Box::new(Self::parse_kind(*inner))),
             Kind::Record(tables) => {
                 if tables.is_empty() {

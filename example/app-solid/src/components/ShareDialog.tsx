@@ -1,5 +1,5 @@
 import { createResource, createSignal, For, Show } from 'solid-js';
-import { RecordId, useDb, useQuery } from '@spooky-sync/client-solid';
+import { RecordId, Uuid, useDb, useQuery } from '@spooky-sync/client-solid';
 import * as jose from 'jose';
 import QRCode from 'qrcode';
 import type { schema } from '../schema.gen';
@@ -28,6 +28,25 @@ const parseRecordId = (id: string | RecordId): RecordId => {
 
 const inviteUrl = (jwt: string) => `${window.location.origin}/invite/${jwt}`;
 
+function formatExpiry(d: Date | string | number | null | undefined): string {
+  if (d == null) return '';
+  const t = +new Date(d as any);
+  if (!Number.isFinite(t)) return '';
+  const diff = t - Date.now();
+  if (diff <= 0) return 'Expired';
+  const days = Math.floor(diff / 86_400_000);
+  const hours = Math.floor((diff % 86_400_000) / 3_600_000);
+  const mins = Math.floor((diff % 3_600_000) / 60_000);
+  if (days > 0) return `Expires in ${days}d`;
+  if (hours > 0) return `Expires in ${hours}h`;
+  if (mins > 0) return `Expires in ${mins}m`;
+  return 'Expires soon';
+}
+
+function linkIdStr(link: { id: any }): string {
+  return typeof link.id === 'string' ? link.id : `${link.id.tb}:${String(link.id.id)}`;
+}
+
 function genJti(): string {
   // 16 random bytes → base64url, plenty for a uniqueness nonce.
   const bytes = new Uint8Array(16);
@@ -43,6 +62,9 @@ export function ShareDialog(props: ShareDialogProps) {
   const [isCreating, setIsCreating] = createSignal(false);
   const [copiedId, setCopiedId] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+  // Single-expansion: at most one row shows its QR. New links open it,
+  // toggling another collapses the previous.
+  const [expandedId, setExpandedId] = createSignal<string | null>(null);
 
   // Local-first query — pulls from the synced cache, so the dialog renders
   // even when offline. The schema's `share_link` SELECT rule already scopes
@@ -68,17 +90,10 @@ export function ShareDialog(props: ShareDialogProps) {
       const userId = auth.userId();
       if (!userId) throw new Error('Not authenticated.');
 
-      // Read the private key from the `user_keypair` table. Its table-level
-      // SELECT rule (`owner = $auth`) is what protects the key from other
-      // users; we still rely on the synced local cache so this works
-      // offline.
-      const [keypairRow] = await db.useRemote(async (s) =>
-        s.query<[Array<{ privkey: string }>]>(
-          'SELECT privkey FROM user_keypair WHERE owner = $u LIMIT 1',
-          { u: parseRecordId(userId) },
-        ),
-      );
-      const privPem = keypairRow?.[0]?.privkey;
+      // Read the private key from the synced local user row — the
+      // field-level SELECT rule (`id = $auth.id`) means the sync stream
+      // already includes it, and the dialog can sign offline.
+      const privPem = auth.user()?.share_privkey;
       if (!privPem) {
         throw new Error("Couldn't find your sharing key. Try reloading after a brief reconnect.");
       }
@@ -95,19 +110,19 @@ export function ShareDialog(props: ShareDialogProps) {
         .setExpirationTime(expSeconds)
         .sign(privKey);
 
-      // Persist in `share_link` so the UI lists it. The remote permission
-      // rule (only the thread author may CREATE) double-gates the write.
-      await db.useRemote(async (s) =>
-        s.query(
-          `CREATE share_link SET thread = $thread, jwt = $jwt, jti = $jti, exp = $exp`,
-          {
-            thread: parseRecordId(props.threadId),
-            jwt,
-            jti,
-            exp: new Date(expSeconds * 1000),
-          },
-        ),
-      );
+      // Write through the local mutation queue so `linksQuery` picks up
+      // the new row immediately; sync propagates the row to remote where
+      // the table-level CREATE rule (thread author only) still gates it.
+      const linkId = new RecordId('share_link', Uuid.v4().toString().replace(/-/g, ''));
+      await db.create(linkId.toString(), {
+        thread: parseRecordId(props.threadId),
+        issuer: parseRecordId(userId),
+        jwt,
+        jti,
+        exp: new Date(expSeconds * 1000),
+      });
+      // Open the freshly created row, collapsing any other.
+      setExpandedId(linkId.toString());
     } catch (e: any) {
       setError(e?.message || 'Failed to create share link.');
     } finally {
@@ -125,69 +140,89 @@ export function ShareDialog(props: ShareDialogProps) {
     }
   };
 
+  const sortedLinks = () =>
+    (linksQuery.data() ?? [])
+      .slice()
+      .sort((a: any, b: any) => +new Date(b.exp) - +new Date(a.exp));
+
   return (
     <Show when={props.isOpen}>
       <div
-        class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4"
+        class="fixed inset-0 bg-black/50 backdrop-blur-md z-[100] flex items-center justify-center p-4"
         onMouseDown={props.onClose}
       >
         <div
-          class="animate-slide-up bg-surface border border-white/[0.06] rounded-xl w-full max-w-lg shadow-2xl"
+          class="animate-slide-up w-full max-w-md rounded-2xl overflow-hidden flex flex-col max-h-[85vh]"
+          style="background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(40px) saturate(1.5); -webkit-backdrop-filter: blur(40px) saturate(1.5); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 8px 48px rgba(0, 0, 0, 0.4), inset 0 0.5px 0 rgba(255, 255, 255, 0.12);"
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div class="flex justify-between items-center px-6 pt-6 pb-2">
-            <h2 class="text-lg font-semibold">Share thread</h2>
-            <Tooltip text="Close" kbd="Esc">
-              <button
-                onMouseDown={props.onClose}
-                class="text-zinc-500 hover:text-white transition-colors duration-150 p-1"
-                aria-label="Close"
-              >
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </Tooltip>
-          </div>
-
-          <div class="px-6 pb-6 pt-2 space-y-4">
-            <p class="text-sm text-zinc-500">
-              Anyone signed in who opens an invite link is added as an editor.
-            </p>
-
-            <div class="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-300/90">
-              Share links can't be revoked. They expire {SHARE_TTL_DAYS} days after they're created.
+          <div class="px-6 pt-6 pb-5 shrink-0">
+            <div class="flex items-start justify-between gap-3">
+              <div class="space-y-1.5 min-w-0">
+                <h2 class="text-base font-semibold text-zinc-100 tracking-tight">Share thread</h2>
+                <p class="text-[12.5px] text-zinc-500 leading-relaxed">
+                  Anyone with a link joins as an editor. Links can't be revoked and expire after {SHARE_TTL_DAYS} days.
+                </p>
+              </div>
+              <Tooltip text="Close" kbd="Esc" position="bottom">
+                <button
+                  onMouseDown={props.onClose}
+                  class="-mr-1 -mt-1 text-zinc-500 hover:text-white transition-colors duration-150 p-1.5 rounded-lg hover:bg-white/[0.06] shrink-0"
+                  aria-label="Close"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </Tooltip>
             </div>
 
             <button
               onMouseDown={create}
               disabled={isCreating()}
-              class="w-full bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white py-2.5 px-4 rounded-lg font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              class="mt-5 w-full h-9 inline-flex items-center justify-center gap-2 bg-white text-zinc-900 hover:bg-zinc-200 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-[13px] font-medium transition-colors duration-150 leading-none"
             >
-              {isCreating() ? 'Creating...' : 'Create share link'}
+              <Show when={!isCreating()} fallback={<span class="opacity-70">Creating link…</span>}>
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14" />
+                </svg>
+                <span>New link</span>
+              </Show>
             </button>
 
             <Show when={error()}>
-              <div class="bg-red-500/10 border border-red-500/20 rounded-lg text-red-400 p-3 text-sm">
-                {error()}
-              </div>
+              <p class="mt-2.5 text-[12px] text-red-400/90">{error()}</p>
             </Show>
+          </div>
 
-            <div class="space-y-3">
-              <For
-                each={linksQuery.data() ?? []}
-                fallback={
-                  <div class="text-center text-sm text-zinc-600 py-6">No share links yet.</div>
-                }
-              >
-                {(link) => <ShareLinkRow link={link} copiedId={copiedId()} onCopy={copy} />}
-              </For>
-            </div>
+          <div class="shrink-0" style="border-top: 1px solid rgba(255, 255, 255, 0.06);" />
+
+          <div class="overflow-y-auto px-2 py-2 max-h-[260px]">
+            <Show
+              when={sortedLinks().length > 0}
+              fallback={
+                <div class="text-center text-[12px] text-zinc-600 py-8">
+                  No active links.
+                </div>
+              }
+            >
+              <ul class="space-y-0.5">
+                <For each={sortedLinks()}>
+                  {(link) => {
+                    const id = linkIdStr(link);
+                    return (
+                      <ShareLinkRow
+                        link={link}
+                        copiedId={copiedId()}
+                        onCopy={copy}
+                        isExpanded={expandedId() === id}
+                        onToggle={() => setExpandedId((cur) => (cur === id ? null : id))}
+                      />
+                    );
+                  }}
+                </For>
+              </ul>
+            </Show>
           </div>
         </div>
       </div>
@@ -205,20 +240,23 @@ function ShareLinkRow(props: {
   link: ShareLinkRow;
   copiedId: string | null;
   onCopy: (link: { id: string; jwt: string }) => void;
+  isExpanded: boolean;
+  onToggle: () => void;
 }) {
-  const idStr = () =>
-    typeof props.link.id === 'string'
-      ? props.link.id
-      : `${props.link.id.tb}:${String(props.link.id.id)}`;
+  const idStr = () => linkIdStr(props.link);
+
+  const url = () => inviteUrl(props.link.jwt);
+  const copied = () => props.copiedId === idStr();
 
   const [qrSvg] = createResource(
-    () => props.link.jwt,
+    () => (props.isExpanded ? props.link.jwt : null),
     async (jwt) => {
+      if (!jwt) return '';
       try {
-        return await QRCode.toString(`${window.location.origin}/invite/${jwt}`, {
+        return await QRCode.toString(inviteUrl(jwt), {
           type: 'svg',
-          margin: 1,
-          width: 160,
+          margin: 0,
+          width: 144,
           color: { dark: '#e4e4e7', light: '#0000' },
         });
       } catch {
@@ -228,24 +266,57 @@ function ShareLinkRow(props: {
   );
 
   return (
-    <div class="bg-zinc-950 border border-white/[0.06] rounded-lg px-3 py-3 space-y-2">
-      <div class="flex items-center gap-2">
-        <input
-          readOnly
-          value={`${window.location.origin}/invite/${props.link.jwt}`}
-          class="flex-1 bg-transparent outline-none text-xs text-zinc-300 font-mono truncate"
-          onFocus={(e) => e.currentTarget.select()}
-        />
+    <li class="rounded-lg transition-colors duration-150 hover:bg-white/[0.04]">
+      <div class="flex items-center gap-1 px-2 py-1.5">
+        <div class="flex-1 min-w-0 px-1">
+          <div class="text-[12px] text-zinc-200 font-mono truncate" title={url()}>
+            {url()}
+          </div>
+          <div class="text-[11px] leading-none text-zinc-600 mt-1">{formatExpiry(props.link.exp)}</div>
+        </div>
+        <Tooltip text={props.isExpanded ? 'Hide QR' : 'Show QR'} position="top">
+          <button
+            onMouseDown={props.onToggle}
+            class={`h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors duration-150 ${
+              props.isExpanded
+                ? 'text-zinc-100 bg-white/[0.08]'
+                : 'text-zinc-500 hover:text-zinc-100 hover:bg-white/[0.06]'
+            }`}
+            aria-label={props.isExpanded ? 'Hide QR code' : 'Show QR code'}
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <rect x="3" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="3" width="7" height="7" rx="1" />
+              <rect x="3" y="14" width="7" height="7" rx="1" />
+              <path stroke-linecap="round" d="M14 14h3v3M21 14v3M14 18v3M17 21h4M21 18v3" />
+            </svg>
+          </button>
+        </Tooltip>
         <button
           onMouseDown={() => props.onCopy({ id: idStr(), jwt: props.link.jwt })}
-          class="text-xs font-medium bg-surface hover:bg-surface-hover border border-white/[0.06] text-zinc-300 hover:text-white px-3 py-1 rounded-md transition-colors duration-150"
+          class={`h-7 inline-flex items-center justify-center px-2.5 rounded-md text-[11px] font-medium transition-colors duration-150 ${
+            copied()
+              ? 'text-emerald-300/90 bg-emerald-400/[0.06]'
+              : 'text-zinc-400 hover:text-white hover:bg-white/[0.06]'
+          }`}
         >
-          {props.copiedId === idStr() ? 'Copied' : 'Copy'}
+          {copied() ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <Show when={qrSvg()}>
-        <div class="flex justify-center pt-1" innerHTML={qrSvg()} />
+      <Show when={props.isExpanded}>
+        <div class="px-3 pb-3 pt-1 flex justify-center animate-fade-in">
+          <Show
+            when={qrSvg()}
+            fallback={<div class="w-[144px] h-[144px] rounded-md" style="background: rgba(255, 255, 255, 0.02);" />}
+          >
+            <div
+              class="rounded-md p-2.5"
+              style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06);"
+              innerHTML={qrSvg()}
+            />
+          </Show>
+        </div>
       </Show>
-    </div>
+    </li>
   );
 }

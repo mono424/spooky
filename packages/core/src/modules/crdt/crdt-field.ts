@@ -33,6 +33,7 @@ export class CrdtField {
   private loadedFromCrdt = false;
   private pushRetryCount = 0;
   private logger: Logger | null;
+  private cursorsEnabled: boolean;
   /** Remote-push debounce. Local writes happen immediately on every Loro
    *  update; the remote UPSERT is coalesced over this window. Configured
    *  via `Sp00kyConfig.crdtDebounceMs`, default 500. */
@@ -60,14 +61,36 @@ export class CrdtField {
 
   constructor(
     private fieldName: string,
-    initialState?: string,
+    cursorsEnabled: boolean,
+    initialState?: Uint8Array,
     logger?: Logger | null,
   ) {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(fieldName)) {
+      throw new Error(
+        `CrdtField: refusing unsafe field identifier '${fieldName}' — must match [a-zA-Z_][a-zA-Z0-9_]*`
+      );
+    }
     this.logger = logger ?? null;
+    this.cursorsEnabled = cursorsEnabled;
     this.doc = new LoroDoc();
-    if (initialState) {
-      this.doc.import(decodeBase64(initialState));
-      this.loadedFromCrdt = true;
+    if (initialState && initialState.length > 0) {
+      // Tolerance: catch bad-snapshot data (corrupt blob, stale legacy
+      // value left over from a pre-`bytes` migration) so the editor still
+      // mounts. Without this guard the rejection bubbles through
+      // `useCrdtField` → permanent fallback `<p>`, with no cursor.
+      try {
+        this.doc.import(initialState);
+        this.loadedFromCrdt = true;
+      } catch (e) {
+        this.logger?.warn(
+          {
+            error: e,
+            fieldName,
+            Category: 'sp00ky-client::CrdtField::constructor',
+          },
+          'Initial CRDT state is not a valid LoroDoc snapshot — starting empty and will seed from fallback text'
+        );
+      }
     }
   }
 
@@ -107,14 +130,14 @@ export class CrdtField {
     if (this.remote && this.recordId) { void this.pushToRemote(); }
   }
 
-  importRemote(base64State: string): void {
+  importRemote(state: Uint8Array): void {
     // Echo suppression: skip imports within `remoteDebounceMs + 200` of
     // our own push. The +200 guards against round-trip jitter where our
     // own write echoes back from the LIVE feed before the debounce
     // window closes.
     if (Date.now() - this.lastPushTime < this.remoteDebounceMs + 200) return;
     try {
-      this.doc.import(decodeBase64(base64State));
+      this.doc.import(state);
       // Persist the merged snapshot locally so the next reload/offline
       // open sees the freshest converged state without waiting for the
       // LIVE feed.
@@ -127,32 +150,27 @@ export class CrdtField {
     }
   }
 
-  exportSnapshot(): string {
-    return encodeBase64(this.doc.export({ mode: 'snapshot' }));
+  exportSnapshot(): Uint8Array {
+    return this.doc.export({ mode: 'snapshot' });
   }
 
-  /** Push cursor presence into the `_00_cursor` table, keyed by the array
-   *  record id `[record_id, session_id, field]`. The composite id is the
-   *  primary key, so UPSERT can target it directly and create-or-update
-   *  without a WHERE clause (UPSERT … WHERE silently fails to create rows
-   *  when no match exists). All three axes are required: a single browser
-   *  session has its own cursor for every open CrdtField, and the blob
-   *  itself is bound to one specific LoroDoc, so the receiver needs the
-   *  field axis to dispatch each blob to the matching editor. The trailing
-   *  `UPDATE $id SET _00_rv = _00_rv` bumps the parent so its LIVE feed
-   *  fans the change to other browsers — see CrdtManager.dispatchRow. */
+  /** Push this session's cursor blob into the parent row at
+   *  `<field>.cursors[$sid]`. No-op when cursors aren't enabled on this
+   *  field — the editor still calls this method optimistically, but
+   *  without `@cursor` on the schema there's nowhere to store the blob.
+   *  The UPDATE itself fires the parent table's LIVE feed, so other
+   *  browsers receive the cursor change without a separate `_00_rv` bump. */
   async pushCursorState(encoded: Uint8Array): Promise<void> {
     if (!this.remote || !this.recordId) return;
+    if (!this.cursorsEnabled) return;
     this.lastCursorPushTime = Date.now();
     try {
       const state = encodeBase64(encoded);
       await this.remote.query(
-        `UPSERT type::record("_00_cursor", [$id, $sid, $field]) SET record_id = $id, session_id = $sid, field = $field, state = $state;
-         UPDATE $id SET _00_rv = _00_rv RETURN NONE;`,
+        `UPDATE $id SET ${this.fieldName}.cursors[$sid] = $state RETURN NONE;`,
         {
           id: parseRecordIdString(this.recordId),
           sid: this.sessionId,
-          field: this.fieldName,
           state,
         }
       );
@@ -188,19 +206,24 @@ export class CrdtField {
     this.pushTimer = setTimeout(() => void this.pushToRemote(), this.remoteDebounceMs);
   }
 
-  /** Mirror the LoroDoc snapshot into the parent row's local `_00_crdt`
-   *  object field. Runs synchronously on every local update and on every
-   *  remote import, so a reload (online or offline) sees the freshest
-   *  content immediately. The field is injected on every CRDT-bearing
-   *  parent by `apps/cli/src/main.rs` for client output only — server
-   *  uses a separate `_00_crdt` table. Failures are logged and swallowed:
-   *  a stale local write must never block user input. */
+  /** SET path inside a parent row for the current snapshot. `@crdt`-only
+   *  fields hold the snapshot directly (`<field>`); `@crdt @cursor`
+   *  fields hold a `{ state, cursors }` object so the snapshot lives at
+   *  `<field>.state` next to per-session cursor blobs. */
+  private statePath(): string {
+    return this.cursorsEnabled ? `${this.fieldName}.state` : this.fieldName;
+  }
+
+  /** Mirror the LoroDoc snapshot into the parent row locally. Runs on
+   *  every local update and every remote import so reloads (online or
+   *  offline) see the freshest content immediately. Failures are
+   *  swallowed — a stale local write must never block user input. */
   private async persistLocal(): Promise<void> {
     if (!this.local || !this.recordId) return;
     try {
       await this.local.query(
-        `UPDATE $id SET _00_crdt[$field] = $state RETURN NONE;`,
-        { id: parseRecordIdString(this.recordId), field: this.fieldName, state: this.exportSnapshot() }
+        `UPDATE $id SET ${this.statePath()} = $state RETURN NONE;`,
+        { id: parseRecordIdString(this.recordId), state: this.exportSnapshot() }
       );
     } catch (e) {
       this.logger?.debug(
@@ -214,15 +237,12 @@ export class CrdtField {
     if (!this.remote || !this.recordId) return;
     this.lastPushTime = Date.now();
     try {
-      // Write the CRDT snapshot into the remote `_00_crdt` table keyed
-      // by the composite `[record_id, field]` id, then bump the parent's
-      // `_00_rv` so its LIVE feed fires for every viewer that can SELECT
-      // it. The bump is what triggers cross-browser delivery — the
-      // editor itself is local-only.
+      // The UPDATE on the parent fires the parent table's LIVE feed,
+      // so cross-browser receivers see this change directly in the LIVE
+      // payload — no separate `_00_rv` bump or sidecar UPSERT.
       await this.remote.query(
-        `UPSERT type::record("_00_crdt", [$id, $field]) SET record_id = $id, field = $field, state = $state;
-         UPDATE $id SET _00_rv = _00_rv RETURN NONE;`,
-        { id: parseRecordIdString(this.recordId), field: this.fieldName, state: this.exportSnapshot() }
+        `UPDATE $id SET ${this.statePath()} = $state RETURN NONE;`,
+        { id: parseRecordIdString(this.recordId), state: this.exportSnapshot() }
       );
       this.pushRetryCount = 0;
     } catch (e) {

@@ -1,7 +1,7 @@
 /**
  * Supported value types in the schema
  */
-export type ValueType = 'string' | 'number' | 'boolean' | 'null' | 'json';
+export type ValueType = 'string' | 'number' | 'boolean' | 'null' | 'json' | 'Uint8Array';
 
 /**
  * Column metadata defining the type and optionality of a field
@@ -17,6 +17,9 @@ export interface ColumnSchema {
   readonly dateTime?: boolean;
   readonly recordId?: boolean;
   readonly crdt?: CrdtType;
+  readonly cursor?: boolean;
+  /** True for `TYPE bytes` columns. Runtime values are `Uint8Array`. */
+  readonly bytes?: boolean;
 }
 
 /**
@@ -68,6 +71,7 @@ export type TypeNameToTypeMap = {
   boolean: boolean;
   null: null;
   json: unknown;
+  Uint8Array: Uint8Array;
 };
 
 /**
