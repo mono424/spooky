@@ -201,10 +201,13 @@ export function ThreadList() {
 
                   {/* Title */}
                   <h2 class="text-[15px] font-semibold text-white group-hover:text-zinc-300 transition-colors duration-150 mb-1.5">
-                    {loroPreview(thread.title) || 'Untitled'}
+                    {thread.title || 'Untitled'}
                   </h2>
 
-                  {/* Content preview */}
+                  {/* Content preview — `content` is `@crdt @cursor`, so the
+                      stored value is `{ state, cursors }`; loroPreview
+                      decodes the LoroDoc snapshot to a plain string for
+                      list display. */}
                   <p class="text-sm text-zinc-500 line-clamp-2 leading-relaxed">
                     {loroPreview(thread.content)}
                   </p>

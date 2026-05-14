@@ -1,4 +1,5 @@
 import { RecordId, Duration } from 'surrealdb';
+import { DEFAULT_REF_MODE, queryTableFor, RefMode } from '../ref-tables';
 import type {
   SchemaStructure,
   TableNames,
@@ -54,6 +55,12 @@ export class DataModule<S extends SchemaStructure> {
   // don't collide on the same `_00_query` row — each session gets its own.
   // Empty string until init(sessionId) is called.
   private sessionId: string = '';
+  // Authenticated user record id (e.g. `"user:abc"`) — drives per-user
+  // `_00_query_user_<id>` routing in `RefMode.Dedicated`. Updated by
+  // `setCurrentUserId` from the auth subscription. null when
+  // unauthenticated.
+  private currentUserId: string | null = null;
+  private refMode: RefMode = DEFAULT_REF_MODE;
 
   constructor(
     private cache: CacheModule,
@@ -82,6 +89,22 @@ export class DataModule<S extends SchemaStructure> {
     this.sessionId = sessionId;
   }
 
+  /**
+   * Update the authenticated user record id used for per-user
+   * `_00_query_user_<id>` routing in `RefMode.Dedicated`. Pass `null`
+   * on sign-out. Only affects queries registered AFTER this call.
+   */
+  setCurrentUserId(userId: string | null): void {
+    this.currentUserId = userId;
+  }
+
+  /** Read-only view of the authenticated user id used for per-user
+   * `_00_list_ref` routing. Other modules consult this so they pick the
+   * same table name DataModule does. */
+  getCurrentUserId(): string | null {
+    return this.currentUserId;
+  }
+
   // ==================== QUERY MANAGEMENT ====================
 
   /**
@@ -99,6 +122,8 @@ export class DataModule<S extends SchemaStructure> {
       'Query Initialization: started'
     );
 
+    // `_00_query` stays the single shared registration table in both
+    // ref-modes; the per-user split happens only on `_00_list_ref`.
     const recordId = new RecordId('_00_query', hash);
 
     if (this.activeQueries.has(hash)) {

@@ -274,11 +274,34 @@ export class Sp00kyClient<S extends SchemaStructure> {
 
       // Refresh the salt whenever auth state flips (sign-in, sign-out).
       // session::id() changes per WebSocket session, and a sign-in spawns
-      // a new authenticated session, so the salt must follow.
-      this.auth.subscribe(async () => {
+      // a new authenticated session, so the salt must follow. Also
+      // forward the user id into `DataModule` and `Sp00kySync` so they
+      // can route to per-user `_00_query_user_<id>` /
+      // `_00_list_ref_user_<id>` tables in `RefMode.Dedicated` — the
+      // LIVE subscription on `_00_list_ref_user_<id>` is restarted
+      // under the new auth context inside `Sp00kySync.setCurrentUserId`
+      // since SurrealDB binds the LIVE permission at registration time.
+      //
+      // Sync prefix BEFORE the first `await`: setting `currentUserId`
+      // synchronously here is critical because the AuthProvider's own
+      // subscribe callback runs right after ours and immediately enables
+      // queries that depend on the user id. Any `await` before
+      // `setCurrentUserId` would let those queries register against the
+      // stale (null) user id and hit the wrong `_00_query[_user_*]`
+      // table.
+      this.auth.subscribe(async (userId) => {
+        this.dataModule.setCurrentUserId(userId);
         const next = await this.fetchSessionId();
         this.dataModule.setSessionId(next);
         this.crdtManager.setSessionId(next);
+        try {
+          await this.sync.setCurrentUserId(userId);
+        } catch (e) {
+          this.logger.error(
+            { error: e, Category: 'sp00ky-client::Sp00kyClient::authChange' },
+            'sync.setCurrentUserId failed'
+          );
+        }
       });
 
       await this.sync.init();

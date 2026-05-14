@@ -249,42 +249,32 @@ export function ThreadDetail() {
     }
   };
 
-  // CRDT fields for collaborative editing. The 4th arg (fallbackText) is
-  // intentionally omitted: with `@crdt` fields stored as raw bytes /
-  // `{ state, cursors }`, the `thread.title` / `thread.content` columns
-  // *are* the LoroDoc snapshots — there's no human-readable string to
-  // hand the editor as a seed anymore. The CrdtField hydrates from the
-  // local row directly via `SELECT VALUE <field>`.
-  const titleCrdtField = useCrdtField(
-    'thread',
-    () => thread()?.id ? `thread:${params.id}` : undefined,
-    'title',
-  );
+  // `content` is `@crdt @cursor` and goes through the collaborative
+  // editor. `title` is a plain `TYPE string` column — edited via a
+  // regular `<input>` and synced through `db.update`, so no CrdtField is
+  // needed for it.
   const contentCrdtField = useCrdtField(
     'thread',
     () => thread()?.id ? `thread:${params.id}` : undefined,
     'content',
   );
 
-  // Both `title` (`@crdt text`) and `content` (`@crdt @cursor`) are
-  // CRDT-backed fields. The CollaborativeEditor drives the LoroDoc
-  // directly and `CrdtField.pushToRemote` is the only writer for the
-  // stored bytes / `{ state, cursors }` shape — calling `db.update` here
-  // with a plain string would race the snapshot push and SurrealDB would
-  // reject it on the bytes/object column anyway. So `onUpdate` from the
-  // editor is intentionally a no-op now; keep the callback so the editor
-  // contract stays the same.
-  const handleTitleChange = (_newTitle: string) => { /* CRDT pushes itself */ };
-  const handleContentChange = (_newContent: string) => { /* CRDT pushes itself */ };
-
-  const handleAcceptTitle = async (_suggestion: string) => {
-    // TODO: apply the suggestion text into the title CrdtField's LoroDoc
-    // (insert + push) and then clear `title_suggestion`. For now we just
-    // drop the suggestion so the UI gets out of the way; the user can
-    // retype manually.
+  // `title` is a regular `TYPE string` column — debounced update through
+  // the normal sync pipeline. `content` is `@crdt @cursor`; the editor's
+  // CrdtField drives `pushToRemote` for that one, so the editor's
+  // `onUpdate` is a no-op (calling `db.update` would race the snapshot
+  // push and SurrealDB would reject a string against the object column).
+  const handleTitleChange = async (newTitle: string) => {
     const threadData = thread();
     if (!threadData || !threadData.id || !canEdit()) return;
-    await db.update('thread', threadData.id, { title_suggestion: '' });
+    await db.update('thread', threadData.id, { title: newTitle }, { debounced: true });
+  };
+  const handleContentChange = (_newContent: string) => { /* CRDT pushes itself */ };
+
+  const handleAcceptTitle = async (suggestion: string) => {
+    const threadData = thread();
+    if (!threadData || !threadData.id || !canEdit()) return;
+    await db.update('thread', threadData.id, { title: suggestion, title_suggestion: '' });
   };
 
   const handleDeclineTitle = async () => {
@@ -519,26 +509,23 @@ export function ThreadDetail() {
                         </div>
                       </Show>
 
-                      {/* Title (CRDT for everyone, editable only for author) */}
+                      {/* Title (plain string, editable only for author) */}
                       <Show
-                        when={titleCrdtField()}
+                        when={canEdit()}
                         fallback={
                           <div class="text-2xl font-semibold mb-4 leading-tight">
-                            <p>Untitled</p>
+                            <p>{threadData().title || 'Untitled'}</p>
                           </div>
                         }
                       >
-                        {(field) => (
-                          <CollaborativeEditor
-                            field={field()}
-                            placeholder="Untitled"
-                            class="text-2xl font-semibold mb-4 leading-tight [&_.ProseMirror]:outline-none"
-                            editable={canEdit()}
-                            singleLine
-                            username={auth.user()?.username}
-                            onUpdate={(text) => handleTitleChange(text)}
-                          />
-                        )}
+                        <input
+                          type="text"
+                          value={threadData().title ?? ''}
+                          onInput={(e) => handleTitleChange(e.currentTarget.value)}
+                          placeholder="Untitled"
+                          maxlength={200}
+                          class="w-full bg-transparent text-2xl font-semibold mb-4 leading-tight outline-none border-none focus:outline-none placeholder-zinc-600"
+                        />
                       </Show>
 
                       {/* Content Suggestion */}

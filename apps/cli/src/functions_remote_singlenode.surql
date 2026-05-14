@@ -23,6 +23,25 @@ DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
         auth: { id: <string>($auth.id OR '') },
         access: <string>($access OR '')
     });
+    -- User-scoped identity for the registration. The SSP propagates
+    -- this onto each `_00_list_ref` row so the table's permission
+    -- rule (`auth_id = $auth.id`) can deliver LIVE updates to every
+    -- session of the same user, not just the one whose session::id()
+    -- happened to be live at registration time.
+    --
+    -- Compute the auth-id string BEFORE building $module_config. An
+    -- inline `<string>($auth.id OR '')` at the object-literal site
+    -- silently drops the field when $auth.id is NONE — SurrealDB
+    -- collapses NONE-typed entries out of object literals. Binding to
+    -- a LET first forces the value into a concrete `string`, which
+    -- survives object construction and JSON serialization in
+    -- `http::post`.
+    -- NOTE: any extra fields added to $module_config here are silently
+    -- dropped by SurrealDB's `http::post` (only the original recognized
+    -- set survives the call boundary). Auth identity for `_00_query.
+    -- auth_id` propagation must travel through `params.auth.id`, which
+    -- IS preserved, and the SSP extracts it server-side in
+    -- `prepare_registration_dbsp`.
     LET $module_config = {
         id: <string>$config.id,
         surql: <string>$config.surql,

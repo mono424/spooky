@@ -85,6 +85,28 @@ pub mod view {
         let safe_params = sanitizer::parse_params(params.clone());
         let safe_params_val = safe_params.clone().unwrap_or(json!({}));
 
+        // Extract the user-scoped auth identity from the injected params.
+        // `fn::query::register` injects `params.auth.id = <string>$auth.id`
+        // server-side, so by the time we get here `safe_params.auth.id`
+        // is the authenticated caller's user record id (as a string like
+        // "user:abc"). We carry this forward as `auth_id` on `_00_query`
+        // and `_00_list_ref` so cross-session LIVE delivery on
+        // `_00_list_ref` can gate on `auth_id = $auth.id` (stable
+        // across re-auth / reconnect) instead of the per-connection
+        // `session::id()`.
+        //
+        // Note: we cannot read this from a top-level `authId` field on
+        // the registration payload because SurrealDB's `http::post`
+        // silently strips object keys that aren't in the runtime's
+        // recognized set for that call site. The `params.auth.id` path
+        // is the only channel that already survives that filtering.
+        let auth_id = safe_params_val
+            .get("auth")
+            .and_then(|a| a.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         permission_inject::inject_permissions(&mut root_op, permissions, safe_params.as_ref())?;
 
         let plan = QueryPlan {
@@ -95,6 +117,7 @@ pub mod view {
         let metadata = json!({
             "id": id,
             "clientId": client_id,
+            "authId": auth_id,
             "sql": surreal_ql,
             "params": params,
             "safe_params": safe_params_val,

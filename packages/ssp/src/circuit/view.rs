@@ -39,6 +39,11 @@ pub struct View {
     /// Subquery record tracking: child_key → (parent_key, alias).
     /// Tracks which subquery records are visible through parent records in the view.
     pub subquery_cache: HashMap<String, (String, String)>,
+    /// Authenticated user that owns this view (record-id form, e.g.
+    /// `"user:abc"`). Empty when the registering call carried no
+    /// `$auth.id`. Drives per-user `_00_list_ref_user_<id>` routing in
+    /// `RefMode::Dedicated`; ignored in `RefMode::Single`.
+    pub auth_id: String,
 }
 
 impl View {
@@ -48,6 +53,7 @@ impl View {
         format: OutputFormat,
         params: Option<Sp00kyValue>,
         referenced_tables: Vec<String>,
+        auth_id: String,
     ) -> Self {
         let subquery_tables = plan.root.subquery_tables();
         Self {
@@ -61,6 +67,7 @@ impl View {
             subquery_tables,
             content_generation: 0,
             subquery_cache: HashMap::new(),
+            auth_id,
         }
     }
 

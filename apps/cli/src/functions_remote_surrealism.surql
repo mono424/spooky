@@ -15,6 +15,9 @@ DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
         auth: { id: <string>($auth.id OR '') },
         access: <string>($access OR '')
     });
+    -- Auth identity flows through `params.auth.id` (see the singlenode
+    -- variant note). Extra top-level fields like `authId` get stripped
+    -- by the call boundary in this mode too.
     LET $module_config = {
         id: <string>$config.id,
         surql: <string>$config.surql,

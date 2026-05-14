@@ -254,6 +254,27 @@ pub struct Sp00kyConfig {
     /// per-environment map `{ dev, cloud }`. Unset → defaults to `info`.
     #[serde(default, rename = "logLevel", skip_serializing_if = "Option::is_none")]
     pub log_level: Option<LogLevelConfig>,
+    /// Storage mode for the internal `_00_query` / `_00_list_ref` ref tables.
+    /// `single` (legacy): one shared table per kind. `dedicated` (default):
+    /// per-user tables `_00_{query,list_ref}_user_<id>`, created lazily by
+    /// the SSP on first registration. Dedicated mode works around a
+    /// SurrealDB v3 LIVE-permission gap where cross-session INSERTs to a
+    /// permission-gated table never fire LIVE notifications for the
+    /// non-inserting subscriber.
+    #[serde(default, rename = "refMode", skip_serializing_if = "Option::is_none")]
+    pub ref_mode: Option<RefMode>,
+}
+
+// `RefMode` lives in `ssp-protocol` so the CLI, the SSP server, and any
+// other crate that needs to derive table names share a single source of
+// truth. Re-export here so existing import paths in the CLI keep working.
+pub use ssp_protocol::RefMode;
+
+impl Sp00kyConfig {
+    /// Resolved ref mode, falling back to the default when unset in YAML.
+    pub fn resolved_ref_mode(&self) -> RefMode {
+        self.ref_mode.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1128,6 +1149,7 @@ fn default_config() -> Sp00kyConfig {
         migration_engine: None,
         surrealkit: None,
         log_level: None,
+        ref_mode: None,
     }
 }
 

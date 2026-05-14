@@ -134,6 +134,7 @@ pub fn add_api(
             migration_engine: None,
             surrealkit: None,
             log_level: None,
+            ref_mode: None,
         }
     };
 

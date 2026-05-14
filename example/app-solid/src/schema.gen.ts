@@ -221,13 +221,7 @@ export const schema = {
          */
         created_at: { type: 'string' as const, dateTime: true, optional: true },
         published: { type: 'boolean' as const, optional: true },
-        /**
-         * `title` — string
-         *
-         * `@crdt text` — collaborative field. Read with `useCrdtField`, never `useQuery`.
-         * Writes should pass `{ debounced: true }` to `db.update` so rapid keystrokes coalesce.
-         */
-        title: { type: 'Uint8Array' as const, bytes: true, crdt: 'text' as const, optional: false },
+        title: { type: 'string' as const, optional: false },
         title_suggestion: { type: 'string' as const, optional: true },
         comments: { type: 'string' as const, optional: true },
         jobs: { type: 'string' as const, optional: true },
@@ -426,11 +420,7 @@ PERMISSIONS FOR select, create, update, delete WHERE true
     FOR delete WHERE $access = "account" AND author.id = $auth.id
 ;
 
--- @crdt text
--- Stored as the raw LoroDoc snapshot bytes. The CRDT manager owns writes;
--- never \`db.update({ title: <string> })\` — the type system would catch it
--- but the editor would lose the in-flight LoroDoc state.
-DEFINE FIELD title ON TABLE thread TYPE option<bytes>;
+DEFINE FIELD title ON TABLE thread TYPE option<string>;
 
 -- @crdt text
 -- @cursor

@@ -264,12 +264,20 @@ export class CrdtManager {
   private extractSnapshot(value: unknown, cursorsEnabled: boolean): Uint8Array | undefined {
     const asBytes = (v: unknown): Uint8Array | undefined => {
       if (v instanceof Uint8Array) return v.length > 0 ? v : undefined;
-      // SurrealDB sometimes ferries bytes through ArrayBuffer / typed
-      // array variants depending on transport; widen accordingly.
+      // SurrealDB ferries bytes through several shapes depending on
+      // transport and on whether the field is a top-level `bytes` column
+      // or bytes nested inside a FLEXIBLE object. Round-tripping bytes
+      // through `option<object> FLEXIBLE` (the `@crdt @cursor` shape) in
+      // particular comes back as a plain `number[]` from the local WASM
+      // DB and as `Uint8Array` from the remote WS engine. Normalize all
+      // recognized variants here so the receiving CrdtField doesn't care.
       if (v instanceof ArrayBuffer) return new Uint8Array(v);
       if (ArrayBuffer.isView(v)) {
         const view = v as ArrayBufferView;
         return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+      }
+      if (Array.isArray(v) && v.length > 0 && v.every((n) => typeof n === 'number')) {
+        return Uint8Array.from(v as number[]);
       }
       return undefined;
     };

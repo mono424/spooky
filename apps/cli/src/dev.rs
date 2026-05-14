@@ -582,6 +582,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
             let scheduler_url_env = format!("SPKY_SCHEDULER_URL={}", urls.ssp_scheduler_url());
             let advertise_addr_env = format!("SPKY_SSP_ADVERTISE_ADDR={}", urls.ssp_advertise());
             let job_config_env = format!("SPKY_JOB_CONFIG={}", job_config_json);
+            let ref_mode_env = format!("SPKY_SSP_REF_MODE={}", config.resolved_ref_mode().as_str());
 
             let mut ssp_args = vec![
                 "run", "-d",
@@ -598,6 +599,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
                 "-e", &ssp_pass_env,
                 "-e", "SPKY_AUTH_SECRET=mysecret",
                 "-e", &job_config_env,
+                "-e", &ref_mode_env,
             ];
 
             if *mode == DeployMode::Cluster {
@@ -632,6 +634,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
                 .env("SPKY_DB_PASS", &resolved_surreal.password)
                 .env("SPKY_AUTH_SECRET", "mysecret")
                 .env("SPKY_JOB_CONFIG", &job_config_json)
+                .env("SPKY_SSP_REF_MODE", config.resolved_ref_mode().as_str())
                 // The container Dockerfile binds 0.0.0.0:8667; on host we
                 // need the same port reachable from frontend dev servers
                 // and (optionally) the docker-side scheduler.

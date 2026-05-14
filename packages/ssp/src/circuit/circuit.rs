@@ -43,6 +43,12 @@ pub struct ViewDelta {
     pub result_hash: String,
     /// Subquery record changes (additions/updates/removals for child records).
     pub subquery_items: Vec<SubqueryDeltaItem>,
+    /// Authenticated user that owns the originating registration, in
+    /// record-id form (e.g. `"user:abc"`). Carried so the SSP server can
+    /// route per-user `_00_list_ref_user_<id>` writes without an extra
+    /// DB round-trip per delta. Empty when no `$auth.id` was present at
+    /// registration time.
+    pub auth_id: String,
 }
 
 /// The DBSP incremental computation circuit.
@@ -271,12 +277,28 @@ impl Circuit {
     }
 
     /// Register a query. Builds the operator DAG, runs initial evaluation,
-    /// and returns the first ViewDelta (if data exists).
+    /// and returns the first ViewDelta (if data exists). The owning user
+    /// id is left empty; callers that need per-user table routing in
+    /// `RefMode::Dedicated` should use [`add_query_with_auth`] instead.
     pub fn add_query(
         &mut self,
         plan: QueryPlan,
         params: Option<serde_json::Value>,
         format: Option<OutputFormat>,
+    ) -> Option<ViewDelta> {
+        self.add_query_with_auth(plan, params, format, String::new())
+    }
+
+    /// Like [`add_query`] but stashes `auth_id` on the resulting `View`
+    /// so subsequent `step()` deltas know their owning user, which the
+    /// SSP server uses to route `_00_list_ref_user_<id>` writes without
+    /// an extra DB lookup per delta.
+    pub fn add_query_with_auth(
+        &mut self,
+        plan: QueryPlan,
+        params: Option<serde_json::Value>,
+        format: Option<OutputFormat>,
+        auth_id: String,
     ) -> Option<ViewDelta> {
         let query_id = plan.id.clone();
         let referenced_tables = plan.root.referenced_tables();
@@ -293,6 +315,7 @@ impl Circuit {
             format,
             params_sv,
             referenced_tables.clone(),
+            auth_id,
         );
 
         self.graphs.insert(query_id.clone(), graph);
@@ -467,6 +490,7 @@ impl Circuit {
             records,
             result_hash: view.last_hash.clone(),
             subquery_items,
+            auth_id: view.auth_id.clone(),
         })
     }
 
@@ -597,6 +621,7 @@ impl Circuit {
             records,
             result_hash: view.last_hash.clone(),
             subquery_items,
+            auth_id: view.auth_id.clone(),
         })
     }
 }
@@ -624,6 +649,11 @@ struct QueryState {
     content_generation: u64,
     #[serde(default)]
     subquery_cache: HashMap<String, (String, String)>,
+    /// Owning user record id (e.g. `"user:abc"`). `default` so old
+    /// snapshots without this field still deserialize (auth_id falls
+    /// back to "" and the SSP routes those views to the global tables).
+    #[serde(default)]
+    auth_id: String,
 }
 
 impl Circuit {
@@ -643,6 +673,7 @@ impl Circuit {
                 last_hash: view.last_hash.clone(),
                 content_generation: view.content_generation,
                 subquery_cache: view.subquery_cache.clone(),
+                auth_id: view.auth_id.clone(),
             })
             .collect();
 
@@ -684,6 +715,7 @@ impl Circuit {
                 qs.format,
                 params_sv,
                 referenced_tables.clone(),
+                qs.auth_id,
             );
             view.cache = qs.cache;
             view.last_hash = qs.last_hash;

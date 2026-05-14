@@ -16,6 +16,14 @@ DEFINE FIELD OVERWRITE surql ON TABLE _00_query TYPE option<string>;
 -- The client id
 DEFINE FIELD OVERWRITE clientId ON TABLE _00_query TYPE option<string>;
 
+-- The auth user id that registered this query. The SSP propagates it
+-- onto each `_00_list_ref` row so live-query delivery can be gated on
+-- the user (stable across re-auth / reconnect) instead of the per-
+-- connection `session::id()`. Empty string means "no auth recorded",
+-- which is fine for SSP-only registrations and unreadable to any
+-- real authenticated user via the list_ref permission below.
+DEFINE FIELD OVERWRITE auth_id ON TABLE _00_query TYPE string DEFAULT '';
+
 -- For garbage collection (Heartbeat)
 DEFINE FIELD OVERWRITE lastActiveAt ON TABLE _00_query TYPE datetime DEFAULT time::now();
 
@@ -46,14 +54,23 @@ DEFINE FIELD OVERWRITE errorCount ON TABLE _00_query TYPE int DEFAULT 0;
 -- its own list refs.
 -- ==================================================
 
+-- Scoped per user, not per session. The originating session's
+-- `auth.id` is copied here from `_00_query.auth_id` at write time, so
+-- every session of the same user receives LIVE updates for queries
+-- that user has registered, regardless of which connection wrote
+-- them. The client still filters in-memory by registered queryId
+-- (see `Sp00kySync.handleRemoteListRefChange`), so cross-session
+-- entries it doesn't care about are dropped after delivery.
 DEFINE TABLE OVERWRITE _00_list_ref SCHEMALESS
-    PERMISSIONS FOR select WHERE clientId = <string>session::id();
+    PERMISSIONS FOR select WHERE auth_id = <string>$auth.id;
 
 DEFINE FIELD OVERWRITE in ON TABLE _00_list_ref TYPE record;
 
 DEFINE FIELD OVERWRITE out ON TABLE _00_list_ref TYPE record;
 
 DEFINE FIELD OVERWRITE clientId ON TABLE _00_list_ref TYPE string;
+
+DEFINE FIELD OVERWRITE auth_id ON TABLE _00_list_ref TYPE string DEFAULT '';
 
 DEFINE FIELD OVERWRITE version ON TABLE _00_list_ref TYPE int;
 

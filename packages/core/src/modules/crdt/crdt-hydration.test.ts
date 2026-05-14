@@ -169,4 +169,38 @@ describe('CrdtManager.open hydration', () => {
     );
     expect(sqls.some((s) => s.includes('SELECT * FROM ONLY'))).toBe(false);
   });
+
+  // Regression: SurrealDB returns bytes nested inside a FLEXIBLE object as a
+  // plain `number[]` from the local WASM engine (e.g. `state: [108, 111, 114,
+  // 111, ...]` — the literal LoroDoc magic header bytes). The cursor-enabled
+  // extractSnapshot path used to only accept Uint8Array and would silently
+  // return undefined for the array form, leaving every editor empty and
+  // killing realtime updates for `@crdt @cursor` fields.
+  it('@crdt @cursor: accepts number[] as the state shape (local WASM transport)', async () => {
+    const remoteSnapshot = buildSnapshot('from local wasm');
+    const remoteAsArray = Array.from(remoteSnapshot) as unknown as number[];
+
+    const local = {
+      query: vi.fn().mockImplementation(async (sql: string) => {
+        if (sql.includes('SELECT VALUE body FROM ONLY')) {
+          return [{ state: remoteAsArray, cursors: {} }];
+        }
+        return [];
+      }),
+    } satisfies Partial<LocalDatabaseService> as unknown as LocalDatabaseService;
+
+    const remote = makeRemote({});
+
+    const manager = new CrdtManager(
+      singleTableSchema({ cursor: true }),
+      local,
+      remote,
+      silentLogger()
+    );
+    manager.setSessionId('session-under-test');
+
+    const field = await manager.open('thread', 'thread:wasm', 'body');
+
+    expect(field.getDoc().getText('text').toString()).toBe('from local wasm');
+  });
 });

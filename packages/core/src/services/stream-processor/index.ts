@@ -334,6 +334,21 @@ export class StreamProcessorService {
     if (value === null || value === undefined) return value;
 
     if (typeof value === 'object') {
+      // CRDT snapshots arrive as `Uint8Array` (or `ArrayBuffer` /
+      // typed-array views). `serde_wasm_bindgen::from_value` rejects
+      // those when deserializing into `serde_json::Value` (JSON has no
+      // binary variant), and the SSP can't filter on opaque bytes
+      // anyway. Replace with `null` so the row still flows through the
+      // ingest path with its other columns intact, and downstream
+      // predicates referencing the bytes column simply don't match.
+      if (
+        value instanceof Uint8Array ||
+        value instanceof ArrayBuffer ||
+        ArrayBuffer.isView(value)
+      ) {
+        return null;
+      }
+
       // RecordId detection using duck typing (constructor.name may be minified)
       // SurrealDB's RecordId has: table (getter returning Table), id, and toString()
       // Check for table getter that has its own toString AND id property

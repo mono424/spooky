@@ -440,8 +440,6 @@ class Thread {
     
     ///Reverse relationship: array of share_link records
     List<String>? shareLinks;
-    
-    ///Binary blob (transported as base64 in JSON)
     String title;
     String? titleSuggestion;
 
@@ -600,11 +598,7 @@ PERMISSIONS FOR select, create, update, delete WHERE true
     FOR delete WHERE \$access = \"account\" AND author.id = \$auth.id
 ;
 
--- @crdt text
--- Stored as the raw LoroDoc snapshot bytes. The CRDT manager owns writes;
--- never `db.update({ title: <string> })` — the type system would catch it
--- but the editor would lose the in-flight LoroDoc state.
-DEFINE FIELD title ON TABLE thread TYPE option<bytes>;
+DEFINE FIELD title ON TABLE thread TYPE option<string>;
 
 -- @crdt text
 -- @cursor
