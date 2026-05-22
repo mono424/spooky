@@ -241,6 +241,48 @@ sequenceDiagram
     Note over SSP1,SSP2: Views updated in real-time
 ```
 
+The SSP responds `200` to `/ingest` immediately and finishes the
+view-fan-out work asynchronously. This matters because SurrealDB
+runs the schema mutation event that called `http::post` **inside**
+the originating transaction; if the SSP's own follow-up
+`UPDATE _00_list_ref_user_<id>` committed before that parent
+transaction did, another session's LIVE notification on the per-user
+edge would race ahead of the source row's visibility. The SSP's
+deferred task waits for the row's `_00_version` to become readable
+on its own connection (a clean proxy for "parent transaction is
+committed") before bumping the per-user edge.
+
+### Per-User `_00_list_ref` Tables
+
+Each registered view stores a per-user materialized edge in
+`_00_list_ref_user_<auth_id>`. The auth id segment is hardcoded
+into the table's `PERMISSIONS FOR select WHERE $auth.id = user:<id>`
+rule, so a record-token client subscribing to its own dedicated
+table matches at LIVE-notification time without any cross-session
+permission lookup. This works around the SurrealDB v3 LIVE
+permission gap, where cross-session LIVE deliveries on a
+permission-gated table can be silently dropped even when the
+subscriber's expression would pass for the new row.
+
+The mode is configured via `refMode` in `sp00ky.yml`
+(or `SPKY_SSP_REF_MODE` on the SSP):
+
+- `dedicated` (default): per-user `_00_list_ref_user_<id>` tables;
+  no cross-session permission evaluation at LIVE time. The SSP
+  pre-emptively creates the user's table when it receives the
+  `user` CREATE ingest event, so the client's first LIVE
+  subscription after sign-in succeeds on the first try. The
+  `liveRetryCount` getter on the client returns `0` on a clean
+  bootstrap and is exposed for regression-guard tests.
+- `single`: legacy shared `_00_list_ref` with a
+  `WHERE auth_id = $auth.id` rule. Same-session writes propagate;
+  cross-session LIVE notifications hit the v3 permission gap.
+
+When a `user` record is deleted upstream, the SSP receives the
+`user` DELETE ingest event and drops the matching
+`_00_list_ref_user_<id>` table so dedicated schema state doesn't
+accumulate over time.
+
 ### Query Registration Flow
 
 ```mermaid

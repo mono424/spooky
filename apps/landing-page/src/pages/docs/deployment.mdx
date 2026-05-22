@@ -150,6 +150,7 @@ For production with high availability and horizontal scaling, use a Scheduler wi
 | `HEARTBEAT_INTERVAL_MS` | Heartbeat interval in ms | `5000` |
 | `SP00KY_CONFIG_PATH` | Path to `sp00ky.yml` for job config | `sp00ky.yml` |
 | `TTL_CLEANUP_INTERVAL_SECS` | View TTL cleanup interval | `60` |
+| `SPKY_SSP_REF_MODE` | `_00_list_ref` storage layout: `dedicated` (per-user tables, works around the SurrealDB v3 LIVE permission gap) or `single` (legacy shared table). Mirrors `refMode` in `sp00ky.yml`. | `dedicated` |
 
 ### Scheduler
 

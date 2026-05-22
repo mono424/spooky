@@ -114,3 +114,25 @@ Determines where metadata like query states are persisted:
 - `'surrealdb'` (default): Store in the local SurrealDB instance
 - `'localstorage'`: Use browser localStorage
 - Custom implementation of `PersistenceClient` interface
+
+## Diagnostics
+
+The client exposes a small number of read-only getters intended for
+e2e regression guards and runtime instrumentation.
+
+### `pendingMutationCount` and `subscribeToPendingMutations`
+
+Live count of mutations queued for upstream sync. The subscribe
+variant fires on enqueue/dequeue so a UI can render a "saving…"
+indicator without polling.
+
+### `liveRetryCount`
+
+Number of times the initial `_00_list_ref[_user_*]` `LIVE SELECT`
+subscription had to retry on the most recent `setCurrentUserId`
+call. Stays at `0` when the SSP's pre-emptive per-user table
+creation got there first (the default path); a value above `0`
+means the LIVE registration hit a "table not found" race and the
+client fell through to the poll fallback while retrying. The e2e
+suite's `z-auth-bootstrap.spec.ts` asserts this stays `0` after a
+clean signup so the pre-emptive path can't silently regress.
