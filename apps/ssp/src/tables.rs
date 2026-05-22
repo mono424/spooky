@@ -15,14 +15,9 @@
 //! never disagree about which name to use.
 
 use anyhow::{Context, Result};
-use ssp_protocol::{list_ref_table_for, query_table_for, sanitize_user_id, RefMode};
+use ssp_protocol::{list_ref_table_for, sanitize_user_id, RefMode};
 use surrealdb::{Connection, Surreal};
 use tracing::warn;
-
-/// Returns the `_00_query` table name for the given mode + user.
-pub fn query_table(mode: RefMode, auth_id: &str) -> String {
-    query_table_for(mode, auth_id)
-}
 
 /// Returns the `_00_list_ref` table name for the given mode + user.
 pub fn list_ref_table(mode: RefMode, auth_id: &str) -> String {
@@ -88,6 +83,37 @@ DEFINE FIELD OVERWRITE parent_rel ON TABLE {list_ref_tbl} TYPE option<string>;
         .with_context(|| format!("Failed to ensure per-user list_ref table for {}", auth_id))?
         .check()
         .with_context(|| format!("ensure_user_tables: at least one DDL statement failed for {}", auth_id))?;
+
+    Ok(())
+}
+
+/// Inverse of `ensure_user_tables`: remove the per-user
+/// `_00_list_ref_user_<id>` table when the owning `user` record is
+/// deleted, so dedicated tables don't accumulate forever. No-op in
+/// `RefMode::Single` (no per-user tables exist) and when `auth_id`
+/// doesn't sanitize (no dedicated table was ever created either).
+/// Idempotent — `REMOVE TABLE IF EXISTS` swallows the missing-table
+/// case.
+pub async fn drop_user_tables<C: Connection>(
+    db: &Surreal<C>,
+    mode: RefMode,
+    auth_id: &str,
+) -> Result<()> {
+    if mode == RefMode::Single {
+        return Ok(());
+    }
+    let Some(uid) = sanitize_user_id(auth_id) else {
+        return Ok(());
+    };
+
+    let list_ref_tbl = format!("_00_list_ref_user_{}", uid);
+    let ddl = format!("REMOVE TABLE IF EXISTS {list_ref_tbl};");
+
+    db.query(ddl)
+        .await
+        .with_context(|| format!("Failed to drop per-user list_ref table for {}", auth_id))?
+        .check()
+        .with_context(|| format!("drop_user_tables: REMOVE TABLE failed for {}", auth_id))?;
 
     Ok(())
 }

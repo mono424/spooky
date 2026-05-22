@@ -199,6 +199,14 @@ export class CrdtManager {
     }
   }
 
+  /** Apply a parent-row payload from a non-LIVE source (e.g. the
+   *  list_ref-driven sync engine, when the cross-user LIVE on the
+   *  parent table is filtered out by the SurrealDB cross-session
+   *  permission gap). Same semantics as the internal `dispatchRow`. */
+  applyRow(table: string, row: Record<string, unknown>): void {
+    this.dispatchRow(table, row);
+  }
+
   /** Dispatch a parent-row LIVE event to every open CrdtField on that
    *  record. Each open field reads its slice of the row directly — the
    *  CRDT snapshot is a column on the parent now, so there is no

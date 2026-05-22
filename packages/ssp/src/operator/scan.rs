@@ -52,6 +52,19 @@ impl super::Operator for Scan {
     fn collections(&self) -> Vec<String> {
         vec![self.table.clone()]
     }
+
+    fn evaluate_key(
+        &self,
+        key: &str,
+        _input_evals: &[bool],
+        store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        store
+            .get_collection(&self.table)
+            .map(|c| c.zset.contains_key(key))
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]

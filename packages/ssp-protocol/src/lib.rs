@@ -11,14 +11,14 @@ pub mod snapshot_hash;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RefMode {
-    /// One shared `_00_query` / `_00_list_ref` for every user. Subject
-    /// to a SurrealDB v3 LIVE-permission gap that drops cross-session
+    /// One shared `_00_list_ref` for every user. Subject to a
+    /// SurrealDB v3 LIVE-permission gap that drops cross-session
     /// INSERT notifications; kept for the eventual upstream fix.
     Single,
-    /// Per-user `_00_query_user_<id>` and `_00_list_ref_user_<id>`
-    /// tables, created lazily by the SSP on first registration. Each
-    /// table's permission rule is hardcoded against the owning user's
-    /// record id, sidestepping the LIVE-permission gap.
+    /// Per-user `_00_list_ref_user_<id>` table, created lazily by the
+    /// SSP on first registration. Its permission rule is hardcoded
+    /// against the owning user's record id, sidestepping the
+    /// LIVE-permission gap. `_00_query` stays global in both modes.
     Dedicated,
 }
 
@@ -67,18 +67,11 @@ pub fn sanitize_user_id(auth_id: &str) -> Option<String> {
     }
 }
 
-/// Returns the `_00_query` table name. Always `_00_query` regardless of
-/// mode: the registration row stays in the single global table so the
-/// client and SSP can agree on its record id without the client needing
-/// to know per-user table names at id-creation time. Only `_00_list_ref`
-/// splits per user — that's where the SurrealDB LIVE permission gap
-/// lives.
-pub fn query_table_for(_mode: RefMode, _auth_id: &str) -> String {
-    "_00_query".to_string()
-}
-
-/// Returns the `_00_list_ref` table name for a given mode + user. See
-/// [`query_table_for`] for fallback semantics.
+/// Returns the `_00_list_ref` table name for a given mode + user.
+/// The `_00_query` registration table stays global in both modes so
+/// the client can compute its record id without knowing the user;
+/// only `_00_list_ref` splits per user because that's where the
+/// SurrealDB LIVE permission gap lives.
 pub fn list_ref_table_for(mode: RefMode, auth_id: &str) -> String {
     match mode {
         RefMode::Single => "_00_list_ref".to_string(),

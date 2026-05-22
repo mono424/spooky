@@ -1,5 +1,5 @@
 # Use the official SurrealDB image
-FROM surrealdb/surrealdb:v3.0.0
+FROM surrealdb/surrealdb:v3.1.0-beta.3
 
 # Expose the default SurrealDB port
 EXPOSE 8000

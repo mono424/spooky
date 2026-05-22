@@ -15,6 +15,20 @@ export const testUser: TestUser = {
 };
 
 /**
+ * Build a unique TestUser per call. Cross-user tests need TWO distinct
+ * accounts, and re-running the suite must produce fresh usernames so
+ * the fixture's register-or-login fallback doesn't quietly log us into
+ * the previous run's account (which would alias alice and bob onto
+ * the same row and defeat the test). Stale accounts pile up in the
+ * upstream `user` table; cleanup is out of scope here.
+ */
+export function uniqueUser(prefix: string): TestUser {
+  const tag =
+    Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  return { username: `${prefix}_${tag}`, password: 'e2e_testpass' };
+}
+
+/**
  * Wait for the SolidJS app to finish initializing its DB connection.
  * Boot screen shows a "Connecting..." spinner; once the layout mounts the
  * <header> appears. This is the universal "app is interactive" gate.

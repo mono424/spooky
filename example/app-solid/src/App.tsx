@@ -191,6 +191,12 @@ export default function App() {
         </div>
       }
       onError={(error) => console.error('Failed to initialize database:', error)}
+      onReady={(db) => {
+        // Expose the client for e2e diagnostics (e.g.
+        // `liveRetryCount` regression in z-auth-bootstrap.spec.ts).
+        // Harmless in prod and useful in the browser dev console too.
+        (window as unknown as Record<string, unknown>).__sp00ky__ = db;
+      }}
     >
       <AuthProvider>
         <Router root={Layout}>

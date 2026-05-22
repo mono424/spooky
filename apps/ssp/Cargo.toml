@@ -8,7 +8,7 @@ anyhow = "1.0"
 axum = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-surrealdb = { version = "3.0.0", features = ["protocol-ws", "protocol-http"] }
+surrealdb = { version = "3.1.0-beta.3", features = ["protocol-ws", "protocol-http"] }
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "io-util"] }
 ssp = { path = "../../packages/ssp" }
 job-runner = { path = "../../packages/job-runner" }

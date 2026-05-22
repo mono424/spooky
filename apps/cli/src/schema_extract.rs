@@ -75,7 +75,7 @@ fn find_free_port() -> Result<u16> {
     Ok(port)
 }
 
-const SURREALDB_IMAGE: &str = "surrealdb/surrealdb:v3.0.0";
+const SURREALDB_IMAGE: &str = "surrealdb/surrealdb:v3.1.0-beta.3";
 
 /// Ensure the SurrealDB image is locally available, pulling it (with visible
 /// progress) on first run. Without this, `docker run` would tacitly pull

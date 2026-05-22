@@ -45,6 +45,19 @@ impl super::Operator for Union {
     }
 
     fn reset(&mut self) {}
+
+    fn evaluate_key(
+        &self,
+        _key: &str,
+        input_evals: &[bool],
+        _store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        // Union admits the key if either branch admits it. This is
+        // critical for the permission-lowering shape where multiple
+        // OR-branches feed into a Union.
+        input_evals.iter().any(|&e| e)
+    }
 }
 
 #[cfg(test)]

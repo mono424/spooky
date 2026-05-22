@@ -87,7 +87,7 @@ pub const YAML_SCHEMA_COMMENT: &str = "# yaml-language-server: $schema=https://s
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum SurrealDbConfig {
-    /// Just the image version, e.g. "v3.0.0"
+    /// Just the image version, e.g. "v3.1.0-beta.3"
     Version(String),
     /// Full config with optional fields
     Full {
@@ -214,7 +214,7 @@ pub struct ClientTypeConfig {
     pub output: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct Sp00kyConfig {
     /// Cloud project slug (used by `sp00ky cloud` commands)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,11 +254,13 @@ pub struct Sp00kyConfig {
     /// per-environment map `{ dev, cloud }`. Unset → defaults to `info`.
     #[serde(default, rename = "logLevel", skip_serializing_if = "Option::is_none")]
     pub log_level: Option<LogLevelConfig>,
-    /// Storage mode for the internal `_00_query` / `_00_list_ref` ref tables.
-    /// `single` (legacy): one shared table per kind. `dedicated` (default):
-    /// per-user tables `_00_{query,list_ref}_user_<id>`, created lazily by
-    /// the SSP on first registration. Dedicated mode works around a
-    /// SurrealDB v3 LIVE-permission gap where cross-session INSERTs to a
+    /// Storage mode for the internal `_00_list_ref` ref table.
+    /// `single` (legacy): one shared `_00_list_ref` table. `dedicated`
+    /// (default): per-user `_00_list_ref_user_<id>` tables created
+    /// lazily by the SSP on first registration. The `_00_query`
+    /// registration table is global in both modes; only `_00_list_ref`
+    /// splits per user. Dedicated mode works around a SurrealDB v3
+    /// LIVE-permission gap where cross-session INSERTs to a
     /// permission-gated table never fire LIVE notifications for the
     /// non-inserting subscriber.
     #[serde(default, rename = "refMode", skip_serializing_if = "Option::is_none")]
@@ -753,7 +755,7 @@ pub enum DeployEnv {
     Cloud,
 }
 
-const DEFAULT_SURREALDB_VERSION: &str = "v3.0.0";
+const DEFAULT_SURREALDB_VERSION: &str = "v3.1.0-beta.3";
 const DEFAULT_SSP_VERSION: &str = "canary";
 const DEFAULT_SCHEDULER_VERSION: &str = "canary";
 
@@ -1135,21 +1137,12 @@ pub fn load_config(path: &Path) -> Sp00kyConfig {
 }
 
 fn default_config() -> Sp00kyConfig {
+    // Singlenode is the historical default for the dev orchestrator;
+    // everything else matches `Sp00kyConfig::default()` so adding a
+    // new field doesn't require updating this function.
     Sp00kyConfig {
-        slug: None,
         mode: Some(DeployMode::Singlenode),
-        surrealdb: None,
-        version: None,
-        schema: None,
-        apps: Default::default(),
-        buckets: Default::default(),
-        client_types: Default::default(),
-        deployment: None,
-        cloud_api: None,
-        migration_engine: None,
-        surrealkit: None,
-        log_level: None,
-        ref_mode: None,
+        ..Default::default()
     }
 }
 
@@ -1338,6 +1331,29 @@ mod version_tests {
     fn resolve_full(yaml: &str, env: DeployEnv) -> ResolvedVersions {
         let cfg = parse(yaml);
         ResolvedVersions::from_config(&cfg, env)
+    }
+
+    /// Guards against `Sp00kyConfig::default()` diverging from
+    /// `serde_yaml::from_str("{}")`. They must produce identical
+    /// serializations so future fields can't accidentally make the
+    /// hand-written `default_config()` and the YAML defaults disagree.
+    /// Compared via serialized JSON because `Sp00kyConfig` doesn't
+    /// derive `PartialEq` (and adding it would cascade across every
+    /// child config type).
+    #[test]
+    fn default_matches_empty_yaml() {
+        let from_default = Sp00kyConfig::default();
+        let from_yaml: Sp00kyConfig =
+            serde_yaml::from_str("{}").expect("empty yaml parses");
+
+        let default_json =
+            serde_json::to_string(&from_default).expect("serialize default");
+        let yaml_json =
+            serde_json::to_string(&from_yaml).expect("serialize from-yaml");
+        assert_eq!(
+            default_json, yaml_json,
+            "Sp00kyConfig::default() must match serde-deserialize of empty YAML"
+        );
     }
 
     #[test]

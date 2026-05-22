@@ -120,22 +120,7 @@ pub fn add_api(
             .context(format!("Failed to read config: {:?}", config_path))?;
         serde_yaml::from_str(&content).context("Failed to parse sp00ky.yml")?
     } else {
-        Sp00kyConfig {
-            slug: None,
-            mode: None,
-            surrealdb: None,
-            version: None,
-            schema: None,
-            apps: std::collections::BTreeMap::new(),
-            buckets: Vec::new(),
-            client_types: Vec::new(),
-            deployment: None,
-            cloud_api: None,
-            migration_engine: None,
-            surrealkit: None,
-            log_level: None,
-            ref_mode: None,
-        }
+        Sp00kyConfig::default()
     };
 
     // Step 3: OpenAPI spec path

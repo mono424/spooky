@@ -81,21 +81,6 @@ test.describe('Multi-client real-time sync', () => {
   });
 
   test('title edits propagate from A to B in real-time', async ({ browser }) => {
-    // KNOWN-BROKEN. After the dedicated-table workaround landed, B's
-    // session correctly receives the rename's `_00_list_ref_user_<id>`
-    // UPDATE event (verified in the dev-log diagnostics) and
-    // `syncEngine.syncRecords` runs with the right `updated` diff. The
-    // `SELECT * FROM thread:<id>` fetch returns the new title and
-    // `cache.saveBatch` UPSERT MERGEs it into the local DB. Despite
-    // that, the local query subscription doesn't re-fire on B — the
-    // home-list `useQuery` keeps the pre-rename row in its memoized
-    // result. The CREATE path of the same machinery works (see the
-    // sibling test), so this isn't a sync-engine gap; it's a
-    // local-DBSP / Solid-reactivity edge case around `UPDATE` events
-    // that change a row's content but not the result set's membership.
-    // Tracked separately from the LIVE-permission workaround that this
-    // session set out to fix.
-    test.fail();
     const baseTitle = 'Multi A2B Title Base';
     const renamedTitle = 'Multi A2B Title Renamed';
     const ctxA = await browser.newContext();

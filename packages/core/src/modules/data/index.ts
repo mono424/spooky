@@ -1,5 +1,4 @@
 import { RecordId, Duration } from 'surrealdb';
-import { DEFAULT_REF_MODE, queryTableFor, RefMode } from '../ref-tables';
 import type {
   SchemaStructure,
   TableNames,
@@ -55,12 +54,12 @@ export class DataModule<S extends SchemaStructure> {
   // don't collide on the same `_00_query` row — each session gets its own.
   // Empty string until init(sessionId) is called.
   private sessionId: string = '';
-  // Authenticated user record id (e.g. `"user:abc"`) — drives per-user
-  // `_00_query_user_<id>` routing in `RefMode.Dedicated`. Updated by
+  // Authenticated user record id (e.g. `"user:abc"`). Updated by
   // `setCurrentUserId` from the auth subscription. null when
-  // unauthenticated.
+  // unauthenticated. Consulted by `Sp00kySync.listRefTable()` so the
+  // poll and LIVE subscription target the same per-user
+  // `_00_list_ref_user_<id>` table the sync engine writes to.
   private currentUserId: string | null = null;
-  private refMode: RefMode = DEFAULT_REF_MODE;
 
   constructor(
     private cache: CacheModule,
@@ -90,9 +89,10 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   /**
-   * Update the authenticated user record id used for per-user
-   * `_00_query_user_<id>` routing in `RefMode.Dedicated`. Pass `null`
-   * on sign-out. Only affects queries registered AFTER this call.
+   * Update the authenticated user record id. Pass `null` on sign-out.
+   * Read by `Sp00kySync.listRefTable()` so the LIVE subscription and
+   * the poll route to the same per-user `_00_list_ref_user_<id>` the
+   * SSP writes to.
    */
   setCurrentUserId(userId: string | null): void {
     this.currentUserId = userId;

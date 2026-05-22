@@ -109,6 +109,15 @@ export class Sp00kyClient<S extends SchemaStructure> {
     return this.sync.pendingMutationCount;
   }
 
+  /** Number of times the initial list_ref LIVE subscription retried on
+   *  the most recent `setCurrentUserId` call. 0 when the SSP's
+   *  pre-emptive user-table creation got there first; >0 when LIVE
+   *  registration hit a "table not found" race. Exposed so the e2e
+   *  suite can guard the pre-emptive path against regression. */
+  get liveRetryCount(): number {
+    return this.sync.liveRetryCount;
+  }
+
   subscribeToPendingMutations(cb: (count: number) => void): () => void {
     return this.sync.subscribeToPendingMutations(cb);
   }
@@ -181,7 +190,15 @@ export class Sp00kyClient<S extends SchemaStructure> {
     this.auth = new AuthService(this.config.schema, this.remote, this.persistenceClient, logger);
 
     // Initialize Sync
-    this.sync = new Sp00kySync(this.local, this.remote, this.cache, this.dataModule, this.config.schema, this.logger);
+    this.sync = new Sp00kySync(
+      this.local,
+      this.remote,
+      this.cache,
+      this.dataModule,
+      this.config.schema,
+      this.logger,
+      { refSyncIntervalMs: this.config.refSyncIntervalMs }
+    );
 
     // Initialize DevTools
     this.devTools = new DevToolsService(
@@ -218,6 +235,32 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // Sync events for incoming updates
     this.sync.events.subscribe('SYNC_QUERY_UPDATED', (event: any) => {
       this.devTools.logEvent('SYNC_QUERY_UPDATED', event.payload);
+    });
+
+    // Hand list_ref-driven row ingests to the CrdtManager so CRDT body
+    // / cursor updates reach the receiver even when the cross-session
+    // LIVE on the parent table is filtered out by the SurrealDB
+    // permission-LIVE gap. Same-user clients receive these rows via
+    // CrdtManager's own `LIVE SELECT * FROM <table>`; this hook is the
+    // redundant path that fires when only the list_ref bumped.
+    this.sync.engineEvents.subscribe('SYNC_REMOTE_DATA_INGESTED', (event: any) => {
+      try {
+        const records: Array<Record<string, any>> = event.payload?.records ?? [];
+        for (const row of records) {
+          const id = row?.id;
+          const table =
+            id && typeof id === 'object' && id.table !== undefined
+              ? String(id.table)
+              : undefined;
+          if (!table) continue;
+          this.crdtManager.applyRow(table, row);
+        }
+      } catch (err) {
+        this.logger.debug(
+          { err, Category: 'sp00ky-client::engineEvents::ingested' },
+          'applyRow forwarding from sync ingest failed'
+        );
+      }
     });
 
     // Database events for DevTools

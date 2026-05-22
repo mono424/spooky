@@ -5,7 +5,13 @@ import type { Logger } from '../../services/logger/index';
 import type { DownEvent, UpEvent} from './queue/index';
 import { DownQueue, UpQueue } from './queue/index';
 import type { RecordId, Uuid } from 'surrealdb';
-import { ArraySyncer, createDiffFromDbOp } from './utils';
+import {
+  ArraySyncer,
+  buildListRefSelect,
+  createDiffFromDbOp,
+  nextPollDelayMs,
+  resolveListRefPollInterval,
+} from './utils';
 import { SyncEngine } from './engine';
 import { SyncScheduler } from './scheduler';
 import type { SchemaStructure } from '@spooky-sync/query-builder';
@@ -13,6 +19,19 @@ import type { CacheModule } from '../cache/index';
 import type { DataModule } from '../data/index';
 import { encodeRecordId, extractTablePart, surql } from '../../utils/index';
 import { DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
+
+/**
+ * Tunables for `Sp00kySync` construction.
+ */
+export interface Sp00kySyncOptions {
+  /**
+   * Cadence (ms) for the `_00_list_ref` poll fallback that catches
+   * cross-session UPDATEs the LIVE-permission gap drops. Non-positive
+   * values fall back to the default; see
+   * {@link resolveListRefPollInterval}.
+   */
+  refSyncIntervalMs?: number;
+}
 
 /**
  * The main synchronization engine for Sp00ky.
@@ -26,6 +45,12 @@ export class Sp00kySync<S extends SchemaStructure> {
   private isInit: boolean = false;
   private logger: Logger;
   private syncEngine: SyncEngine;
+  /** Engine-level events (e.g. `SYNC_REMOTE_DATA_INGESTED`). Distinct
+   *  from `this.events`, which carries Sp00kySync-level events like
+   *  `SYNC_QUERY_UPDATED` and `SYNC_MUTATION_ROLLED_BACK`. */
+  public get engineEvents() {
+    return this.syncEngine.events;
+  }
   private scheduler: SyncScheduler;
   private wasDisconnected: boolean = false;
   public events = createSyncEventSystem();
@@ -47,9 +72,33 @@ export class Sp00kySync<S extends SchemaStructure> {
   // Periodic re-poll of `_00_list_ref` as a safety net for missed LIVE
   // notifications. SurrealDB v3 occasionally drops LIVE deliveries
   // across sessions even when the row matches the permission rule;
-  // this catches those without requiring users to reload.
-  private listRefPollTimer: ReturnType<typeof setInterval> | null = null;
-  private static readonly LIST_REF_POLL_INTERVAL_MS = 500;
+  // this catches those without requiring users to reload. The
+  // interval is configurable via the constructor; see
+  // `resolveListRefPollInterval` for fallback semantics.
+  //
+  // Self-rescheduling rather than setInterval so each tick can pick
+  // its own delay via `nextPollDelayMs` — slows the poll down when
+  // LIVE is delivering events and speeds it back up when LIVE quiets.
+  private listRefPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private listRefPollRunning: boolean = false;
+  public readonly refSyncIntervalMs: number;
+
+  // Wall-clock timestamp (ms) of the most recent LIVE event delivered
+  // through `handleRemoteListRefChange`. Read by `nextPollDelayMs` to
+  // back the poll off when LIVE is healthy.
+  private lastLiveEventAt: number | null = null;
+
+  // Number of times the initial `_00_list_ref[_user_*]` LIVE subscription
+  // had to retry on `setCurrentUserId`. Stays at 0 when the SSP has
+  // pre-emptively created the user's dedicated tables; otherwise
+  // increments on each retry attempt until LIVE succeeds or attempts
+  // are exhausted. Surfaced as a diagnostic so the e2e suite can prove
+  // the pre-emptive table-creation path is keeping the first sign-in
+  // off the lazy-creation race.
+  private _liveRetryCount: number = 0;
+  public get liveRetryCount(): number {
+    return this._liveRetryCount;
+  }
 
   get isSyncing() {
     return this.scheduler.isSyncing;
@@ -80,7 +129,8 @@ export class Sp00kySync<S extends SchemaStructure> {
     private cache: CacheModule,
     private dataModule: DataModule<S>,
     private schema: S,
-    logger: Logger
+    logger: Logger,
+    options?: Sp00kySyncOptions
   ) {
     this.logger = logger.child({ service: 'Sp00kySync' });
     this.upQueue = new UpQueue(this.local, this.logger);
@@ -94,6 +144,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       this.logger,
       this.handleRollback.bind(this)
     );
+    this.refSyncIntervalMs = resolveListRefPollInterval(options?.refSyncIntervalMs);
   }
 
   /**
@@ -143,6 +194,7 @@ export class Sp00kySync<S extends SchemaStructure> {
     const attemptDelays = [0, 250, 500, 1000, 2000];
     for (let i = 0; i < attemptDelays.length; i++) {
       if (attemptDelays[i] > 0) {
+        this._liveRetryCount++;
         await new Promise((r) => setTimeout(r, attemptDelays[i]));
       }
       try {
@@ -158,22 +210,38 @@ export class Sp00kySync<S extends SchemaStructure> {
   }
 
   private startListRefPoll(): void {
-    if (this.listRefPollTimer !== null) return;
+    if (this.listRefPollRunning) return;
+    this.listRefPollRunning = true;
     this.logger.debug(
       {
-        intervalMs: Sp00kySync.LIST_REF_POLL_INTERVAL_MS,
+        intervalMs: this.refSyncIntervalMs,
         Category: 'sp00ky-client::Sp00kySync::startListRefPoll',
       },
       'list_ref poll loop started'
     );
-    this.listRefPollTimer = setInterval(() => {
-      void this.pollListRefForActiveQueries();
-    }, Sp00kySync.LIST_REF_POLL_INTERVAL_MS);
+    const schedule = (delayMs: number) => {
+      this.listRefPollTimer = setTimeout(async () => {
+        if (!this.listRefPollRunning) return;
+        try {
+          await this.pollListRefForActiveQueries();
+        } finally {
+          if (!this.listRefPollRunning) return;
+          const next = nextPollDelayMs({
+            now: Date.now(),
+            lastLiveEventAt: this.lastLiveEventAt,
+            baseIntervalMs: this.refSyncIntervalMs,
+          });
+          schedule(next);
+        }
+      }, delayMs);
+    };
+    schedule(this.refSyncIntervalMs);
   }
 
   private stopListRefPoll(): void {
+    this.listRefPollRunning = false;
     if (this.listRefPollTimer !== null) {
-      clearInterval(this.listRefPollTimer);
+      clearTimeout(this.listRefPollTimer);
       this.listRefPollTimer = null;
     }
   }
@@ -206,7 +274,7 @@ export class Sp00kySync<S extends SchemaStructure> {
     if (!queryState) return;
     const listRefTbl = this.listRefTable();
     const [items] = await this.remote.query<[{ out: RecordId<string>; version: number }[]]>(
-      surql.selectByFieldsAnd(listRefTbl, ['in'], ['out', 'version']),
+      buildListRefSelect(listRefTbl),
       { in: queryState.config.id }
     );
     if (!Array.isArray(items)) return;
@@ -337,6 +405,12 @@ export class Sp00kySync<S extends SchemaStructure> {
     recordId: RecordId,
     version: number
   ) {
+    // Any LIVE delivery is evidence that the feed is healthy — even
+    // a DELETE we'll ignore below or a notification for an unknown
+    // local query counts. `nextPollDelayMs` reads this to slow the
+    // poll fallback while LIVE is doing its job.
+    this.lastLiveEventAt = Date.now();
+
     if (action === 'DELETE') {
       this.logger.debug(
         {
@@ -573,10 +647,11 @@ export class Sp00kySync<S extends SchemaStructure> {
     // Initial materialized-view fetch — pull from the same per-user
     // `_00_list_ref_user_<id>` (or global `_00_list_ref` in single
     // mode) that the LIVE subscription listens on, so the two stay in
-    // sync.
+    // sync. `parent IS NONE` excludes subquery entries; the
+    // `localArray` cache only tracks primary records.
     const listRefTbl = this.listRefTable();
     const [items] = await this.remote.query<[{ out: RecordId<string>; version: number }[]]>(
-      surql.selectByFieldsAnd(listRefTbl, ['in'], ['out', 'version']),
+      buildListRefSelect(listRefTbl),
       {
         in: queryState.config.id,
       }

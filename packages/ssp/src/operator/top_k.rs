@@ -159,6 +159,23 @@ impl super::Operator for TopK {
         self.buffer.clear();
         self.key_index.clear();
     }
+
+    fn evaluate_key(
+        &self,
+        _key: &str,
+        input_evals: &[bool],
+        _store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        // TopK can drop keys that fall outside the limit, but that
+        // path is handled by the in-cache check at apply-delta time.
+        // For the purpose of detecting Update-driven membership
+        // transitions, treating it as a pass-through is correct
+        // enough: a row newly admitted upstream may not actually end
+        // up in the top-N, but the over-emit gets dedup'd by
+        // `view.cache.contains_key` when classifying additions.
+        input_evals.first().copied().unwrap_or(false)
+    }
 }
 
 #[cfg(test)]

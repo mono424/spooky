@@ -56,6 +56,23 @@ impl super::Operator for Filter {
     }
 
     fn reset(&mut self) {}
+
+    fn evaluate_key(
+        &self,
+        key: &str,
+        input_evals: &[bool],
+        store: &Store,
+        ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        // Filter is the membership-changing operator that breaks
+        // cross-user Update propagation: the upstream Scan emits
+        // nothing for Operation::Update, so the standard delta path
+        // never re-evaluates the predicate. Here we check both that
+        // the key is reachable upstream AND that the predicate holds
+        // on the current row data.
+        input_evals.first().copied().unwrap_or(false)
+            && self.check_predicate(key, store, ctx)
+    }
 }
 
 /// Resolve a predicate value, handling $param references.

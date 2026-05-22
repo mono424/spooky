@@ -126,6 +126,13 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * collaborators. Defaults to 500ms.
    */
   crdtDebounceMs?: number;
+  /**
+   * Cadence (ms) for the `_00_list_ref` poll that catches cross-session
+   * UPDATEs the SurrealDB v3 LIVE-permission gap drops. Lower = faster
+   * convergence + more query load; higher = the inverse. Non-positive
+   * values fall back to the default (500ms).
+   */
+  refSyncIntervalMs?: number;
 }
 
 export type QueryHash = string;

@@ -56,6 +56,34 @@ pub trait Operator: Debug + Send + Sync {
     fn collections(&self) -> Vec<String> {
         vec![]
     }
+
+    /// Membership test for a single key against this operator's CURRENT
+    /// snapshot output, without recomputing the full snapshot.
+    ///
+    /// Used by `Circuit::step_query` to detect membership transitions
+    /// caused by `Operation::Update` (weight 0): the Scan emits an
+    /// empty delta for Updates, so Filter never re-evaluates the
+    /// predicate against the new row content. Walking the DAG with
+    /// `evaluate_key` lets us ask "is this key in the current
+    /// snapshot?" and synthesize +1/-1 weights when membership
+    /// transitioned.
+    ///
+    /// `input_evals[i]` is the result of `evaluate_key` on the i-th
+    /// input node, computed in topological order.
+    ///
+    /// Default: returns `false`. Conservative — operators that don't
+    /// implement this won't surface membership transitions through
+    /// Updates. Override on operators whose membership semantics are
+    /// well-defined per-row (Scan, Filter, Map, TopK, Union, Distinct).
+    fn evaluate_key(
+        &self,
+        _key: &str,
+        _input_evals: &[bool],
+        _store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        false
+    }
 }
 
 pub use aggregate::{Aggregate, AggregateFunc};

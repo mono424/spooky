@@ -46,18 +46,6 @@ export function sanitizeUserId(userId: unknown): string | null {
 }
 
 /**
- * Returns the `_00_query` table name. Always `_00_query` regardless of
- * mode: the registration row stays in the single global table so the
- * client and the SSP can agree on its record id without the client
- * needing to know per-user table names at id-creation time. Only
- * `_00_list_ref` splits per user — that's where the SurrealDB LIVE
- * permission gap lives.
- */
-export function queryTableFor(_mode: RefMode, _userId: unknown): string {
-  return '_00_query';
-}
-
-/**
  * Returns the `_00_list_ref` table name for `(mode, userId)`. Falls
  * back to the global `_00_list_ref` when sanitization fails or in
  * single mode.

@@ -426,7 +426,6 @@ pub async fn run_server() -> anyhow::Result<()> {
         let ssp_id = config.ssp_id.clone();
         let listen_addr = config.listen_addr.clone();
         let advertise_addr = config.advertise_addr.clone();
-        let ref_mode = config.ref_mode;
 
         tokio::spawn(async move {
             // Choose bootstrap source based on mode. The metadata source
@@ -481,7 +480,7 @@ pub async fn run_server() -> anyhow::Result<()> {
             let mut attempt = 0;
             loop {
                 attempt += 1;
-                match self_bootstrap_with_metadata(&metadata_source, &data_source, &processor, ref_mode).await {
+                match self_bootstrap_with_metadata(&metadata_source, &data_source, &processor).await {
                     Ok(()) => {
                         // Integrity check: only when the scheduler handed us
                         // expected hashes (cluster mode). Mismatch ⇒ wipe
@@ -723,7 +722,6 @@ async fn self_bootstrap_with_metadata(
     metadata_source: &BootstrapSource,
     data_source: &BootstrapSource,
     processor: &Arc<RwLock<Circuit>>,
-    ref_mode: ssp_protocol::RefMode,
 ) -> anyhow::Result<()> {
     info!("Starting self-bootstrap");
     let source = data_source;
@@ -1195,6 +1193,45 @@ async fn ingest_handler(
     // Prepare record data
     let clean = ssp::sanitizer::normalize_record(payload.record.clone());
 
+    // Pre-emptively create the new user's dedicated `_00_list_ref_user_<id>`
+    // and `_00_query_user_<id>` tables (idempotent — no-op in
+    // `RefMode::Single`). Without this, the client's `setCurrentUserId`
+    // call after auth-success races the SSP's lazy table creation in
+    // `register_view_handler` and the initial `LIVE SELECT * FROM
+    // _00_list_ref_user_<id>` fails with "table not found" until the
+    // retry backoff in `Sp00kySync::setCurrentUserId` kicks in.
+    if payload.table == "user" && op == Operation::Create {
+        if let Err(e) =
+            tables::ensure_user_tables(&state.db, state.ref_mode, &payload.id).await
+        {
+            warn!(
+                target: "ssp::ingest",
+                error = %e,
+                auth_id = %payload.id,
+                "Pre-emptive ensure_user_tables failed; falling back to lazy creation on view register"
+            );
+        }
+    }
+
+    // Inverse of pre-emptive creation: when the owning user record is
+    // deleted, drop the dedicated `_00_list_ref_user_<id>` so leftover
+    // schema state doesn't accumulate forever. The schema's
+    // `_00_user_delete` event fires this ingest with op=DELETE and the
+    // pre-delete row payload, which carries the same id sanitization
+    // path. No-op in `RefMode::Single` (no per-user tables exist).
+    if payload.table == "user" && op == Operation::Delete {
+        if let Err(e) =
+            tables::drop_user_tables(&state.db, state.ref_mode, &payload.id).await
+        {
+            warn!(
+                target: "ssp::ingest",
+                error = %e,
+                auth_id = %payload.id,
+                "drop_user_tables failed; per-user list_ref table will linger"
+            );
+        }
+    }
+
     // Check if this is a job table and queue the job if pending (only on assigned SSP)
     if let Some(backend_info) = state.job_config.job_tables.get(&payload.table) {
         // In singlenode mode (no scheduler), this SSP handles all jobs.
@@ -1306,27 +1343,76 @@ async fn ingest_handler(
             .sum();
         span.record("edges_updated", edge_count);
 
-        // Update edges in database
-        let delta_refs: Vec<&ViewDelta> = deltas.iter().collect();
-        {
-            let circuit = state.processor.read().await;
-            update_all_edges(&state.db, &delta_refs, &state.metrics, &circuit, state.ref_mode).await;
-        }
-
-        // Persist per-view metrics for every affected view. The same step
-        // duration is recorded against every view touched by this change
-        // (going finer-grained would require per-view timing inside the
-        // circuit). Best-effort: log on failure rather than fail the ingest.
-        persist_view_metrics(
-            &state,
-            deltas.iter().map(|d| d.records.len()).collect::<Vec<_>>(),
-            deltas
-                .iter()
-                .map(|d| (d.query_id.clone(), d.auth_id.clone()))
-                .collect::<Vec<_>>(),
-            materialization_time_ms,
-        )
-        .await;
+        // Defer the actual `UPDATE _00_list_ref_user_<...>` writes
+        // into a background task and return 200 to the schema event
+        // immediately. Without this, the schema's `http::post` blocks
+        // alice's parent transaction until `update_all_edges` completes
+        // and commits — in a SEPARATE transaction over the SSP's own
+        // connection. That separate tx commits BEFORE alice's parent
+        // tx, so when bob's LIVE on `_00_list_ref_user_<bob>` fires
+        // and his client re-fetches the row over a different session,
+        // alice's UPDATE on the source row isn't visible yet and bob
+        // ingests stale content with the new list_ref version (see
+        // docs/surrealdb-bugs/ws-row-cache-stale-after-update.md).
+        //
+        // By spawning the work and waiting on `_00_version` (which is
+        // bumped inside alice's tx and only becomes visible to other
+        // connections post-commit) we ensure the list_ref UPDATE
+        // lands AFTER the source row is readable downstream.
+        let expected_version: Option<i64> = payload
+            .record
+            .get("_00_rv")
+            .and_then(|v| v.as_i64())
+            .filter(|&v| v > 0);
+        let row_id_for_wait = payload.id.clone();
+        let table_for_wait = payload.table.clone();
+        let op_for_wait = payload.op.clone();
+        let state_for_task = state.clone();
+        let deltas_for_task = deltas;
+        let span_for_task = span.clone();
+        tokio::spawn(async move {
+            let _enter = span_for_task.enter();
+            if let Some(expected) = expected_version {
+                if !wait_for_row_committed(
+                    &state_for_task.db,
+                    &row_id_for_wait,
+                    expected,
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                {
+                    warn!(
+                        target: "ssp::ingest",
+                        table = %table_for_wait,
+                        op = %op_for_wait,
+                        id = %row_id_for_wait,
+                        expected_version = expected,
+                        "Timed out waiting for source row to commit; proceeding with edges update"
+                    );
+                }
+            }
+            let delta_refs: Vec<&ViewDelta> = deltas_for_task.iter().collect();
+            let circuit = state_for_task.processor.read().await;
+            update_all_edges(
+                &state_for_task.db,
+                &delta_refs,
+                &state_for_task.metrics,
+                &circuit,
+                state_for_task.ref_mode,
+            )
+            .await;
+            drop(circuit);
+            persist_view_metrics(
+                &state_for_task,
+                deltas_for_task.iter().map(|d| d.records.len()).collect::<Vec<_>>(),
+                deltas_for_task
+                    .iter()
+                    .map(|d| d.query_id.clone())
+                    .collect::<Vec<_>>(),
+                materialization_time_ms,
+            )
+            .await;
+        });
     }
 
     // Record duration
@@ -1334,6 +1420,56 @@ async fn ingest_handler(
     state.metrics.ingest_duration.record(duration_ms, &[]);
 
     StatusCode::OK.into_response()
+}
+
+/// Poll `_00_version` on the SSP's own connection until the source row
+/// reaches `expected_version`. The schema event bumps `_00_version`
+/// inside alice's parent transaction; from the SSP's connection that
+/// bump is only visible AFTER alice's tx commits, so this is a clean
+/// proxy for "alice's source row is now readable downstream". Returns
+/// `true` if the version is observed within `timeout`, `false` on
+/// timeout (caller proceeds anyway so a missing `_00_version` row
+/// doesn't permanently wedge the fan-out).
+async fn wait_for_row_committed(
+    db: &SharedDb,
+    row_id: &str,
+    expected_version: i64,
+    timeout: std::time::Duration,
+) -> bool {
+    let Some(rid) = parse_record_id(row_id) else {
+        return false;
+    };
+    let start = std::time::Instant::now();
+    let mut backoff_ms: u64 = 10;
+    while start.elapsed() < timeout {
+        match db
+            .query("SELECT VALUE version FROM ONLY _00_version WHERE record_id = $rid LIMIT 1")
+            .bind(("rid", rid.clone()))
+            .await
+        {
+            Ok(mut response) => {
+                let v: Option<i64> = response.take(0).ok().flatten();
+                if let Some(v) = v {
+                    if v >= expected_version {
+                        return true;
+                    }
+                }
+            }
+            Err(e) => {
+                debug!(
+                    target: "ssp::ingest",
+                    error = %e,
+                    row_id,
+                    "Source-row commit poll query failed; retrying"
+                );
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+        if backoff_ms < 80 {
+            backoff_ms *= 2;
+        }
+    }
+    false
 }
 
 /// Log handler - receives logs from client and forwards to tracing
@@ -1420,7 +1556,7 @@ async fn register_view_handler(
         .get("id")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    let incantation_id = format_incantation_id(state.ref_mode, &auth_id, raw_id);
+    let incantation_id = format_incantation_id(raw_id);
 
     // Check if view exists and clean up old edges
     let view_existed = {
@@ -1608,7 +1744,7 @@ async fn unregister_view_handler(
     state.metrics.view_count.add(-1, &[]);
 
     // Delete all edges for this incantation
-    let incantation_id = format_incantation_id(state.ref_mode, &auth_id, &payload.id);
+    let incantation_id = format_incantation_id(&payload.id);
     let list_ref_tbl = tables::list_ref_table(state.ref_mode, &auth_id);
     if let Some(from_id) = parse_record_id(&incantation_id) {
         let stmt = format!("DELETE $from->{}", list_ref_tbl);
@@ -1767,6 +1903,11 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
         .map(|(t, h)| (t, Value::String(h)))
         .collect();
 
+    let ref_mode_str = match state.ref_mode {
+        ssp_protocol::RefMode::Single => "single",
+        ssp_protocol::RefMode::Dedicated => "dedicated",
+    };
+
     Json(json!([
         {
             "entity": "ssp",
@@ -1779,6 +1920,7 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
             "last_heartbeat_seconds_ago": null,
             "circuit_tables": circuit_tables,
             "circuit_hashes": circuit_hashes,
+            "ref_mode": ref_mode_str,
             "env": env_vars,
         }
     ]))
@@ -1856,7 +1998,7 @@ async fn cleanup_expired_query(
             .unwrap_or_default()
     };
 
-    let incantation_id = format_incantation_id(mode, &auth_id, query_id);
+    let incantation_id = format_incantation_id(query_id);
     let list_ref_tbl = tables::list_ref_table(mode, &auth_id);
     let Some(record_id) = parse_record_id(&incantation_id) else {
         error!(query_id = %query_id, "TTL cleanup: invalid record ID");
@@ -1961,13 +2103,14 @@ fn parse_record_id(id: &str) -> Option<RecordId> {
     RecordId::parse_simple(id).ok()
 }
 
-/// Format incantation ID with the right per-user query table prefix.
-/// Strips any existing `_00_query[_user_*]:` prefix from `id` and
-/// re-applies the target table name resolved from `(mode, auth_id)`.
-fn format_incantation_id(mode: ssp_protocol::RefMode, auth_id: &str, id: &str) -> String {
-    let table = tables::query_table(mode, auth_id);
+/// Format incantation ID with the global `_00_query` prefix. Strips
+/// any existing prefix from `id` and re-applies `_00_query:`. The
+/// registration table is global in both ref modes because the client
+/// needs to compute the record id without knowing the user at
+/// id-creation time; only `_00_list_ref` splits per user.
+fn format_incantation_id(id: &str) -> String {
     let raw = id.rsplit(':').next().unwrap_or(id);
-    format!("{}:{}", table, raw)
+    format!("_00_query:{}", raw)
 }
 
 /// Update edges for multiple views in a SINGLE database transaction
@@ -2005,7 +2148,7 @@ pub async fn update_all_edges<C: Connection>(
         // `_00_list_ref` pair in `RefMode::Dedicated`. The delta carries
         // its owning user from `View.auth_id` (set in `add_query_with_auth`)
         // so we don't need an extra DB lookup per delta.
-        let incantation_id = format_incantation_id(mode, &delta.auth_id, &delta.query_id);
+        let incantation_id = format_incantation_id(&delta.query_id);
         let list_ref_tbl = tables::list_ref_table(mode, &delta.auth_id);
 
         let Some(from_id) = parse_record_id(&incantation_id) else {
@@ -2228,7 +2371,7 @@ async fn update_incantation_edges<C: Connection>(
 async fn persist_view_metrics(
     state: &AppState,
     row_counts: Vec<usize>,
-    view_ids: Vec<(String, String)>,
+    view_ids: Vec<String>,
     materialization_time_ms: f64,
 ) {
     if view_ids.is_empty() {
@@ -2242,7 +2385,7 @@ async fn persist_view_metrics(
         view_ids
             .iter()
             .zip(row_counts.iter())
-            .map(|((view_id, auth_id), row_count)| {
+            .map(|(view_id, row_count)| {
                 let entry = metrics_map
                     .entry(view_id.clone())
                     .or_insert_with(ViewMetricsState::default);
@@ -2251,7 +2394,6 @@ async fn persist_view_metrics(
                 let percentiles = entry.percentiles();
                 (
                     view_id.clone(),
-                    auth_id.clone(),
                     *row_count,
                     entry.update_count,
                     materialization_time_ms,
@@ -2261,8 +2403,8 @@ async fn persist_view_metrics(
             .collect()
     };
 
-    for (view_id, auth_id, row_count, update_count, last_ingest_latency, percentiles) in snapshots {
-        let incantation_id = format_incantation_id(state.ref_mode, &auth_id, &view_id);
+    for (view_id, row_count, update_count, last_ingest_latency, percentiles) in snapshots {
+        let incantation_id = format_incantation_id(&view_id);
         let query = "UPDATE <record>$id SET \
             rowCount = <int>$rowCount, \
             updateCount = <int>$updateCount, \
