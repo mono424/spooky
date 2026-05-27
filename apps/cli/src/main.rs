@@ -16,6 +16,7 @@ mod migration;
 mod modules;
 mod package_manager;
 mod parser;
+mod port_check;
 mod scaffold;
 mod schema_builder;
 mod schema_diff;

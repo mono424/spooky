@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, RuntimeSource, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
+use crate::port_check;
 use crate::schema_builder::{self, SchemaBuilderConfig};
 use crate::schema_diff;
 use crate::schema_extract;
@@ -42,6 +43,46 @@ fn surreal_connection_url(resolved: &ResolvedSurrealDb, local_port: u16) -> Stri
     }
 }
 
+/// Collect every host port `spky dev` will try to bind in the current mode.
+/// Mirrors the gates around each `docker run -p` in `run_direct_mode` /
+/// `run_compose_mode`: SurrealDB only when locally hosted, scheduler only in
+/// cluster mode, plus any user `dev: { type: docker, port: "..." }` entries.
+fn collect_dev_ports(
+    config: &Sp00kyConfig,
+    mode: &DeployMode,
+    resolved_surreal: &ResolvedSurrealDb,
+) -> Vec<(u16, String)> {
+    let mut out: Vec<(u16, String)> = Vec::new();
+    out.push((SSP_PORT, "ssp".to_string()));
+    if resolved_surreal.hosting != HostingMode::External {
+        out.push((SURREAL_PORT, "surrealdb".to_string()));
+    }
+    if *mode == DeployMode::Cluster {
+        out.push((SCHEDULER_PORT, "scheduler".to_string()));
+    }
+
+    let mut collect_app = |label: &str, name: &str, dev: &Option<BackendDevConfig>| {
+        if let Some(BackendDevConfig::Typed(BackendDevTypedConfig::Docker { port: Some(p), .. })) = dev {
+            match port_check::parse_docker_host_port(p) {
+                Some(host) => out.push((host, format!("{}:{}", label, name))),
+                None => eprintln!(
+                    "{} Warning: could not parse docker port spec '{}' for {} '{}', skipping pre-check for it",
+                    PREFIX, p, label, name
+                ),
+            }
+        }
+    };
+
+    if let Some((name, fe)) = config.frontend() {
+        collect_app("app", name, &fe.dev);
+    }
+    for (name, app) in config.backends() {
+        collect_app("app", name, &app.dev);
+    }
+
+    out
+}
+
 // ── Public entry point ──────────────────────────────────────────────────────
 
 pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, clean: bool, clean_db: bool) -> Result<()> {
@@ -54,13 +95,34 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
 
     println!("{} Starting development environment...", PREFIX);
 
+    // Load config first so the port pre-check below is mode-aware and so we
+    // don't wipe local state in `--clean`/`--clean-db` if the pre-check fails.
+    let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
+    let mode = config.mode.clone().unwrap_or(DeployMode::Singlenode);
+    // Anchor any relative `version: { ssp: { path: ... } }` entries against
+    // the project directory (where sp00ky.yml lives), not the user's cwd.
+    // Otherwise `../../target/debug/ssp-server` from inside `example/`
+    // would only work when invoked from that exact dir.
+    let project_dir = std::env::current_dir().context("Failed to get current directory")?;
+    let versions = ResolvedVersions::from_config_with_dir(&config, DeployEnv::Dev, &project_dir);
+    let resolved = config.resolved_schema();
+    let resolved_surreal = config.resolved_surrealdb();
+    let migrations_path = resolved.migrations.to_string_lossy().to_string();
+    let migrations_path = migrations_path.as_str();
+    println!("{} Mode: {}", PREFIX, mode);
+
+    // Pre-flight port check: bail before touching docker or local state if
+    // any port we're about to bind is already taken.
+    port_check::ensure_ports_free(
+        collect_dev_ports(&config, &mode, &resolved_surreal),
+        PREFIX,
+    )?;
+
     // `--clean-db` implies `--clean`: wiping the DB while keeping SSP/
     // scheduler caches would leave them rebootstrapping into stale state.
     let clean_state = clean || clean_db;
 
     if clean_state || clean_db {
-        let project_dir = std::env::current_dir().context("Failed to get current directory")?;
-
         let mut subs: Vec<&str> = Vec::new();
         if clean_state {
             subs.extend_from_slice(&["ssp_data", "scheduler_data"]);
@@ -88,21 +150,6 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
             println!("{} --clean-db: SurrealDB volume wiped — starting from an empty database", PREFIX);
         }
     }
-
-    // Read config from sp00ky.yml
-    let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
-    let mode = config.mode.clone().unwrap_or(DeployMode::Singlenode);
-    // Anchor any relative `version: { ssp: { path: ... } }` entries against
-    // the project directory (where sp00ky.yml lives), not the user's cwd.
-    // Otherwise `../../target/debug/ssp-server` from inside `example/`
-    // would only work when invoked from that exact dir.
-    let project_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let versions = ResolvedVersions::from_config_with_dir(&config, DeployEnv::Dev, &project_dir);
-    let resolved = config.resolved_schema();
-    let resolved_surreal = config.resolved_surrealdb();
-    let migrations_path = resolved.migrations.to_string_lossy().to_string();
-    let migrations_path = migrations_path.as_str();
-    println!("{} Mode: {}", PREFIX, mode);
 
     // Check for schema drift before starting infrastructure
     if !skip_migrations {

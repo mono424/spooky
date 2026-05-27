@@ -20,9 +20,10 @@ export const code10 = `DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND "mem
       )
     );`;
 
-export const code9 = `mode: sidecar
+export const code9 = `# sp00ky.yml — \`mode\` is one of \`singlenode\`, \`cluster\`, or \`surrealism\`.
+mode: cluster
 buckets:
-  - ./src/buckets/profile.surql`;
+  - ./schema/src/buckets/profile.surql`;
 
 export const code8 = `spky bucket add`;
 

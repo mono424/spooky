@@ -56,7 +56,7 @@ spky cloud vault request-reset
 # After admin approves, set your new passphrase
 spky cloud vault complete-reset`;
 
-export const code19 = `rm ~/.sp00ky/vault-passphrase`;
+export const code19 = `rm ~/.sp00ky/vault-derived-key`;
 
 export const code18 = `spky cloud env <COMMAND>
 
@@ -189,7 +189,7 @@ Before using environment variables, initialize your encryption vault:
 You'll be prompted to:
 1. **Choose a vault passphrase** — this protects your encryption keys, pick something strong
 2. **Confirm the passphrase**
-3. **Optionally cache it** locally in `~/.sp00ky/vault-passphrase`
+3. **Optionally cache the derived key** locally in `~/.sp00ky/vault-derived-key` (the raw passphrase is never written to disk; only its Argon2id-derived key)
 
 If you skip `env init`, the vault will be created automatically the first time you run `env set`.
 
@@ -235,7 +235,7 @@ The output format is `KEY=value`, one per line — designed for shell evaluation
 The first time you run `env load`, you'll be prompted for your vault passphrase. You can choose to cache it locally so subsequent loads are automatic.
 
 <Note title="CI/CD Usage">
-In non-interactive environments (CI/CD), set the <code>SPOOKY_API_KEY</code> environment variable for authentication and cache the vault passphrase in <code>~/.sp00ky/vault-passphrase</code> during your pipeline setup.
+In non-interactive environments (CI/CD), set the <code>SPOOKY_API_KEY</code> environment variable for authentication and cache the derived key in <code>~/.sp00ky/vault-derived-key</code> during your pipeline setup.
 </Note>
 
 ## Listing Variables
@@ -292,7 +292,7 @@ Only your copy of the encryption key is re-wrapped. Other members and existing v
 
 See [Passphrase Reset](/docs/cloud/vault#passphrase-reset) for the full flow.
 
-**Caching:** The CLI can cache your passphrase at `~/.sp00ky/vault-passphrase`. To clear it:
+**Caching:** The CLI can cache the Argon2id-derived key at `~/.sp00ky/vault-derived-key` (your raw passphrase is never persisted). To clear the cache:
 
 <CodeBlock
   code={code19}

@@ -7,7 +7,8 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
-export const configCode = `mode: sidecar
+export const configCode = `# \`mode\` is one of \`singlenode\`, \`cluster\`, or \`surrealism\`.
+mode: cluster
 apps:
   api:
     type: backend

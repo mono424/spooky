@@ -5,85 +5,67 @@ title: SolidJS Guide
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 
-export const code7 = `npm install @spooky-sync/client-solid surrealdb`;
+export const code7 = `pnpm add @spooky-sync/core @spooky-sync/client-solid surrealdb`;
 
-export const code6 = `# Generate TypeScript types from your schema
-spky --input src/schema.surql --output src/schema.gen.ts --format typescript`;
+export const code6 = `# Recommended: drive from sp00ky.yml's clientTypes entries
+spky generate
 
-export const code5 = `import { SyncedDb, type SyncedDbConfig } from '@spooky-sync/client-solid';
+# One-shot variant
+spky --input ./schema/src/schema.surql --output ./src/schema.gen.ts --format typescript`;
+
+export const code5 = `import type { SyncedDbConfig } from '@spooky-sync/client-solid';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 export const dbConfig: SyncedDbConfig<typeof schema> = {
   logLevel: 'info',
-  schema: schema,
+  schema,
   schemaSurql: SURQL_SCHEMA,
   database: {
     namespace: 'main',
     database: 'main',
-    endpoint: 'ws://localhost:8000/rpc',
+    // \`spky dev\` exposes SurrealDB on 8666 by default.
+    endpoint: 'ws://localhost:8666/rpc',
     store: 'indexeddb',
   },
-};
+};`;
 
-export const db = new SyncedDb<typeof schema>(dbConfig);
-
-// Initialize the database
-let initPromise: Promise<void> | null = null;
-
-export function initDatabase(): Promise<void> {
-  if (initPromise) return initPromise;
-  
-  initPromise = (async () => {
-    try {
-      await db.init();
-      console.log('Database initialized');
-    } catch (error) {
-      initPromise = null;
-      throw error;
-    }
-  })();
-  
-  return initPromise;
-}`;
-
-export const code4 = `import { createSignal, onMount, Show } from 'solid-js';
-import { initDatabase } from './db';
+export const code4 = `import { Sp00kyProvider } from '@spooky-sync/client-solid';
+import { dbConfig } from './db';
+import { MainContent } from './MainContent';
 
 export default function App() {
-  const [isReady, setIsReady] = createSignal(false);
-
-  onMount(async () => {
-    try {
-      await initDatabase();
-      setIsReady(true);
-    } catch (error) {
-      console.error('Failed to initialize database:', error);
-    }
-  });
-
+  // \`Sp00kyProvider\` constructs a \`SyncedDb\` from the config and
+  // awaits its \`init()\` internally. While it's connecting it shows
+  // the \`fallback\` instead of the children. After that, descendants
+  // can pull the client with \`useDb()\` and queries with \`useQuery()\`.
   return (
-    <Show
-      when={isReady()}
+    <Sp00kyProvider
+      config={dbConfig}
       fallback={<div>Initializing database...</div>}
+      onError={(err) => console.error('Failed to initialize database:', err)}
     >
       <MainContent />
-    </Show>
+    </Sp00kyProvider>
   );
 }`;
 
-export const code3 = `import { For } from 'solid-js';
-import { useQuery } from '@spooky-sync/client-solid';
-import { db } from '../db';
+export const code3 = `import { For, Show } from 'solid-js';
+import { useDb, useQuery } from '@spooky-sync/client-solid';
+import type { schema } from '../schema.gen';
 
 export function ThreadList() {
-  // Build the query
-  const threadsQuery = useQuery(db, () => {
-    return db.query('thread')
+  // \`useDb\` reads the client from the \`<Sp00kyProvider>\` context.
+  const db = useDb<typeof schema>();
+
+  // Build the query. \`useQuery\` re-renders the component when the
+  // result set changes (locally or from another tab / device).
+  const threadsQuery = useQuery(() =>
+    db.query('thread')
       .related('author')
       .orderBy('created_at', 'desc')
       .limit(20)
-      .build();
-  });
+      .build()
+  );
 
   return (
     <div>
@@ -111,8 +93,8 @@ export function ThreadList() {
 }`;
 
 export const code2 = `import { createContext, useContext, createSignal, onCleanup, type JSX } from 'solid-js';
-import { useQuery } from '@spooky-sync/client-solid';
-import { db } from '../db';
+import { useDb } from '@spooky-sync/client-solid';
+import type { schema } from '../schema.gen';
 
 interface AuthContextType {
   userId: () => string | null;
@@ -125,10 +107,12 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>();
 
 export function AuthProvider(props: { children: JSX.Element }) {
+  const db = useDb<typeof schema>();
   const [userId, setUserId] = createSignal<string | null>(null);
   const [isInitializing, setIsInitializing] = createSignal(true);
 
-  // Subscribe to auth state changes
+  // Subscribe to auth state changes — fires synchronously with the
+  // current value on subscribe, then on every signin/signout.
   const unsubscribe = db.auth.subscribe((uid) => {
     setUserId(uid);
     setIsInitializing(false);
@@ -145,7 +129,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
   };
 
   const signOut = async () => {
-    await db.auth.signOut();
+    await db.signOut();
   };
 
   const value: AuthContextType = {
@@ -171,29 +155,41 @@ export function useAuth() {
   return context;
 }`;
 
-export const code1 = `import { Uuid } from 'surrealdb';
-import { db } from './db';
+export const code1 = `import { RecordId, Uuid } from 'surrealdb';
+import { useDb } from '@spooky-sync/client-solid';
+import type { schema } from './schema.gen';
 
-// Create a new thread
-async function createThread(title: string, content: string, authorId: string) {
-  const id = \\\`thread:\\\${Uuid.v4().toString().replace(/-/g, '')}\\\`;
-  
-  await db.create(id, {
-    title,
-    content,
-    author: authorId,
-    active: true,
-  });
-}
+function useMutations() {
+  const db = useDb<typeof schema>();
 
-// Update a thread
-async function updateThread(threadId: string, updates: { title?: string; content?: string }) {
-  await db.update('thread', threadId, updates);
-}
+  // Create a new thread. \`db.create\` takes a fully-qualified record
+  // id ("thread:abc…") plus a typed payload — there's no separate
+  // table argument.
+  const createThread = async (title: string, content: string, authorId: string) => {
+    const id = \\\`thread:\\\${Uuid.v4().toString().replace(/-/g, '')}\\\`;
+    await db.create(id, {
+      title,
+      content,
+      active: true,
+      author: new RecordId('user', authorId),
+    });
+  };
 
-// Delete a thread
-async function deleteThread(threadId: string) {
-  await db.delete('thread', threadId);
+  // Update a thread. The third arg is a partial — only listed fields
+  // are merged.
+  const updateThread = async (
+    threadId: string,
+    updates: { title?: string; content?: string },
+  ) => {
+    await db.update('thread', threadId, updates);
+  };
+
+  // Delete a thread.
+  const deleteThread = async (threadId: string) => {
+    await db.delete('thread', threadId);
+  };
+
+  return { createThread, updateThread, deleteThread };
 }`;
 
 This guide walks you through building a reactive app with SolidJS and Sp00ky.

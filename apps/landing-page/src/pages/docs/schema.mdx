@@ -54,11 +54,14 @@ DEFINE FIELD created_at ON TABLE liked TYPE datetime VALUE time::now();
 -- 4. Create the relationship using standard sql or Events
 -- RELATE user:john->liked->post:surrealdb_is_cool;`;
 
-export const code2 = `# Generate TypeScript types
-spky --input src/schema.surql --output schema.gen.ts --format typescript
+export const code2 = `# Recommended: drive from sp00ky.yml's \`clientTypes\` entries
+spky generate
 
-# Or generate all formats at once
-spky --input src/schema.surql --output schema --all`;
+# One-shot variant: invoke the schema extractor directly
+spky --input ./schema/src/schema.surql --output ./schema.gen.ts --format typescript
+
+# Or emit every format (TypeScript + Dart in addition to JSON Schema)
+spky --input ./schema/src/schema.surql --output ./schema --all`;
 
 export const code1 = `export type User = {
     id: RecordId<"user">;

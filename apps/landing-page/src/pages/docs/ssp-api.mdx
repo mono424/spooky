@@ -11,17 +11,17 @@ The SSP (Sp00ky Sidecar Processor) is a stateful service that maintains material
 
 Default: `http://localhost:8667`
 
-Configure via: `LISTEN_ADDR` environment variable
+Configure via: `SPKY_SSP_LISTEN_ADDR` environment variable (form `host:port`).
 
 ## Authentication
 
 All endpoints (except `/health`, `/version`, and `/info`) require authentication via the `Authorization` header:
 
 ```
-Authorization: Bearer <SP00KY_AUTH_SECRET>
+Authorization: Bearer <SPKY_AUTH_SECRET>
 ```
 
-Set via `SP00KY_AUTH_SECRET` environment variable.
+Set via `SPKY_AUTH_SECRET` environment variable. When unset, the middleware accepts any bearer token and is intended for dev only.
 
 ---
 
@@ -468,38 +468,47 @@ Configure the SSP via environment variables:
 
 ```bash
 # Server
-LISTEN_ADDR=0.0.0.0:8667
+SPKY_SSP_LISTEN_ADDR=0.0.0.0:8667
 
-# Authentication
-SP00KY_AUTH_SECRET=your-secret-token
+# Authentication. When unset the auth middleware accepts any bearer
+# token, which is intended for dev only.
+SPKY_AUTH_SECRET=your-secret-token
 
-# Database connection
-SURREALDB_ADDR=127.0.0.1:8000
-SURREALDB_USER=root
-SURREALDB_PASS=root
-SURREALDB_NS=test
-SURREALDB_DB=test
+# Database connection (WebSocket URL)
+SPKY_DB_WS=ws://127.0.0.1:8000
+SPKY_DB_USER=root
+SPKY_DB_PASS=root
+SPKY_DB_NS=main
+SPKY_DB_NAME=app
 
-# Job configuration
-SP00KY_CONFIG_PATH=sp00ky.yml
+# _00_list_ref layout — see Architecture
+SPKY_SSP_REF_MODE=dedicated   # or 'single'
 
 # TTL cleanup interval (seconds, default: 60)
 TTL_CLEANUP_INTERVAL_SECS=60
+
+# Job-table runner config, JSON-encoded. Read once at startup.
+SPKY_JOB_CONFIG='{"job_tables": {…}}'
+
+# Optional knobs
+SPKY_CRDT_CACHE_SIZE=10000       # in-memory CRDT cache capacity
+SPKY_CRDT_FIELDS='{"thread": ["content"]}'  # override @crdt detection
+SPKY_SSP_BOOTSTRAP_PAGE_SIZE=500 # rows pulled per /proxy/query page
 ```
 
 ### Scheduler Integration
 
 ```bash
 # Scheduler URL (optional - enables scheduler integration)
-SCHEDULER_URL=http://localhost:9667
+SPKY_SCHEDULER_URL=http://localhost:9667
 
 # SSP identification (defaults to ssp-<uuid> if not set)
-SSP_ID=ssp-primary-01
+SPKY_SSP_ID=ssp-primary-01
 
 # Externally reachable address for this SSP (optional)
-ADVERTISE_ADDR=http://ssp-01.example.com:8667
+SPKY_SSP_ADVERTISE_ADDR=10.100.1.30:8667
 
-# Heartbeat configuration
+# Heartbeat cadence (ms, default 5000)
 HEARTBEAT_INTERVAL_MS=5000
 ```
 
@@ -524,7 +533,7 @@ When a record is created in a job table with `status: "pending"`, the SSP will:
 
 ### Standalone Mode
 
-When `SCHEDULER_URL` is not set:
+When `SPKY_SCHEDULER_URL` is not set:
 - SSP runs independently
 - No registration or heartbeat
 - Direct client connections only
@@ -532,7 +541,7 @@ When `SCHEDULER_URL` is not set:
 
 ### Scheduler Mode
 
-When `SCHEDULER_URL` is set:
+When `SPKY_SCHEDULER_URL` is set:
 - SSP registers with scheduler on startup
 - Receives bootstrap data from scheduler
 - Sends periodic heartbeats
@@ -551,8 +560,12 @@ When `SCHEDULER_URL` is set:
 
 ### State Persistence
 
-- State is automatically saved with debouncing
-- On startup, state is loaded from disk
+- The SSP holds materialized view state in memory only — it does not
+  write a local snapshot to disk.
+- On startup the SSP **self-bootstraps** by paging through the
+  scheduler's `POST /proxy/query` endpoint to replay the relevant
+  source rows into its in-memory circuit. The scheduler is the
+  durable source of truth.
 
 ### Memory Management
 
