@@ -43,6 +43,12 @@ pub struct ViewDelta {
     pub result_hash: String,
     /// Subquery record changes (additions/updates/removals for child records).
     pub subquery_items: Vec<SubqueryDeltaItem>,
+    /// Authenticated user that owns the originating registration, in
+    /// record-id form (e.g. `"user:abc"`). Carried so the SSP server can
+    /// route per-user `_00_list_ref_user_<id>` writes without an extra
+    /// DB round-trip per delta. Empty when no `$auth.id` was present at
+    /// registration time.
+    pub auth_id: String,
 }
 
 /// The DBSP incremental computation circuit.
@@ -58,6 +64,11 @@ pub struct Circuit {
     views: HashMap<String, View>,
     /// Routing: table_name → [query_id].
     dependency_map: HashMap<String, Vec<String>>,
+    /// Per-table raw `PERMISSIONS FOR select WHERE <expr>` text, loaded from
+    /// SurrealDB at boot. The registration pipeline routes each scan's
+    /// permission through the same converter that handles user queries and
+    /// AND-folds the result into the scan's filter.
+    permissions: HashMap<String, String>,
 }
 
 /// Compute the full set of subquery records visible through the current view.
@@ -239,7 +250,19 @@ impl Circuit {
             graphs: HashMap::new(),
             views: HashMap::new(),
             dependency_map: HashMap::new(),
+            permissions: HashMap::new(),
         }
+    }
+
+    /// Read-only access to the per-table permission text (for query rewriting).
+    pub fn permissions(&self) -> &HashMap<String, String> {
+        &self.permissions
+    }
+
+    /// Register a table's raw `PERMISSIONS FOR select WHERE <expr>` text.
+    /// Called once per table at boot time after `INFO FOR DB` is parsed.
+    pub fn set_permission(&mut self, table: impl Into<String>, where_text: impl Into<String>) {
+        self.permissions.insert(table.into(), where_text.into());
     }
 
     /// Bulk-load initial data into base collections.
@@ -254,12 +277,28 @@ impl Circuit {
     }
 
     /// Register a query. Builds the operator DAG, runs initial evaluation,
-    /// and returns the first ViewDelta (if data exists).
+    /// and returns the first ViewDelta (if data exists). The owning user
+    /// id is left empty; callers that need per-user table routing in
+    /// `RefMode::Dedicated` should use [`add_query_with_auth`] instead.
     pub fn add_query(
         &mut self,
         plan: QueryPlan,
         params: Option<serde_json::Value>,
         format: Option<OutputFormat>,
+    ) -> Option<ViewDelta> {
+        self.add_query_with_auth(plan, params, format, String::new())
+    }
+
+    /// Like [`add_query`] but stashes `auth_id` on the resulting `View`
+    /// so subsequent `step()` deltas know their owning user, which the
+    /// SSP server uses to route `_00_list_ref_user_<id>` writes without
+    /// an extra DB lookup per delta.
+    pub fn add_query_with_auth(
+        &mut self,
+        plan: QueryPlan,
+        params: Option<serde_json::Value>,
+        format: Option<OutputFormat>,
+        auth_id: String,
     ) -> Option<ViewDelta> {
         let query_id = plan.id.clone();
         let referenced_tables = plan.root.referenced_tables();
@@ -276,6 +315,7 @@ impl Circuit {
             format,
             params_sv,
             referenced_tables.clone(),
+            auth_id,
         );
 
         self.graphs.insert(query_id.clone(), graph);
@@ -450,6 +490,7 @@ impl Circuit {
             records,
             result_hash: view.last_hash.clone(),
             subquery_items,
+            auth_id: view.auth_id.clone(),
         })
     }
 
@@ -495,7 +536,52 @@ impl Circuit {
             node_outputs[node_id] = Some(output);
         }
 
-        let view_delta = node_outputs[graph.output_node].take()?;
+        let mut view_delta = node_outputs[graph.output_node].take()?;
+
+        // Membership re-evaluation pass for Operation::Update.
+        //
+        // Operation::Update has weight 0, so the Scan operator emits
+        // an empty delta for the table and the Filter never sees the
+        // updated row. That silently breaks cross-user realtime sync:
+        // when alice publishes a thread, bob's view's permission
+        // filter would NOW admit it, but the empty Scan delta means
+        // no addition propagates. Symmetrically, an unpublish leaves
+        // a stale row in bob's view.cache.
+        //
+        // Fix: for each content_update key, ask the output operator
+        // "does this key satisfy the view right now?". If yes and not
+        // in cache → synthesize +1 (will surface as `additions`). If
+        // no and in cache → synthesize a weight that zeroes the cache
+        // entry (surfaces as `removals`). The existing additions /
+        // removals / updates classification below picks these up
+        // naturally.
+        for (_, keys) in content_updates {
+            for key in keys {
+                // Walk the DAG in topo order, computing evaluate_key
+                // per node so the output's result reflects whether the
+                // row's NEW content satisfies the view right now.
+                let mut node_evals: Vec<bool> = vec![false; num_nodes];
+                for &node_id in &topo_order {
+                    let input_ids = graph.nodes[node_id].inputs.clone();
+                    let input_evals: Vec<bool> =
+                        input_ids.iter().map(|&i| node_evals[i]).collect();
+                    node_evals[node_id] = graph.nodes[node_id].operator.evaluate_key(
+                        key,
+                        &input_evals,
+                        &self.store,
+                        view.params.as_ref(),
+                    );
+                }
+                let now_matches = node_evals[graph.output_node];
+                let prev_cached = view.cache.get(key).copied().unwrap_or(0);
+                let in_cache = prev_cached > 0;
+                if now_matches && !in_cache && !view_delta.contains_key(key) {
+                    view_delta.insert(key.clone(), 1);
+                } else if !now_matches && in_cache && !view_delta.contains_key(key) {
+                    view_delta.insert(key.clone(), -prev_cached);
+                }
+            }
+        }
 
         // Identify content-only updates: keys in the view cache whose data changed
         // but membership didn't (Operation::Update with weight 0).
@@ -580,6 +666,7 @@ impl Circuit {
             records,
             result_hash: view.last_hash.clone(),
             subquery_items,
+            auth_id: view.auth_id.clone(),
         })
     }
 }
@@ -607,6 +694,11 @@ struct QueryState {
     content_generation: u64,
     #[serde(default)]
     subquery_cache: HashMap<String, (String, String)>,
+    /// Owning user record id (e.g. `"user:abc"`). `default` so old
+    /// snapshots without this field still deserialize (auth_id falls
+    /// back to "" and the SSP routes those views to the global tables).
+    #[serde(default)]
+    auth_id: String,
 }
 
 impl Circuit {
@@ -626,6 +718,7 @@ impl Circuit {
                 last_hash: view.last_hash.clone(),
                 content_generation: view.content_generation,
                 subquery_cache: view.subquery_cache.clone(),
+                auth_id: view.auth_id.clone(),
             })
             .collect();
 
@@ -649,6 +742,7 @@ impl Circuit {
             graphs: HashMap::new(),
             views: HashMap::new(),
             dependency_map: HashMap::new(),
+            permissions: HashMap::new(),
         };
 
         for qs in state.queries {
@@ -666,6 +760,7 @@ impl Circuit {
                 qs.format,
                 params_sv,
                 referenced_tables.clone(),
+                qs.auth_id,
             );
             view.cache = qs.cache;
             view.last_hash = qs.last_hash;
@@ -972,6 +1067,218 @@ mod tests {
 
         assert_eq!(deltas.len(), 1);
         assert!(deltas[0].updates.contains(&"thread:1".to_string()));
+    }
+
+    #[test]
+    fn scan_query_emits_content_update_for_in_set_row() {
+        // Regression guard for the cross-session title-edit path:
+        // when a row that's already in the result set has its content
+        // updated (Operation::Update with weight 0), the circuit must
+        // emit a ViewDelta with that row's id in `updates`. Otherwise
+        // the WasmStreamUpdate.updates is empty and the client never
+        // re-queries the local DB, leaving stale data in `useQuery`.
+        let mut circuit = Circuit::new();
+
+        circuit.load(vec![Record::new(
+            "thread",
+            "thread:1",
+            json!({"title": "Hello"}),
+        )]);
+
+        let initial = circuit.add_query(scan_query("q1", "thread"), None, None);
+        let initial_hash = initial.unwrap().result_hash;
+
+        // Content-only update: title changes, row stays in result set.
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::update(
+                "thread",
+                "thread:1",
+                json!({"title": "Renamed"}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let d = &deltas[0];
+        assert!(d.additions.is_empty(), "no membership additions");
+        assert!(d.removals.is_empty(), "no membership removals");
+        assert!(
+            d.updates.contains(&"thread:1".to_string()),
+            "in-set row content update must surface in `updates`, got {:?}",
+            d.updates
+        );
+        // result_hash doesn't change for content-only updates on a plain
+        // scan because the cache keys are unchanged; that's expected and
+        // is exactly why we need the `updates` field as the change signal.
+        assert_eq!(d.result_hash, initial_hash);
+    }
+
+    // ── Filter re-evaluation on Operation::Update ─────────────────
+    //
+    // Regression guards for the cross-user realtime sync fix.
+    // Operation::Update has weight 0, so the Scan operator emits an
+    // empty delta and the Filter never re-evaluates the predicate.
+    // Without a fix, a row that newly matches (publish) or newly
+    // fails (unpublish) the filter predicate via a content change is
+    // invisible to the circuit's step output.
+
+    /// Build a `Filter(Scan(table), predicate)` plan — minimal shape
+    /// for testing predicate re-evaluation on Updates.
+    fn filter_scan_query(
+        id: &str,
+        table: &str,
+        predicate: crate::operator::predicate::Predicate,
+    ) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Filter {
+                input: Box::new(OperatorPlan::Scan {
+                    table: table.to_string(),
+                }),
+                predicate,
+            },
+        }
+    }
+
+    #[test]
+    fn content_update_admits_row_into_filtered_view() {
+        use crate::operator::predicate::Predicate;
+        use crate::types::Path;
+
+        let mut circuit = Circuit::new();
+        circuit.load(vec![Record::new(
+            "thread",
+            "thread:1",
+            json!({"title": "Hello", "published": false}),
+        )]);
+
+        // View admits only published threads. Initial snapshot is
+        // empty because the only row has published=false.
+        let plan = filter_scan_query(
+            "q1",
+            "thread",
+            Predicate::Eq {
+                field: Path::new("published"),
+                value: json!(true),
+            },
+        );
+        let initial = circuit.add_query(plan, None, None);
+        assert!(
+            initial.is_none(),
+            "filtered view is empty at registration time"
+        );
+
+        // Alice flips published to true. Operation::Update has weight 0
+        // in the table delta; before the fix, the Scan emitted an empty
+        // delta and the Filter never re-evaluated. With the fix,
+        // evaluate_key catches the transition.
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::update(
+                "thread",
+                "thread:1",
+                json!({"title": "Hello", "published": true}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1, "view should be affected by publish");
+        let d = &deltas[0];
+        assert!(
+            d.additions.contains(&"thread:1".to_string()),
+            "publish must surface as an addition; got additions={:?}, updates={:?}",
+            d.additions,
+            d.updates
+        );
+        assert!(d.removals.is_empty());
+    }
+
+    #[test]
+    fn content_update_removes_row_from_filtered_view() {
+        use crate::operator::predicate::Predicate;
+        use crate::types::Path;
+
+        let mut circuit = Circuit::new();
+        circuit.load(vec![Record::new(
+            "thread",
+            "thread:1",
+            json!({"title": "Hello", "published": true}),
+        )]);
+
+        // View admits only published threads. Initial snapshot has the
+        // row.
+        let plan = filter_scan_query(
+            "q1",
+            "thread",
+            Predicate::Eq {
+                field: Path::new("published"),
+                value: json!(true),
+            },
+        );
+        let initial = circuit.add_query(plan, None, None);
+        assert!(initial.is_some());
+
+        // Alice unpublishes. Without the fix, the row stays in
+        // view.cache forever because Scan emits nothing for Update.
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::update(
+                "thread",
+                "thread:1",
+                json!({"title": "Hello", "published": false}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1, "view should be affected by unpublish");
+        let d = &deltas[0];
+        assert!(
+            d.removals.contains(&"thread:1".to_string()),
+            "unpublish must surface as a removal; got removals={:?}, updates={:?}",
+            d.removals,
+            d.updates
+        );
+        assert!(d.additions.is_empty());
+    }
+
+    #[test]
+    fn content_update_no_match_change_still_emits_update() {
+        // Companion guard: when an in-cache row's content changes but
+        // the predicate result is unchanged (e.g. title rename on an
+        // already-published thread), the row should appear in `updates`
+        // (the pre-existing content-update path), not `additions` or
+        // `removals`.
+        use crate::operator::predicate::Predicate;
+        use crate::types::Path;
+
+        let mut circuit = Circuit::new();
+        circuit.load(vec![Record::new(
+            "thread",
+            "thread:1",
+            json!({"title": "Original", "published": true}),
+        )]);
+
+        let plan = filter_scan_query(
+            "q1",
+            "thread",
+            Predicate::Eq {
+                field: Path::new("published"),
+                value: json!(true),
+            },
+        );
+        circuit.add_query(plan, None, None);
+
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::update(
+                "thread",
+                "thread:1",
+                json!({"title": "Renamed", "published": true}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let d = &deltas[0];
+        assert!(d.additions.is_empty(), "no membership change expected");
+        assert!(d.removals.is_empty(), "no membership change expected");
+        assert!(
+            d.updates.contains(&"thread:1".to_string()),
+            "in-cache content change should surface in `updates`"
+        );
     }
 
     #[test]

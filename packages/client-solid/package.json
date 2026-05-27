@@ -45,7 +45,7 @@
     "@spooky-sync/query-builder": "workspace:*",
     "@spooky-sync/core": "workspace:*",
     "@surrealdb/wasm": "^3.0.0",
-    "surrealdb": "2.0.0",
+    "surrealdb": "2.0.3",
     "valtio": "^2.1.8"
   },
   "peerDependencies": {

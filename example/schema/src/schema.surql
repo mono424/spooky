@@ -3,7 +3,17 @@
 -- ##################################################################
 
 DEFINE ACCESS account ON DATABASE TYPE RECORD
-  SIGNUP ( CREATE user SET username = $username, password = crypto::argon2::generate($password) )
+  SIGNUP {
+    -- When the browser fails to generate a keypair (e.g. WebCrypto Ed25519
+    -- not yet available) we still let signup succeed; the user can rotate
+    -- a key in via UPDATE later, they just can't issue share links until
+    -- they do.
+    RETURN CREATE ONLY user SET
+      username      = $username,
+      password      = crypto::argon2::generate($password),
+      share_pubkey  = $share_pubkey,
+      share_privkey = $share_privkey;
+  }
   SIGNIN ( SELECT * FROM user WHERE username = $username AND crypto::argon2::compare(password, $password) )
   DURATION FOR TOKEN 15m, FOR SESSION 30d
 ;
@@ -23,7 +33,7 @@ PERMISSIONS
     FOR select WHERE true
     FOR create WHERE true
     FOR update WHERE $access = "account" AND id = $auth.id;
-    
+
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 DEFINE FIELD password ON TABLE user TYPE string
@@ -45,13 +55,37 @@ PERMISSIONS
     FOR select WHERE true
     FOR create, update WHERE $access = "account" AND id = $auth.id;
 
+-- Ed25519 public key (PEM SPKI). Read by anyone — used to verify share-link
+-- JWTs the user has signed.
+DEFINE FIELD share_pubkey ON TABLE user TYPE option<string>
+PERMISSIONS
+    FOR select WHERE true
+    FOR create WHERE true
+    FOR update WHERE $access = "account" AND id = $auth.id;
+
+-- Matching Ed25519 private key (PEM PKCS8). Readable only by the owning
+-- user, like `password` but author-scoped instead of always-denied.
+DEFINE FIELD share_privkey ON TABLE user TYPE option<string>
+PERMISSIONS
+    FOR select WHERE $access = "account" AND id = $auth.id
+    FOR create WHERE true
+    FOR update WHERE $access = "account" AND id = $auth.id;
+
 -- ##################################################################
 -- THREAD TABLE
 -- ##################################################################
 
+-- Permission shape constraint: the SSP's predicate parser doesn't accept
+-- subqueries (packages/ssp/src/converter.rs:498-504) and its filter
+-- vocabulary has no IN/contains operator (operator/predicate.rs). So we
+-- can't gate SELECT on `$auth.id IN (SELECT … FROM collaborates_on)` —
+-- the SSP would fail closed and the materialized view would never reach
+-- a collaborator. Keep SELECT to author-only for now; collaborator
+-- visibility is recovered through the `collaborates_on`-driven UPDATE
+-- rule and an explicit client-side query for invited threads.
 DEFINE TABLE thread SCHEMAFULL
   PERMISSIONS
-    FOR select WHERE true
+    FOR select WHERE published = true OR ($access = "account" AND author.id = $auth.id)
     FOR create WHERE $access = "account" AND author.id = $auth.id
     FOR update WHERE $access = "account"
       AND (author.id = $auth.id
@@ -59,13 +93,13 @@ DEFINE TABLE thread SCHEMAFULL
     FOR delete WHERE $access = "account" AND author.id = $auth.id
 ;
 
--- @crdt text
-DEFINE FIELD title ON TABLE thread TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200;
+DEFINE FIELD title ON TABLE thread TYPE string;
 
 -- @crdt text
-DEFINE FIELD content ON TABLE thread TYPE string
-    ASSERT $value != NONE AND string::len($value) > 0;
+-- @cursor
+-- Stored as `{ state: bytes, cursors: ... }`. The CRDT manager owns
+-- writes — never `db.update({ content: <string> })`.
+DEFINE FIELD content ON TABLE thread TYPE object;
 
 DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
 
@@ -78,13 +112,15 @@ DEFINE FIELD created_at ON TABLE thread TYPE datetime
 
 DEFINE FIELD active ON TABLE thread TYPE bool VALUE $value OR false;
 
+DEFINE FIELD published ON TABLE thread TYPE bool VALUE $value OR false;
+
 -- ##################################################################
 -- COMMENT TABLE
 -- ##################################################################
 
 DEFINE TABLE comment SCHEMAFULL
   PERMISSIONS
-    FOR select WHERE true
+    FOR select WHERE thread.published = true OR ($access = "account" AND thread.author.id = $auth.id)
     FOR update, delete, create WHERE $access = "account" AND author.id = $auth.id
 ;
 
@@ -104,7 +140,8 @@ DEFINE FIELD created_at ON TABLE comment TYPE datetime
 
 DEFINE TABLE commented_on SCHEMAFULL TYPE RELATION
   FROM comment TO thread
-  PERMISSIONS FOR select WHERE true;
+  PERMISSIONS
+    FOR select WHERE out.published = true OR ($access = "account" AND out.author.id = $auth.id);
 
 DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
   RELATE ($after.id)->commented_on->($after.thread)
@@ -114,25 +151,33 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 -- COLLABORATORS
 -- ##################################################################
 
-DEFINE TABLE thread_invite SCHEMAFULL
+-- Per-issuer history of share links. Append-only by design — there's no
+-- way to revoke a JWT once it's out, so the dialog only shows the issuer
+-- the links they've made and warns them. Acceptance happens server-side
+-- (example/api /share/accept), not via this table; rows here are purely
+-- informational.
+DEFINE TABLE share_link SCHEMAFULL
   PERMISSIONS
-    FOR select WHERE true
-    FOR create, delete WHERE $access = "account" AND thread.author.id = $auth.id
-    FOR update WHERE false;
+    FOR select WHERE issuer.id = $auth.id
+    FOR create WHERE $access = "account" AND issuer = $auth.id AND thread.author.id = $auth.id
+    FOR update, delete WHERE false;
 
-DEFINE FIELD thread     ON TABLE thread_invite TYPE record<thread>;
-DEFINE FIELD token      ON TABLE thread_invite TYPE string
-  ASSERT $value != NONE AND string::len($value) >= 16;
-DEFINE FIELD created_by ON TABLE thread_invite TYPE record<user> VALUE $auth.id;
-DEFINE FIELD created_at ON TABLE thread_invite TYPE datetime VALUE time::now();
-DEFINE INDEX unique_invite_token ON TABLE thread_invite FIELDS token UNIQUE;
+DEFINE FIELD issuer     ON TABLE share_link TYPE record<user> VALUE $auth.id;
+DEFINE FIELD thread     ON TABLE share_link TYPE record<thread>;
+DEFINE FIELD jwt        ON TABLE share_link TYPE string;
+DEFINE FIELD jti        ON TABLE share_link TYPE string;
+DEFINE FIELD exp        ON TABLE share_link TYPE datetime;
+DEFINE FIELD created_at ON TABLE share_link TYPE datetime VALUE time::now();
+DEFINE INDEX unique_share_jti ON TABLE share_link FIELDS jti UNIQUE;
 
+-- Only root may CREATE a `collaborates_on` edge — the JWT-verifying API
+-- endpoint does it on the recipient's behalf after checking the share
+-- link's signature against the issuer's `share_pubkey`. Author can still
+-- kick collaborators off via FOR delete.
 DEFINE TABLE collaborates_on SCHEMAFULL TYPE RELATION FROM user TO thread
   PERMISSIONS
     FOR select WHERE true
-    FOR create WHERE $access = "account"
-      AND in = $auth.id
-      AND $parent.out IN (SELECT VALUE thread FROM thread_invite)
+    FOR create WHERE false
     FOR delete WHERE $access = "account"
       AND (in.id = $auth.id OR out.author.id = $auth.id)
     FOR update WHERE false;

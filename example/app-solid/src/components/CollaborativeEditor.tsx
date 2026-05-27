@@ -100,11 +100,17 @@ export function CollaborativeEditor(props: CollaborativeEditorProps) {
 
     lastEmittedText = editor.getText();
 
-    // Add cursor plugin after content is settled
-    const editorRef = editor;
-    setTimeout(() => {
-      suppressOnUpdate = false;
+    // The editor is mounted and seeded — the user couldn't have typed
+    // anything yet, so it's safe to start emitting onUpdate now. (The old
+    // 200 ms gate was a defensive guard that delayed remote-cursor
+    // delivery in collab sessions for no benefit.)
+    suppressOnUpdate = false;
 
+    // Install the cursor plugin via queueMicrotask so it lands in a
+    // separate task from the editor's first render — that's all the
+    // separation the previous setTimeout actually needed.
+    const editorRef = editor;
+    queueMicrotask(() => {
       try {
         const cursorPlugin = LoroEphemeralCursorPlugin(presenceRef, {
           user: {
@@ -120,7 +126,7 @@ export function CollaborativeEditor(props: CollaborativeEditorProps) {
         console.warn('[CollaborativeEditor] Failed to add cursor plugin:', e);
       }
 
-      // Sync cursor state: push local cursor changes to _00_crdt as "_cursor" field
+      // Sync cursor state: push local cursor changes to _00_cursor.
       cursorUnsub = presenceRef.subscribeBy((by) => {
         if (by !== 'local') return;
         if (cursorPushTimer) clearTimeout(cursorPushTimer);
@@ -135,7 +141,7 @@ export function CollaborativeEditor(props: CollaborativeEditorProps) {
           console.warn('[CollaborativeEditor] Failed to apply remote cursor:', e);
         }
       };
-    }, 200);
+    });
   });
 
   createEffect(() => {

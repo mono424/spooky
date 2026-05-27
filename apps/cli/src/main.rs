@@ -16,6 +16,7 @@ mod migration;
 mod modules;
 mod package_manager;
 mod parser;
+mod port_check;
 mod scaffold;
 mod schema_builder;
 mod schema_diff;
@@ -140,6 +141,13 @@ enum Commands {
         /// SurrealDB volume — user data is preserved.
         #[arg(long)]
         clean: bool,
+        /// Wipe the SurrealDB volume too — start with a completely empty
+        /// database. Implies `--clean` since the SSP/scheduler caches would
+        /// otherwise rebootstrap inconsistent state. Pair with this for a
+        /// full reset; use `--clean` alone if you only need to recover from
+        /// SSP/scheduler corruption.
+        #[arg(long)]
+        clean_db: bool,
     },
     /// Verify the SSP/scheduler snapshot matches the upstream SurrealDB
     Verify {
@@ -700,6 +708,7 @@ struct ConnectionArgs {
 /// Filter schema content to remove field definitions with FOR select WHERE false
 /// and make all fields (except 'id') nullable by wrapping their types in option<>
 fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<String> {
+    let field_annotations = annotations::extract_field_annotations(content);
     let lines: Vec<&str> = content.lines().collect();
     let mut result = Vec::new();
     let mut modified_lines: Vec<String> = Vec::new(); // Store owned strings
@@ -740,10 +749,24 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                 }
             }
 
-            // Make all fields (except 'id') nullable by wrapping TYPE in option<>
-            if let Some((_table_name, field_name)) = extract_table_and_field_name(trimmed) {
+            // Make all fields (except 'id') nullable by wrapping TYPE in option<>.
+            // Then, for `@crdt @cursor` fields, override the resulting TYPE
+            // with `option<object> FLEXIBLE` so the row carries `{ state,
+            // cursors }`. The override runs AFTER the nullable wrap so a
+            // user-declared `string` becomes `option<object> FLEXIBLE`, not
+            // `option<string>`.
+            if let Some((table_name, field_name)) = extract_table_and_field_name(trimmed) {
                 if field_name != "id" {
-                    let modified_line = make_field_nullable(line);
+                    let mut modified_line = make_field_nullable(line);
+                    if let Some(anns) =
+                        field_annotations.get(&(table_name.clone(), field_name.clone()))
+                    {
+                        if let Some(rewritten) =
+                            annotations::rewrite_crdt_cursor_type(&modified_line, anns)
+                        {
+                            modified_line = rewritten;
+                        }
+                    }
                     modified_lines.push(modified_line.clone());
                     result.push(modified_line);
                     i += 1;
@@ -1169,7 +1192,7 @@ fn run_codegen(
 
     // Append embedded meta tables
     let meta_tables = include_str!("meta_tables.surql");
-    let meta_tables_remote = include_str!("meta_tables_remote.surql");
+    let meta_tables_remote_raw = include_str!("meta_tables_remote.surql");
     let meta_tables_client = include_str!("meta_tables_client.surql");
 
     content.push('\n');
@@ -1177,8 +1200,20 @@ fn run_codegen(
     println!("  + Appended base meta_tables.surql");
 
     if matches!(output_format, OutputFormat::Surql) {
+        // Pre-parse the user schema (without meta tables yet) so we can
+        // derive the per-parent CRDT permission rule and substitute the
+        // {{CRDT_UPDATE_RULE}} placeholder before appending.
+        let mut pre_parser = SchemaParser::new();
+        pre_parser
+            .parse_file(&content)
+            .context("Failed to pre-parse user schema for CRDT permission derivation")?;
+        let meta_tables_remote = schema_builder::substitute_crdt_update_rule(
+            meta_tables_remote_raw,
+            &content,
+            &pre_parser,
+        );
         content.push('\n');
-        content.push_str(meta_tables_remote);
+        content.push_str(&meta_tables_remote);
         println!("  + Appended meta_tables_remote.surql");
     } else {
         content.push('\n');
@@ -1218,6 +1253,71 @@ fn run_codegen(
         }
     }
 
+    // Validate @crdt fields' TYPE matches their on-disk shape:
+    //
+    //   `@crdt`             → TYPE bytes  (raw LoroDoc snapshot)
+    //   `@crdt` + `@cursor` → TYPE object (`{ state: bytes, cursors: { … } }`)
+    //
+    // The schema-builder rewrites `@crdt @cursor` to `option<object>
+    // FLEXIBLE` regardless of source TYPE, but we still want the source
+    // TYPE to reflect intent — otherwise readers see e.g. `TYPE bytes`
+    // for a field that's actually stored as an object. Fail loudly so
+    // mistakes surface at codegen time, not via a confusing runtime
+    // shape mismatch later.
+    let mut crdt_errors: Vec<String> = Vec::new();
+    for (table_name, table_schema) in &parser.tables {
+        for (field_name, field_def) in &table_schema.fields {
+            let has_crdt = annotations::has_annotation(&field_def.annotations, "crdt");
+            if !has_crdt {
+                continue;
+            }
+            let has_cursor = annotations::has_annotation(&field_def.annotations, "cursor");
+
+            // Unwrap option<inner> once so authors can choose `option<bytes>`
+            // / `option<object>` if they want explicit nullability — same
+            // effective shape since the schema-builder wraps non-option
+            // fields in option<> anyway when emitting the client schema.
+            let inner: &crate::parser::FieldType = match &field_def.field_type {
+                crate::parser::FieldType::Option(inner) => inner,
+                other => other,
+            };
+
+            if has_cursor {
+                let is_object = matches!(inner, crate::parser::FieldType::Object);
+                if !is_object {
+                    crdt_errors.push(format!(
+                        "  - `{table}.{field}` is annotated `@crdt @cursor` but its TYPE is \
+                         `{ty:?}`. Cursored CRDT fields carry `{{ state, cursors }}`, so the \
+                         source TYPE must be `object` (the schema-builder rewrites it to \
+                         `option<object> FLEXIBLE` on emit). Change the DEFINE FIELD line to \
+                         `TYPE object`.",
+                        table = table_name,
+                        field = field_name,
+                        ty = field_def.field_type,
+                    ));
+                }
+            } else {
+                let is_bytes = matches!(inner, crate::parser::FieldType::Bytes);
+                if !is_bytes {
+                    crdt_errors.push(format!(
+                        "  - `{table}.{field}` is annotated `@crdt` but its TYPE is `{ty:?}`. \
+                         CRDT fields must be `TYPE bytes` so the LoroDoc snapshot can be stored \
+                         verbatim. Change the DEFINE FIELD line to `TYPE bytes`.",
+                        table = table_name,
+                        field = field_name,
+                        ty = field_def.field_type,
+                    ));
+                }
+            }
+        }
+    }
+    if !crdt_errors.is_empty() {
+        anyhow::bail!(
+            "Schema validation failed for @crdt fields:\n{}",
+            crdt_errors.join("\n")
+        );
+    }
+
     // Extract buckets from separate bucket files (if any)
     if !backend_processor.bucket_schema.is_empty() {
         parser.extract_buckets(&backend_processor.bucket_schema);
@@ -1226,28 +1326,19 @@ fn run_codegen(
     // Filter the raw schema content to remove fields with FOR select WHERE false
     let mut filtered_schema_content = filter_schema_for_client(&content, &parser)?;
 
-    // Append _00_rv field to every table for local cache setup (client-side only)
+    // Append _00_rv field to every table for local cache setup (client-side only).
+    //
+    // The `WHERE true` field-level permission is intentional: SurrealDB applies
+    // the table-level PERMISSIONS first, so a user who can't SELECT from `thread`
+    // never reaches `thread._00_rv` regardless of what's written here. The field
+    // permission only matters once the row is already accessible — and in that
+    // case the sync runtime needs to read/write the version unconditionally.
     println!("  + Injecting _00_rv field for local cache schema");
     for table_name in parser.tables.keys() {
         filtered_schema_content.push_str(&format!(
             "\nDEFINE FIELD _00_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
             table_name
         ));
-    }
-
-    // Inject _00_crdt field for tables with CRDT-annotated fields (client-side only)
-    for table_name in parser.tables.keys() {
-        let has_crdt = field_annotations.keys().any(|(t, _)| t == table_name);
-        if has_crdt {
-            println!(
-                "  + Injecting _00_crdt field on table '{}' for CRDT support",
-                table_name
-            );
-            filtered_schema_content.push_str(&format!(
-                "\nDEFINE FIELD _00_crdt ON TABLE {} TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;",
-                table_name
-            ));
-        }
     }
 
     // Choose which content to use based on format
@@ -1689,8 +1780,9 @@ fn main() -> Result<()> {
             apply_migrations,
             fix_checksums,
             clean,
+            clean_db,
         }) => {
-            return dev::run(skip_migrations, apply_migrations, fix_checksums, clean);
+            return dev::run(skip_migrations, apply_migrations, fix_checksums, clean, clean_db);
         }
         Some(Commands::Verify { fix }) => {
             return verify::run(fix);

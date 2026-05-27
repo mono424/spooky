@@ -94,7 +94,12 @@ export class CacheModule implements StreamUpdateReceiver {
         const query = surql.seal<void>(
           surql.tx(
             populatedRecords.map((_, i) => {
-              return surql.upsert(`id${i}`, `content${i}`);
+              // MERGE, not REPLACE: the remote payload omits local-only
+              // fields (`_00_crdt`, `_00_cursor`) injected by the CLI's
+              // local schema, so REPLACE would wipe the persisted CRDT
+              // snapshot on every sync-down round-trip and break offline
+              // reload of formatted text.
+              return surql.upsertMerge(`id${i}`, `content${i}`);
             })
           )
         );

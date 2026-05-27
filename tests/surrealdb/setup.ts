@@ -12,6 +12,11 @@ export const TEST_DB_CONFIG = {
   pass: 'root',
 };
 
+export function getTestDbPort(): number {
+  if (currentPort == null) throw new Error('Test container not yet started');
+  return currentPort;
+}
+
 async function getContainer() {
   if (container) return container;
 

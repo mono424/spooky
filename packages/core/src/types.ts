@@ -99,8 +99,6 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
     /** Authentication token. */
     token?: string;
   };
-  /** Unique client identifier. If not provided, one will be generated. */
-  clientId?: string;
   /** The schema definition. */
   schema: S;
   /** The compiled SURQL schema string. */
@@ -119,6 +117,22 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * Defaults to 100ms.
    */
   streamDebounceTime?: number;
+  /**
+   * Debounce time in milliseconds for syncing collaborative (CRDT) field
+   * changes to the remote database. Local writes happen immediately on
+   * every keystroke (so reload/offline works), but the remote UPSERT is
+   * coalesced over this window. Lower = snappier remote propagation +
+   * more network traffic; higher = less traffic + more lag for other
+   * collaborators. Defaults to 500ms.
+   */
+  crdtDebounceMs?: number;
+  /**
+   * Cadence (ms) for the `_00_list_ref` poll that catches cross-session
+   * UPDATEs the SurrealDB v3 LIVE-permission gap drops. Lower = faster
+   * convergence + more query load; higher = the inverse. Non-positive
+   * values fall back to the default (500ms).
+   */
+  refSyncIntervalMs?: number;
 }
 
 export type QueryHash = string;
@@ -178,7 +192,20 @@ export interface QueryState {
   ttlDurationMs: number;
   /** Number of times the query has been updated. */
   updateCount: number;
+  /**
+   * Rolling window of the most recent materialization-step latencies (ms).
+   * Capped at MATERIALIZATION_SAMPLE_WINDOW; used to recompute p55/p90/p99
+   * before each persist to `_00_query`. Samples themselves are not persisted.
+   */
+  materializationSamples: number[];
+  /** Most recent end-to-end ingest latency in ms, or null until the first ingest. */
+  lastIngestLatencyMs: number | null;
+  /** Cumulative count of ingest/materialization errors observed for this query. */
+  errorCount: number;
 }
+
+/** Cap on the rolling materialization-sample window kept per query in memory. */
+export const MATERIALIZATION_SAMPLE_WINDOW = 100;
 
 // Callback types
 export type QueryUpdateCallback = (records: Record<string, any>[]) => void;

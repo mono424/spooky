@@ -20,8 +20,8 @@ class Schema {
     Comment comment;
     CommentedOn commentedOn;
     Job job;
+    ShareLink shareLink;
     Thread thread;
-    ThreadInvite threadInvite;
     User user;
 
     Schema({
@@ -33,8 +33,8 @@ class Schema {
         required this.comment,
         required this.commentedOn,
         required this.job,
+        required this.shareLink,
         required this.thread,
-        required this.threadInvite,
         required this.user,
     });
 
@@ -47,8 +47,8 @@ class Schema {
         comment: Comment.fromJson(json["comment"]),
         commentedOn: CommentedOn.fromJson(json["commented_on"]),
         job: Job.fromJson(json["job"]),
+        shareLink: ShareLink.fromJson(json["share_link"]),
         thread: Thread.fromJson(json["thread"]),
-        threadInvite: ThreadInvite.fromJson(json["thread_invite"]),
         user: User.fromJson(json["user"]),
     );
 
@@ -61,8 +61,8 @@ class Schema {
         "comment": comment.toJson(),
         "commented_on": commentedOn.toJson(),
         "job": job.toJson(),
+        "share_link": shareLink.toJson(),
         "thread": thread.toJson(),
-        "thread_invite": threadInvite.toJson(),
         "user": user.toJson(),
     };
 }
@@ -148,7 +148,7 @@ class Job {
     ///Record ID of table: thread
     String assignedTo;
     DateTime? createdAt;
-    List<dynamic> errors;
+    List<Map<String, dynamic>> errors;
     
     ///Record ID
     String id;
@@ -183,7 +183,7 @@ class Job {
     factory Job.fromJson(Map<String, dynamic> json) => Job(
         assignedTo: json["assigned_to"],
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        errors: List<dynamic>.from(json["errors"].map((x) => x)),
+        errors: List<Map<String, dynamic>>.from(json["errors"].map((x) => Map.from(x).map((k, v) => MapEntry<String, dynamic>(k, v)))),
         id: json["id"],
         maxRetries: json["max_retries"],
         path: json["path"],
@@ -197,7 +197,7 @@ class Job {
     Map<String, dynamic> toJson() => {
         "assigned_to": assignedTo,
         "created_at": createdAt?.toIso8601String(),
-        "errors": List<dynamic>.from(errors.map((x) => x)),
+        "errors": List<dynamic>.from(errors.map((x) => Map.from(x).map((k, v) => MapEntry<String, dynamic>(k, v)))),
         "id": id,
         "max_retries": maxRetries,
         "path": path,
@@ -209,10 +209,56 @@ class Job {
     };
 }
 
+class ShareLink {
+    DateTime? createdAt;
+    DateTime exp;
+    
+    ///Record ID
+    String id;
+    
+    ///Record ID of table: user
+    String? issuer;
+    String jti;
+    String jwt;
+    
+    ///Record ID of table: thread
+    String thread;
+
+    ShareLink({
+        this.createdAt,
+        required this.exp,
+        required this.id,
+        this.issuer,
+        required this.jti,
+        required this.jwt,
+        required this.thread,
+    });
+
+    factory ShareLink.fromJson(Map<String, dynamic> json) => ShareLink(
+        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
+        exp: DateTime.parse(json["exp"]),
+        id: json["id"],
+        issuer: json["issuer"],
+        jti: json["jti"],
+        jwt: json["jwt"],
+        thread: json["thread"],
+    );
+
+    Map<String, dynamic> toJson() => {
+        "created_at": createdAt?.toIso8601String(),
+        "exp": exp.toIso8601String(),
+        "id": id,
+        "issuer": issuer,
+        "jti": jti,
+        "jwt": jwt,
+        "thread": thread,
+    };
+}
+
 class The00PendingMutations {
     
-    ///Any type
-    String? data;
+    ///Free-form object (FLEXIBLE on the SurrealDB side)
+    Map<String, dynamic>? data;
     String id;
     String mutationType;
     
@@ -227,14 +273,14 @@ class The00PendingMutations {
     });
 
     factory The00PendingMutations.fromJson(Map<String, dynamic> json) => The00PendingMutations(
-        data: json["data"],
+        data: Map.from(json["data"]!).map((k, v) => MapEntry<String, dynamic>(k, v)),
         id: json["id"],
         mutationType: json["mutationType"],
         recordId: json["recordId"],
     );
 
     Map<String, dynamic> toJson() => {
-        "data": data,
+        "data": Map.from(data!).map((k, v) => MapEntry<String, dynamic>(k, v)),
         "id": id,
         "mutationType": mutationType,
         "recordId": recordId,
@@ -242,48 +288,84 @@ class The00PendingMutations {
 }
 
 class The00Query {
+    DateTime createdAt;
+    int errorCount;
     
     ///Record ID
     String id;
     DateTime lastActiveAt;
+    double? lastIngestLatency;
     
     ///Any type
     dynamic localArray;
+    double? materializationP55;
+    double? materializationP90;
+    double? materializationP99;
+    double? registrationTime;
     
     ///Any type
     dynamic remoteArray;
+    int rowCount;
     String surql;
     String tableName;
     String ttl;
+    int updateCount;
 
     The00Query({
+        required this.createdAt,
+        required this.errorCount,
         required this.id,
         required this.lastActiveAt,
+        this.lastIngestLatency,
         required this.localArray,
+        this.materializationP55,
+        this.materializationP90,
+        this.materializationP99,
+        this.registrationTime,
         required this.remoteArray,
+        required this.rowCount,
         required this.surql,
         required this.tableName,
         required this.ttl,
+        required this.updateCount,
     });
 
     factory The00Query.fromJson(Map<String, dynamic> json) => The00Query(
+        createdAt: DateTime.parse(json["createdAt"]),
+        errorCount: json["errorCount"],
         id: json["id"],
         lastActiveAt: DateTime.parse(json["lastActiveAt"]),
+        lastIngestLatency: json["lastIngestLatency"]?.toDouble(),
         localArray: json["localArray"],
+        materializationP55: json["materializationP55"]?.toDouble(),
+        materializationP90: json["materializationP90"]?.toDouble(),
+        materializationP99: json["materializationP99"]?.toDouble(),
+        registrationTime: json["registrationTime"]?.toDouble(),
         remoteArray: json["remoteArray"],
+        rowCount: json["rowCount"],
         surql: json["surql"],
         tableName: json["tableName"],
         ttl: json["ttl"],
+        updateCount: json["updateCount"],
     );
 
     Map<String, dynamic> toJson() => {
+        "createdAt": createdAt.toIso8601String(),
+        "errorCount": errorCount,
         "id": id,
         "lastActiveAt": lastActiveAt.toIso8601String(),
+        "lastIngestLatency": lastIngestLatency,
         "localArray": localArray,
+        "materializationP55": materializationP55,
+        "materializationP90": materializationP90,
+        "materializationP99": materializationP99,
+        "registrationTime": registrationTime,
         "remoteArray": remoteArray,
+        "rowCount": rowCount,
         "surql": surql,
         "tableName": tableName,
         "ttl": ttl,
+        "updateCount": updateCount,
     };
 }
 
@@ -344,8 +426,8 @@ class Thread {
     ///Reverse relationship: array of comment records
     List<String>? comments;
     
-    ///Assert: $value != NONE AND string::len($value) > 0
-    String content;
+    ///Free-form object (FLEXIBLE on the SurrealDB side)
+    Map<String, dynamic> content;
     String? contentSuggestion;
     DateTime? createdAt;
     
@@ -354,11 +436,10 @@ class Thread {
     
     ///Reverse relationship: array of job records
     List<String>? jobs;
+    bool? published;
     
-    ///Reverse relationship: array of thread_invite records
-    List<String>? threadInvites;
-    
-    ///Assert: $value != NONE AND string::len($value) > 0 AND string::len($value) <= 200
+    ///Reverse relationship: array of share_link records
+    List<String>? shareLinks;
     String title;
     String? titleSuggestion;
 
@@ -371,7 +452,8 @@ class Thread {
         this.createdAt,
         required this.id,
         this.jobs,
-        this.threadInvites,
+        this.published,
+        this.shareLinks,
         required this.title,
         this.titleSuggestion,
     });
@@ -380,12 +462,13 @@ class Thread {
         active: json["active"],
         author: json["author"],
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
-        content: json["content"],
+        content: Map.from(json["content"]).map((k, v) => MapEntry<String, dynamic>(k, v)),
         contentSuggestion: json["content_suggestion"],
         createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
         id: json["id"],
         jobs: json["jobs"] == null ? [] : List<String>.from(json["jobs"]!.map((x) => x)),
-        threadInvites: json["thread_invites"] == null ? [] : List<String>.from(json["thread_invites"]!.map((x) => x)),
+        published: json["published"],
+        shareLinks: json["share_links"] == null ? [] : List<String>.from(json["share_links"]!.map((x) => x)),
         title: json["title"],
         titleSuggestion: json["title_suggestion"],
     );
@@ -394,54 +477,15 @@ class Thread {
         "active": active,
         "author": author,
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
-        "content": content,
+        "content": Map.from(content).map((k, v) => MapEntry<String, dynamic>(k, v)),
         "content_suggestion": contentSuggestion,
         "created_at": createdAt?.toIso8601String(),
         "id": id,
         "jobs": jobs == null ? [] : List<dynamic>.from(jobs!.map((x) => x)),
-        "thread_invites": threadInvites == null ? [] : List<dynamic>.from(threadInvites!.map((x) => x)),
+        "published": published,
+        "share_links": shareLinks == null ? [] : List<dynamic>.from(shareLinks!.map((x) => x)),
         "title": title,
         "title_suggestion": titleSuggestion,
-    };
-}
-
-class ThreadInvite {
-    DateTime? createdAt;
-    
-    ///Record ID of table: user
-    String? createdBy;
-    
-    ///Record ID
-    String id;
-    
-    ///Record ID of table: thread
-    String thread;
-    
-    ///Assert: $value != NONE AND string::len($value) >= 16
-    String token;
-
-    ThreadInvite({
-        this.createdAt,
-        this.createdBy,
-        required this.id,
-        required this.thread,
-        required this.token,
-    });
-
-    factory ThreadInvite.fromJson(Map<String, dynamic> json) => ThreadInvite(
-        createdAt: json["created_at"] == null ? null : DateTime.parse(json["created_at"]),
-        createdBy: json["created_by"],
-        id: json["id"],
-        thread: json["thread"],
-        token: json["token"],
-    );
-
-    Map<String, dynamic> toJson() => {
-        "created_at": createdAt?.toIso8601String(),
-        "created_by": createdBy,
-        "id": id,
-        "thread": thread,
-        "token": token,
     };
 }
 
@@ -454,8 +498,10 @@ class User {
     String id;
     String? profilePicture;
     
-    ///Reverse relationship: array of thread_invite records
-    List<String>? threadInvites;
+    ///Reverse relationship: array of share_link records
+    List<String>? shareLinks;
+    String? sharePrivkey;
+    String? sharePubkey;
     
     ///Reverse relationship: array of thread records
     List<String>? threads;
@@ -467,7 +513,9 @@ class User {
         this.comments,
         required this.id,
         this.profilePicture,
-        this.threadInvites,
+        this.shareLinks,
+        this.sharePrivkey,
+        this.sharePubkey,
         this.threads,
         required this.username,
     });
@@ -476,7 +524,9 @@ class User {
         comments: json["comments"] == null ? [] : List<String>.from(json["comments"]!.map((x) => x)),
         id: json["id"],
         profilePicture: json["profile_picture"],
-        threadInvites: json["thread_invites"] == null ? [] : List<String>.from(json["thread_invites"]!.map((x) => x)),
+        shareLinks: json["share_links"] == null ? [] : List<String>.from(json["share_links"]!.map((x) => x)),
+        sharePrivkey: json["share_privkey"],
+        sharePubkey: json["share_pubkey"],
         threads: json["threads"] == null ? [] : List<String>.from(json["threads"]!.map((x) => x)),
         username: json["username"],
     );
@@ -485,7 +535,9 @@ class User {
         "comments": comments == null ? [] : List<dynamic>.from(comments!.map((x) => x)),
         "id": id,
         "profile_picture": profilePicture,
-        "thread_invites": threadInvites == null ? [] : List<dynamic>.from(threadInvites!.map((x) => x)),
+        "share_links": shareLinks == null ? [] : List<dynamic>.from(shareLinks!.map((x) => x)),
+        "share_privkey": sharePrivkey,
+        "share_pubkey": sharePubkey,
         "threads": threads == null ? [] : List<dynamic>.from(threads!.map((x) => x)),
         "username": username,
     };
@@ -509,7 +561,7 @@ PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD username ON TABLE user TYPE option<string>
 ASSERT \$value != NONE AND string::len(\$value) > 3
 PERMISSIONS FOR select, create, update WHERE true;
-    
+
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 
@@ -517,10 +569,28 @@ DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 DEFINE FIELD profile_picture ON TABLE user TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
+-- Ed25519 public key (PEM SPKI). Read by anyone — used to verify share-link
+-- JWTs the user has signed.
+DEFINE FIELD share_pubkey ON TABLE user TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Matching Ed25519 private key (PEM PKCS8). Readable only by the owning
+-- user, like `password` but author-scoped instead of always-denied.
+DEFINE FIELD share_privkey ON TABLE user TYPE option<string>
+PERMISSIONS FOR select, create, update WHERE true;
+
 -- ##################################################################
 -- THREAD TABLE
 -- ##################################################################
 
+-- Permission shape constraint: the SSP's predicate parser doesn't accept
+-- subqueries (packages/ssp/src/converter.rs:498-504) and its filter
+-- vocabulary has no IN/contains operator (operator/predicate.rs). So we
+-- can't gate SELECT on `\$auth.id IN (SELECT … FROM collaborates_on)` —
+-- the SSP would fail closed and the materialized view would never reach
+-- a collaborator. Keep SELECT to author-only for now; collaborator
+-- visibility is recovered through the `collaborates_on`-driven UPDATE
+-- rule and an explicit client-side query for invited threads.
 DEFINE TABLE thread SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true
       AND (author.id = \$auth.id
@@ -528,13 +598,13 @@ PERMISSIONS FOR select, create, update, delete WHERE true
     FOR delete WHERE \$access = \"account\" AND author.id = \$auth.id
 ;
 
--- @crdt text
-DEFINE FIELD title ON TABLE thread TYPE option<string>
-    ASSERT \$value != NONE AND string::len(\$value) > 0 AND string::len(\$value) <= 200;
+DEFINE FIELD title ON TABLE thread TYPE option<string>;
 
 -- @crdt text
-DEFINE FIELD content ON TABLE thread TYPE option<string>
-    ASSERT \$value != NONE AND string::len(\$value) > 0;
+-- @cursor
+-- Stored as `{ state: bytes, cursors: ... }`. The CRDT manager owns
+-- writes — never `db.update({ content: <string> })`.
+DEFINE FIELD content ON TABLE thread TYPE option<object> FLEXIBLE;
 
 DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
 
@@ -546,6 +616,8 @@ DEFINE FIELD created_at ON TABLE thread TYPE option<datetime>
     VALUE time::now();
 
 DEFINE FIELD active ON TABLE thread TYPE option<bool> VALUE \$value OR false;
+
+DEFINE FIELD published ON TABLE thread TYPE option<bool> VALUE \$value OR false;
 
 -- ##################################################################
 -- COMMENT TABLE
@@ -581,25 +653,33 @@ DEFINE EVENT comment_created ON TABLE comment WHEN \$event = \"CREATE\" THEN
 -- COLLABORATORS
 -- ##################################################################
 
-DEFINE TABLE thread_invite SCHEMAFULL
+-- Per-issuer history of share links. Append-only by design — there's no
+-- way to revoke a JWT once it's out, so the dialog only shows the issuer
+-- the links they've made and warns them. Acceptance happens server-side
+-- (example/api /share/accept), not via this table; rows here are purely
+-- informational.
+DEFINE TABLE share_link SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD thread     ON TABLE thread_invite TYPE option<record<thread>>;
-DEFINE FIELD token      ON TABLE thread_invite TYPE option<string>
-  ASSERT \$value != NONE AND string::len(\$value) >= 16;
-DEFINE FIELD created_by ON TABLE thread_invite TYPE option<record<user>> VALUE \$auth.id;
-DEFINE FIELD created_at ON TABLE thread_invite TYPE option<datetime> VALUE time::now();
-DEFINE INDEX unique_invite_token ON TABLE thread_invite FIELDS token UNIQUE;
+DEFINE FIELD issuer     ON TABLE share_link TYPE option<record<user>> VALUE \$auth.id;
+DEFINE FIELD thread     ON TABLE share_link TYPE option<record<thread>>;
+DEFINE FIELD jwt        ON TABLE share_link TYPE option<string>;
+DEFINE FIELD jti        ON TABLE share_link TYPE option<string>;
+DEFINE FIELD exp        ON TABLE share_link TYPE option<datetime>;
+DEFINE FIELD created_at ON TABLE share_link TYPE option<datetime> VALUE time::now();
+DEFINE INDEX unique_share_jti ON TABLE share_link FIELDS jti UNIQUE;
 
+-- Only root may CREATE a `collaborates_on` edge — the JWT-verifying API
+-- endpoint does it on the recipient's behalf after checking the share
+-- link's signature against the issuer's `share_pubkey`. Author can still
+-- kick collaborators off via FOR delete.
 DEFINE TABLE collaborates_on SCHEMAFULL TYPE RELATION FROM user TO thread
 PERMISSIONS FOR select, create, update, delete WHERE true
-      AND in = \$auth.id
-      AND \$parent.out IN (SELECT VALUE thread FROM thread_invite)
-    FOR delete WHERE \$access = \"account\"
       AND (in.id = \$auth.id OR out.author.id = \$auth.id)
     FOR update WHERE false;
 
 DEFINE INDEX unique_collab ON TABLE collaborates_on FIELDS in, out UNIQUE;
+
 
 -- Backend Schema: api
 -- ##################################################################
@@ -646,6 +726,17 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
 -- Moved to meta_tables_client.surql and meta_tables_remote.surql
+-- ==================================================
+
+-- ==================================================
+-- CLIENT-SIDE META TABLES
+--
+-- These tables live in the per-device local SurrealKV cache, which is
+-- single-tenant by construction (one user, one device). The codegen step in
+-- apps/cli/src/codegen.rs rewrites every PERMISSIONS clause to `WHERE true`
+-- when emitting the client schema, because there's no \$session / \$auth on
+-- the local DB to scope against. For multi-tenant scoping, see the
+-- corresponding rules in meta_tables_remote.surql which run on the server.
 -- ==================================================
 
 -- ==================================================
@@ -698,6 +789,38 @@ PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD tableName ON TABLE _00_query TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
+-- Metrics: lifecycle and per-query observability. Rolling-window percentiles
+-- are computed in the client (DataModule) from the last N materialization
+-- samples and persisted on each ingest so devtools can read them without
+-- re-running the query.
+
+DEFINE FIELD createdAt ON TABLE _00_query TYPE option<datetime> DEFAULT time::now() READONLY
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD registrationTime ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP55 ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP90 ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP99 ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD lastIngestLatency ON TABLE _00_query TYPE option<float>
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD updateCount ON TABLE _00_query TYPE option<int> DEFAULT 0
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD rowCount ON TABLE _00_query TYPE option<int> DEFAULT 0
+PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD errorCount ON TABLE _00_query TYPE option<int> DEFAULT 0
+PERMISSIONS FOR select, create, update WHERE true;
+
 -- ==================================================
 -- SPOOKY EVENTS
 -- Stores create, update, and delete events
@@ -718,6 +841,12 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- The data payload (for create/update)
 DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLEXIBLE
 PERMISSIONS FOR select, create, update WHERE true;
+
+-- CRDT state lives inline on the parent record itself (the `@crdt`-
+-- annotated field). `@crdt`-only fields hold the base64 LoroDoc
+-- snapshot directly; `@crdt @cursor` fields hold an
+-- `option<object> FLEXIBLE` of shape `{ state, cursors }` (rewritten
+-- by the schema-builder). Same shape on client and server.
 DEFINE FIELD _00_rv ON TABLE _00_pending_mutations TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
@@ -726,11 +855,9 @@ DEFINE FIELD _00_rv ON TABLE collaborates_on TYPE int DEFAULT 0 PERMISSIONS FOR 
 DEFINE FIELD _00_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE share_link TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_rv ON TABLE thread_invite TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_crdt ON TABLE comment TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_crdt ON TABLE thread TYPE option<object> FLEXIBLE PERMISSIONS FOR select, create, update WHERE true;
 
 
 -- ==================================================
@@ -765,6 +892,20 @@ THEN {
     -- No-op for now.
 };
 
+-- Table: share_link Client Mutation
+DEFINE EVENT OVERWRITE _00_share_link_client_mutation ON TABLE share_link
+WHEN \$before != \$after AND \$event != \"DELETE\"
+THEN {
+    -- No-op for now. Client mutation sync logic moved to DBSP.
+};
+
+-- Table: share_link Client Deletion
+DEFINE EVENT OVERWRITE _00_share_link_client_delete ON TABLE share_link
+WHEN \$event = \"DELETE\"
+THEN {
+    -- No-op for now.
+};
+
 -- Table: thread Client Mutation
 DEFINE EVENT OVERWRITE _00_thread_client_mutation ON TABLE thread
 WHEN \$before != \$after AND \$event != \"DELETE\"
@@ -774,20 +915,6 @@ THEN {
 
 -- Table: thread Client Deletion
 DEFINE EVENT OVERWRITE _00_thread_client_delete ON TABLE thread
-WHEN \$event = \"DELETE\"
-THEN {
-    -- No-op for now.
-};
-
--- Table: thread_invite Client Mutation
-DEFINE EVENT OVERWRITE _00_thread_invite_client_mutation ON TABLE thread_invite
-WHEN \$before != \$after AND \$event != \"DELETE\"
-THEN {
-    -- No-op for now. Client mutation sync logic moved to DBSP.
-};
-
--- Table: thread_invite Client Deletion
-DEFINE EVENT OVERWRITE _00_thread_invite_client_delete ON TABLE thread_invite
 WHEN \$event = \"DELETE\"
 THEN {
     -- No-op for now.

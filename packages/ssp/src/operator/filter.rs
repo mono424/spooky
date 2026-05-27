@@ -56,6 +56,23 @@ impl super::Operator for Filter {
     }
 
     fn reset(&mut self) {}
+
+    fn evaluate_key(
+        &self,
+        key: &str,
+        input_evals: &[bool],
+        store: &Store,
+        ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        // Filter is the membership-changing operator that breaks
+        // cross-user Update propagation: the upstream Scan emits
+        // nothing for Operation::Update, so the standard delta path
+        // never re-evaluates the predicate. Here we check both that
+        // the key is reachable upstream AND that the predicate holds
+        // on the current row data.
+        input_evals.first().copied().unwrap_or(false)
+            && self.check_predicate(key, store, ctx)
+    }
 }
 
 /// Resolve a predicate value, handling $param references.
@@ -86,6 +103,8 @@ fn check_predicate_recursive(
     ctx: Option<&Sp00kyValue>,
 ) -> bool {
     match pred {
+        Predicate::True => true,
+        Predicate::False => false,
         Predicate::And { predicates } => predicates
             .iter()
             .all(|p| check_predicate_recursive(p, key, store, ctx)),
@@ -135,7 +154,44 @@ fn check_predicate_recursive(
                 false
             }
         }
+        Predicate::ParamEq { param, value }
+        | Predicate::ParamNeq { param, value }
+        | Predicate::ParamGt { param, value }
+        | Predicate::ParamGte { param, value }
+        | Predicate::ParamLt { param, value }
+        | Predicate::ParamLte { param, value } => {
+            // LHS is a $param: resolve from ctx the same way RHS $param refs are
+            // resolved in `resolve_predicate_value`. RHS may itself be a literal or
+            // a $param.
+            let left = match resolve_param_lookup(param, ctx) {
+                Some(v) => v,
+                None => return false,
+            };
+            let right = match resolve_predicate_value(value, ctx) {
+                Some(v) => v,
+                None => return false,
+            };
+            let ord = compare_values(Some(&left), Some(&right));
+            match pred {
+                Predicate::ParamEq { .. } => ord == Ordering::Equal,
+                Predicate::ParamNeq { .. } => ord != Ordering::Equal,
+                Predicate::ParamGt { .. } => ord == Ordering::Greater,
+                Predicate::ParamGte { .. } => ord != Ordering::Less,
+                Predicate::ParamLt { .. } => ord == Ordering::Less,
+                Predicate::ParamLte { .. } => ord != Ordering::Greater,
+                _ => false,
+            }
+        }
     }
+}
+
+/// Look up a `$param` reference (e.g. "auth.id", "access") against the
+/// per-registration context. Mirrors the RHS resolution path in
+/// `resolve_predicate_value` but takes the already-extracted param name.
+fn resolve_param_lookup(param: &str, ctx: Option<&Sp00kyValue>) -> Option<Sp00kyValue> {
+    let ctx = ctx?;
+    let effective_path = param.strip_prefix("parent.").unwrap_or(param);
+    resolve_field(Some(ctx), &Path::new(effective_path)).cloned()
 }
 
 #[cfg(test)]
@@ -201,5 +257,89 @@ mod tests {
 
         let result = filter.step(&[&delta], &store, None);
         assert_eq!(result.get("users:1"), Some(&-1));
+    }
+
+    #[test]
+    fn param_eq_matches_when_ctx_param_equals_literal() {
+        // Mirrors `$access = "account"` on the LHS. The per-row context carries
+        // the registration's params; for ParamEq the comparison is row-independent.
+        let mut store = Store::new();
+        store.ensure_collection("threads");
+        store.apply_change(&Change::create(
+            "threads",
+            "thread:1",
+            json!({"title": "t1"}),
+        ));
+        let pred = Predicate::ParamEq {
+            param: "access".into(),
+            value: json!("account"),
+        };
+        let filter = Filter::new(pred);
+        let input = zset(&[("threads:1", 1)]);
+        let ctx = Sp00kyValue::from(json!({"access": "account"}));
+        let result = filter.snapshot(&[&input], &store, Some(&ctx));
+        assert_eq!(result.get("threads:1"), Some(&1));
+    }
+
+    #[test]
+    fn param_eq_filters_out_when_ctx_param_differs() {
+        let mut store = Store::new();
+        store.ensure_collection("threads");
+        store.apply_change(&Change::create(
+            "threads",
+            "thread:1",
+            json!({"title": "t1"}),
+        ));
+        let pred = Predicate::ParamEq {
+            param: "access".into(),
+            value: json!("account"),
+        };
+        let filter = Filter::new(pred);
+        let input = zset(&[("threads:1", 1)]);
+        let ctx = Sp00kyValue::from(json!({"access": "system"}));
+        let result = filter.snapshot(&[&input], &store, Some(&ctx));
+        assert!(!result.contains_key("threads:1"));
+    }
+
+    #[test]
+    fn param_eq_falls_closed_when_ctx_missing() {
+        let mut store = Store::new();
+        store.ensure_collection("threads");
+        store.apply_change(&Change::create(
+            "threads",
+            "thread:1",
+            json!({"title": "t1"}),
+        ));
+        let pred = Predicate::ParamEq {
+            param: "access".into(),
+            value: json!("account"),
+        };
+        let filter = Filter::new(pred);
+        let input = zset(&[("threads:1", 1)]);
+        // No ctx at all => param can't be resolved => row drops out (fail-closed).
+        let result = filter.snapshot(&[&input], &store, None);
+        assert!(!result.contains_key("threads:1"));
+    }
+
+    #[test]
+    fn param_eq_resolves_dotted_path() {
+        // `$auth.id = "user:abc"` — dotted param paths must resolve through the
+        // ctx object (mirrors how RHS `{"$param": "auth.id"}` already resolves).
+        let mut store = Store::new();
+        store.ensure_collection("threads");
+        store.apply_change(&Change::create(
+            "threads",
+            "thread:1",
+            json!({"title": "t1"}),
+        ));
+        let pred = Predicate::ParamEq {
+            param: "auth.id".into(),
+            value: json!("user:abc"),
+        };
+        let filter = Filter::new(pred);
+        let input = zset(&[("threads:1", 1)]);
+        let ctx = Sp00kyValue::from(json!({"auth": {"id": "user:abc"}}));
+        let result = filter.snapshot(&[&input], &store, Some(&ctx));
+        assert_eq!(result.get("threads:1"), Some(&1));
     }
 }

@@ -3,101 +3,122 @@ import {
   expect,
   registerUser,
   loginUser,
+  signOutUser,
   testUser,
   waitForAppReady,
 } from '../fixtures/test-fixtures';
 
 test.describe.serial('Authentication flows', () => {
-  test('should show landing page when unauthenticated', async ({ page }) => {
+  test('shows landing page when unauthenticated', async ({ page }) => {
     await page.goto('/');
     await waitForAppReady(page);
 
-    await expect(page.getByText('Welcome to Thread App')).toBeVisible();
+    await expect(page.getByText('Welcome to Threads')).toBeVisible();
+
+    // Header has both Sign in + Sign up; landing has Sign in + Create
+    // account. The header buttons are stable (the landing variants
+    // duplicate them via `openAuth`).
     await expect(
-      page.getByRole('button', { name: '[ INITIALIZE_SESSION ]' })
+      page.getByRole('button', { name: 'Sign in', exact: true }).first()
     ).toBeVisible();
     await expect(
-      page.getByRole('button', { name: '[ REGISTER ]' })
+      page.getByRole('button', { name: 'Sign up', exact: true })
     ).toBeVisible();
   });
 
-  test('should register a new user', async ({ page }) => {
+  test('registers a new user', async ({ page }) => {
     await registerUser(page, testUser);
 
-    // --- Local check: authenticated view shows the thread list ---
+    // Local check: authenticated layout shows the "New thread" trigger.
     await expect(
-      page.getByRole('button', { name: '[ + WRITE_NEW ]' })
+      page.getByRole('button', { name: 'New thread' })
     ).toBeVisible();
 
-    // Landing page is gone
-    await expect(page.getByText('Welcome to Thread App')).not.toBeVisible();
+    // The unauth landing shouldn't be visible anymore.
+    await expect(page.getByText('Welcome to Threads')).not.toBeVisible();
 
-    // --- Persistence check: reload and verify session survived ---
+    // Persistence check: reload should keep us logged in.
     await page.reload();
     await waitForAppReady(page);
 
     await expect(
-      page.getByText(`USER: ${testUser.username}`, { exact: false })
+      page.getByRole('button', { name: 'New thread' })
     ).toBeVisible({ timeout: 15_000 });
-
+    // Sign out is the easiest "logged in" header marker.
     await expect(
-      page.getByRole('button', { name: '[ + WRITE_NEW ]' })
+      page.getByRole('button', { name: 'Sign out' })
     ).toBeVisible();
   });
 
-  test('should logout and login again', async ({ page }) => {
-    // Login (user already registered in previous test, fresh browser context)
+  test('signs out and signs back in', async ({ page }) => {
     await loginUser(page, testUser);
 
-    // Logout
-    await page.getByRole('button', { name: '<< LOGOUT' }).click();
-    await expect(page.getByText('Welcome to Thread App')).toBeVisible({
-      timeout: 10_000,
-    });
-
-    // Login with same credentials
+    await signOutUser(page);
     await loginUser(page, testUser);
 
-    // --- Local check: authenticated view is restored ---
+    // Local check: authenticated layout restored.
     await expect(
-      page.getByRole('button', { name: '[ + WRITE_NEW ]' })
+      page.getByRole('button', { name: 'New thread' })
     ).toBeVisible();
 
-    // --- Persistence check: reload and verify session survived ---
+    // Persistence check: reload still authenticated.
     await page.reload();
     await waitForAppReady(page);
 
     await expect(
-      page.getByText(`USER: ${testUser.username}`, { exact: false })
+      page.getByRole('button', { name: 'Sign out' })
     ).toBeVisible({ timeout: 15_000 });
-
     await expect(
-      page.getByRole('button', { name: '[ + WRITE_NEW ]' })
+      page.getByRole('button', { name: 'New thread' })
     ).toBeVisible();
   });
 
-  test('should toggle between signup and login modes', async ({ page }) => {
+  test('toggles between sign-in and sign-up modes inside the dialog', async ({ page }) => {
     await page.goto('/');
     await waitForAppReady(page);
 
-    // Open dialog in signup mode
-    await page.getByRole('button', { name: '[ REGISTER ]' }).click();
-    await expect(
-      page.getByRole('button', { name: '[ EXECUTE_SIGN_UP ]' })
-    ).toBeVisible();
-    await expect(page.getByText('Access_Existing_Account')).toBeVisible();
+    // Open in sign-up mode (header button).
+    await page.getByRole('button', { name: 'Sign up', exact: true }).click();
 
-    // Toggle to login mode
-    await page.getByText('Access_Existing_Account').click();
-    await expect(
-      page.getByRole('button', { name: '[ EXECUTE_LOGIN ]' })
-    ).toBeVisible();
-    await expect(page.getByText('Create_New_Identifier')).toBeVisible();
+    // Scope to the dialog body (matches the wrapper that holds both the
+    // form *and* the toggle button below it). The toggle button is the
+    // only one in the page with these long sentence labels — they're
+    // unique by text on their own — but we keep the scope tight so a
+    // future relabel of "Sign in"/"Create account" elsewhere doesn't
+    // make this test ambiguous.
+    const dialog = page
+      .locator('div')
+      .filter({ has: page.locator('#username') })
+      .first();
 
-    // Toggle back to signup mode
-    await page.getByText('Create_New_Identifier').click();
+    // Form submit + heading are scoped to the dialog so we don't pick
+    // up the header/landing "Sign in" or "Create account" buttons.
+    const form = dialog.locator('form');
+
     await expect(
-      page.getByRole('button', { name: '[ EXECUTE_SIGN_UP ]' })
+      form.getByRole('button', { name: 'Create account', exact: true })
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole('button', { name: "Already have an account? Sign in" })
+    ).toBeVisible();
+
+    // Toggle to sign-in mode.
+    await dialog
+      .getByRole('button', { name: "Already have an account? Sign in" })
+      .click();
+    await expect(
+      form.getByRole('button', { name: 'Sign in', exact: true })
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole('button', { name: "Don't have an account? Sign up" })
+    ).toBeVisible();
+
+    // Toggle back to sign-up mode.
+    await dialog
+      .getByRole('button', { name: "Don't have an account? Sign up" })
+      .click();
+    await expect(
+      form.getByRole('button', { name: 'Create account', exact: true })
     ).toBeVisible();
   });
 });

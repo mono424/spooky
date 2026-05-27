@@ -116,6 +116,18 @@ impl SchedulerConfig {
         scheduler_config.scheduler_id = std::env::var("SPKY_SCHEDULER_ID")
             .unwrap_or_else(|_| format!("scheduler-{}", uuid::Uuid::new_v4()));
 
+        // Drain WAL → replica every N seconds. Default 300 is fine for
+        // production but makes dev painful: records vanish from live
+        // queries until the first 5-minute tick. The dev launcher sets
+        // this to 2s.
+        if let Ok(v) = std::env::var("SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                if n > 0 {
+                    scheduler_config.snapshot_update_interval_secs = n;
+                }
+            }
+        }
+
         // Parse backend health check targets from JSON env var
         if let Ok(backends_json) = std::env::var("SPKY_SCHEDULER_BACKENDS") {
             if let Ok(backends) = serde_json::from_str::<Vec<BackendHealthConfig>>(&backends_json) {

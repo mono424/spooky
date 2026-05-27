@@ -1,4 +1,15 @@
 -- ==================================================
+-- CLIENT-SIDE META TABLES
+--
+-- These tables live in the per-device local SurrealKV cache, which is
+-- single-tenant by construction (one user, one device). The codegen step in
+-- apps/cli/src/codegen.rs rewrites every PERMISSIONS clause to `WHERE true`
+-- when emitting the client schema, because there's no $session / $auth on
+-- the local DB to scope against. For multi-tenant scoping, see the
+-- corresponding rules in meta_tables_remote.surql which run on the server.
+-- ==================================================
+
+-- ==================================================
 -- SPOOKY SCHEMA
 -- The provisioned schema state for the database. Currently only used in local cache.
 -- Used in local-migrator.ts
@@ -48,6 +59,38 @@ DEFINE FIELD ttl ON TABLE _00_query TYPE string
 DEFINE FIELD tableName ON TABLE _00_query TYPE string
     PERMISSIONS FOR select, create, update WHERE true;
 
+-- Metrics: lifecycle and per-query observability. Rolling-window percentiles
+-- are computed in the client (DataModule) from the last N materialization
+-- samples and persisted on each ingest so devtools can read them without
+-- re-running the query.
+
+DEFINE FIELD createdAt ON TABLE _00_query TYPE datetime DEFAULT time::now() READONLY
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD registrationTime ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP55 ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP90 ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD materializationP99 ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD lastIngestLatency ON TABLE _00_query TYPE option<float>
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD updateCount ON TABLE _00_query TYPE int DEFAULT 0
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD rowCount ON TABLE _00_query TYPE int DEFAULT 0
+    PERMISSIONS FOR select, create, update WHERE true;
+
+DEFINE FIELD errorCount ON TABLE _00_query TYPE int DEFAULT 0
+    PERMISSIONS FOR select, create, update WHERE true;
+
 -- ==================================================
 -- SPOOKY EVENTS
 -- Stores create, update, and delete events
@@ -68,3 +111,9 @@ DEFINE FIELD IF NOT EXISTS recordId ON _00_pending_mutations TYPE option<record>
 -- The data payload (for create/update)
 DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLEXIBLE
     PERMISSIONS FOR select, create, update WHERE true;
+
+-- CRDT state lives inline on the parent record itself (the `@crdt`-
+-- annotated field). `@crdt`-only fields hold the base64 LoroDoc
+-- snapshot directly; `@crdt @cursor` fields hold an
+-- `option<object> FLEXIBLE` of shape `{ state, cursors }` (rewritten
+-- by the schema-builder). Same shape on client and server.

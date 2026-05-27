@@ -1,6 +1,7 @@
-use crate::{converter, sanitizer};
+use crate::{converter, permission_inject, sanitizer};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 pub mod view {
     use super::*;
@@ -14,7 +15,15 @@ pub mod view {
     }
 
     /// Prepares a view registration request using DBSP types.
-    pub fn prepare_registration_dbsp(config: Value) -> Result<DbspRegistrationData> {
+    ///
+    /// Runs the converter on the user's surql, then injects each table's
+    /// permission predicate per scan via `permission_inject::inject_permissions`.
+    /// Errors abort registration so callers can surface them (typically as
+    /// HTTP 400) with the offending table named.
+    pub fn prepare_registration_dbsp(
+        config: Value,
+        permissions: &HashMap<String, String>,
+    ) -> Result<DbspRegistrationData> {
         use crate::circuit::view::OutputFormat;
         use crate::operator::plan::{OperatorPlan, QueryPlan};
 
@@ -70,11 +79,35 @@ pub mod view {
             })
             .map_err(|_| anyhow!("Invalid Query Plan"))?;
 
-        let root_op: OperatorPlan = serde_json::from_value(root_op_val)
+        let mut root_op: OperatorPlan = serde_json::from_value(root_op_val)
             .map_err(|e| anyhow!("Invalid Operator JSON: {}", e))?;
 
         let safe_params = sanitizer::parse_params(params.clone());
         let safe_params_val = safe_params.clone().unwrap_or(json!({}));
+
+        // Extract the user-scoped auth identity from the injected params.
+        // `fn::query::register` injects `params.auth.id = <string>$auth.id`
+        // server-side, so by the time we get here `safe_params.auth.id`
+        // is the authenticated caller's user record id (as a string like
+        // "user:abc"). We carry this forward as `auth_id` on `_00_query`
+        // and `_00_list_ref` so cross-session LIVE delivery on
+        // `_00_list_ref` can gate on `auth_id = $auth.id` (stable
+        // across re-auth / reconnect) instead of the per-connection
+        // `session::id()`.
+        //
+        // Note: we cannot read this from a top-level `authId` field on
+        // the registration payload because SurrealDB's `http::post`
+        // silently strips object keys that aren't in the runtime's
+        // recognized set for that call site. The `params.auth.id` path
+        // is the only channel that already survives that filtering.
+        let auth_id = safe_params_val
+            .get("auth")
+            .and_then(|a| a.get("id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        permission_inject::inject_permissions(&mut root_op, permissions, safe_params.as_ref())?;
 
         let plan = QueryPlan {
             id: id.clone(),
@@ -84,6 +117,7 @@ pub mod view {
         let metadata = json!({
             "id": id,
             "clientId": client_id,
+            "authId": auth_id,
             "sql": surreal_ql,
             "params": params,
             "safe_params": safe_params_val,

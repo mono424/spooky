@@ -19,6 +19,12 @@ pub struct TableSchema {
     pub is_relation: bool,                // Whether this is a relation table
     pub relation_from: Option<String>,    // Source table for relation
     pub relation_to: Option<String>,      // Target table for relation
+    /// Per-action WHERE expression for table-level PERMISSIONS, keyed by
+    /// action ("select", "create", "update", "delete"). `Permission::Full`
+    /// maps to "true"; `Permission::None` maps to "false"; `Specific(expr)`
+    /// is the raw expression formatted via Display, with no `WHERE ` prefix.
+    /// Used to derive meta-table permissions that mirror the parent's rules.
+    pub table_permissions: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +71,8 @@ pub enum FieldType {
     Bool,
     Datetime,
     Duration,
+    Bytes,
+    Object,
     Array(Box<FieldType>),
     Record(String),
     Option(Box<FieldType>),
@@ -316,6 +324,8 @@ impl SchemaParser {
                     (None, None)
                 };
 
+                let table_permissions = Self::extract_table_permissions(&table_def.permissions);
+
                 self.tables.insert(
                     table_name.clone(),
                     TableSchema {
@@ -326,6 +336,7 @@ impl SchemaParser {
                         is_relation,
                         relation_from,
                         relation_to,
+                        table_permissions,
                     },
                 );
             }
@@ -437,6 +448,8 @@ impl SchemaParser {
             Kind::Bool => FieldType::Bool,
             Kind::Datetime => FieldType::Datetime,
             Kind::Duration => FieldType::Duration,
+            Kind::Bytes => FieldType::Bytes,
+            Kind::Object => FieldType::Object,
             Kind::Array(inner, _) => FieldType::Array(Box::new(Self::parse_kind(*inner))),
             Kind::Record(tables) => {
                 if tables.is_empty() {
@@ -483,6 +496,26 @@ impl SchemaParser {
             FieldType::Array(inner) => Self::extract_related_table(inner),
             _ => None,
         }
+    }
+
+    fn extract_table_permissions(
+        permissions: &surrealdb_core::sql::Permissions,
+    ) -> BTreeMap<String, String> {
+        use surrealdb_core::sql::Permission;
+        let render = |p: &Permission| -> String {
+            match p {
+                Permission::None => "false".to_string(),
+                Permission::Full => "true".to_string(),
+                Permission::Specific(v) => format!("{}", v),
+                _ => "false".to_string(),
+            }
+        };
+        let mut map = BTreeMap::new();
+        map.insert("select".to_string(), render(&permissions.select));
+        map.insert("create".to_string(), render(&permissions.create));
+        map.insert("update".to_string(), render(&permissions.update));
+        map.insert("delete".to_string(), render(&permissions.delete));
+        map
     }
 
     /// Parse field permissions and determine if field should be stripped from client schema

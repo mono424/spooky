@@ -92,6 +92,49 @@ impl Graph {
                 });
                 id
             }
+            operator::OperatorPlan::SemiJoin { left, right, on } => {
+                let left_id = Self::build_node(left, nodes, scan_index);
+                let right_id = Self::build_node(right, nodes, scan_index);
+                let id = nodes.len();
+                nodes.push(Node {
+                    id,
+                    operator: Box::new(operator::SemiJoin::new(on.clone())),
+                    inputs: vec![left_id, right_id],
+                });
+                id
+            }
+            operator::OperatorPlan::AntiJoin { left, right, on } => {
+                let left_id = Self::build_node(left, nodes, scan_index);
+                let right_id = Self::build_node(right, nodes, scan_index);
+                let id = nodes.len();
+                nodes.push(Node {
+                    id,
+                    operator: Box::new(operator::AntiJoin::new(on.clone())),
+                    inputs: vec![left_id, right_id],
+                });
+                id
+            }
+            operator::OperatorPlan::Union { left, right } => {
+                let left_id = Self::build_node(left, nodes, scan_index);
+                let right_id = Self::build_node(right, nodes, scan_index);
+                let id = nodes.len();
+                nodes.push(Node {
+                    id,
+                    operator: Box::new(operator::Union::new()),
+                    inputs: vec![left_id, right_id],
+                });
+                id
+            }
+            operator::OperatorPlan::Distinct { input } => {
+                let input_id = Self::build_node(input, nodes, scan_index);
+                let id = nodes.len();
+                nodes.push(Node {
+                    id,
+                    operator: Box::new(operator::Distinct::new()),
+                    inputs: vec![input_id],
+                });
+                id
+            }
             operator::OperatorPlan::Project { input, projections } => {
                 let input_id = Self::build_node(input, nodes, scan_index);
                 let id = nodes.len();
@@ -878,5 +921,105 @@ mod tests {
         let g = Graph::from_plan(&plan);
         assert_topo_valid(&g);
         assert_eq!(g.node_count(), 7); // 4 scans + 2 inner joins + 1 outer join
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // New permission-lowering operators
+    // ═══════════════════════════════════════════════════════════════════
+
+    fn semi_join(left: OperatorPlan, right: OperatorPlan, lf: &str, rf: &str) -> OperatorPlan {
+        OperatorPlan::SemiJoin {
+            left: Box::new(left),
+            right: Box::new(right),
+            on: JoinCondition {
+                left_field: Path::new(lf),
+                right_field: Path::new(rf),
+            },
+        }
+    }
+
+    fn anti_join(left: OperatorPlan, right: OperatorPlan, lf: &str, rf: &str) -> OperatorPlan {
+        OperatorPlan::AntiJoin {
+            left: Box::new(left),
+            right: Box::new(right),
+            on: JoinCondition {
+                left_field: Path::new(lf),
+                right_field: Path::new(rf),
+            },
+        }
+    }
+
+    fn union(left: OperatorPlan, right: OperatorPlan) -> OperatorPlan {
+        OperatorPlan::Union {
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    fn distinct(input: OperatorPlan) -> OperatorPlan {
+        OperatorPlan::Distinct {
+            input: Box::new(input),
+        }
+    }
+
+    #[test]
+    fn semi_join_builds_two_input_node() {
+        let plan = semi_join(scan("threads"), scan("collab"), "id", "out");
+        let g = Graph::from_plan(&plan);
+        assert_eq!(g.node_count(), 3);
+        assert_eq!(g.nodes[2].operator.arity(), 2);
+        assert_eq!(g.nodes[2].inputs, vec![0, 1]);
+    }
+
+    #[test]
+    fn anti_join_builds_two_input_node() {
+        let plan = anti_join(scan("threads"), scan("collab"), "id", "out");
+        let g = Graph::from_plan(&plan);
+        assert_eq!(g.node_count(), 3);
+        assert_eq!(g.nodes[2].operator.arity(), 2);
+    }
+
+    #[test]
+    fn union_builds_two_input_node() {
+        let plan = union(scan("a"), scan("b"));
+        let g = Graph::from_plan(&plan);
+        assert_eq!(g.node_count(), 3);
+        assert_eq!(g.nodes[2].operator.arity(), 2);
+    }
+
+    #[test]
+    fn distinct_builds_one_input_node() {
+        let plan = distinct(scan("a"));
+        let g = Graph::from_plan(&plan);
+        assert_eq!(g.node_count(), 2);
+        assert_eq!(g.nodes[1].operator.arity(), 1);
+    }
+
+    #[test]
+    fn permission_or_lowering_shape_is_buildable() {
+        // The lowered shape we'll produce in Step 5 for an OR of three branches:
+        // Distinct(Union(Union(Filter, Filter), SemiJoin)) over Scan(threads).
+        // This test pins that the graph builder accepts it end-to-end and the
+        // dependency-tracking helpers see all three primary tables.
+        let scan_threads = scan("threads");
+        let scan_collab = scan("collab");
+        let pred_pub = eq_pred("published", json!(true));
+        let pred_author = eq_pred("author.id", json!("user:owner"));
+        let lowered = distinct(union(
+            union(
+                filter(scan_threads.clone(), pred_pub),
+                filter(scan_threads.clone(), pred_author),
+            ),
+            semi_join(scan_threads, scan_collab, "id", "out"),
+        ));
+        let g = Graph::from_plan(&lowered);
+        assert_topo_valid(&g);
+        // Three Scan(threads) nodes (one per OR branch) + one Scan(collab) +
+        // 2 filters + semi-join + 2 unions + distinct = 10 nodes.
+        assert_eq!(g.node_count(), 10);
+        // The dependency map (via referenced_tables on the plan) sees both tables.
+        let referenced = lowered.referenced_tables();
+        assert!(referenced.contains(&"threads".to_string()));
+        assert!(referenced.contains(&"collab".to_string()));
     }
 }

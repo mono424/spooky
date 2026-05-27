@@ -87,7 +87,7 @@ pub const YAML_SCHEMA_COMMENT: &str = "# yaml-language-server: $schema=https://s
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum SurrealDbConfig {
-    /// Just the image version, e.g. "v3.0.0"
+    /// Just the image version, e.g. "v3.1.0-beta.3"
     Version(String),
     /// Full config with optional fields
     Full {
@@ -214,7 +214,7 @@ pub struct ClientTypeConfig {
     pub output: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct Sp00kyConfig {
     /// Cloud project slug (used by `sp00ky cloud` commands)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,6 +254,29 @@ pub struct Sp00kyConfig {
     /// per-environment map `{ dev, cloud }`. Unset → defaults to `info`.
     #[serde(default, rename = "logLevel", skip_serializing_if = "Option::is_none")]
     pub log_level: Option<LogLevelConfig>,
+    /// Storage mode for the internal `_00_list_ref` ref table.
+    /// `single` (legacy): one shared `_00_list_ref` table. `dedicated`
+    /// (default): per-user `_00_list_ref_user_<id>` tables created
+    /// lazily by the SSP on first registration. The `_00_query`
+    /// registration table is global in both modes; only `_00_list_ref`
+    /// splits per user. Dedicated mode works around a SurrealDB v3
+    /// LIVE-permission gap where cross-session INSERTs to a
+    /// permission-gated table never fire LIVE notifications for the
+    /// non-inserting subscriber.
+    #[serde(default, rename = "refMode", skip_serializing_if = "Option::is_none")]
+    pub ref_mode: Option<RefMode>,
+}
+
+// `RefMode` lives in `ssp-protocol` so the CLI, the SSP server, and any
+// other crate that needs to derive table names share a single source of
+// truth. Re-export here so existing import paths in the CLI keep working.
+pub use ssp_protocol::RefMode;
+
+impl Sp00kyConfig {
+    /// Resolved ref mode, falling back to the default when unset in YAML.
+    pub fn resolved_ref_mode(&self) -> RefMode {
+        self.ref_mode.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -522,17 +545,36 @@ impl Sp00kyConfig {
     }
 }
 
+/// Per-component pin: either a Docker tag, or a path to a host binary.
+/// A bare string parses as `Tag`, the object form `{ path: "..." }` parses
+/// as `Path`. Path-mode opts that one component into "host process" launch;
+/// see `RuntimeSource` and `dev::run_direct_mode`.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum ComponentVersion {
+    /// Bare string => Docker tag (e.g. "canary", "v0.1.0").
+    Tag(String),
+    /// `{ path: "../../target/debug/ssp-server" }` => host process.
+    Path {
+        path: PathBuf,
+    },
+}
+
 /// Inner shape: a string (applies to both ssp & scheduler) or `{ssp, scheduler}`.
 /// Used both as the flat `version` value and as the per-env entry inside `VersionConfig::PerEnvironment`.
+///
+/// `All` is intentionally tag-only — a single value applied to both components
+/// can't be a path, since the SSP and scheduler are different binaries. Use
+/// `Individual` for path-mode.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum VersionSpec {
     All(String),
     Individual {
         #[serde(default)]
-        ssp: Option<String>,
+        ssp: Option<ComponentVersion>,
         #[serde(default)]
-        scheduler: Option<String>,
+        scheduler: Option<ComponentVersion>,
     },
 }
 
@@ -713,25 +755,64 @@ pub enum DeployEnv {
     Cloud,
 }
 
-const DEFAULT_SURREALDB_VERSION: &str = "v3.0.0";
+const DEFAULT_SURREALDB_VERSION: &str = "v3.1.0-beta.3";
 const DEFAULT_SSP_VERSION: &str = "canary";
 const DEFAULT_SCHEDULER_VERSION: &str = "canary";
+
+/// How a single component (SSP or scheduler) should be launched in dev mode.
+/// `Image` keeps the existing `docker run` path; `LocalBinary` spawns the
+/// binary directly on the host. The `dev` runtime branches on this and
+/// reshapes networking env vars accordingly (see `RuntimeUrls`).
+#[derive(Debug, Clone)]
+pub enum RuntimeSource {
+    Image(String),          // tag, e.g. "canary"
+    LocalBinary(PathBuf),   // absolute path to a host binary
+}
+
+impl RuntimeSource {
+    pub fn is_local(&self) -> bool {
+        matches!(self, RuntimeSource::LocalBinary(_))
+    }
+}
 
 /// Resolved version config with all defaults applied.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ResolvedVersions {
     pub surrealdb: String,
-    pub ssp: String,
-    pub scheduler: String,
+    pub ssp: RuntimeSource,
+    pub scheduler: RuntimeSource,
 }
 
 impl Default for ResolvedVersions {
     fn default() -> Self {
         Self {
             surrealdb: DEFAULT_SURREALDB_VERSION.to_string(),
-            ssp: DEFAULT_SSP_VERSION.to_string(),
-            scheduler: DEFAULT_SCHEDULER_VERSION.to_string(),
+            ssp: RuntimeSource::Image(DEFAULT_SSP_VERSION.to_string()),
+            scheduler: RuntimeSource::Image(DEFAULT_SCHEDULER_VERSION.to_string()),
+        }
+    }
+}
+
+/// Resolve a `ComponentVersion` (or absent value with default tag) into a
+/// `RuntimeSource`. Relative paths are anchored at `project_dir` so users
+/// can write `../../target/debug/ssp-server` from inside `example/` without
+/// caring about the cwd at invocation time.
+fn resolve_component(
+    cv: Option<&ComponentVersion>,
+    default_tag: &str,
+    project_dir: &Path,
+) -> RuntimeSource {
+    match cv {
+        None => RuntimeSource::Image(default_tag.to_string()),
+        Some(ComponentVersion::Tag(t)) => RuntimeSource::Image(t.clone()),
+        Some(ComponentVersion::Path { path }) => {
+            let resolved = if path.is_absolute() {
+                path.clone()
+            } else {
+                project_dir.join(path)
+            };
+            RuntimeSource::LocalBinary(resolved)
         }
     }
 }
@@ -743,7 +824,19 @@ impl ResolvedVersions {
     /// - `version: { ssp, scheduler }` → individual control, applies to all envs
     /// - `version: { dev: ..., cloud: ... }` → per-env override; missing key for the
     ///   requested env falls back to defaults (same as no `version` field).
+    ///
+    /// Anchors any relative path entries against the current working dir.
+    /// Use `from_config_with_dir` to pin them to the project dir explicitly.
+    #[allow(dead_code)] // Public API surface; tests prefer from_config_with_dir.
     pub fn from_config(config: &Sp00kyConfig, env: DeployEnv) -> Self {
+        Self::from_config_with_dir(config, env, Path::new("."))
+    }
+
+    /// As `from_config`, but anchors any relative `path:` entries against
+    /// `project_dir`. Use this from the dev runtime so `../../target/...`
+    /// in `example/sp00ky.yml` resolves regardless of where the user invoked
+    /// `spooky dev`.
+    pub fn from_config_with_dir(config: &Sp00kyConfig, env: DeployEnv, project_dir: &Path) -> Self {
         let surrealdb = config.resolved_surrealdb().version;
 
         let spec: Option<&VersionSpec> = match &config.version {
@@ -756,14 +849,17 @@ impl ResolvedVersions {
         };
 
         let (ssp, scheduler) = match spec {
-            Some(VersionSpec::All(v)) => (v.clone(), v.clone()),
+            Some(VersionSpec::All(v)) => (
+                RuntimeSource::Image(v.clone()),
+                RuntimeSource::Image(v.clone()),
+            ),
             Some(VersionSpec::Individual { ssp, scheduler }) => (
-                ssp.clone().unwrap_or_else(|| DEFAULT_SSP_VERSION.to_string()),
-                scheduler.clone().unwrap_or_else(|| DEFAULT_SCHEDULER_VERSION.to_string()),
+                resolve_component(ssp.as_ref(), DEFAULT_SSP_VERSION, project_dir),
+                resolve_component(scheduler.as_ref(), DEFAULT_SCHEDULER_VERSION, project_dir),
             ),
             None => (
-                DEFAULT_SSP_VERSION.to_string(),
-                DEFAULT_SCHEDULER_VERSION.to_string(),
+                RuntimeSource::Image(DEFAULT_SSP_VERSION.to_string()),
+                RuntimeSource::Image(DEFAULT_SCHEDULER_VERSION.to_string()),
             ),
         };
 
@@ -771,9 +867,43 @@ impl ResolvedVersions {
     }
 
     pub fn surrealdb_image(&self) -> String { format!("surrealdb/surrealdb:{}", self.surrealdb) }
-    pub fn ssp_image(&self) -> String { format!("mono424/spooky-ssp:{}", self.ssp) }
+
+    /// Image reference for the SSP, if it is launched from Docker.
+    /// Returns `None` for `LocalBinary`.
+    pub fn ssp_image(&self) -> Option<String> {
+        match &self.ssp {
+            RuntimeSource::Image(t) => Some(format!("mono424/spooky-ssp:{}", t)),
+            RuntimeSource::LocalBinary(_) => None,
+        }
+    }
+
+    /// Image reference for the scheduler, if it is launched from Docker.
+    /// Returns `None` for `LocalBinary`.
     #[allow(dead_code)]
-    pub fn scheduler_image(&self) -> String { format!("mono424/spooky-scheduler:{}", self.scheduler) }
+    pub fn scheduler_image(&self) -> Option<String> {
+        match &self.scheduler {
+            RuntimeSource::Image(t) => Some(format!("mono424/spooky-scheduler:{}", t)),
+            RuntimeSource::LocalBinary(_) => None,
+        }
+    }
+
+    /// Path to the SSP host binary, if configured. `None` for `Image`.
+    #[allow(dead_code)]
+    pub fn ssp_local_binary(&self) -> Option<&Path> {
+        match &self.ssp {
+            RuntimeSource::LocalBinary(p) => Some(p),
+            RuntimeSource::Image(_) => None,
+        }
+    }
+
+    /// Path to the scheduler host binary, if configured. `None` for `Image`.
+    #[allow(dead_code)]
+    pub fn scheduler_local_binary(&self) -> Option<&Path> {
+        match &self.scheduler {
+            RuntimeSource::LocalBinary(p) => Some(p),
+            RuntimeSource::Image(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1007,20 +1137,12 @@ pub fn load_config(path: &Path) -> Sp00kyConfig {
 }
 
 fn default_config() -> Sp00kyConfig {
+    // Singlenode is the historical default for the dev orchestrator;
+    // everything else matches `Sp00kyConfig::default()` so adding a
+    // new field doesn't require updating this function.
     Sp00kyConfig {
-        slug: None,
         mode: Some(DeployMode::Singlenode),
-        surrealdb: None,
-        version: None,
-        schema: None,
-        apps: Default::default(),
-        buckets: Default::default(),
-        client_types: Default::default(),
-        deployment: None,
-        cloud_api: None,
-        migration_engine: None,
-        surrealkit: None,
-        log_level: None,
+        ..Default::default()
     }
 }
 
@@ -1194,10 +1316,44 @@ mod version_tests {
         serde_yaml::from_str(yaml)
     }
 
+    /// Helper for tests that only care about the tag form. Panics if either
+    /// side resolved to a `LocalBinary` — those tests must call
+    /// `resolve_full` and pattern-match on the `RuntimeSource`.
     fn resolve(yaml: &str, env: DeployEnv) -> (String, String) {
+        let r = resolve_full(yaml, env);
+        let unwrap_tag = |rs: RuntimeSource| match rs {
+            RuntimeSource::Image(t) => t,
+            RuntimeSource::LocalBinary(p) => panic!("expected Image, got LocalBinary({:?})", p),
+        };
+        (unwrap_tag(r.ssp), unwrap_tag(r.scheduler))
+    }
+
+    fn resolve_full(yaml: &str, env: DeployEnv) -> ResolvedVersions {
         let cfg = parse(yaml);
-        let r = ResolvedVersions::from_config(&cfg, env);
-        (r.ssp, r.scheduler)
+        ResolvedVersions::from_config(&cfg, env)
+    }
+
+    /// Guards against `Sp00kyConfig::default()` diverging from
+    /// `serde_yaml::from_str("{}")`. They must produce identical
+    /// serializations so future fields can't accidentally make the
+    /// hand-written `default_config()` and the YAML defaults disagree.
+    /// Compared via serialized JSON because `Sp00kyConfig` doesn't
+    /// derive `PartialEq` (and adding it would cascade across every
+    /// child config type).
+    #[test]
+    fn default_matches_empty_yaml() {
+        let from_default = Sp00kyConfig::default();
+        let from_yaml: Sp00kyConfig =
+            serde_yaml::from_str("{}").expect("empty yaml parses");
+
+        let default_json =
+            serde_json::to_string(&from_default).expect("serialize default");
+        let yaml_json =
+            serde_json::to_string(&from_yaml).expect("serialize from-yaml");
+        assert_eq!(
+            default_json, yaml_json,
+            "Sp00kyConfig::default() must match serde-deserialize of empty YAML"
+        );
     }
 
     #[test]
@@ -1279,5 +1435,64 @@ mod version_tests {
             }
             _ => panic!("expected PerEnvironment, got {:?}", reparsed),
         }
+    }
+
+    #[test]
+    fn per_service_path_resolves_to_local_binary() {
+        let yaml = "version:\n  ssp: { path: ./target/debug/ssp-server }\n  scheduler: { path: /abs/path/scheduler }\n";
+        let cfg = parse(yaml);
+        let r = ResolvedVersions::from_config_with_dir(&cfg, DeployEnv::Dev, Path::new("/proj"));
+
+        match &r.ssp {
+            RuntimeSource::LocalBinary(p) => {
+                // Relative path is anchored at project_dir.
+                assert_eq!(p, &PathBuf::from("/proj/./target/debug/ssp-server"));
+            }
+            other => panic!("expected LocalBinary, got {:?}", other),
+        }
+        match &r.scheduler {
+            RuntimeSource::LocalBinary(p) => {
+                // Absolute path is preserved verbatim.
+                assert_eq!(p, &PathBuf::from("/abs/path/scheduler"));
+            }
+            other => panic!("expected LocalBinary, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn per_service_mixed_tag_and_path() {
+        let yaml = "version:\n  ssp: { path: ./target/debug/ssp-server }\n  scheduler: canary\n";
+        let r = resolve_full(yaml, DeployEnv::Dev);
+        assert!(matches!(r.ssp, RuntimeSource::LocalBinary(_)));
+        match &r.scheduler {
+            RuntimeSource::Image(t) => assert_eq!(t, "canary"),
+            other => panic!("expected Image(canary), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn per_env_with_path_in_dev() {
+        let yaml = "version:\n  dev: { ssp: { path: ./target/debug/ssp-server }, scheduler: { path: ./target/debug/scheduler } }\n  cloud: canary\n";
+        let cfg = parse(yaml);
+        let dev = ResolvedVersions::from_config_with_dir(&cfg, DeployEnv::Dev, Path::new("/proj"));
+        let cloud = ResolvedVersions::from_config_with_dir(&cfg, DeployEnv::Cloud, Path::new("/proj"));
+
+        assert!(matches!(dev.ssp, RuntimeSource::LocalBinary(_)));
+        assert!(matches!(dev.scheduler, RuntimeSource::LocalBinary(_)));
+        assert!(matches!(cloud.ssp, RuntimeSource::Image(ref t) if t == "canary"));
+        assert!(matches!(cloud.scheduler, RuntimeSource::Image(ref t) if t == "canary"));
+    }
+
+    #[test]
+    fn helpers_split_image_and_path() {
+        let yaml = "version:\n  ssp: { path: ./bin/ssp }\n  scheduler: canary\n";
+        let cfg = parse(yaml);
+        let r = ResolvedVersions::from_config_with_dir(&cfg, DeployEnv::Dev, Path::new("/proj"));
+
+        assert!(r.ssp_image().is_none());
+        assert_eq!(r.ssp_local_binary().unwrap(), Path::new("/proj/./bin/ssp"));
+
+        assert_eq!(r.scheduler_image().as_deref(), Some("mono424/spooky-scheduler:canary"));
+        assert!(r.scheduler_local_binary().is_none());
     }
 }

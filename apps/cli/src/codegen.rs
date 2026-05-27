@@ -329,9 +329,13 @@ impl CodeGenerator {
                                 let is_datetime = col_def.get("x-is-datetime")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
+                                let is_bytes = col_def.get("x-is-bytes")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
                                 let crdt_variant = col_def.get("x-crdt")
                                     .and_then(|v| v.as_str())
                                     .filter(|s| !s.is_empty());
+                                let has_cursor = col_def.get("x-cursor").is_some();
                                 let is_parent = col_def.get("x-parent").is_some();
 
                                 let clean_col_name = col_name.replace("`", "");
@@ -358,19 +362,33 @@ impl CodeGenerator {
                                 if is_datetime {
                                     flags.push("dateTime: true".to_string());
                                 }
+                                if is_bytes {
+                                    flags.push("bytes: true".to_string());
+                                }
                                 if let Some(crdt) = crdt_variant {
                                     flags.push(format!("crdt: '{}' as const", crdt));
                                 }
+                                if has_cursor {
+                                    flags.push("cursor: true".to_string());
+                                }
+
+                                // For `bytes` fields the runtime value is a
+                                // Uint8Array, not a string. The JSON-schema
+                                // `type` stays `string` (with
+                                // contentEncoding=base64) for spec
+                                // consumers, so we override here at
+                                // codegen time.
+                                let runtime_type = if is_bytes { "Uint8Array" } else { col_type };
 
                                 if flags.is_empty() {
                                     tables_lines.push(format!(
                                         "        {}: {{ type: '{}' as const, optional: {} }},",
-                                        clean_col_name, col_type, is_optional
+                                        clean_col_name, runtime_type, is_optional
                                     ));
                                 } else {
                                     tables_lines.push(format!(
                                         "        {}: {{ type: '{}' as const, {}, optional: {} }},",
-                                        clean_col_name, col_type, flags.join(", "), is_optional
+                                        clean_col_name, runtime_type, flags.join(", "), is_optional
                                     ));
                                 }
                             }
@@ -1144,7 +1162,14 @@ impl CodeGenerator {
             }
 
             // Handle PERMISSIONS replacement
-            // Match PERMISSIONS at start of line (for TABLE/FIELD)
+            // Match PERMISSIONS at start of line (for TABLE/FIELD).
+            //
+            // Important: this rewrite runs ONLY for the client-local SurrealKV
+            // cache schema. The local DB is single-tenant (one user, one device)
+            // and has no $session / $auth context to scope against, so blanket
+            // `WHERE true` is correct here. The server schema preserves real
+            // permissions — see meta_tables_remote.surql for inheritance rules
+            // (e.g. _00_crdt / _00_version follow the linked record's perms).
             if trimmed.to_uppercase().starts_with("PERMISSIONS") {
                 let perms = if def_type == "TABLE" {
                     "PERMISSIONS FOR select, create, update, delete WHERE true"

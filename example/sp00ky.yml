@@ -10,8 +10,24 @@ surrealdb:
   # hosting: cloud      # "cloud" (default) or "external"
   # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
 schema: ./schema
+# Storage layout for the SSP's internal `_00_list_ref` table.
+# `dedicated` (default) gives each authenticated user their own
+# `_00_list_ref_user_<id>` table; `single` keeps the legacy shared
+# `_00_list_ref`. The `_00_query` registration table is global in both
+# modes. Dedicated mode works around a SurrealDB v3 LIVE permission
+# gap where cross-session INSERT notifications never fire on
+# permission-gated tables. Stated explicitly here so the e2e suite's
+# config documents itself.
+refMode: dedicated
 version:
-  dev: dev
+  # Run host-built binaries in dev so `cargo build -p ssp-server -p scheduler`
+  # is what actually runs under `pnpm dev:example`. Switch either entry back
+  # to a tag (e.g. `ssp: dev`) to fall back to the published Docker image.
+  dev:
+    ssp:
+      path: ../target/debug/ssp-server
+    scheduler:
+      path: ../target/debug/scheduler
   cloud: canary
 buckets:
   - ./schema/src/buckets/profile.surql

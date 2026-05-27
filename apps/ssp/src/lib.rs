@@ -28,8 +28,11 @@ use tracing::{Span, debug, error, info, instrument, warn};
 pub mod crdt;
 pub mod metrics;
 pub mod open_telemetry;
+pub mod tables;
+pub mod view_metrics;
 
 use metrics::Metrics;
+use view_metrics::{ViewMetrics, ViewMetricsState};
 
 use job_runner::{JobConfig, JobEntry, JobRunner};
 use tokio::sync::mpsc;
@@ -67,6 +70,13 @@ pub struct AppState {
     pub scheduler_url: Option<String>,
     pub start_time: std::time::Instant,
     pub crdt_cache: Arc<crdt::CrdtCache>,
+    /// Per-view rolling materialization-latency samples plus running
+    /// update/error counters. Persisted onto `_00_query` after each
+    /// affected ingest step.
+    pub view_metrics: Arc<ViewMetrics>,
+    /// `_00_query` / `_00_list_ref` storage layout. See
+    /// `ssp_protocol::RefMode` and `crate::tables`.
+    pub ref_mode: ssp_protocol::RefMode,
 }
 
 // --- Request/Response DTOs ---
@@ -96,6 +106,13 @@ pub struct Config {
     pub heartbeat_interval_ms: u64,
     pub advertise_addr: Option<String>,
     pub ttl_cleanup_interval_secs: u64,
+    /// Storage layout for `_00_query` / `_00_list_ref`. See
+    /// `ssp_protocol::RefMode`. Defaults to `Dedicated` so cross-session
+    /// LIVE delivery doesn't depend on the SurrealDB v3 LIVE-permission
+    /// path; flip to `Single` only when running against a SurrealDB
+    /// version that delivers cross-session LIVE notifications correctly
+    /// through permission rules.
+    pub ref_mode: ssp_protocol::RefMode,
 }
 
 pub fn load_config() -> Config {
@@ -118,6 +135,11 @@ pub fn load_config() -> Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(60),
+        ref_mode: std::env::var("SPKY_SSP_REF_MODE")
+            .ok()
+            .as_deref()
+            .and_then(ssp_protocol::RefMode::parse_str)
+            .unwrap_or_default(),
     }
 }
 
@@ -199,7 +221,14 @@ impl BootstrapSource {
                     .with_context(|| format!("Query failed: {}", surql))?;
                 let val: surrealdb::types::Value = response.take(0)
                     .context("Failed to parse query response")?;
-                Ok(serde_json::to_value(&val).unwrap_or_default())
+                // `into_json_value()` flattens RecordId/Datetime to plain
+                // strings and unwraps SurrealDB's tagged Value enum into
+                // ordinary JSON. `serde_json::to_value(&val)` (the previous
+                // implementation) emitted the tagged shape `{"Object": {
+                // "tables": {"Object": {...}}}}`, which broke
+                // `info_json.get("tables")` and made the bootstrap report
+                // an empty table list against a populated DB.
+                Ok(val.into_json_value())
             }
             BootstrapSource::Proxy { client, proxy_url } => {
                 let url = format!("{}/query", proxy_url);
@@ -324,7 +353,11 @@ pub async fn run_server() -> anyhow::Result<()> {
         metrics::init_metrics().context("Failed to initialize metrics")?;
     let metrics = Arc::new(metrics);
 
-    info!("\n ____  ____  ____\n/ ___)/ ___)(  _ \\\n\\___ \\\\___ \\ ) __/\n(____/(____/(__)    v{}\n\nSp00ky Sync Provider — streaming mode", env!("CARGO_PKG_VERSION"));
+    info!(
+        "\n ____  ____  ____\n/ ___)/ ___)(  _ \\\n\\___ \\\\___ \\ ) __/\n(____/(____/(__)    v{}\n\nSp00ky Sync Provider — streaming mode\nBuilt: {}",
+        env!("CARGO_PKG_VERSION"),
+        env!("SPOOKY_BUILD_TIMESTAMP"),
+    );
 
     let config = load_config();
     let db = connect_database(&config).await?;
@@ -371,6 +404,8 @@ pub async fn run_server() -> anyhow::Result<()> {
         scheduler_url: config.scheduler_url.clone(),
         start_time: std::time::Instant::now(),
         crdt_cache,
+        view_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        ref_mode: config.ref_mode,
     };
 
     let app = create_app(state);
@@ -393,8 +428,12 @@ pub async fn run_server() -> anyhow::Result<()> {
         let advertise_addr = config.advertise_addr.clone();
 
         tokio::spawn(async move {
-            // Choose bootstrap source based on mode
-            let (source, expected_hashes) = if let Some(ref scheduler_url) = scheduler_url {
+            // Choose bootstrap source based on mode. The metadata source
+            // (INFO FOR DB → permissions) is always upstream SurrealDB
+            // regardless of mode, because the scheduler's replica is
+            // records-only and won't carry DEFINE TABLE strings.
+            let metadata_source = BootstrapSource::Direct(db.clone());
+            let (data_source, expected_hashes) = if let Some(ref scheduler_url) = scheduler_url {
                 // Cluster mode: register with scheduler, then bootstrap from proxy
                 let client = reqwest::Client::new();
                 let scheduler_base = scheduler_url.trim_end_matches('/');
@@ -441,7 +480,7 @@ pub async fn run_server() -> anyhow::Result<()> {
             let mut attempt = 0;
             loop {
                 attempt += 1;
-                match self_bootstrap(&source, &processor).await {
+                match self_bootstrap_with_metadata(&metadata_source, &data_source, &processor).await {
                     Ok(()) => {
                         // Integrity check: only when the scheduler handed us
                         // expected hashes (cluster mode). Mismatch ⇒ wipe
@@ -522,8 +561,9 @@ pub async fn run_server() -> anyhow::Result<()> {
         let scheduler_url_clone = scheduler_url.clone();
         let heartbeat_interval = config.heartbeat_interval_ms;
         let processor_clone = processor_for_scheduler.clone();
-        let listen_addr = config.listen_addr.clone();
-        let advertise_addr = config.advertise_addr.clone();
+        // listen_addr / advertise_addr aren't read here — the heartbeat
+        // path no longer self-registers; if the scheduler 404s us, we
+        // exit and the supervisor reruns the full register handshake.
         let status_for_heartbeat = status.clone();
 
         tokio::spawn(async move {
@@ -602,6 +642,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         let status = status.clone();
         let metrics = metrics.clone();
         let interval_secs = config.ttl_cleanup_interval_secs;
+        let ref_mode = config.ref_mode;
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(
@@ -616,7 +657,7 @@ pub async fn run_server() -> anyhow::Result<()> {
                     continue;
                 }
 
-                ttl_cleanup_sweep(&db, &processor, &metrics).await;
+                ttl_cleanup_sweep(&db, &processor, &metrics, ref_mode).await;
             }
         });
         info!(interval_secs = config.ttl_cleanup_interval_secs, "TTL cleanup loop started");
@@ -668,29 +709,65 @@ async fn shutdown_signal(
 
 /// Bootstrap the circuit by loading all table data and view definitions.
 /// Works with either a direct SurrealDB connection or the scheduler's HTTP proxy.
-async fn self_bootstrap(
-    source: &BootstrapSource,
+/// Bootstrap with separate sources for metadata (INFO FOR DB) and data
+/// (record SELECTs). In cluster mode the scheduler's proxy backs onto its
+/// RocksDB replica, which only stores records — DEFINE TABLE / PERMISSIONS
+/// strings never land there, so `INFO FOR DB` against the proxy returns
+/// at most an empty or schemaless view of each table. That breaks the
+/// SSP's policy bootstrap (every table comes back without a registered
+/// permission and gets default-denied at view-register time). Upstream
+/// SurrealDB is the source of truth for schema, so callers in cluster
+/// mode pass it explicitly here as `metadata_source`.
+async fn self_bootstrap_with_metadata(
+    metadata_source: &BootstrapSource,
+    data_source: &BootstrapSource,
     processor: &Arc<RwLock<Circuit>>,
 ) -> anyhow::Result<()> {
     info!("Starting self-bootstrap");
+    let source = data_source;
 
-    // Step 1: Discover tables via INFO FOR DB
-    let info_json = source.query("INFO FOR DB").await
+    // Step 1: Discover tables via INFO FOR DB (against upstream so we get
+    // the real DEFINE TABLE strings with PERMISSIONS clauses).
+    let info_json = metadata_source.query("INFO FOR DB").await
         .context("Failed to query INFO FOR DB")?;
 
-    let tables: Vec<String> = match info_json.get("tables") {
+    // INFO FOR DB returns `tables: { name: "DEFINE TABLE ... PERMISSIONS ...;" }`.
+    // Keep both the table list (for data-loading) and the raw DEFINE strings
+    // (for permission extraction below).
+    let table_defs: Vec<(String, String)> = match info_json.get("tables") {
         Some(Value::Object(tables_map)) => tables_map
-            .keys()
-            .filter(|name| !name.starts_with("_00_"))
-            .cloned()
+            .iter()
+            .filter(|(name, _)| !name.starts_with("_00_"))
+            .map(|(name, def)| {
+                (name.clone(), def.as_str().unwrap_or("").to_string())
+            })
             .collect(),
         _ => {
             info!("No tables found in database");
             vec![]
         }
     };
+    let tables: Vec<String> = table_defs.iter().map(|(n, _)| n.clone()).collect();
 
     info!(count = tables.len(), "Discovered tables: {:?}", tables);
+
+    // Step 1b: Pull `PERMISSIONS FOR select WHERE <expr>` text out of each
+    // DEFINE TABLE string and stash it on the circuit. Stored as raw text so
+    // `prepare_registration_dbsp` can route it through the same converter that
+    // handles user queries (see permission_inject.rs).
+    {
+        let mut circuit = processor.write().await;
+        for (name, def) in &table_defs {
+            let permission = extract_select_permission_text(def);
+            info!(
+                target: "ssp::policy",
+                table = %name,
+                permission = %permission,
+                "registered table permission"
+            );
+            circuit.set_permission(name, permission);
+        }
+    }
 
     // Step 2: Load all table data, paged. Pulling the entire table in one
     // request blew up at multi-GB DBs because either the SurrealDB Rust SDK's
@@ -749,15 +826,17 @@ async fn self_bootstrap(
         info!(table = %table, records = record_count, "Loaded table data");
     }
 
-    // Step 3: Re-register views from _00_query
+    // Step 3: Re-register views from the global `_00_query` table.
+    // `_00_query` is global in both modes (only `_00_list_ref` splits
+    // per user); each row carries an `auth_id` field which decides
+    // where the corresponding `_00_list_ref_user_<id>` writes go.
     let result = source.query("SELECT * FROM _00_query").await
         .context("Failed to query _00_query")?;
-
     let views: Vec<Value> = match result {
         Value::Array(arr) => arr,
         _ => vec![],
     };
-    info!(count = views.len(), "Found persisted views");
+    info!(count = views.len(), "Found persisted views in _00_query");
 
     for view_row in views {
         let view_id = match view_row.get("id") {
@@ -769,7 +848,7 @@ async fn self_bootstrap(
             }
         };
 
-        // Strip the table prefix if present (e.g. "_00_query:abc" -> "abc")
+        // Strip the table prefix (e.g. "_00_query:abc" → "abc").
         let raw_id = view_id
             .strip_prefix("_00_query:")
             .unwrap_or(&view_id)
@@ -785,6 +864,11 @@ async fn self_bootstrap(
 
         let client_id = view_row
             .get("clientId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let auth_id = view_row
+            .get("auth_id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
@@ -807,28 +891,230 @@ async fn self_bootstrap(
             "id": raw_id,
             "surql": surql,
             "clientId": client_id,
+            "authId": auth_id,
             "ttl": ttl,
             "lastActiveAt": last_active_at,
             "params": params,
         });
 
-        match ssp::service::view::prepare_registration_dbsp(payload) {
+        let prep = {
+            let circuit = processor.read().await;
+            ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions())
+        };
+        match prep {
             Ok(data) => {
                 let mut circuit = processor.write().await;
-                circuit.add_query(
+                circuit.add_query_with_auth(
                     data.plan,
                     data.safe_params,
                     Some(OutputFormat::Streaming),
+                    auth_id.clone(),
                 );
-                info!(view_id = %raw_id, "Re-registered view");
+                info!(view_id = %raw_id, auth_id = %auth_id, "Re-registered view");
             }
             Err(e) => {
-                warn!(view_id = %raw_id, error = %e, "Failed to re-register view");
+                warn!(
+                    target: "ssp::policy",
+                    view_id = %raw_id,
+                    error = %e,
+                    "Failed to re-register view; the owner client will get the same error on next register"
+                );
             }
         }
     }
 
     Ok(())
+}
+
+/// Pull the raw `PERMISSIONS FOR select WHERE <expr>` text out of a
+/// `DEFINE TABLE` statement.
+///
+/// Returns the body of the `WHERE` clause (no leading `WHERE`), or one of the
+/// sentinels `"true"` / `"false"` for the bare-keyword and missing-action
+/// cases. This text is later spliced into a synthetic
+/// `SELECT * FROM <table> WHERE <text>` and routed through the shared
+/// converter, so it must be valid SurrealQL `WHERE` syntax. See
+/// `permission_inject.rs` for how it gets used.
+///
+/// Behavior:
+/// - `WHERE true` or no PERMISSIONS clause at all (SurrealDB defaults to FULL)
+///   -> `"true"`.
+/// - `PERMISSIONS NONE` or no `select` action -> `"false"` (deny).
+/// - `FOR select WHERE <expr>` -> the raw `<expr>` text.
+fn extract_select_permission_text(define_table: &str) -> String {
+    let def = define_table.trim().trim_end_matches(';');
+    let upper = def.to_uppercase();
+
+    // No PERMISSIONS clause → SurrealDB defaults to FULL → allow.
+    let Some(perm_idx) = upper.find("PERMISSIONS") else {
+        return "true".into();
+    };
+    let perm_section = def[perm_idx + "PERMISSIONS".len()..].trim();
+    let perm_upper = perm_section.to_uppercase();
+
+    if perm_upper.starts_with("FULL") {
+        return "true".into();
+    }
+    if perm_upper.starts_with("NONE") {
+        return "false".into();
+    }
+
+    let lower = perm_section.to_lowercase();
+    let mut clause_starts: Vec<usize> = Vec::new();
+    for (i, _) in lower.match_indices("for ") {
+        if i == 0 || lower.as_bytes()[i - 1].is_ascii_whitespace() {
+            clause_starts.push(i);
+        }
+    }
+    if clause_starts.is_empty() {
+        warn!(target: "ssp::policy", def = %def, "PERMISSIONS clause has no FOR clauses; denying");
+        return "false".into();
+    }
+
+    for (idx, &start) in clause_starts.iter().enumerate() {
+        let end = clause_starts.get(idx + 1).copied().unwrap_or(perm_section.len());
+        let clause = &perm_section[start..end];
+        let lower_clause = clause.to_lowercase();
+        let where_idx = lower_clause.find("where");
+        let header = match where_idx {
+            Some(w) => &clause[..w],
+            None => clause,
+        };
+        let header_lower = header.to_lowercase();
+        if !header_lower.contains("select") {
+            continue;
+        }
+        let Some(w) = where_idx else {
+            // FOR select with no WHERE - SurrealDB treats this as full-allow.
+            return "true".into();
+        };
+        // Strip leading "WHERE" keyword and trailing comma/semicolon/whitespace.
+        let body = clause[w + "where".len()..]
+            .trim()
+            .trim_end_matches(',')
+            .trim_end_matches(';')
+            .trim()
+            .to_string();
+        if body.is_empty() {
+            return "true".into();
+        }
+        return body;
+    }
+
+    // SurrealDB default for unlisted actions is DENY.
+    "false".into()
+}
+
+#[cfg(test)]
+mod permission_extract_tests {
+    use super::*;
+
+    #[test]
+    fn no_permissions_clause_is_full() {
+        assert_eq!(
+            extract_select_permission_text("DEFINE TABLE foo SCHEMAFULL;"),
+            "true"
+        );
+    }
+
+    #[test]
+    fn permissions_full_is_true() {
+        assert_eq!(
+            extract_select_permission_text("DEFINE TABLE foo SCHEMAFULL PERMISSIONS FULL"),
+            "true"
+        );
+    }
+
+    #[test]
+    fn permissions_none_is_false() {
+        assert_eq!(
+            extract_select_permission_text("DEFINE TABLE foo SCHEMAFULL PERMISSIONS NONE"),
+            "false"
+        );
+    }
+
+    #[test]
+    fn for_select_where_true_is_true_text() {
+        assert_eq!(
+            extract_select_permission_text(
+                "DEFINE TABLE foo SCHEMAFULL PERMISSIONS FOR select WHERE true",
+            ),
+            "true"
+        );
+    }
+
+    #[test]
+    fn for_select_where_false_is_false_text() {
+        assert_eq!(
+            extract_select_permission_text(
+                "DEFINE TABLE foo SCHEMAFULL PERMISSIONS FOR select WHERE false",
+            ),
+            "false"
+        );
+    }
+
+    #[test]
+    fn for_other_action_only_denies_select() {
+        assert_eq!(
+            extract_select_permission_text(
+                "DEFINE TABLE foo SCHEMAFULL PERMISSIONS FOR update WHERE true",
+            ),
+            "false"
+        );
+    }
+
+    #[test]
+    fn extracts_select_auth_eq_body() {
+        let text = extract_select_permission_text(
+            "DEFINE TABLE thread SCHEMAFULL PERMISSIONS FOR select WHERE author.id = $auth.id FOR update WHERE false",
+        );
+        assert_eq!(text, "author.id = $auth.id");
+    }
+
+    #[test]
+    fn extracts_unparseable_text_verbatim() {
+        // The boot loader extracts text and the registration step decides
+        // whether it can represent it. Boundary check - subquery WHERE comes
+        // through as raw text.
+        let text = extract_select_permission_text(
+            "DEFINE TABLE thread SCHEMAFULL PERMISSIONS FOR select WHERE $auth.id IN (SELECT id FROM x)",
+        );
+        assert_eq!(text, "$auth.id IN (SELECT id FROM x)");
+    }
+
+    #[test]
+    fn select_in_action_list() {
+        assert_eq!(
+            extract_select_permission_text(
+                "DEFINE TABLE foo PERMISSIONS FOR create, select, update WHERE true",
+            ),
+            "true"
+        );
+    }
+
+    #[test]
+    fn extracts_complex_select_with_param_lhs() {
+        // The exact shape used by the example app's thread permission. The
+        // text comes out verbatim; the converter decides whether it parses.
+        let text = extract_select_permission_text(
+            "DEFINE TABLE thread SCHEMAFULL PERMISSIONS FOR select WHERE published = true OR $access = 'account' AND author.id = $auth.id, FOR create, delete WHERE $access = 'account' AND author.id = $auth.id",
+        );
+        assert_eq!(
+            text,
+            "published = true OR $access = 'account' AND author.id = $auth.id"
+        );
+    }
+
+    #[test]
+    fn for_select_no_where_is_true() {
+        // `PERMISSIONS FOR select` with no WHERE is full-allow per SurrealDB.
+        assert_eq!(
+            extract_select_permission_text(
+                "DEFINE TABLE foo SCHEMAFULL PERMISSIONS FOR select",
+            ),
+            "true"
+        );
+    }
 }
 
 // --- Middleware ---
@@ -906,6 +1192,45 @@ async fn ingest_handler(
 
     // Prepare record data
     let clean = ssp::sanitizer::normalize_record(payload.record.clone());
+
+    // Pre-emptively create the new user's dedicated `_00_list_ref_user_<id>`
+    // and `_00_query_user_<id>` tables (idempotent — no-op in
+    // `RefMode::Single`). Without this, the client's `setCurrentUserId`
+    // call after auth-success races the SSP's lazy table creation in
+    // `register_view_handler` and the initial `LIVE SELECT * FROM
+    // _00_list_ref_user_<id>` fails with "table not found" until the
+    // retry backoff in `Sp00kySync::setCurrentUserId` kicks in.
+    if payload.table == "user" && op == Operation::Create {
+        if let Err(e) =
+            tables::ensure_user_tables(&state.db, state.ref_mode, &payload.id).await
+        {
+            warn!(
+                target: "ssp::ingest",
+                error = %e,
+                auth_id = %payload.id,
+                "Pre-emptive ensure_user_tables failed; falling back to lazy creation on view register"
+            );
+        }
+    }
+
+    // Inverse of pre-emptive creation: when the owning user record is
+    // deleted, drop the dedicated `_00_list_ref_user_<id>` so leftover
+    // schema state doesn't accumulate forever. The schema's
+    // `_00_user_delete` event fires this ingest with op=DELETE and the
+    // pre-delete row payload, which carries the same id sanitization
+    // path. No-op in `RefMode::Single` (no per-user tables exist).
+    if payload.table == "user" && op == Operation::Delete {
+        if let Err(e) =
+            tables::drop_user_tables(&state.db, state.ref_mode, &payload.id).await
+        {
+            warn!(
+                target: "ssp::ingest",
+                error = %e,
+                auth_id = %payload.id,
+                "drop_user_tables failed; per-user list_ref table will linger"
+            );
+        }
+    }
 
     // Check if this is a job table and queue the job if pending (only on assigned SSP)
     if let Some(backend_info) = state.job_config.job_tables.get(&payload.table) {
@@ -994,10 +1319,12 @@ async fn ingest_handler(
         Operation::Update => Change::update(&payload.table, &payload.id, clean),
         Operation::Delete => Change::delete(&payload.table, &payload.id),
     };
+    let step_start = std::time::Instant::now();
     let deltas = {
         let mut circuit = state.processor.write().await;
         circuit.step(ChangeSet { changes: vec![change] })
     };
+    let materialization_time_ms = step_start.elapsed().as_secs_f64() * 1000.0;
 
     // Record metrics
     state.metrics.inc_ingest(
@@ -1016,10 +1343,76 @@ async fn ingest_handler(
             .sum();
         span.record("edges_updated", edge_count);
 
-        // Update edges in database
-        let delta_refs: Vec<&ViewDelta> = deltas.iter().collect();
-        let circuit = state.processor.read().await;
-        update_all_edges(&state.db, &delta_refs, &state.metrics, &circuit).await;
+        // Defer the actual `UPDATE _00_list_ref_user_<...>` writes
+        // into a background task and return 200 to the schema event
+        // immediately. Without this, the schema's `http::post` blocks
+        // alice's parent transaction until `update_all_edges` completes
+        // and commits — in a SEPARATE transaction over the SSP's own
+        // connection. That separate tx commits BEFORE alice's parent
+        // tx, so when bob's LIVE on `_00_list_ref_user_<bob>` fires
+        // and his client re-fetches the row over a different session,
+        // alice's UPDATE on the source row isn't visible yet and bob
+        // ingests stale content with the new list_ref version (see
+        // docs/surrealdb-bugs/ws-row-cache-stale-after-update.md).
+        //
+        // By spawning the work and waiting on `_00_version` (which is
+        // bumped inside alice's tx and only becomes visible to other
+        // connections post-commit) we ensure the list_ref UPDATE
+        // lands AFTER the source row is readable downstream.
+        let expected_version: Option<i64> = payload
+            .record
+            .get("_00_rv")
+            .and_then(|v| v.as_i64())
+            .filter(|&v| v > 0);
+        let row_id_for_wait = payload.id.clone();
+        let table_for_wait = payload.table.clone();
+        let op_for_wait = payload.op.clone();
+        let state_for_task = state.clone();
+        let deltas_for_task = deltas;
+        let span_for_task = span.clone();
+        tokio::spawn(async move {
+            let _enter = span_for_task.enter();
+            if let Some(expected) = expected_version {
+                if !wait_for_row_committed(
+                    &state_for_task.db,
+                    &row_id_for_wait,
+                    expected,
+                    std::time::Duration::from_secs(5),
+                )
+                .await
+                {
+                    warn!(
+                        target: "ssp::ingest",
+                        table = %table_for_wait,
+                        op = %op_for_wait,
+                        id = %row_id_for_wait,
+                        expected_version = expected,
+                        "Timed out waiting for source row to commit; proceeding with edges update"
+                    );
+                }
+            }
+            let delta_refs: Vec<&ViewDelta> = deltas_for_task.iter().collect();
+            let circuit = state_for_task.processor.read().await;
+            update_all_edges(
+                &state_for_task.db,
+                &delta_refs,
+                &state_for_task.metrics,
+                &circuit,
+                state_for_task.ref_mode,
+            )
+            .await;
+            drop(circuit);
+            persist_view_metrics(
+                &state_for_task,
+                deltas_for_task.iter().map(|d| d.records.len()).collect::<Vec<_>>(),
+                deltas_for_task
+                    .iter()
+                    .map(|d| d.query_id.clone())
+                    .collect::<Vec<_>>(),
+                materialization_time_ms,
+            )
+            .await;
+        });
     }
 
     // Record duration
@@ -1027,6 +1420,56 @@ async fn ingest_handler(
     state.metrics.ingest_duration.record(duration_ms, &[]);
 
     StatusCode::OK.into_response()
+}
+
+/// Poll `_00_version` on the SSP's own connection until the source row
+/// reaches `expected_version`. The schema event bumps `_00_version`
+/// inside alice's parent transaction; from the SSP's connection that
+/// bump is only visible AFTER alice's tx commits, so this is a clean
+/// proxy for "alice's source row is now readable downstream". Returns
+/// `true` if the version is observed within `timeout`, `false` on
+/// timeout (caller proceeds anyway so a missing `_00_version` row
+/// doesn't permanently wedge the fan-out).
+async fn wait_for_row_committed(
+    db: &SharedDb,
+    row_id: &str,
+    expected_version: i64,
+    timeout: std::time::Duration,
+) -> bool {
+    let Some(rid) = parse_record_id(row_id) else {
+        return false;
+    };
+    let start = std::time::Instant::now();
+    let mut backoff_ms: u64 = 10;
+    while start.elapsed() < timeout {
+        match db
+            .query("SELECT VALUE version FROM ONLY _00_version WHERE record_id = $rid LIMIT 1")
+            .bind(("rid", rid.clone()))
+            .await
+        {
+            Ok(mut response) => {
+                let v: Option<i64> = response.take(0).ok().flatten();
+                if let Some(v) = v {
+                    if v >= expected_version {
+                        return true;
+                    }
+                }
+            }
+            Err(e) => {
+                debug!(
+                    target: "ssp::ingest",
+                    error = %e,
+                    row_id,
+                    "Source-row commit poll query failed; retrying"
+                );
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+        if backoff_ms < 80 {
+            backoff_ms *= 2;
+        }
+    }
+    false
 }
 
 /// Log handler - receives logs from client and forwards to tracing
@@ -1070,16 +1513,42 @@ async fn register_view_handler(
 
     let span = Span::current();
 
-    // Parse and validate registration data
-    let data = match ssp::service::view::prepare_registration_dbsp(payload) {
-        Ok(d) => d,
-        Err(e) => {
-            error!(error = %e, "Invalid view registration payload");
-            return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    // Parse and validate the registration. The per-table permission text is
+    // stashed on the Circuit by self_bootstrap; reading it under the read lock
+    // keeps the registration path off the write lock until we actually mutate
+    // the circuit below. Permission-injection failures (default-deny, missing
+    // $auth, unrepresentable expression) come back as a 400 with the offending
+    // table named so the client can fix its schema or pass the missing param.
+    let data = {
+        let circuit = state.processor.read().await;
+        match ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions()) {
+            Ok(d) => d,
+            Err(e) => {
+                error!(target: "ssp::policy", error = %e, "Rejected view registration");
+                return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+            }
         }
     };
 
     span.record("view_id", &data.plan.id);
+
+    // Auth identity for per-user table routing. Extracted up front so
+    // every downstream record-id computation uses the same value.
+    let auth_id = data
+        .metadata
+        .get("authId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Lazy-define the per-user `_00_query_user_<id>` and
+    // `_00_list_ref_user_<id>` tables (idempotent). No-op in
+    // `RefMode::Single`. Done before the UPSERT below so the table
+    // exists when we try to write into it.
+    if let Err(e) = tables::ensure_user_tables(&state.db, state.ref_mode, &auth_id).await {
+        error!(error = %e, auth_id = %auth_id, "Failed to ensure per-user tables");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+    }
 
     // Extract metadata
     let raw_id = data
@@ -1102,14 +1571,19 @@ async fn register_view_handler(
             "View already existed - updating metadata only"
         );
 
-        // Still update the _00_query record for fresh clientId/lastActiveAt
+        // Still update the _00_query record for fresh
+        // clientId/lastActiveAt/auth_id. auth_id can shift across
+        // re-registrations if the same WS session re-authenticates,
+        // and we want list_ref entries written after this point to
+        // carry the latest user attribution.
         let client_id = data.metadata.get("clientId").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let last_active_at = data.metadata.get("lastActiveAt").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-        let query = "UPDATE <record>$id SET clientId = <string>$clientId, lastActiveAt = <datetime>$lastActiveAt";
+        let query = "UPDATE <record>$id SET clientId = <string>$clientId, auth_id = <string>$authId, lastActiveAt = <datetime>$lastActiveAt";
         if let Err(e) = state.db.query(query)
             .bind(("id", incantation_id.clone()))
             .bind(("clientId", client_id))
+            .bind(("authId", auth_id.clone()))
             .bind(("lastActiveAt", last_active_at))
             .await
         {
@@ -1122,18 +1596,32 @@ async fn register_view_handler(
     debug!("Registering view: {}", data.plan.id);
 
     // Register view with Streaming format
+    let register_start = std::time::Instant::now();
     let update = {
         let mut circuit = state.processor.write().await;
-        circuit.add_query(
+        circuit.add_query_with_auth(
             data.plan.clone(),
             data.safe_params,
             Some(OutputFormat::Streaming),
+            auth_id.clone(),
         )
     };
+    let registration_time_ms = register_start.elapsed().as_secs_f64() * 1000.0;
 
     state.metrics.view_count.add(1, &[]);
 
-    // Extract metadata fields
+    // Seed an empty per-view metrics state so the first ingest doesn't have
+    // to take the write lock to insert.
+    {
+        let mut metrics_map = state.view_metrics.write().await;
+        metrics_map
+            .entry(data.plan.id.clone())
+            .or_insert_with(ViewMetricsState::default);
+    }
+
+    // Extract metadata fields. `auth_id` was already pulled earlier
+    // to drive table routing; the others go on the `_00_query[_user_*]`
+    // row as observability metadata.
     let client_id = data
         .metadata
         .get("clientId")
@@ -1164,18 +1652,34 @@ async fn register_view_handler(
         .cloned()
         .unwrap_or(Value::Null);
 
-    // Store incantation metadata
-    let query = "UPSERT <record>$id SET clientId = <string>$clientId, surql = <string>$surql, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt";
+    // Capture initial row count from the snapshot delta so `_00_query.rowCount`
+    // reflects the materialized view's content immediately after register,
+    // not just after the first per-ingest update. Without this the row
+    // count stays at the schema default 0 until something mutates the
+    // upstream tables — confusing when the view actually has rows
+    // already, e.g. on page reload.
+    let initial_row_count: i64 = update
+        .as_ref()
+        .map(|d| d.records.len() as i64)
+        .unwrap_or(0);
+
+    // Store incantation metadata. createdAt has DEFAULT time::now() and is
+    // READONLY so it's only set on the inserting branch of the UPSERT;
+    // counters default to 0 if absent.
+    let query = "UPSERT <record>$id SET clientId = <string>$clientId, auth_id = <string>$authId, surql = <string>$surql, params = $params, ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt, registrationTime = <float>$registrationTime, rowCount = <int>$rowCount";
 
     if let Err(e) = state
         .db
         .query(query)
         .bind(("id", incantation_id.clone()))
         .bind(("clientId", client_id))
+        .bind(("authId", auth_id))
         .bind(("surql", surreal_ql))
         .bind(("params", params))
         .bind(("ttl", ttl))
         .bind(("lastActiveAt", last_active_at))
+        .bind(("registrationTime", registration_time_ms))
+        .bind(("rowCount", initial_row_count))
         .await
     {
         error!("Failed to upsert incantation metadata: {}", e);
@@ -1186,7 +1690,7 @@ async fn register_view_handler(
     if let Some(ref delta) = update {
         debug!(incantation_id);
         let circuit = state.processor.read().await;
-        update_incantation_edges(&state.db, delta, &state.metrics, &circuit).await;
+        update_incantation_edges(&state.db, delta, &state.metrics, &circuit, state.ref_mode).await;
     }
 
     StatusCode::OK.into_response()
@@ -1213,20 +1717,40 @@ async fn unregister_view_handler(
 
     debug!("Unregistering view: {}", payload.id);
 
+    // Look up the auth_id from the View before removing it, so we can
+    // target the right per-user `_00_list_ref_user_<id>` for the edge
+    // cleanup below.
+    let auth_id = {
+        let circuit = state.processor.read().await;
+        circuit
+            .get_view(&payload.id)
+            .map(|v| v.auth_id.clone())
+            .unwrap_or_default()
+    };
+
     // Remove from circuit
     {
         let mut circuit = state.processor.write().await;
         circuit.remove_query(&payload.id);
     }
 
+    // Drop the per-view metrics state alongside the circuit entry so the
+    // map doesn't grow unbounded across the lifetime of the SSP.
+    {
+        let mut metrics_map = state.view_metrics.write().await;
+        metrics_map.remove(&payload.id);
+    }
+
     state.metrics.view_count.add(-1, &[]);
 
     // Delete all edges for this incantation
     let incantation_id = format_incantation_id(&payload.id);
+    let list_ref_tbl = tables::list_ref_table(state.ref_mode, &auth_id);
     if let Some(from_id) = parse_record_id(&incantation_id) {
+        let stmt = format!("DELETE $from->{}", list_ref_tbl);
         if let Err(e) = state
             .db
-            .query("DELETE $from->_00_list_ref")
+            .query(stmt)
             .bind(("from", from_id))
             .await
         {
@@ -1281,9 +1805,47 @@ async fn reset_handler(State(state): State<AppState>) -> impl IntoResponse {
 
     state.metrics.view_count.add(-(old_view_count as i64), &[]);
 
-    // Delete all edges
-    if let Err(e) = state.db.query("DELETE _00_list_ref").await {
-        error!("Failed to delete all edges on reset: {}", e);
+    // Delete all edges. In dedicated mode that's every
+    // `_00_list_ref_user_*` table; single mode is just the global one.
+    match state.ref_mode {
+        ssp_protocol::RefMode::Single => {
+            if let Err(e) = state.db.query("DELETE _00_list_ref").await {
+                error!("Failed to delete all edges on reset: {}", e);
+            }
+        }
+        ssp_protocol::RefMode::Dedicated => {
+            // Walk every per-user list_ref table and wipe it. Cheap
+            // because this handler is only used in tests / explicit
+            // resets.
+            match state
+                .db
+                .query("INFO FOR DB")
+                .await
+                .and_then(|mut r| r.take::<surrealdb::types::Value>(0))
+            {
+                Ok(info_val) => {
+                    let info_json: Value = info_val.into_json_value();
+                    if let Some(tables) = info_json.get("tables").and_then(|t| t.as_object()) {
+                        for name in tables.keys() {
+                            if !name.starts_with("_00_list_ref_user_") {
+                                continue;
+                            }
+                            if !name
+                                .chars()
+                                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+                            {
+                                continue;
+                            }
+                            let stmt = format!("DELETE {}", name);
+                            if let Err(e) = state.db.query(stmt).await {
+                                error!(table = %name, "Failed to delete edges on reset: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => error!("Failed to enumerate edge tables on reset: {}", e),
+            }
+        }
     }
 
     StatusCode::OK
@@ -1341,6 +1903,11 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
         .map(|(t, h)| (t, Value::String(h)))
         .collect();
 
+    let ref_mode_str = match state.ref_mode {
+        ssp_protocol::RefMode::Single => "single",
+        ssp_protocol::RefMode::Dedicated => "dedicated",
+    };
+
     Json(json!([
         {
             "entity": "ssp",
@@ -1353,6 +1920,7 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
             "last_heartbeat_seconds_ago": null,
             "circuit_tables": circuit_tables,
             "circuit_hashes": circuit_hashes,
+            "ref_mode": ref_mode_str,
             "env": env_vars,
         }
     ]))
@@ -1418,8 +1986,20 @@ async fn cleanup_expired_query(
     processor: &Arc<RwLock<Circuit>>,
     metrics: &Arc<Metrics>,
     query_id: &str,
+    mode: ssp_protocol::RefMode,
 ) {
+    // Pull auth_id from the in-memory Circuit so we route the cleanup to
+    // the right per-user `_00_query_user_<id>` / `_00_list_ref_user_<id>`.
+    let auth_id = {
+        let circuit = processor.read().await;
+        circuit
+            .get_view(query_id)
+            .map(|v| v.auth_id.clone())
+            .unwrap_or_default()
+    };
+
     let incantation_id = format_incantation_id(query_id);
+    let list_ref_tbl = tables::list_ref_table(mode, &auth_id);
     let Some(record_id) = parse_record_id(&incantation_id) else {
         error!(query_id = %query_id, "TTL cleanup: invalid record ID");
         return;
@@ -1445,8 +2025,9 @@ async fn cleanup_expired_query(
     }
 
     // Delete associated list_ref edges
+    let edge_delete = format!("DELETE $id->{}", list_ref_tbl);
     if let Err(e) = db
-        .query("DELETE $id->_00_list_ref")
+        .query(edge_delete)
         .bind(("id", parse_record_id(&incantation_id).unwrap()))
         .await
     {
@@ -1468,6 +2049,7 @@ async fn ttl_cleanup_sweep(
     db: &SharedDb,
     processor: &Arc<RwLock<Circuit>>,
     metrics: &Arc<Metrics>,
+    mode: ssp_protocol::RefMode,
 ) -> usize {
     let view_ids: Vec<String> = {
         let circuit = processor.read().await;
@@ -1478,6 +2060,8 @@ async fn ttl_cleanup_sweep(
         return 0;
     }
 
+    // `_00_query` stays a single global table even in dedicated mode,
+    // so the sweep keeps its original shape.
     let expired_ids: Vec<String> = match db
         .query("SELECT VALUE id FROM _00_query WHERE lastActiveAt + ttl < time::now()")
         .await
@@ -1489,7 +2073,7 @@ async fn ttl_cleanup_sweep(
         }
     };
 
-    // Only clean up queries that are in OUR circuit
+    // Only clean up queries that are in OUR circuit.
     let to_cleanup: Vec<String> = expired_ids
         .into_iter()
         .filter_map(|id| {
@@ -1503,7 +2087,7 @@ async fn ttl_cleanup_sweep(
 
     let count = to_cleanup.len();
     for query_id in to_cleanup {
-        cleanup_expired_query(db, processor, metrics, &query_id).await;
+        cleanup_expired_query(db, processor, metrics, &query_id, mode).await;
     }
 
     if count > 0 {
@@ -1519,13 +2103,14 @@ fn parse_record_id(id: &str) -> Option<RecordId> {
     RecordId::parse_simple(id).ok()
 }
 
-/// Format incantation ID with proper prefix
+/// Format incantation ID with the global `_00_query` prefix. Strips
+/// any existing prefix from `id` and re-applies `_00_query:`. The
+/// registration table is global in both ref modes because the client
+/// needs to compute the record id without knowing the user at
+/// id-creation time; only `_00_list_ref` splits per user.
 fn format_incantation_id(id: &str) -> String {
-    if id.starts_with("_00_query:") {
-        id.to_string()
-    } else {
-        format!("_00_query:{}", id)
-    }
+    let raw = id.rsplit(':').next().unwrap_or(id);
+    format!("_00_query:{}", raw)
 }
 
 /// Update edges for multiple views in a SINGLE database transaction
@@ -1540,6 +2125,7 @@ pub async fn update_all_edges<C: Connection>(
     deltas: &[&ViewDelta],
     metrics: &Metrics,
     circuit: &Circuit,
+    mode: ssp_protocol::RefMode,
 ) {
     if deltas.is_empty() {
         return;
@@ -1558,7 +2144,12 @@ pub async fn update_all_edges<C: Connection>(
             continue;
         }
 
+        // Route writes to the originating user's per-user `_00_query` /
+        // `_00_list_ref` pair in `RefMode::Dedicated`. The delta carries
+        // its owning user from `View.auth_id` (set in `add_query_with_auth`)
+        // so we don't need an extra DB lookup per delta.
         let incantation_id = format_incantation_id(&delta.query_id);
+        let list_ref_tbl = tables::list_ref_table(mode, &delta.auth_id);
 
         let Some(from_id) = parse_record_id(&incantation_id) else {
             error!(
@@ -1586,8 +2177,11 @@ pub async fn update_all_edges<C: Connection>(
             let version = circuit.store.get_record_version_by_key(id).unwrap_or(1);
             created_count += 1;
             all_statements.push(format!(
-                "RELATE ${1}->_00_list_ref->{0} SET version = {2}, clientId = (SELECT VALUE clientId FROM ${1} LIMIT 1)[0]",
-                id, binding_name, version
+                "RELATE ${binding}->{list_ref}->{out} SET version = {version}, clientId = (SELECT VALUE clientId FROM ${binding} LIMIT 1)[0], auth_id = (SELECT VALUE auth_id FROM ${binding} LIMIT 1)[0]",
+                binding = binding_name,
+                list_ref = list_ref_tbl,
+                out = id,
+                version = version,
             ));
         }
 
@@ -1606,8 +2200,11 @@ pub async fn update_all_edges<C: Connection>(
             let version = circuit.store.get_record_version_by_key(id).unwrap_or(1);
             updated_count += 1;
             all_statements.push(format!(
-                "UPDATE _00_list_ref SET version = {2} WHERE in = ${0} AND out = {1}",
-                binding_name, id, version
+                "UPDATE {list_ref} SET version = {version} WHERE in = ${binding} AND out = {out}",
+                list_ref = list_ref_tbl,
+                version = version,
+                binding = binding_name,
+                out = id,
             ));
         }
 
@@ -1625,8 +2222,10 @@ pub async fn update_all_edges<C: Connection>(
 
             deleted_count += 1;
             all_statements.push(format!(
-                "DELETE ${1}->_00_list_ref WHERE out = {0}",
-                id, binding_name
+                "DELETE ${binding}->{list_ref} WHERE out = {out}",
+                binding = binding_name,
+                list_ref = list_ref_tbl,
+                out = id,
             ));
         }
 
@@ -1648,12 +2247,14 @@ pub async fn update_all_edges<C: Connection>(
                     let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
                     created_count += 1;
                     all_statements.push(format!(
-                        "RELATE ${binding}->_00_list_ref->{id} SET \
+                        "RELATE ${binding}->{list_ref}->{id} SET \
                          version = {version}, \
                          clientId = (SELECT VALUE clientId FROM ${binding} LIMIT 1)[0], \
-                         parent = (SELECT VALUE id FROM _00_list_ref WHERE in = ${binding} AND out = {parent} LIMIT 1)[0], \
+                         auth_id = (SELECT VALUE auth_id FROM ${binding} LIMIT 1)[0], \
+                         parent = (SELECT VALUE id FROM {list_ref} WHERE in = ${binding} AND out = {parent} LIMIT 1)[0], \
                          parent_rel = '{alias}'",
                         binding = binding_name,
+                        list_ref = list_ref_tbl,
                         id = item.id,
                         version = version,
                         parent = item.parent_key,
@@ -1664,15 +2265,16 @@ pub async fn update_all_edges<C: Connection>(
                     let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
                     updated_count += 1;
                     all_statements.push(format!(
-                        "UPDATE _00_list_ref SET version = {version} WHERE in = ${binding} AND out = {id}",
+                        "UPDATE {list_ref} SET version = {version} WHERE in = ${binding} AND out = {id}",
+                        list_ref = list_ref_tbl,
                         binding = binding_name, id = item.id, version = version
                     ));
                 }
                 SubqueryOp::Remove => {
                     deleted_count += 1;
                     all_statements.push(format!(
-                        "DELETE ${binding}->_00_list_ref WHERE out = {id}",
-                        binding = binding_name, id = item.id
+                        "DELETE ${binding}->{list_ref} WHERE out = {id}",
+                        binding = binding_name, list_ref = list_ref_tbl, id = item.id
                     ));
                 }
             }
@@ -1756,6 +2358,84 @@ async fn update_incantation_edges<C: Connection>(
     delta: &ViewDelta,
     metrics: &Metrics,
     circuit: &Circuit,
+    mode: ssp_protocol::RefMode,
 ) {
-    update_all_edges(db, &[delta], metrics, circuit).await;
+    update_all_edges(db, &[delta], metrics, circuit, mode).await;
+}
+
+/// Push the same materialization-step latency sample onto every affected
+/// view's rolling window, then persist `_00_query.{materializationP55,
+/// materializationP90, materializationP99, lastIngestLatency, updateCount,
+/// rowCount}` for each view. Best-effort: logs but does not surface
+/// failures to the ingest caller.
+async fn persist_view_metrics(
+    state: &AppState,
+    row_counts: Vec<usize>,
+    view_ids: Vec<String>,
+    materialization_time_ms: f64,
+) {
+    if view_ids.is_empty() {
+        return;
+    }
+
+    // Update the in-memory rolling window once per affected view, computing
+    // the new percentiles and update_count under the same lock acquisition.
+    let snapshots: Vec<_> = {
+        let mut metrics_map = state.view_metrics.write().await;
+        view_ids
+            .iter()
+            .zip(row_counts.iter())
+            .map(|(view_id, row_count)| {
+                let entry = metrics_map
+                    .entry(view_id.clone())
+                    .or_insert_with(ViewMetricsState::default);
+                entry.record_sample(materialization_time_ms);
+                entry.update_count = entry.update_count.saturating_add(1);
+                let percentiles = entry.percentiles();
+                (
+                    view_id.clone(),
+                    *row_count,
+                    entry.update_count,
+                    materialization_time_ms,
+                    percentiles,
+                )
+            })
+            .collect()
+    };
+
+    for (view_id, row_count, update_count, last_ingest_latency, percentiles) in snapshots {
+        let incantation_id = format_incantation_id(&view_id);
+        let query = "UPDATE <record>$id SET \
+            rowCount = <int>$rowCount, \
+            updateCount = <int>$updateCount, \
+            lastIngestLatency = <float>$lastIngestLatency, \
+            materializationP55 = $p55, \
+            materializationP90 = $p90, \
+            materializationP99 = $p99";
+
+        let (p55, p90, p99) = match percentiles {
+            Some(t) => (Some(t.0), Some(t.1), Some(t.2)),
+            None => (None, None, None),
+        };
+
+        if let Err(e) = state
+            .db
+            .query(query)
+            .bind(("id", incantation_id.clone()))
+            .bind(("rowCount", row_count as i64))
+            .bind(("updateCount", update_count as i64))
+            .bind(("lastIngestLatency", last_ingest_latency))
+            .bind(("p55", p55))
+            .bind(("p90", p90))
+            .bind(("p99", p99))
+            .await
+        {
+            warn!(
+                target: "ssp::view_metrics",
+                error = %e,
+                view_id = %incantation_id,
+                "Failed to persist per-view metrics"
+            );
+        }
+    }
 }

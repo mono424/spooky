@@ -8,7 +8,35 @@ pub struct FieldAnnotation {
 }
 
 /// Known annotation names. Unknown annotations produce a warning.
-const KNOWN_ANNOTATIONS: &[&str] = &["crdt", "parent"];
+const KNOWN_ANNOTATIONS: &[&str] = &["crdt", "cursor", "parent"];
+
+pub fn has_annotation(annotations: &[FieldAnnotation], name: &str) -> bool {
+    annotations.iter().any(|a| a.name == name)
+}
+
+/// Rewrite a `DEFINE FIELD` line to use `option<object> FLEXIBLE` when the
+/// field carries both `@crdt` and `@cursor` annotations. The CRDT field
+/// then stores `{ state, cursors }` as a structured object (the editor
+/// writes both halves) instead of a plain snapshot string. Returns `None`
+/// when the line doesn't need a rewrite.
+pub fn rewrite_crdt_cursor_type(line: &str, annotations: &[FieldAnnotation]) -> Option<String> {
+    if !(has_annotation(annotations, "crdt") && has_annotation(annotations, "cursor")) {
+        return None;
+    }
+    let type_pos = line.find("TYPE ")?;
+    let before_type = &line[..type_pos + 5];
+    let after_type = &line[type_pos + 5..];
+    let type_end = after_type
+        .find(" ASSERT ")
+        .or_else(|| after_type.find(" VALUE "))
+        .or_else(|| after_type.find(" PERMISSIONS "))
+        .or_else(|| after_type.find(" DEFAULT "))
+        .or_else(|| after_type.find(" READONLY "))
+        .or_else(|| after_type.find(';'))
+        .unwrap_or(after_type.len());
+    let rest = &after_type[type_end..];
+    Some(format!("{}option<object> FLEXIBLE{}", before_type, rest))
+}
 
 /// Extract field annotations from raw .surql content.
 ///

@@ -184,8 +184,11 @@ impl Sp00kyProcessor {
         let config_val: Value = serde_wasm_bindgen::from_value(config)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse config: {}", e)))?;
 
-        let data = ssp::service::view::prepare_registration_dbsp(config_val)
-            .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
+        let data = ssp::service::view::prepare_registration_dbsp(
+            config_val,
+            self.circuit.permissions(),
+        )
+        .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 
         let plan_id = data.plan.id.clone();
         let initial_delta = self

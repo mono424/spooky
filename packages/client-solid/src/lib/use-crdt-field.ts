@@ -36,11 +36,25 @@ export function useCrdtField(
 
     const sp00ky = db.getSp00ky();
     const text = fallbackText?.();
-    sp00ky.openCrdtField(table, id, field, text).then((cf) => {
-      if (currentId === id) {
-        setCrdtField(cf);
-      }
-    });
+    sp00ky
+      .openCrdtField(table, id, field, text)
+      .then((cf) => {
+        if (currentId === id) {
+          setCrdtField(cf);
+        }
+      })
+      .catch((err) => {
+        // Silent rejections here leave the consumer's `Show when={field()}`
+        // permanently stuck on its fallback (typically a static `<p>` with
+        // no editing UI), with no error trail. Surface the failure so the
+        // root cause (missing `@crdt` annotation, schema codegen drift,
+        // local DB query failure, etc.) is visible in the console instead
+        // of silently breaking collaborative fields.
+        console.error(
+          `[useCrdtField] Failed to open CRDT field ${table}.${field} on ${id}:`,
+          err,
+        );
+      });
   });
 
   onCleanup(() => {

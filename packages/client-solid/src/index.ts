@@ -258,6 +258,12 @@ export class SyncedDb<S extends SchemaStructure> {
     return this.sp00ky.pendingMutationCount;
   }
 
+  /** Diagnostic — see `Sp00kyClient.liveRetryCount`. */
+  get liveRetryCount(): number {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.liveRetryCount;
+  }
+
   subscribeToPendingMutations(cb: (count: number) => void): () => void {
     if (!this.sp00ky) throw new Error('SyncedDb not initialized');
     return this.sp00ky.subscribeToPendingMutations(cb);

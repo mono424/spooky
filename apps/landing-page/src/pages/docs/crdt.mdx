@@ -109,12 +109,9 @@ Then run `spky` to regenerate.
 | Type | What it does |
 |---|---|
 | `text` | Character-level text merging with full editor support |
-| `map` | Key/value with last-write-wins per key |
-| `list` | Ordered collections with stable insertion |
-| `counter` | Monotonic numeric counters |
 
 <Note>
-  SurrealDB ignores the comment. Sp00ky's parser picks it up and wires everything for you.
+  SurrealDB ignores the comment. Sp00ky's parser picks it up and wires everything for you. Today only `text` has built-in `CrdtField` wiring; for `map`/`list`/`counter` containers you can call `field.getDoc()` and drive the underlying [Loro](https://loro.dev) APIs directly.
 </Note>
 
 ## 2. Get the CrdtField
@@ -190,7 +187,9 @@ For cursor presence in a custom editor:
 
 ## Under the hood
 
-CRDT state lives in a `_00_crdt` sidecar table, completely separate from your records. When `useCrdtField` mounts it loads existing state, opens a `LIVE SELECT` to stream updates, and pushes local changes back (debounced at 300ms). Cursors ride the same channel under `_cursor_<field>` keys. Failed pushes retry twice before logging. Works with any backend that supports live queries.
+CRDT state lives **inline** on the same row as the rest of your record: a `@crdt`-only field stores the snapshot bytes directly, and a `@crdt @cursor` field stores `{ state, cursors }` so each session's cursor blob sits next to the snapshot. There is no separate `_00_crdt` sidecar table.
+
+When `useCrdtField` mounts, the `CrdtManager` ensures a single `LIVE SELECT * FROM <table>` is open for that table (shared across every open field on that table), imports the existing snapshot, and pushes local changes back debounced at `crdtDebounceMs` (default 500 ms, configurable on `Sp00kyConfig`). Cross-user propagation also rides the list_ref sync path so updates arrive even when SurrealDB's cross-session LIVE-permission gap drops the parent-table notification (see [Architecture](/docs/architecture)).
 
 ## Limitations
 

@@ -5,54 +5,52 @@ title: Deployment
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
-export const code2 = `version: '3.8'
-services:
+export const code2 = `services:
   surrealdb:
-    image: surrealdb/surrealdb:latest
-    command: start --user root --pass root file://data.db
+    image: surrealdb/surrealdb:v3.1.0-beta.3
+    command: start --user root --pass root rocksdb:/data/db
     ports:
-      - "8000:8000"
+      - "8666:8000"
     volumes:
       - ./data:/data
 
-  sp00ky-ssp:
-    image: ghcr.io/sp00ky-org/sidecar:latest
+  ssp:
+    image: ghcr.io/sp00ky-org/ssp-server:canary
     environment:
-      - SURREALDB_ADDR=surrealdb:8000
-      - SURREALDB_USER=root
-      - SURREALDB_PASS=root
-      - SURREALDB_NS=test
-      - SURREALDB_DB=test
-      - LISTEN_ADDR=0.0.0.0:8667
-      - SP00KY_AUTH_SECRET=your-secret-token
+      - SPKY_DB_WS=ws://surrealdb:8000
+      - SPKY_DB_USER=root
+      - SPKY_DB_PASS=root
+      - SPKY_DB_NS=main
+      - SPKY_DB_NAME=app
+      - SPKY_SSP_LISTEN_ADDR=0.0.0.0:8667
+      - SPKY_AUTH_SECRET=your-secret-token
+      - SPKY_SSP_REF_MODE=dedicated
     ports:
       - "8667:8667"
     depends_on:
       - surrealdb`;
 
-export const code1 = `version: '3.8'
-services:
+export const code1 = `services:
   surrealdb:
-    image: surrealdb/surrealdb:latest
-    command: start --user root --pass root file://data.db
+    image: surrealdb/surrealdb:v3.1.0-beta.3
+    command: start --user root --pass root rocksdb:/data/db
     ports:
-      - "8000:8000"
+      - "8666:8000"
     volumes:
       - surreal-data:/data
 
   scheduler:
-    image: ghcr.io/sp00ky-org/scheduler:latest
+    image: ghcr.io/sp00ky-org/scheduler:canary
     environment:
-      - SP00KY_SCHEDULER_DB_URL=surrealdb:8000/rpc
-      - SP00KY_SCHEDULER_DB_NAMESPACE=test
-      - SP00KY_SCHEDULER_DB_DATABASE=test
-      - SP00KY_SCHEDULER_DB_USERNAME=root
-      - SP00KY_SCHEDULER_DB_PASSWORD=root
-      - SP00KY_SCHEDULER_INGEST_HOST=0.0.0.0
-      - SP00KY_SCHEDULER_INGEST_PORT=9667
-      - SP00KY_SCHEDULER_REPLICA_DB_PATH=./data/replica
-      - SP00KY_SCHEDULER_WAL_PATH=./data/event_wal.log
-      - SP00KY_SCHEDULER_LOAD_BALANCE=least_queries
+      - SPKY_DB_WS=ws://surrealdb:8000
+      - SPKY_DB_NS=main
+      - SPKY_DB_NAME=app
+      - SPKY_DB_USER=root
+      - SPKY_DB_PASS=root
+      - SPKY_SCHEDULER_ID=scheduler-01
+      - SPKY_AUTH_SECRET=your-secret-token
+    # Bind host/port and storage paths come from the scheduler's
+    # sp00ky.yml (ingest_host, ingest_port, replica_db_path, wal_path).
     ports:
       - "9667:9667"
     volumes:
@@ -61,17 +59,19 @@ services:
       - surrealdb
 
   ssp-1:
-    image: ghcr.io/sp00ky-org/sidecar:latest
+    image: ghcr.io/sp00ky-org/ssp-server:canary
     environment:
-      - SSP_ID=ssp-01
-      - SURREALDB_ADDR=surrealdb:8000
-      - SURREALDB_USER=root
-      - SURREALDB_PASS=root
-      - SURREALDB_NS=test
-      - SURREALDB_DB=test
-      - LISTEN_ADDR=0.0.0.0:8667
-      - SP00KY_AUTH_SECRET=your-secret-token
-      - SCHEDULER_URL=http://scheduler:9667
+      - SPKY_SSP_ID=ssp-01
+      - SPKY_DB_WS=ws://surrealdb:8000
+      - SPKY_DB_USER=root
+      - SPKY_DB_PASS=root
+      - SPKY_DB_NS=main
+      - SPKY_DB_NAME=app
+      - SPKY_SSP_LISTEN_ADDR=0.0.0.0:8667
+      - SPKY_AUTH_SECRET=your-secret-token
+      - SPKY_SCHEDULER_URL=http://scheduler:9667
+      - SPKY_SSP_ADVERTISE_ADDR=ssp-1:8667
+      - SPKY_SSP_REF_MODE=dedicated
       - HEARTBEAT_INTERVAL_MS=5000
     ports:
       - "8667:8667"
@@ -80,17 +80,19 @@ services:
       - scheduler
 
   ssp-2:
-    image: ghcr.io/sp00ky-org/sidecar:latest
+    image: ghcr.io/sp00ky-org/ssp-server:canary
     environment:
-      - SSP_ID=ssp-02
-      - SURREALDB_ADDR=surrealdb:8000
-      - SURREALDB_USER=root
-      - SURREALDB_PASS=root
-      - SURREALDB_NS=test
-      - SURREALDB_DB=test
-      - LISTEN_ADDR=0.0.0.0:8667
-      - SP00KY_AUTH_SECRET=your-secret-token
-      - SCHEDULER_URL=http://scheduler:9667
+      - SPKY_SSP_ID=ssp-02
+      - SPKY_DB_WS=ws://surrealdb:8000
+      - SPKY_DB_USER=root
+      - SPKY_DB_PASS=root
+      - SPKY_DB_NS=main
+      - SPKY_DB_NAME=app
+      - SPKY_SSP_LISTEN_ADDR=0.0.0.0:8667
+      - SPKY_AUTH_SECRET=your-secret-token
+      - SPKY_SCHEDULER_URL=http://scheduler:9667
+      - SPKY_SSP_ADVERTISE_ADDR=ssp-2:8667
+      - SPKY_SSP_REF_MODE=dedicated
       - HEARTBEAT_INTERVAL_MS=5000
     ports:
       - "8668:8667"
@@ -135,40 +137,48 @@ For production with high availability and horizontal scaling, use a Scheduler wi
 
 ### SSP (Sidecar)
 
+All `SPKY_*` vars below are read directly from the process environment.
+
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `LISTEN_ADDR` | Address and port for the SSP HTTP server | `0.0.0.0:8667` |
-| `SP00KY_AUTH_SECRET` | Bearer token for authenticating SSP API requests | *(required)* |
-| `SURREALDB_ADDR` | SurrealDB host and port | `127.0.0.1:8000` |
-| `SURREALDB_USER` | SurrealDB username | `root` |
-| `SURREALDB_PASS` | SurrealDB password | `root` |
-| `SURREALDB_NS` | SurrealDB namespace | `test` |
-| `SURREALDB_DB` | SurrealDB database | `test` |
-| `SCHEDULER_URL` | Scheduler URL (enables distributed mode) | *(unset)* |
-| `SSP_ID` | Unique SSP identifier | `ssp-<uuid>` |
-| `ADVERTISE_ADDR` | Externally reachable address for this SSP | *(unset)* |
+| `SPKY_SSP_LISTEN_ADDR` | Address and port for the SSP HTTP server | `0.0.0.0:8667` |
+| `SPKY_AUTH_SECRET` | Bearer token for authenticating SSP API requests. When unset the auth middleware accepts any bearer (dev only). | *(empty)* |
+| `SPKY_DB_WS` | SurrealDB WebSocket URL | `ws://127.0.0.1:8000` |
+| `SPKY_DB_USER` | SurrealDB username | `root` |
+| `SPKY_DB_PASS` | SurrealDB password | `root` |
+| `SPKY_DB_NS` | SurrealDB namespace | `test` |
+| `SPKY_DB_NAME` | SurrealDB database | `test` |
+| `SPKY_SCHEDULER_URL` | Scheduler URL (enables distributed mode) | *(unset)* |
+| `SPKY_SSP_ID` | Unique SSP identifier | `ssp-<uuid>` |
+| `SPKY_SSP_ADVERTISE_ADDR` | Externally reachable `host:port` for this SSP | *(unset)* |
 | `HEARTBEAT_INTERVAL_MS` | Heartbeat interval in ms | `5000` |
-| `SP00KY_CONFIG_PATH` | Path to `sp00ky.yml` for job config | `sp00ky.yml` |
 | `TTL_CLEANUP_INTERVAL_SECS` | View TTL cleanup interval | `60` |
+| `SPKY_SSP_REF_MODE` | `_00_list_ref` storage layout: `dedicated` (per-user tables; works around the SurrealDB v3 LIVE permission gap) or `single` (legacy shared table). Mirrors `refMode` in `sp00ky.yml`. | `dedicated` |
+| `SPKY_JOB_CONFIG` | JSON-encoded `{ "job_tables": { … } }` describing backends the SSP can dispatch to. | *(unset)* |
+| `SPKY_CRDT_CACHE_SIZE` | In-memory CRDT cache capacity | `10000` |
+| `SPKY_CRDT_FIELDS` | JSON override for `@crdt` field detection, e.g. `{"thread":["content"]}` | *(auto)* |
+| `SPKY_SSP_BOOTSTRAP_PAGE_SIZE` | Rows pulled per `/proxy/query` page | `500` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint for SSP metrics | *(unset)* |
+| `OTEL_SERVICE_NAME` | OTEL service identifier | `ssp` |
 
 ### Scheduler
 
+The scheduler reads most of its config from `sp00ky.yml`. The
+`SPKY_*` env vars below override the corresponding YAML field — every
+other field (`ingest_host`, `ingest_port`, `load_balance`,
+`heartbeat_*`, `bootstrap_*`, `replica_db_path`, `wal_path`,
+`ssp_poll_interval_ms`, `max_buffer_per_ssp`, `job_tables`) is YAML
+only.
+
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `SCHEDULER_ID` | Unique scheduler identifier | `scheduler-<uuid>` |
-| `SP00KY_SCHEDULER_INGEST_HOST` | HTTP server bind host | `0.0.0.0` |
-| `SP00KY_SCHEDULER_INGEST_PORT` | HTTP server bind port | `9667` |
-| `SP00KY_SCHEDULER_DB_URL` | SurrealDB connection URL | `localhost:8000/rpc` |
-| `SP00KY_SCHEDULER_DB_NAMESPACE` | SurrealDB namespace | `sp00ky` |
-| `SP00KY_SCHEDULER_DB_DATABASE` | SurrealDB database | `sp00ky` |
-| `SP00KY_SCHEDULER_DB_USERNAME` | SurrealDB username | `root` |
-| `SP00KY_SCHEDULER_DB_PASSWORD` | SurrealDB password | `root` |
-| `SP00KY_SCHEDULER_REPLICA_DB_PATH` | RocksDB snapshot replica path | `./data/replica` |
-| `SP00KY_SCHEDULER_WAL_PATH` | Write-ahead log path | `./data/event_wal.log` |
-| `SP00KY_SCHEDULER_LOAD_BALANCE` | Load balancing strategy | `least_queries` |
-| `SP00KY_SCHEDULER_HEARTBEAT_INTERVAL_MS` | Expected heartbeat interval | `5000` |
-| `SP00KY_SCHEDULER_HEARTBEAT_TIMEOUT_MS` | Heartbeat timeout before stale | `15000` |
-| `SP00KY_SCHEDULER_BOOTSTRAP_TIMEOUT_SECS` | Bootstrap timeout | `120` |
-| `SP00KY_SCHEDULER_SSP_POLL_INTERVAL_MS` | SSP health poll interval during bootstrap | `3000` |
-| `SP00KY_SCHEDULER_MAX_BUFFER_PER_SSP` | Max buffered messages per SSP | `10000` |
-| `SP00KY_SCHEDULER_SNAPSHOT_UPDATE_INTERVAL_SECS` | Snapshot update interval | `300` |
+| `SPKY_SCHEDULER_ID` | Unique scheduler identifier | `scheduler-<uuid>` |
+| `SPKY_DB_WS` | SurrealDB WebSocket URL | `ws://localhost:8000` |
+| `SPKY_DB_NS` | SurrealDB namespace | `sp00ky` |
+| `SPKY_DB_NAME` | SurrealDB database | `sp00ky` |
+| `SPKY_DB_USER` | SurrealDB username | `root` |
+| `SPKY_DB_PASS` | SurrealDB password | `root` |
+| `SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS` | Snapshot update interval (seconds) | `300` |
+| `SPKY_BOOTSTRAP_PAGE_SIZE` | Rows read per bootstrap page from the replica | `500` |
+| `SPKY_AUTH_SECRET` | Optional shared secret; when set, callers to `/proxy/*` must send `Authorization: Bearer <secret>`. | *(empty)* |
+| `SPKY_SCHEDULER_BACKENDS` | JSON-encoded backend list (job-runner configuration) | *(unset)* |

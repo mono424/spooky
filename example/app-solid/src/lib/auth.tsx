@@ -1,5 +1,6 @@
 import type { JSX} from 'solid-js';
 import { createContext, useContext, createSignal, Show, onCleanup } from 'solid-js';
+import * as jose from 'jose';
 import type { schema } from '../schema.gen';
 import { type GetTable, type TableModel, useQuery, useDb } from '@spooky-sync/client-solid';
 
@@ -53,7 +54,24 @@ export function AuthProvider(props: { children: JSX.Element }) {
   };
 
   const signUp = async (username: string, password: string) => {
-    await db.auth.signUp('account', { username, password });
+    // Generate the user's Ed25519 share-link keypair before signup so both
+    // halves land on the user row atomically. WebCrypto Ed25519 isn't
+    // universally supported yet; if generation fails we still want signup
+    // to succeed (the SIGNUP query treats the keypair fields as optional)
+    // and let the user backfill a key later.
+    let share_pubkey: string | null = null;
+    let share_privkey: string | null = null;
+    try {
+      const { publicKey, privateKey } = await jose.generateKeyPair('Ed25519', { extractable: true });
+      share_pubkey  = await jose.exportSPKI(publicKey);
+      share_privkey = await jose.exportPKCS8(privateKey);
+    } catch (e) {
+      console.warn('[auth] Ed25519 keypair generation failed; signing up without one.', e);
+    }
+    // The codegen types the keypair fields as required strings; null is
+    // accepted by the SIGNUP block at runtime (the field is option<string>),
+    // but TypeScript doesn't know that.
+    await db.auth.signUp('account', { username, password, share_pubkey, share_privkey } as any);
   };
 
   const signOut = async () => {

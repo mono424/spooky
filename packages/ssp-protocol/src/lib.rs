@@ -4,6 +4,84 @@ use std::collections::BTreeMap;
 
 pub mod snapshot_hash;
 
+/// Storage mode for the SSP's per-query reference tables (`_00_query`,
+/// `_00_list_ref`). Shared by the CLI (reads from `sp00ky.yml`), the SSP
+/// server (runtime routing), and downstream codegen so all three agree
+/// on the table-name convention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RefMode {
+    /// One shared `_00_list_ref` for every user. Subject to a
+    /// SurrealDB v3 LIVE-permission gap that drops cross-session
+    /// INSERT notifications; kept for the eventual upstream fix.
+    Single,
+    /// Per-user `_00_list_ref_user_<id>` table, created lazily by the
+    /// SSP on first registration. Its permission rule is hardcoded
+    /// against the owning user's record id, sidestepping the
+    /// LIVE-permission gap. `_00_query` stays global in both modes.
+    Dedicated,
+}
+
+impl Default for RefMode {
+    fn default() -> Self {
+        RefMode::Dedicated
+    }
+}
+
+impl RefMode {
+    /// Stable lowercase token used in env vars and codegen output.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RefMode::Single => "single",
+            RefMode::Dedicated => "dedicated",
+        }
+    }
+
+    pub fn parse_str(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "single" => Some(RefMode::Single),
+            "dedicated" => Some(RefMode::Dedicated),
+            _ => None,
+        }
+    }
+}
+
+/// Sanitize a user record id (e.g. `"user:abc123"`) into the segment
+/// that goes into a dedicated table name (e.g. `"abc123"`). Returns
+/// `None` if the id is empty, missing the `user:` prefix, or contains
+/// characters that aren't valid in a SurrealDB table identifier. The
+/// SSP and the client mirror this function so both sides land on the
+/// exact same table name.
+pub fn sanitize_user_id(auth_id: &str) -> Option<String> {
+    let raw = auth_id.strip_prefix("user:").unwrap_or(auth_id);
+    if raw.is_empty() {
+        return None;
+    }
+    if raw
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        Some(raw.to_string())
+    } else {
+        None
+    }
+}
+
+/// Returns the `_00_list_ref` table name for a given mode + user.
+/// The `_00_query` registration table stays global in both modes so
+/// the client can compute its record id without knowing the user;
+/// only `_00_list_ref` splits per user because that's where the
+/// SurrealDB LIVE permission gap lives.
+pub fn list_ref_table_for(mode: RefMode, auth_id: &str) -> String {
+    match mode {
+        RefMode::Single => "_00_list_ref".to_string(),
+        RefMode::Dedicated => match sanitize_user_id(auth_id) {
+            Some(uid) => format!("_00_list_ref_user_{}", uid),
+            None => "_00_list_ref".to_string(),
+        },
+    }
+}
+
 // --- Ingest API (snake_case wire format) ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

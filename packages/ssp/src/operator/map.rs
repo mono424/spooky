@@ -44,4 +44,16 @@ impl super::Operator for Map {
     }
 
     fn reset(&mut self) {}
+
+    fn evaluate_key(
+        &self,
+        _key: &str,
+        input_evals: &[bool],
+        _store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        // Map (Project) doesn't change row identity, so membership is
+        // identical to its upstream.
+        input_evals.first().copied().unwrap_or(false)
+    }
 }

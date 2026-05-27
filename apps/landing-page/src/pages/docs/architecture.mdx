@@ -39,13 +39,17 @@ graph TD
 
 Even though the client connects directly to SurrealDB, the Sidecar is essential for the **Sp00ky Protocol**:
 
-### 1. Integrity & Hashing
+### 1. Incremental View Computation
 
-The Sidecar listens to changes in the database and computes the Merkle Tree hashes required for the sync engine to work. It writes these hashes back to the `_00_*` system tables.
+The SSP runs a DBSP circuit per registered query. When SurrealDB's schema events forward row CREATE / UPDATE / DELETE notifications to the SSP's `/ingest` endpoint, the circuit incrementally computes which views the change affects and writes the resulting per-user edges into `_00_list_ref_user_<id>` (or the legacy `_00_list_ref`). Clients then read those edges over a LIVE subscription instead of re-running the source query.
 
-### 2. Async Processing
+### 2. Backend Job Execution
 
-It handles tasks that are too heavy for the database functions or the client, ensuring that your application remains snappy while data consistency is guaranteed in the background.
+It runs backend jobs declared in `sp00ky.yml` (e.g. AI agent steps, scheduled tasks). The same DBSP machinery routes the trigger row through to the configured backend so a job runner can pick it up.
+
+### 3. Integrity Checks
+
+The SSP also computes per-table content hashes that the scheduler can compare against its persisted replica during bootstrap and through `spky verify`, so cluster nodes detect drift before serving stale data.
 
 ---
 
@@ -210,7 +214,7 @@ Assigns queries to the SSP with the fewest active queries.
 ### Least Load
 Assigns queries to the SSP with the lowest combined CPU and memory usage.
 
-Configure via `load_balance` in `sp00ky.yml` or `SP00KY_SCHEDULER_LOAD_BALANCE` environment variable.
+Configure via the scheduler's `load_balance` field in its config (default `LeastQueries`).
 
 ---
 
@@ -241,6 +245,48 @@ sequenceDiagram
     Note over SSP1,SSP2: Views updated in real-time
 ```
 
+The SSP responds `200` to `/ingest` immediately and finishes the
+view-fan-out work asynchronously. This matters because SurrealDB
+runs the schema mutation event that called `http::post` **inside**
+the originating transaction; if the SSP's own follow-up
+`UPDATE _00_list_ref_user_<id>` committed before that parent
+transaction did, another session's LIVE notification on the per-user
+edge would race ahead of the source row's visibility. The SSP's
+deferred task waits for the row's `_00_version` to become readable
+on its own connection (a clean proxy for "parent transaction is
+committed") before bumping the per-user edge.
+
+### Per-User `_00_list_ref` Tables
+
+Each registered view stores a per-user materialized edge in
+`_00_list_ref_user_<auth_id>`. The auth id segment is hardcoded
+into the table's `PERMISSIONS FOR select WHERE $auth.id = user:<id>`
+rule, so a record-token client subscribing to its own dedicated
+table matches at LIVE-notification time without any cross-session
+permission lookup. This works around the SurrealDB v3 LIVE
+permission gap, where cross-session LIVE deliveries on a
+permission-gated table can be silently dropped even when the
+subscriber's expression would pass for the new row.
+
+The mode is configured via `refMode` in `sp00ky.yml`
+(or `SPKY_SSP_REF_MODE` on the SSP):
+
+- `dedicated` (default): per-user `_00_list_ref_user_<id>` tables;
+  no cross-session permission evaluation at LIVE time. The SSP
+  pre-emptively creates the user's table when it receives the
+  `user` CREATE ingest event, so the client's first LIVE
+  subscription after sign-in succeeds on the first try. The
+  `liveRetryCount` getter on the client returns `0` on a clean
+  bootstrap and is exposed for regression-guard tests.
+- `single`: legacy shared `_00_list_ref` with a
+  `WHERE auth_id = $auth.id` rule. Same-session writes propagate;
+  cross-session LIVE notifications hit the v3 permission gap.
+
+When a `user` record is deleted upstream, the SSP receives the
+`user` DELETE ingest event and drops the matching
+`_00_list_ref_user_<id>` table so dedicated schema state doesn't
+accumulate over time.
+
 ### Query Registration Flow
 
 ```mermaid
@@ -267,7 +313,7 @@ The distributed architecture supports horizontal scaling:
 
 ### Adding SSPs
 
-1. Start a new SSP instance with `SCHEDULER_URL` configured
+1. Start a new SSP instance with `SPKY_SCHEDULER_URL` configured
 2. SSP automatically registers with scheduler
 3. Scheduler bootstraps the SSP with current replica state
 4. New queries are distributed across all healthy SSPs
@@ -292,26 +338,32 @@ The distributed architecture supports horizontal scaling:
 
 ### Single SSP (Development)
 
-```yaml
-# No scheduler needed
-SURREALDB_ADDR=localhost:8000
-LISTEN_ADDR=0.0.0.0:8667
+```bash
+# No scheduler needed — one SSP, one SurrealDB.
+SPKY_DB_URL=http://localhost:8666
+SPKY_SSP_LISTEN_ADDR=0.0.0.0:8667
+SPKY_SSP_REF_MODE=dedicated   # or 'single' for the legacy shared _00_list_ref
 ```
 
-Simple setup for development and testing. Client connects directly to SSP.
+Simple setup for development and testing. The Sp00ky CLI's `spky dev` wires this up automatically using values from `sp00ky.yml`.
 
 ### Multiple SSPs (Production)
 
-```yaml
-# Scheduler
-SP00KY_SCHEDULER_INGEST_PORT=9667
-SP00KY_SCHEDULER_DB_URL=surrealdb:8000/rpc
-SP00KY_SCHEDULER_REPLICA_DB_PATH=./data/replica
-SP00KY_SCHEDULER_WAL_PATH=./data/event_wal.log
+```bash
+# Scheduler — host/port and DB credentials come from its YAML config plus
+# a handful of optional env overrides.
+SPKY_DB_WS=ws://surrealdb:8000/rpc
+SPKY_DB_NS=main
+SPKY_DB_NAME=app
+SPKY_SCHEDULER_ID=scheduler-01
+SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS=10
 
 # SSP instances
-SCHEDULER_URL=http://scheduler:9667
-SSP_ID=ssp-01  # Unique per instance
+SPKY_SCHEDULER_URL=http://scheduler:9667
+SPKY_SSP_ID=ssp-01
+SPKY_SSP_LISTEN_ADDR=0.0.0.0:8667
+SPKY_SSP_ADVERTISE_ADDR=10.100.1.30:8667
+SPKY_SSP_REF_MODE=dedicated
 ```
 
 Production setup with high availability and load distribution.

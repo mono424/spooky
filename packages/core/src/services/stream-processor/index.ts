@@ -28,6 +28,12 @@ export interface StreamUpdate {
   queryHash: string;
   localArray: RecordVersionArray;
   op?: 'CREATE' | 'UPDATE' | 'DELETE'; // Operation type for conditional debouncing
+  /**
+   * End-to-end ingest latency for the WASM call that produced this update,
+   * in milliseconds. Populated by StreamProcessorService.ingest. Undefined
+   * for the initial register_view snapshot.
+   */
+  materializationTimeMs?: number;
 }
 
 // Define events map (kept for DevTools compatibility)
@@ -205,13 +211,16 @@ export class StreamProcessorService {
     try {
       const normalizedRecord = this.normalizeValue(record);
 
+      const t0 = performance.now();
       const rawUpdates = this.processor.ingest(table, op, id, normalizedRecord);
+      const materializationTimeMs = performance.now() - t0;
       this.logger.debug(
         {
           table,
           op,
           id,
           rawUpdates: rawUpdates.length,
+          materializationTimeMs,
           Category: 'sp00ky-client::StreamProcessorService::ingest',
         },
         'Ingesting into ssp done'
@@ -222,6 +231,7 @@ export class StreamProcessorService {
           queryHash: u.query_id,
           localArray: u.result_data,
           op: op,
+          materializationTimeMs,
         }));
         // Direct handler call instead of event
         this.notifyUpdates(updates);
@@ -324,6 +334,21 @@ export class StreamProcessorService {
     if (value === null || value === undefined) return value;
 
     if (typeof value === 'object') {
+      // CRDT snapshots arrive as `Uint8Array` (or `ArrayBuffer` /
+      // typed-array views). `serde_wasm_bindgen::from_value` rejects
+      // those when deserializing into `serde_json::Value` (JSON has no
+      // binary variant), and the SSP can't filter on opaque bytes
+      // anyway. Replace with `null` so the row still flows through the
+      // ingest path with its other columns intact, and downstream
+      // predicates referencing the bytes column simply don't match.
+      if (
+        value instanceof Uint8Array ||
+        value instanceof ArrayBuffer ||
+        ArrayBuffer.isView(value)
+      ) {
+        return null;
+      }
+
       // RecordId detection using duck typing (constructor.name may be minified)
       // SurrealDB's RecordId has: table (getter returning Table), id, and toString()
       // Check for table getter that has its own toString AND id property

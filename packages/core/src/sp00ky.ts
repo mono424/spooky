@@ -36,7 +36,7 @@ import { EventSystem } from './events/index';
 import { CacheModule } from './modules/cache/index';
 import { CrdtManager, CrdtField } from './modules/crdt/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
-import { generateId, parseParams } from './utils/index';
+import { parseParams } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
 
@@ -109,6 +109,15 @@ export class Sp00kyClient<S extends SchemaStructure> {
     return this.sync.pendingMutationCount;
   }
 
+  /** Number of times the initial list_ref LIVE subscription retried on
+   *  the most recent `setCurrentUserId` call. 0 when the SSP's
+   *  pre-emptive user-table creation got there first; >0 when LIVE
+   *  registration hit a "table not found" race. Exposed so the e2e
+   *  suite can guard the pre-emptive path against regression. */
+  get liveRetryCount(): number {
+    return this.sync.liveRetryCount;
+  }
+
   subscribeToPendingMutations(cb: (count: number) => void): () => void {
     return this.sync.subscribeToPendingMutations(cb);
   }
@@ -156,8 +165,18 @@ export class Sp00kyClient<S extends SchemaStructure> {
       logger
     );
 
-    // Initialize CRDT Manager (needs remote for _00_crdt LIVE SELECT)
-    this.crdtManager = new CrdtManager(this.config.schema, this.remote, logger);
+    // Initialize CRDT Manager. `local` is used to read the initial
+    // `_00_crdt` snapshot when a field opens AND to mirror every local
+    // edit (so reload/offline see the freshest state); `remote` is used
+    // for the debounced outgoing UPSERTs and the parent-table LIVE feed.
+    // The debounce window is configurable via `crdtDebounceMs`.
+    this.crdtManager = new CrdtManager(
+      this.config.schema,
+      this.local,
+      this.remote,
+      logger,
+      config.crdtDebounceMs ?? 500,
+    );
 
     this.dataModule = new DataModule(
       this.cache,
@@ -171,7 +190,15 @@ export class Sp00kyClient<S extends SchemaStructure> {
     this.auth = new AuthService(this.config.schema, this.remote, this.persistenceClient, logger);
 
     // Initialize Sync
-    this.sync = new Sp00kySync(this.local, this.remote, this.cache, this.dataModule, this.config.schema, this.logger);
+    this.sync = new Sp00kySync(
+      this.local,
+      this.remote,
+      this.cache,
+      this.dataModule,
+      this.config.schema,
+      this.logger,
+      { refSyncIntervalMs: this.config.refSyncIntervalMs }
+    );
 
     // Initialize DevTools
     this.devTools = new DevToolsService(
@@ -210,6 +237,32 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.devTools.logEvent('SYNC_QUERY_UPDATED', event.payload);
     });
 
+    // Hand list_ref-driven row ingests to the CrdtManager so CRDT body
+    // / cursor updates reach the receiver even when the cross-session
+    // LIVE on the parent table is filtered out by the SurrealDB
+    // permission-LIVE gap. Same-user clients receive these rows via
+    // CrdtManager's own `LIVE SELECT * FROM <table>`; this hook is the
+    // redundant path that fires when only the list_ref bumped.
+    this.sync.engineEvents.subscribe('SYNC_REMOTE_DATA_INGESTED', (event: any) => {
+      try {
+        const records: Array<Record<string, any>> = event.payload?.records ?? [];
+        for (const row of records) {
+          const id = row?.id;
+          const table =
+            id && typeof id === 'object' && id.table !== undefined
+              ? String(id.table)
+              : undefined;
+          if (!table) continue;
+          this.crdtManager.applyRow(table, row);
+        }
+      } catch (err) {
+        this.logger.debug(
+          { err, Category: 'sp00ky-client::engineEvents::ingested' },
+          'applyRow forwarding from sync ingest failed'
+        );
+      }
+    });
+
     // Database events for DevTools
     this.local.getEvents().subscribe('DATABASE_LOCAL_QUERY', (event: any) => {
       this.devTools.logEvent('LOCAL_QUERY', event.payload);
@@ -226,13 +279,6 @@ export class Sp00kyClient<S extends SchemaStructure> {
       'Sp00kyClient initialization started'
     );
     try {
-      const clientId = this.config.clientId ?? (await this.loadOrGenerateClientId());
-      this.persistClientId(clientId);
-      this.logger.debug(
-        { clientId, Category: 'sp00ky-client::Sp00kyClient::init' },
-        'Client ID loaded'
-      );
-
       await this.local.connect();
       this.logger.debug(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
@@ -257,13 +303,51 @@ export class Sp00kyClient<S extends SchemaStructure> {
       await this.auth.init();
       this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Auth initialized');
 
-      await this.dataModule.init();
+      // Salt query-id hashing with the SurrealDB session id so two browsers
+      // for the same user don't collide on shared `_00_query` rows. The same
+      // session id is the `session_id` key in `_00_cursor` rows, so the
+      // CrdtManager needs it too.
+      const sessionId = await this.fetchSessionId();
+      await this.dataModule.init(sessionId);
+      this.crdtManager.setSessionId(sessionId);
       this.logger.debug(
-        { Category: 'sp00ky-client::Sp00kyClient::init' },
+        { sessionId, Category: 'sp00ky-client::Sp00kyClient::init' },
         'DataModule initialized'
       );
 
-      await this.sync.init(clientId);
+      // Refresh the salt whenever auth state flips (sign-in, sign-out).
+      // session::id() changes per WebSocket session, and a sign-in spawns
+      // a new authenticated session, so the salt must follow. Also
+      // forward the user id into `DataModule` and `Sp00kySync` so they
+      // can route to per-user `_00_query_user_<id>` /
+      // `_00_list_ref_user_<id>` tables in `RefMode.Dedicated` — the
+      // LIVE subscription on `_00_list_ref_user_<id>` is restarted
+      // under the new auth context inside `Sp00kySync.setCurrentUserId`
+      // since SurrealDB binds the LIVE permission at registration time.
+      //
+      // Sync prefix BEFORE the first `await`: setting `currentUserId`
+      // synchronously here is critical because the AuthProvider's own
+      // subscribe callback runs right after ours and immediately enables
+      // queries that depend on the user id. Any `await` before
+      // `setCurrentUserId` would let those queries register against the
+      // stale (null) user id and hit the wrong `_00_query[_user_*]`
+      // table.
+      this.auth.subscribe(async (userId) => {
+        this.dataModule.setCurrentUserId(userId);
+        const next = await this.fetchSessionId();
+        this.dataModule.setSessionId(next);
+        this.crdtManager.setSessionId(next);
+        try {
+          await this.sync.setCurrentUserId(userId);
+        } catch (e) {
+          this.logger.error(
+            { error: e, Category: 'sp00ky-client::Sp00kyClient::authChange' },
+            'sync.setCurrentUserId failed'
+          );
+        }
+      });
+
+      await this.sync.init();
       this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Sync initialized');
 
       this.logger.info(
@@ -292,7 +376,8 @@ export class Sp00kyClient<S extends SchemaStructure> {
   /**
    * Open a CRDT field for collaborative editing.
    * Returns a CrdtField with a LoroDoc that can be bound to any editor.
-   * Also starts a LIVE SELECT on _00_crdt for real-time sync.
+   * Also starts a LIVE SELECT on the parent table for real-time sync;
+   * incoming events trigger a subquery fetch of `_00_crdt` / `_00_cursor`.
    */
   async openCrdtField(
     table: string,
@@ -396,26 +481,22 @@ export class Sp00kyClient<S extends SchemaStructure> {
     return fn(this.remote.getClient());
   }
 
-  private persistClientId(id: string) {
+  /**
+   * Fetch SurrealDB's `session::id()` as a string. Used as a salt for
+   * query-id hashing so two sessions for the same user get distinct
+   * `_00_query` rows. Returns empty string if the query fails (we still
+   * boot, just without session scoping for IDs).
+   */
+  private async fetchSessionId(): Promise<string> {
     try {
-      this.persistenceClient.set('sp00ky_client_id', id);
+      const [sid] = await this.remote.query<[string]>('RETURN <string>session::id()');
+      return typeof sid === 'string' ? sid : '';
     } catch (e) {
       this.logger.warn(
-        { error: e, Category: 'sp00ky-client::Sp00kyClient::persistClientId' },
-        'Failed to persist client ID'
+        { error: e, Category: 'sp00ky-client::Sp00kyClient::fetchSessionId' },
+        'Failed to fetch session::id() — proceeding with empty salt'
       );
+      return '';
     }
-  }
-
-  private async loadOrGenerateClientId(): Promise<string> {
-    const clientId = await this.persistenceClient.get<string>('sp00ky_client_id');
-
-    if (clientId) {
-      return clientId;
-    }
-
-    const newId = generateId();
-    await this.persistClientId(newId);
-    return newId;
   }
 }

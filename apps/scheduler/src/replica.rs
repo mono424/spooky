@@ -493,24 +493,39 @@ impl Replica {
                 .chunks(INSERT_BATCH_SIZE)
                 .map(<[Value]>::to_vec)
                 .collect();
-            for (chunk_idx, chunk) in chunks.into_iter().enumerate() {
+            for (chunk_idx, mut chunk) in chunks.into_iter().enumerate() {
                 // Validate ids upfront so we can give a specific error on the
-                // offending record, matching the old loop's behaviour.
-                for (within, rec) in chunk.iter().enumerate() {
-                    let has_id = rec
-                        .as_object()
-                        .and_then(|o| o.get("id"))
-                        .and_then(|v| v.as_str())
-                        .is_some();
-                    if !has_id {
-                        anyhow::bail!(
-                            "Record {}/{} in '{}' (batch {}) missing string `id` after JSON flatten",
+                // offending record, matching the old loop's behaviour. Also
+                // strip the leading `<table>:` from each id — without it,
+                // SurrealDB INSERT INTO treats the colon as part of an
+                // escaped composite id and stores the row as
+                // `<table>:`<table>:<raw>``, breaking every SELECT-by-id
+                // query against the replica.
+                let table_prefix = format!("{}:", table_name);
+                for (within, rec) in chunk.iter_mut().enumerate() {
+                    let obj = match rec.as_object_mut() {
+                        Some(o) => o,
+                        None => anyhow::bail!(
+                            "Record {}/{} in '{}' (batch {}) is not a JSON object",
                             within,
-                            chunk.len(),
+                            chunk_idx,
                             table_name,
                             chunk_idx,
-                        );
-                    }
+                        ),
+                    };
+                    let id = obj
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "Record {}/{} in '{}' (batch {}) missing string `id` after JSON flatten",
+                            within,
+                            chunk_idx,
+                            table_name,
+                            chunk_idx,
+                        ))?
+                        .to_string();
+                    let raw = id.strip_prefix(&table_prefix).unwrap_or(&id).to_string();
+                    obj.insert("id".to_string(), Value::String(raw));
                 }
                 let chunk_len = chunk.len();
                 trace!(
@@ -626,28 +641,49 @@ impl Replica {
         let thing_id = build_thing_id(table, id);
         match op {
             RecordOp::Create => {
-                if let Some(data) = record {
+                if let Some(mut data) = record {
+                    // Strip `id` from the payload before CREATE: SurrealDB
+                    // 3.0 takes the record id from the `thing` literal.
+                    // Keeping `id` in CONTENT as the string `"user:abc"`
+                    // makes SurrealDB treat the colon as part of an
+                    // escaped composite id and store it as
+                    // `user:`user:abc``. Subsequent SELECTs by the clean
+                    // `user:abc` form return nothing — and the SSP's
+                    // bootstrap loads the corrupted shape, so live
+                    // queries from the client never resolve.
+                    if let Some(obj) = data.as_object_mut() {
+                        obj.remove("id");
+                    }
                     self.db
                         .query(format!("CREATE {} CONTENT $data", thing_id))
                         .bind(("data", data))
                         .await
-                        .with_context(|| format!("Failed to CREATE {}", thing_id))?;
+                        .with_context(|| format!("CREATE {} send failed", thing_id))?
+                        .check()
+                        .with_context(|| format!("CREATE {} returned a statement error", thing_id))?;
                 }
             }
             RecordOp::Update => {
-                if let Some(data) = record {
+                if let Some(mut data) = record {
+                    if let Some(obj) = data.as_object_mut() {
+                        obj.remove("id");
+                    }
                     self.db
                         .query(format!("UPDATE {} MERGE $data", thing_id))
                         .bind(("data", data))
                         .await
-                        .with_context(|| format!("Failed to UPDATE {}", thing_id))?;
+                        .with_context(|| format!("UPDATE {} send failed", thing_id))?
+                        .check()
+                        .with_context(|| format!("UPDATE {} returned a statement error", thing_id))?;
                 }
             }
             RecordOp::Delete => {
                 self.db
                     .query(format!("DELETE {}", thing_id))
                     .await
-                    .with_context(|| format!("Failed to DELETE {}", thing_id))?;
+                    .with_context(|| format!("DELETE {} send failed", thing_id))?
+                    .check()
+                    .with_context(|| format!("DELETE {} returned a statement error", thing_id))?;
             }
         }
 

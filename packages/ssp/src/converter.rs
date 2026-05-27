@@ -82,19 +82,69 @@ fn parse_value_entry(input: &str) -> IResult<&str, ParsedValue> {
 
 // --- LOGIC ---
 
-fn parse_leaf_predicate(input: &str) -> IResult<&str, Value> {
+fn parse_cmp_op(input: &str) -> IResult<&str, &str> {
+    alt((
+        tag(">="),
+        tag("<="),
+        tag("!="),
+        tag("="),
+        tag(">"),
+        tag("<"),
+        tag_no_case("CONTAINS"),
+        tag_no_case("INSIDE"),
+    ))(input)
+}
+
+/// Parse `$param OP value` — comparison with the param on the LHS. Returns
+/// a `paramcmp`-flavored predicate JSON ({ "type": "parameq", "param", "value" }).
+/// CONTAINS / INSIDE are not supported with a param-LHS.
+fn parse_leaf_param_lhs(input: &str) -> IResult<&str, Value> {
+    let (input, _) = ws(char('$'))(input)?;
+    let (input, param) = parse_identifier(input)?;
+    let (input, op) = ws(parse_cmp_op)(input)?;
+    let (input, right) = ws(parse_value_entry)(input)?;
+
+    let type_str = match op.to_uppercase().as_str() {
+        "=" => "parameq",
+        "!=" => "paramneq",
+        ">" => "paramgt",
+        ">=" => "paramgte",
+        "<" => "paramlt",
+        "<=" => "paramlte",
+        _ => {
+            // CONTAINS / INSIDE with a param-LHS aren't supported; fail this
+            // alt branch so the outer parser can try the next alternative.
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+    };
+
+    let val = match right {
+        ParsedValue::Json(v) => v,
+        // identifier/prefix on the RHS of a $param-LHS comparison isn't supported
+        // in v1; bail.
+        _ => {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+    };
+
+    Ok((
+        input,
+        json!({ "type": type_str, "param": param, "value": val }),
+    ))
+}
+
+/// Parse `field OP value` — the historical leaf shape with a path-identifier
+/// on the LHS. Kept verbatim apart from the op-tag extraction.
+fn parse_leaf_field_lhs(input: &str) -> IResult<&str, Value> {
     let (input, (left, op, right)) = tuple((
         ws(parse_identifier),
-        ws(alt((
-            tag(">="),
-            tag("<="),
-            tag("!="),
-            tag("="),
-            tag(">"),
-            tag("<"),
-            tag_no_case("CONTAINS"),
-            tag_no_case("INSIDE"),
-        ))),
+        ws(parse_cmp_op),
         ws(parse_value_entry),
     ))(input)?;
 
@@ -122,6 +172,12 @@ fn parse_leaf_predicate(input: &str) -> IResult<&str, Value> {
             json!({ "type": "__JOIN_CANDIDATE__", "left": left, "right": right_field }),
         )),
     }
+}
+
+fn parse_leaf_predicate(input: &str) -> IResult<&str, Value> {
+    // Try param-LHS first (it's distinguishable by the leading `$`); fall back
+    // to the historical field-LHS shape.
+    alt((parse_leaf_param_lhs, parse_leaf_field_lhs))(input)
 }
 
 // Recursive Expression Parser

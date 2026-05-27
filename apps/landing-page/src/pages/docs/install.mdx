@@ -7,9 +7,9 @@ Getting started with Sp00ky involves setting up the CLI tool and configuring you
 
 ## Prerequisites
 
-- **Node.js** (v18 or higher)
-- **SurrealDB** (v2.0 or higher)
-- **Rust** (for compiling modules)
+- **Node.js** (v22.12 or higher — the workspace pins `>=22.21.1`)
+- **SurrealDB** (v3.1 — the CLI defaults to `surrealdb/surrealdb:v3.1.0-beta.3`)
+- **Rust** (only if you're building the SSP / scheduler from source — pre-built Docker images are used by default)
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 
@@ -19,22 +19,23 @@ export const code4 = `pnpm add @spooky-sync/core @spooky-sync/client-solid`;
 
 export const code3 = `spky dev`;
 
-export const code2 = `version: '3.8'
-services:
+export const code2 = `services:
   surrealdb:
-    image: surrealdb/surrealdb:latest
-    command: start --user root --pass root file://data.db
+    image: surrealdb/surrealdb:v3.1.0-beta.3
+    command: start --user root --pass root rocksdb:/data/db
     ports:
-      - "8000:8000"
+      - "8666:8000"
     volumes:
       - ./data:/data
 
-  sp00ky-sidecar:
-    image: ghcr.io/sp00ky-org/sidecar:latest
+  ssp:
+    image: ghcr.io/sp00ky-org/ssp-server:canary
     environment:
-      - SURREAL_URL=ws://surrealdb:8000
-      - SURREAL_USER=root
-      - SURREAL_PASS=root
+      - SPKY_DB_URL=http://surrealdb:8000
+      - SPKY_DB_USER=root
+      - SPKY_DB_PASS=root
+      - SPKY_SSP_LISTEN_ADDR=0.0.0.0:8667
+      - SPKY_SSP_REF_MODE=dedicated
     depends_on:
       - surrealdb`;
 
@@ -62,7 +63,7 @@ The easiest way to start everything is with the Sp00ky CLI:
 
 <CodeBlock code={code3} lang="bash" />
 
-This starts SurrealDB, the SSP sidecar, applies migrations, and runs your app dev server — all in one command. If your apps have a `dev` field configured in `sp00ky.yml`, those are started too. See [Backend Functions](/docs/backend-functions#dev-server) for details.
+This starts SurrealDB, the SSP sidecar, applies migrations, and runs your app dev server — all in one command. If your apps have a `dev` field configured in `sp00ky.yml`, those are started too. See the [Dev Server](/docs/backend/dev-server) page for details.
 
 Alternatively, you can set up infrastructure manually with Docker Compose:
 

@@ -13,7 +13,7 @@ import Home from './routes/index';
 import ThreadPage from './routes/thread/[id]';
 import CreateThreadPage from './routes/create-thread';
 import ProfilePage from './routes/profile';
-import InvitePage from './routes/invite/[token]';
+import InvitePage from './routes/invite/[jwt]';
 import { ProfilePicture } from './components/ProfilePicture';
 import { Tooltip } from './components/Tooltip';
 
@@ -191,6 +191,12 @@ export default function App() {
         </div>
       }
       onError={(error) => console.error('Failed to initialize database:', error)}
+      onReady={(db) => {
+        // Expose the client for e2e diagnostics (e.g.
+        // `liveRetryCount` regression in z-auth-bootstrap.spec.ts).
+        // Harmless in prod and useful in the browser dev console too.
+        (window as unknown as Record<string, unknown>).__sp00ky__ = db;
+      }}
     >
       <AuthProvider>
         <Router root={Layout}>
@@ -198,7 +204,7 @@ export default function App() {
           <Route path="/thread/:id" component={ThreadPage} />
           <Route path="/create-thread" component={CreateThreadPage} />
           <Route path="/profile" component={ProfilePage} />
-          <Route path="/invite/:token" component={InvitePage} />
+          <Route path="/invite/:jwt" component={InvitePage} />
         </Router>
       </AuthProvider>
     </Sp00kyProvider>

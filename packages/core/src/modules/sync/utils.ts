@@ -167,3 +167,82 @@ export function createDiffFromDbOp(
     };
   }
 }
+
+/**
+ * Default cadence for the `_00_list_ref_user_<id>` poll fallback. The
+ * poll is the safety net for SurrealDB v3's occasionally-dropped LIVE
+ * deliveries; 500ms is aggressive enough to feel real-time on the
+ * happy path while keeping the per-session query load bounded.
+ */
+export const DEFAULT_LIST_REF_POLL_INTERVAL_MS = 500;
+
+/**
+ * Build the SurrealQL select that powers both the initial-fetch and
+ * the periodic poll of `_00_list_ref[_user_<id>]`. The `parent IS NONE`
+ * predicate excludes subquery entries (rows with `parent_rel` set)
+ * because the client's `RecordVersionArray` only tracks primary rows;
+ * including subquery rows would surface them as spurious "added"
+ * diffs every tick.
+ */
+export function buildListRefSelect(table: string): string {
+  return `SELECT out, version FROM ${table} WHERE in = $in AND parent IS NONE`;
+}
+
+/**
+ * Resolve the effective list-ref poll interval. Negative or zero
+ * values fall back to the default — accepting them would either
+ * disable polling silently or busy-loop the event loop.
+ */
+export function resolveListRefPollInterval(opt?: number): number {
+  if (typeof opt !== 'number' || !Number.isFinite(opt) || opt <= 0) {
+    return DEFAULT_LIST_REF_POLL_INTERVAL_MS;
+  }
+  return opt;
+}
+
+/**
+ * When the LIVE feed has delivered an event within this window, treat
+ * the LIVE subscription as healthy and back the poll off to
+ * {@link LIVE_HEALTHY_POLL_INTERVAL_MS}. As soon as LIVE quiets for
+ * longer than this, the poll snaps back to the aggressive default.
+ */
+export const LIVE_HEALTHY_COOLDOWN_MS = 5_000;
+
+/**
+ * Poll interval while LIVE is delivering events. The aggressive
+ * default 500ms costs ~120 queries / minute / session — wasted work
+ * when LIVE is already covering us. 5s keeps the safety net in place
+ * at 1/10th the load.
+ */
+export const LIVE_HEALTHY_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * Pick the next poll delay based on whether LIVE has been healthy
+ * recently. If a LIVE event fired within `cooldownMs`, use the slow
+ * (`healthyIntervalMs`) cadence; otherwise the fast (`baseIntervalMs`)
+ * cadence. Pure so it's unit-testable; `Sp00kySync.startListRefPoll`
+ * calls it from a self-rescheduling timer.
+ *
+ * The healthy interval is clamped to at least `baseIntervalMs` so
+ * configuring an aggressive base (e.g. 100ms) never gets implicitly
+ * widened by this helper.
+ */
+export function nextPollDelayMs(args: {
+  now: number;
+  lastLiveEventAt: number | null;
+  baseIntervalMs: number;
+  cooldownMs?: number;
+  healthyIntervalMs?: number;
+}): number {
+  const {
+    now,
+    lastLiveEventAt,
+    baseIntervalMs,
+    cooldownMs = LIVE_HEALTHY_COOLDOWN_MS,
+    healthyIntervalMs = LIVE_HEALTHY_POLL_INTERVAL_MS,
+  } = args;
+  if (lastLiveEventAt === null) return baseIntervalMs;
+  const sinceLive = now - lastLiveEventAt;
+  if (sinceLive < 0 || sinceLive >= cooldownMs) return baseIntervalMs;
+  return Math.max(healthyIntervalMs, baseIntervalMs);
+}

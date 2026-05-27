@@ -2,9 +2,26 @@ use crate::types::{Path, Sp00kyValue};
 use std::cmp::Ordering;
 
 /// Resolve a nested value from a Sp00kyValue by following a Path.
+///
+/// One non-obvious case: `<field>.id` on a record-reference field. The
+/// store keeps record references as the string form `"table:abc"`, but
+/// SurrealDB's predicate semantics auto-dereference `author.id` on a
+/// `record<user>` field to the linked record's id. So when we land on a
+/// string of the form `"<table>:<rest>"` and the next segment is `id`,
+/// return the string itself — that *is* the id. Without this, every
+/// permission rule of the shape `author.id = $auth.id` (the example
+/// app's thread permission) silently evaluates to false on records the
+/// caller actually owns.
 pub fn resolve_field<'a>(value: Option<&'a Sp00kyValue>, path: &Path) -> Option<&'a Sp00kyValue> {
     let mut current = value?;
     for segment in path.segments() {
+        if segment == "id" {
+            if let Sp00kyValue::Str(s) = current {
+                if s.contains(':') {
+                    return Some(current);
+                }
+            }
+        }
         current = current.get(segment)?;
     }
     Some(current)

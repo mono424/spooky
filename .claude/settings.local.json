@@ -143,7 +143,8 @@
       "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.ts -o -name *.tsx \\\\\\) -not -path */node_modules/* -not -path */.git/*)",
       "Bash(find /Users/khadim/dev/spooky -type f \\\\\\(-name *.ts -o -name *.tsx -o -name *.rs -o -name *.surql \\\\\\) -not -path */node_modules/* -not -path */.git/*)",
       "Bash(mkdir -p /Users/khadim/dev/spooky/.claude/skills/bump-version)",
-      "Bash(mv /Users/khadim/dev/spooky/.claude/skills/bump-version.md /Users/khadim/dev/spooky/.claude/skills/bump-version/SKILL.md)"
+      "Bash(mv /Users/khadim/dev/spooky/.claude/skills/bump-version.md /Users/khadim/dev/spooky/.claude/skills/bump-version/SKILL.md)",
+      "Bash(rg -n \"query_table_for|queryTableFor\" --type-add 'rs:*.rs' --type-add 'ts:*.ts' -t rs -t ts)"
     ],
     "deny": [],
     "ask": []

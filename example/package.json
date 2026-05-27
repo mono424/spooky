@@ -5,6 +5,8 @@
   "description": "Example Sp00ky project",
   "scripts": {
     "dev": "spooky dev",
+    "dev:clean": "spooky dev --clean",
+    "dev:reset": "spooky dev --clean-db",
     "dev:app": "pnpm --filter @example/app-solid dev",
     "generate": "spooky generate",
     "build": "spooky generate && pnpm build:surql",

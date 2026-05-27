@@ -5,28 +5,33 @@ title: Vanilla JS / TS
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 
-export const code7 = `npm install @spooky-sync/core surrealdb`;
+export const code7 = `pnpm add @spooky-sync/core surrealdb`;
 
-export const code6 = `spky --input src/schema.surql --output src/schema.gen.ts --format typescript`;
+export const code6 = `# Recommended: drive from sp00ky.yml's clientTypes entries
+spky generate
+
+# One-shot variant
+spky --input ./schema/src/schema.surql --output ./src/schema.gen.ts --format typescript`;
 
 export const code5 = `import { Sp00kyClient, type Sp00kyConfig } from '@spooky-sync/core';
 import { schema, SURQL_SCHEMA } from './schema.gen';
 
 const config: Sp00kyConfig<typeof schema> = {
   logLevel: 'info',
-  schema: schema,
+  schema,
   schemaSurql: SURQL_SCHEMA,
   database: {
     namespace: 'main',
     database: 'main',
-    endpoint: 'ws://localhost:8000/rpc',
+    // \`spky dev\` exposes SurrealDB on 8666 by default.
+    endpoint: 'ws://localhost:8666/rpc',
     store: 'indexeddb', // or 'memory'
   },
 };
 
 export const client = new Sp00kyClient<typeof schema>(config);
 
-// Initialize the client
+// Initialize the client (idempotent — safe to await multiple times).
 export async function initDatabase() {
   await client.init();
   console.log('Sp00ky client initialized');
@@ -34,23 +39,27 @@ export async function initDatabase() {
 
 export const code4 = `import { client } from './db';
 
-// Build a query
-const query = client.query('thread')
+// Build a query. The second argument is \`QueryOptions\` — pass \`{}\`
+// for defaults. SolidJS users get the same builder from \`db.query()\`
+// without the options argument.
+const builder = client.query('thread', {})
   .related('author')
   .orderBy('created_at', 'desc')
-  .limit(10);
+  .limit(10)
+  .build();
 
-// Execute and get the query hash
-const { hash } = await query.build().run();
+// Register the query with the client and get back its \`{ hash }\`.
+const { hash } = await builder.run();
 
-// Subscribe to query updates
+// Subscribe to query updates. \`immediate: true\` invokes the callback
+// synchronously with whatever the local store has right now.
 const unsubscribe = await client.subscribe(
   hash,
   (records) => {
     console.log('Threads updated:', records);
     renderThreads(records);
   },
-  { immediate: true } // Get initial results immediately
+  { immediate: true }
 );
 
 // Later: unsubscribe when done
@@ -108,32 +117,30 @@ async function signOut() {
 }`;
 
 export const code2 = `import { client } from './db';
-import { Uuid } from 'surrealdb';
+import { RecordId, Uuid } from 'surrealdb';
 
-// Create a new thread
+// Create a new thread. \`client.create\` takes a fully-qualified record
+// id ("thread:abc…") plus a typed payload.
 async function createThread(title: string, content: string, authorId: string) {
   const id = \\\`thread:\\\${Uuid.v4().toString().replace(/-/g, '')}\\\`;
-  
+
   await client.create(id, {
     title,
     content,
-    author: authorId,
     active: true,
+    author: new RecordId('user', authorId),
   });
-  
+
   console.log('Thread created:', id);
 }
 
-// Update a thread
+// Update a thread. Only listed fields are merged.
 async function updateThread(threadId: string, title: string) {
-  await client.update('thread', threadId, {
-    title,
-  });
-  
+  await client.update('thread', threadId, { title });
   console.log('Thread updated');
 }
 
-// Delete a thread
+// Delete a thread.
 async function deleteThread(threadId: string) {
   await client.delete('thread', threadId);
   console.log('Thread deleted');
@@ -154,13 +161,14 @@ async function main() {
   
   // Load and display threads
   async function loadThreads() {
-    const query = client.query('thread')
+    const builder = client.query('thread', {})
       .related('author')
       .orderBy('created_at', 'desc')
-      .limit(20);
-    
-    const { hash } = await query.build().run();
-    
+      .limit(20)
+      .build();
+
+    const { hash } = await builder.run();
+
     await client.subscribe(hash, (threads) => {
       renderThreads(threads);
     }, { immediate: true });

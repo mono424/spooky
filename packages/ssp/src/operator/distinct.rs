@@ -71,6 +71,18 @@ impl super::Operator for Distinct {
         self.integrated.clear();
         self.prev_output.clear();
     }
+
+    fn evaluate_key(
+        &self,
+        _key: &str,
+        input_evals: &[bool],
+        _store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        // Distinct doesn't change membership semantics; if upstream
+        // admits the key with positive weight, distinct emits it once.
+        input_evals.first().copied().unwrap_or(false)
+    }
 }
 
 #[cfg(test)]

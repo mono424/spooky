@@ -6,18 +6,20 @@ title: Mutate Data
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import Warning from '../../components/ui/Warning.astro';
 
-export const code3 = `import { Uuid } from 'surrealdb';
+export const code3 = `import { RecordId, Uuid } from 'surrealdb';
 
 // Generate a unique ID
 const genId = Uuid.v4().toString().replace(/-/g, '');
 const threadId = \\\`thread:\\\${genId}\\\`;
 
-// Create the record
+// Create the record. \`db.create\` takes a fully-qualified record id
+// ("thread:abc...") plus a typed payload — there's no separate table
+// argument. Pass record-typed fields as \`RecordId\` instances so the
+// SurrealDB SDK encodes them correctly.
 await db.create(threadId, {
   title: 'My New Thread',
-  content: 'This is the content of the thread.',
-  author: 'user:current_user_id', // Record ID as string
   active: true,
+  author: new RecordId('user', currentUserId),
 });`;
 
 export const code2 = `// Partial update
