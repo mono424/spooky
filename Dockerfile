@@ -3,7 +3,7 @@
 # Build a specific image with: docker buildx build --target ssp ...
 # or                          docker buildx build --target scheduler ...
 
-FROM rust:1.90-bookworm AS chef
+FROM rust:1.93-bookworm AS chef
 RUN apt-get update && apt-get install -y --no-install-recommends \
         protobuf-compiler \
         cmake \
