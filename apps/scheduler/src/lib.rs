@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod ssp_management;
 pub mod wal;
 pub mod proxy;
+pub mod feature_flags;
 
 use anyhow::{Context, Result};
 

@@ -38,6 +38,8 @@ import { EventSystem } from './events/index';
 import { CacheModule } from './modules/cache/index';
 import type { RecordWithId } from './modules/cache/index';
 import { CrdtManager, CrdtField } from './modules/crdt/index';
+import { FeatureFlagModule, FeatureFlagHandle } from './modules/feature-flag/index';
+import type { FeatureFlagOptions } from './modules/feature-flag/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { parseParams } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
@@ -95,6 +97,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
   private sync: Sp00kySync<S>;
   private devTools: DevToolsService;
   private crdtManager: CrdtManager;
+  private featureFlags!: FeatureFlagModule<S>;
 
   private logger: ReturnType<typeof createLogger>;
   public auth: AuthService<S>;
@@ -202,6 +205,16 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.logger,
       { refSyncIntervalMs: this.config.refSyncIntervalMs }
     );
+
+    // Initialize feature flags. Reuses the down-queue to register SSP plans
+    // on `_00_user_feature` and the auth subscription to re-register handles
+    // when the signed-in user changes.
+    this.featureFlags = new FeatureFlagModule({
+      dataModule: this.dataModule,
+      sync: this.sync,
+      auth: this.auth,
+      logger,
+    });
 
     // Initialize DevTools
     this.devTools = new DevToolsService(
@@ -384,6 +397,12 @@ export class Sp00kyClient<S extends SchemaStructure> {
       await this.sync.init();
       this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Sync initialized');
 
+      this.featureFlags.init();
+      this.logger.debug(
+        { Category: 'sp00ky-client::Sp00kyClient::init' },
+        'FeatureFlagModule initialized'
+      );
+
       this.logger.info(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
         'Sp00kyClient initialization completed successfully'
@@ -398,9 +417,23 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   async close() {
+    await this.featureFlags.closeAll();
     this.crdtManager.closeAll();
     await this.local.close();
     await this.remote.close();
+  }
+
+  /**
+   * Subscribe to a feature flag for the current user. Returns a
+   * `FeatureFlagHandle` whose `variant()`, `payload()` and `enabled()`
+   * accessors reflect the latest assignment from `_00_user_feature`,
+   * and whose `subscribe(cb)` fires whenever that assignment changes.
+   *
+   * Permissions are enforced by SurrealDB: a client can only ever see
+   * its own row, and cannot create or modify assignments.
+   */
+  feature(key: string, options?: FeatureFlagOptions): FeatureFlagHandle {
+    return this.featureFlags.feature(key, options);
   }
 
   authenticate(token: string) {

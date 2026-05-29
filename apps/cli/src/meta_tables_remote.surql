@@ -118,3 +118,53 @@ DEFINE INDEX OVERWRITE idx_record_id ON TABLE _00_version COLUMNS record_id UNIQ
 -- No sidecar tables. Sync-down naturally carries CRDT state with the
 -- parent row; cross-browser delivery rides the parent's existing LIVE
 -- feed without a follow-up subquery.
+
+-- ==================================================
+-- SPOOKY FEATURE FLAG (definitions)
+-- Root-only. Record-token callers can neither read nor write, so
+-- targeting rules (including allowlisted user records) are never on
+-- the client. The scheduler and the `spky flag` CLI write here using
+-- the project root token; the scheduler recomputes _00_user_feature
+-- assignments whenever a row changes.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_feature_flag SCHEMAFULL PERMISSIONS NONE;
+
+DEFINE FIELD OVERWRITE key ON TABLE _00_feature_flag TYPE string;
+DEFINE FIELD OVERWRITE description ON TABLE _00_feature_flag TYPE option<string>;
+DEFINE FIELD OVERWRITE variants ON TABLE _00_feature_flag TYPE array<string> DEFAULT ['off', 'on'];
+DEFINE FIELD OVERWRITE default_variant ON TABLE _00_feature_flag TYPE string DEFAULT 'off';
+DEFINE FIELD OVERWRITE payloads ON TABLE _00_feature_flag TYPE option<object>;
+-- Each rule: { variant, priority, allowlist: array<record>, rollout_percent: int 0..100,
+--             conditions: array<{ attr: string, op: string, value: any }> }
+DEFINE FIELD OVERWRITE rules ON TABLE _00_feature_flag TYPE array<object> DEFAULT [];
+DEFINE FIELD OVERWRITE enabled ON TABLE _00_feature_flag TYPE bool DEFAULT true;
+DEFINE FIELD OVERWRITE created_at ON TABLE _00_feature_flag TYPE datetime DEFAULT time::now() READONLY;
+DEFINE FIELD OVERWRITE updated_at ON TABLE _00_feature_flag TYPE datetime VALUE time::now();
+DEFINE INDEX OVERWRITE idx_feature_flag_key ON TABLE _00_feature_flag COLUMNS key UNIQUE;
+
+-- ==================================================
+-- SPOOKY USER FEATURE (per-user materialized assignments)
+-- Record-token callers can SELECT only their own rows. Writes are
+-- root-only: clients cannot self-enable a flag even with a forged
+-- mutation, because create/update/delete are denied unconditionally.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_user_feature SCHEMAFULL
+    PERMISSIONS
+      FOR select WHERE user = $auth.id
+      FOR create, update, delete NONE;
+
+DEFINE FIELD OVERWRITE user ON TABLE _00_user_feature TYPE record;
+DEFINE FIELD OVERWRITE key ON TABLE _00_user_feature TYPE string;
+DEFINE FIELD OVERWRITE variant ON TABLE _00_user_feature TYPE string;
+DEFINE FIELD OVERWRITE payload ON TABLE _00_user_feature TYPE option<object>;
+DEFINE FIELD OVERWRITE evaluated_at ON TABLE _00_user_feature TYPE datetime VALUE time::now();
+DEFINE INDEX OVERWRITE idx_user_feature_user_key ON TABLE _00_user_feature COLUMNS user, key UNIQUE;
+
+-- Stable hash for percentage rollouts. Combines flag key and user id
+-- so the same (flag, user) pair always lands in the same bucket 0..99
+-- across deploys. Implementation matches the Rust evaluator in
+-- `apps/cli/src/flag.rs::rollout_hash`: SHA-256, then read the first 8
+-- hex chars as an unsigned 32-bit integer modulo 100.
+DEFINE FUNCTION OVERWRITE fn::feature::hash($key: string, $user_id: string) -> int {
+  RETURN <int> (<int> ('0x' + string::slice(crypto::sha256($key + ':' + $user_id), 0, 8))) % 100;
+};
