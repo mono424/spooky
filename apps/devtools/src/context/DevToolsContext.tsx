@@ -138,7 +138,6 @@ export const DevToolsProvider: ParentComponent = (props) => {
         break;
 
       case 'SP00KY_QUERY_RESPONSE':
-        // @ts-expect-error - Validating custom message structure
         const msg = message as any;
         console.log('[DevTools] RAW QUERY RESPONSE:', msg);
 
