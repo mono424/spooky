@@ -2,6 +2,7 @@ import { DataModule } from './modules/data/index';
 import type {
   Sp00kyConfig,
   QueryTimeToLive,
+  QueryStatusCallback,
   Sp00kyQueryResultPromise,
   PersistenceClient,
   UpdateOptions,
@@ -221,6 +222,13 @@ export class Sp00kyClient<S extends SchemaStructure> {
    * Setup direct callbacks instead of event subscriptions
    */
   private setupCallbacks() {
+    // Surface query fetch-status changes (idle/fetching) in DevTools. Logs a
+    // discrete event and triggers a state push so the active-queries panel
+    // reflects the flip immediately.
+    this.dataModule.onQueryStatusChange = (queryHash, status) => {
+      this.devTools.logEvent('QUERY_STATUS_CHANGED', { queryHash, status });
+    };
+
     // Mutation callback for sync
     this.dataModule.onMutation((mutations: UpEvent[]) => {
       // Notify DevTools
@@ -452,6 +460,19 @@ export class Sp00kyClient<S extends SchemaStructure> {
     options?: { immediate?: boolean }
   ): Promise<() => void> {
     return this.dataModule.subscribe(queryHash, callback, options);
+  }
+
+  /**
+   * Subscribe to a query's fetch-status changes (idle/fetching). With
+   * `{ immediate: true }` the callback fires synchronously with the current
+   * status. Powers the `useQuery` hook's `isFetching()` accessor.
+   */
+  subscribeQueryStatus(
+    queryHash: string,
+    callback: QueryStatusCallback,
+    options?: { immediate?: boolean }
+  ): () => void {
+    return this.dataModule.subscribeStatus(queryHash, callback, options);
   }
 
   run<

@@ -179,6 +179,15 @@ export interface QueryConfig {
 export type QueryConfigRecord = QueryConfig & { id: string };
 
 /**
+ * Runtime fetch status of a live query.
+ * - `idle`: not currently fetching missing records.
+ * - `fetching`: the sync engine is fetching/ingesting missing records for this
+ *   query. UI notifications are coalesced so the result lands as a single
+ *   update once fetching completes.
+ */
+export type QueryStatus = 'idle' | 'fetching';
+
+/**
  * Internal state of a live query.
  */
 export interface QueryState {
@@ -202,6 +211,12 @@ export interface QueryState {
   lastIngestLatencyMs: number | null;
   /** Cumulative count of ingest/materialization errors observed for this query. */
   errorCount: number;
+  /**
+   * Ephemeral runtime fetch status. Not persisted to `_00_query`; observable
+   * via DevTools and the `useQuery` hook. `fetching` while the sync engine is
+   * pulling missing records for this query, otherwise `idle`.
+   */
+  status: QueryStatus;
 }
 
 /** Cap on the rolling materialization-sample window kept per query in memory. */
@@ -209,6 +224,7 @@ export const MATERIALIZATION_SAMPLE_WINDOW = 100;
 
 // Callback types
 export type QueryUpdateCallback = (records: Record<string, any>[]) => void;
+export type QueryStatusCallback = (status: QueryStatus) => void;
 export type MutationCallback = (mutations: UpEvent[]) => void;
 
 export type MutationEventType = 'create' | 'update' | 'delete';

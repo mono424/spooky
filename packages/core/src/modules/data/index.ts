@@ -14,6 +14,8 @@ import type {
   QueryConfig,
   QueryHash,
   QueryState,
+  QueryStatus,
+  QueryStatusCallback,
   QueryTimeToLive,
   QueryUpdateCallback,
   MutationCallback,
@@ -46,9 +48,17 @@ export class DataModule<S extends SchemaStructure> {
   private activeQueries: Map<QueryHash, QueryState> = new Map();
   private pendingQueries: Map<QueryHash, Promise<QueryHash>> = new Map();
   private subscriptions: Map<QueryHash, Set<QueryUpdateCallback>> = new Map();
+  private statusSubscriptions: Map<QueryHash, Set<QueryStatusCallback>> = new Map();
   private mutationCallbacks: Set<MutationCallback> = new Set();
   private debounceTimers: Map<QueryHash, NodeJS.Timeout> = new Map();
   private logger: Logger;
+  /**
+   * Optional observer notified whenever a query's fetch status changes.
+   * Wired by Sp00kyClient to push status changes into DevTools. Kept as a
+   * settable field (rather than a constructor arg) because DevTools is
+   * constructed after DataModule.
+   */
+  public onQueryStatusChange?: (hash: QueryHash, status: QueryStatus) => void;
   // Salt for query-id hashing. Set from SurrealDB's session::id() so two
   // browser sessions registering the same logical query (same surql + params)
   // don't collide on the same `_00_query` row — each session gets its own.
@@ -192,6 +202,58 @@ export class DataModule<S extends SchemaStructure> {
         }
       }
     };
+  }
+
+  /**
+   * Subscribe to a query's fetch-status changes (idle/fetching).
+   * With `{ immediate: true }` the callback fires synchronously with the
+   * current status (defaults to `idle` if the query isn't registered yet).
+   */
+  subscribeStatus(
+    queryHash: string,
+    callback: QueryStatusCallback,
+    options: { immediate?: boolean } = {}
+  ): () => void {
+    if (!this.statusSubscriptions.has(queryHash)) {
+      this.statusSubscriptions.set(queryHash, new Set());
+    }
+    this.statusSubscriptions.get(queryHash)?.add(callback);
+
+    if (options.immediate) {
+      callback(this.activeQueries.get(queryHash)?.status ?? 'idle');
+    }
+
+    return () => {
+      const subs = this.statusSubscriptions.get(queryHash);
+      if (subs) {
+        subs.delete(callback);
+        if (subs.size === 0) {
+          this.statusSubscriptions.delete(queryHash);
+        }
+      }
+    };
+  }
+
+  /**
+   * Set a query's fetch status and notify status observers (DevTools +
+   * `subscribeStatus` listeners). No-op when the status is unchanged or the
+   * query is unknown.
+   */
+  setQueryStatus(queryHash: string, status: QueryStatus): void {
+    const queryState = this.activeQueries.get(queryHash);
+    if (!queryState || queryState.status === status) {
+      return;
+    }
+    queryState.status = status;
+
+    this.onQueryStatusChange?.(queryHash, status);
+
+    const subs = this.statusSubscriptions.get(queryHash);
+    if (subs) {
+      for (const callback of subs) {
+        callback(status);
+      }
+    }
   }
 
   /**
@@ -954,6 +1016,7 @@ export class DataModule<S extends SchemaStructure> {
       materializationSamples: [],
       lastIngestLatencyMs: null,
       errorCount: persistedErrorCount,
+      status: 'idle',
     };
   }
 

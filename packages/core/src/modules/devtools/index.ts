@@ -51,6 +51,10 @@ export class DevToolsService implements StreamUpdateReceiver {
       result.set(queryHash, {
         queryHash,
         status: 'active',
+        // Runtime fetch status, distinct from the `status: 'active'`
+        // registration flag above. `fetchStatus` is 'idle' | 'fetching'.
+        fetchStatus: q.status,
+        isFetching: q.status === 'fetching',
         createdAt:
           q.config.lastActiveAt instanceof Date
             ? q.config.lastActiveAt.getTime()

@@ -1,5 +1,5 @@
 import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
-import type { RecordVersionArray } from '../../types';
+import type { RecordVersionArray, RecordVersionDiff } from '../../types';
 import { createSyncEventSystem, SyncEventTypes, SyncQueueEventTypes } from './events/index';
 import type { Logger } from '../../services/logger/index';
 import type { DownEvent, UpEvent} from './queue/index';
@@ -17,7 +17,7 @@ import { SyncScheduler } from './scheduler';
 import type { SchemaStructure } from '@spooky-sync/query-builder';
 import type { CacheModule } from '../cache/index';
 import type { DataModule } from '../data/index';
-import { encodeRecordId, extractTablePart, surql } from '../../utils/index';
+import { encodeRecordId, extractIdPart, extractTablePart, surql } from '../../utils/index';
 import { DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
 
 /**
@@ -450,7 +450,10 @@ export class Sp00kySync<S extends SchemaStructure> {
       'Live update is being processed'
     );
     const diff = createDiffFromDbOp(action, recordId, version, localArray);
-    await this.syncEngine.syncRecords(diff);
+    // `config.id` is `_00_query:<hash>`, so its id-part IS the query hash
+    // (a SHA-256 over query content + sessionId) — the key DataModule uses.
+    const hash = extractIdPart(existing.config.id);
+    await this.runSyncForQuery(hash, diff);
   }
 
   /**
@@ -592,7 +595,28 @@ export class Sp00kySync<S extends SchemaStructure> {
     if (!diff) {
       return;
     }
-    return this.syncEngine.syncRecords(diff);
+    return this.runSyncForQuery(hash, diff);
+  }
+
+  /**
+   * Run a sync for a single query while reflecting its fetch status. Marks the
+   * query `fetching` for the duration when the diff actually pulls records
+   * (added/updated), then resets to `idle` in a `finally` so a failed sync
+   * never leaves a query stuck `fetching`. Part A's notification coalescing
+   * means the single resulting UI update lands after this completes.
+   */
+  private async runSyncForQuery(hash: string, diff: RecordVersionDiff): Promise<void> {
+    const fetching = diff.added.length + diff.updated.length > 0;
+    if (fetching) {
+      this.dataModule.setQueryStatus(hash, 'fetching');
+    }
+    try {
+      await this.syncEngine.syncRecords(diff);
+    } finally {
+      if (fetching) {
+        this.dataModule.setQueryStatus(hash, 'idle');
+      }
+    }
   }
 
   /**
