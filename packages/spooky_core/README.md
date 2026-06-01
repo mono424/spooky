@@ -72,7 +72,7 @@ await client.create('thread:abc', {'title': 'hello'});
 
 ## Status
 
-Implemented and tested (48 tests):
+Implemented and tested (54 tests):
 - ssp-ffi C ABI + Dart FFI bindings (round-trip against the real native lib)
 - Foundations: RecordId, durations, surql builders, parser, EventSystem
 - Services: sqlite local store, stream-processor service, persistence
@@ -82,6 +82,10 @@ Implemented and tested (48 tests):
   (UpQueue/DownQueue/SyncEngine/SyncScheduler), LIVE subscription + poll
   fallback on `_00_list_ref[_user_<id>]`, reconnect re-registration.
 - `AuthService` and the auth-driven session/sync wiring in `init`.
+- sqlite-backed persistence (`SqlitePersistenceClient`, the default): the DBSP
+  circuit state and auth token survive restarts with a file-backed store.
+- TTL heartbeat lifecycle: each query re-registers at ~90% of its TTL so the
+  server-side registration does not expire.
 
 The full sync orchestration (up-queue -> remote, down-queue register + initial
 fetch, LIVE -> down-sync -> Stream) is verified end-to-end against a fake

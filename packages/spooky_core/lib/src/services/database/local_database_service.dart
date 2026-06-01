@@ -58,6 +58,10 @@ class LocalDatabaseService {
         hash       TEXT PRIMARY KEY,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS _00_kv (
+        id    TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     ''');
   }
 
@@ -217,6 +221,26 @@ class LocalDatabaseService {
       'ON CONFLICT(id) DO UPDATE SET state = excluded.state',
       [state],
     );
+  }
+
+  // ---- generic key-value (backs SqlitePersistenceClient) --------------------
+
+  String? kvGet(String key) {
+    final rs = _db.select('SELECT value FROM _00_kv WHERE id = ?', [key]);
+    if (rs.isEmpty) return null;
+    return rs.first['value'] as String;
+  }
+
+  void kvSet(String key, String value) {
+    _db.execute(
+      'INSERT INTO _00_kv (id, value) VALUES (?, ?) '
+      'ON CONFLICT(id) DO UPDATE SET value = excluded.value',
+      [key, value],
+    );
+  }
+
+  void kvRemove(String key) {
+    _db.execute('DELETE FROM _00_kv WHERE id = ?', [key]);
   }
 
   // ---- schema hash ----------------------------------------------------------

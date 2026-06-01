@@ -10,6 +10,7 @@ import 'services/database/local_database_service.dart';
 import 'services/database/remote_database_service.dart';
 import 'services/logger/logger.dart';
 import 'services/persistence/memory_persistence.dart';
+import 'services/persistence/sqlite_persistence.dart';
 import 'services/stream_processor/stream_processor_service.dart';
 import 'surreal/remote_client.dart';
 import 'surreal/value.dart';
@@ -84,6 +85,9 @@ class Sp00kyClient {
       config.schema,
       _logger,
       streamDebounceTime: config.streamDebounceTime,
+      // Keep the server-side registration alive: re-register on each TTL beat.
+      // Reads `_sync` at fire-time (set later in init); no-op in local-only.
+      onHeartbeat: (hash) => _sync?.enqueueDownEvent(HeartbeatEvent(hash)),
     );
 
     final hasRemote =
@@ -247,6 +251,7 @@ class Sp00kyClient {
   // ==================== LIFECYCLE ====================
 
   Future<void> close() async {
+    _dataModule.dispose();
     await _sync?.close();
     await _remote?.close();
     await _streamProcessor.close();
@@ -257,7 +262,10 @@ class Sp00kyClient {
   PersistenceClient _resolvePersistence() {
     final pc = config.persistenceClient;
     if (pc is PersistenceClient) return pc;
-    return MemoryPersistenceClient();
+    if (pc == 'memory') return MemoryPersistenceClient();
+    // Default to sqlite-backed persistence so stream-processor circuit state
+    // and the auth token survive restarts (with a file-backed store).
+    return SqlitePersistenceClient(_local);
   }
 
   /// Parse the target table from a `SELECT ... FROM <table>` query.

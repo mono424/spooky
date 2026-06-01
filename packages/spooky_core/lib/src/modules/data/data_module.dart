@@ -29,8 +29,10 @@ class DataModule {
     this._schema,
     SpookyLogger logger, {
     int streamDebounceTime = 100,
+    void Function(String hash)? onHeartbeat,
   })  : _logger = logger.child('DataModule'),
-        _streamDebounceTime = streamDebounceTime;
+        _streamDebounceTime = streamDebounceTime,
+        _onHeartbeat = onHeartbeat;
 
   final CacheModule _cache;
   final LocalDatabaseService _local;
@@ -38,6 +40,11 @@ class DataModule {
       _schema; // table -> { columns: {name: ColumnSchema} }
   final SpookyLogger _logger;
   final int _streamDebounceTime;
+
+  /// Called when a query's TTL heartbeat fires (TS leaves this a TODO; here it
+  /// is wired so the client can re-register/heartbeat the query before the
+  /// server expires it). Null in local-only mode (timer just reschedules).
+  final void Function(String hash)? _onHeartbeat;
 
   final Map<String, QueryState> _activeQueries = {};
   final Map<String, Future<String>> _pendingQueries = {};
@@ -451,7 +458,37 @@ class DataModule {
     });
 
     _activeQueries[hash] = queryState;
+    _startTTLHeartbeat(hash, queryState);
     return hash;
+  }
+
+  /// Self-rescheduling timer at 90% of the query's TTL (TS `startTTLHeartbeat`).
+  /// Faithful to the JS lifecycle; additionally invokes [_onHeartbeat] so the
+  /// client can keep the server-side registration alive.
+  void _startTTLHeartbeat(String hash, QueryState queryState) {
+    if (queryState.ttlTimer != null) return;
+    final heartbeatTime = (queryState.ttlDurationMs * 0.9).floor();
+    queryState.ttlTimer = Timer(Duration(milliseconds: heartbeatTime), () {
+      queryState.ttlTimer = null;
+      _onHeartbeat?.call(hash);
+      _startTTLHeartbeat(hash, queryState);
+    });
+  }
+
+  void _stopTTLHeartbeat(QueryState queryState) {
+    queryState.ttlTimer?.cancel();
+    queryState.ttlTimer = null;
+  }
+
+  /// Cancel all heartbeat and debounce timers (call on client shutdown).
+  void dispose() {
+    for (final qs in _activeQueries.values) {
+      _stopTTLHeartbeat(qs);
+    }
+    for (final timer in _debounceTimers.values) {
+      timer.cancel();
+    }
+    _debounceTimers.clear();
   }
 
   QueryState _createNewQuery(
