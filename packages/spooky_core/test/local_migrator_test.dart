@@ -27,7 +27,8 @@ void main() {
     expect(db.latestSchemaHash(), isNotNull);
   });
 
-  test('re-provisioning the same schema is a no-op (keeps local data)', () async {
+  test('re-provisioning the same schema is a no-op (keeps local data)',
+      () async {
     await migrator.provision(schemaA);
     db.create('thread:a', {'title': 'x', '_00_rv': 1});
     db.putQueryConfig('_00_query:h', {'surql': 'SELECT * FROM thread'});

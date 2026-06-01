@@ -298,6 +298,49 @@ class DataModule {
     }
   }
 
+  // ==================== BACKEND RUN ====================
+
+  /// Enqueue a backend job by writing an outbox record (TS `run`). Validates
+  /// the route's declared args, then reuses [create] (local write + sync).
+  Future<void> run(
+    String backend,
+    String path,
+    Map<String, dynamic> data, {
+    RunOptions? options,
+  }) async {
+    final backends = _schema['backends'];
+    final backendDef = (backends is Map ? backends[backend] : null) as Map?;
+    if (backendDef == null) throw ArgumentError('Backend $backend not found');
+    final route = (backendDef['routes'] as Map?)?[path] as Map?;
+    if (route == null) throw ArgumentError('Route $backend.$path not found');
+    final tableName = backendDef['outboxTable'] as String?;
+    if (tableName == null) {
+      throw ArgumentError('Outbox table for backend $backend not found');
+    }
+
+    final args = (route['args'] as Map?) ?? const {};
+    final payload = <String, dynamic>{};
+    args.forEach((argName, argDef) {
+      final optional = argDef is Map && argDef['optional'] == true;
+      if (!data.containsKey(argName) && !optional) {
+        throw ArgumentError('Missing required argument $argName');
+      }
+      payload[argName as String] = data[argName];
+    });
+
+    final record = <String, dynamic>{
+      'path': path,
+      'payload': jsonEncode(payload),
+      'max_retries': options?.maxRetries ?? 3,
+      'retry_strategy': options?.retryStrategy ?? 'linear',
+    };
+    if (options?.timeout != null) record['timeout'] = options!.timeout;
+    if (options?.assignedTo != null)
+      record['assigned_to'] = options!.assignedTo;
+
+    await create('$tableName:${generateId()}', record);
+  }
+
   // ==================== MUTATIONS ====================
 
   /// Create a record (TS `create`). Optimistic local write + DBSP ingest +

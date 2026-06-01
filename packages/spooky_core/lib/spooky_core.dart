@@ -26,3 +26,4 @@ export 'src/utils/parser.dart' show ColumnSchema;
 export 'src/surreal/remote_client.dart'
     show RemoteSurrealClient, WebSocketSurrealClient, LiveMessage;
 export 'src/modules/auth/auth_service.dart' show AuthService, AuthEventTypes;
+export 'src/modules/bucket.dart' show BucketHandle;

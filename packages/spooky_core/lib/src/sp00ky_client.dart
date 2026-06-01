@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'modules/auth/auth_service.dart';
+import 'modules/bucket.dart';
 import 'modules/cache/cache_module.dart';
 import 'modules/data/data_module.dart';
 import 'modules/sync/queue/queue_down.dart';
@@ -243,6 +244,24 @@ class Sp00kyClient {
       _dataModule.update(table, id, data, options: options);
 
   Future<void> delete(String table, String id) => _dataModule.delete(table, id);
+
+  // ==================== BACKENDS & BUCKETS ====================
+
+  /// Enqueue a backend job (TS `run`).
+  Future<void> run(
+    String backend,
+    String path,
+    Map<String, dynamic> payload, {
+    RunOptions? options,
+  }) =>
+      _dataModule.run(backend, path, payload, options: options);
+
+  /// A handle to a storage bucket (TS `bucket`). Requires a remote endpoint.
+  BucketHandle bucket(String name) {
+    final remote = _remote;
+    if (remote == null) throw StateError('bucket() requires a remote endpoint');
+    return BucketHandle(name, remote);
+  }
 
   // ==================== CRDT (deferred) ====================
 

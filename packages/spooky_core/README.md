@@ -86,6 +86,10 @@ Implemented and tested (54 tests):
   circuit state and auth token survive restarts with a file-backed store.
 - TTL heartbeat lifecycle: each query re-registers at ~90% of its TTL so the
   server-side registration does not expire.
+- `LocalMigrator`: schema-hash provisioning that wipes stale local data on a
+  schema change (preserving the auth token).
+- `run()` backend job outbox and `bucket()` file storage (`BucketHandle`:
+  put/get/delete/exists/head/copy/rename/list).
 
 The full sync orchestration (up-queue -> remote, down-queue register + initial
 fetch, LIVE -> down-sync -> Stream) is verified end-to-end against a fake
