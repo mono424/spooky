@@ -53,6 +53,12 @@ export class StreamProcessorService {
   private processor: WasmProcessor | undefined;
   private isInitialized = false;
   private receivers: StreamUpdateReceiver[] = [];
+  // When true, `notifyUpdates` coalesces updates into `batchBuffer` (keyed by
+  // queryHash) instead of dispatching them. Used to collapse the per-record
+  // stream updates produced by a batched ingest into a single notification per
+  // query, so the UI updates once after the whole batch rather than row-by-row.
+  private batching = false;
+  private batchBuffer: Map<string, StreamUpdate> = new Map();
 
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
@@ -72,11 +78,68 @@ export class StreamProcessorService {
   }
 
   private notifyUpdates(updates: StreamUpdate[]) {
+    if (this.batching) {
+      // Coalesce by queryHash instead of dispatching. The WASM `result_data`
+      // (localArray) is the full materialized array, so last-write-wins
+      // already reflects every prior ingest in the batch. We sum the
+      // materialization times so the single recorded sample reflects the
+      // batch's total work, and emit `op: 'CREATE'` on flush so the coalesced
+      // update takes DataModule's immediate (non-debounced) path.
+      for (const update of updates) {
+        const prev = this.batchBuffer.get(update.queryHash);
+        const summedTime =
+          (prev?.materializationTimeMs ?? 0) + (update.materializationTimeMs ?? 0);
+        this.batchBuffer.set(update.queryHash, {
+          ...update,
+          op: 'CREATE',
+          materializationTimeMs: summedTime,
+        });
+      }
+      return;
+    }
+
+    this.dispatchUpdates(updates);
+  }
+
+  private dispatchUpdates(updates: StreamUpdate[]) {
     for (const update of updates) {
       for (const receiver of this.receivers) {
         receiver.onStreamUpdate(update);
       }
     }
+  }
+
+  /**
+   * Open a coalescing window. While open, the per-record stream updates
+   * emitted by `ingest` are buffered (one entry per queryHash) instead of
+   * dispatched. Pair with `endBatch()` in a try/finally so the window always
+   * closes — otherwise the processor stays stuck buffering forever.
+   *
+   * No-op if a batch is already open (nested batches aren't expected here).
+   */
+  beginBatch() {
+    if (this.batching) return;
+    this.batching = true;
+    this.batchBuffer.clear();
+  }
+
+  /**
+   * Close the coalescing window and flush: dispatch one coalesced
+   * `StreamUpdate` per buffered queryHash, then persist processor state once
+   * for the whole batch (instead of once per ingest).
+   */
+  endBatch() {
+    if (!this.batching) return;
+    this.batching = false;
+    const buffered = Array.from(this.batchBuffer.values());
+    this.batchBuffer.clear();
+    if (buffered.length > 0) {
+      this.dispatchUpdates(buffered);
+    }
+    // The processor state after the last ingest is cumulative, so a single
+    // snapshot covers the whole batch. Kept fire-and-forget like the per-ingest
+    // call it replaces.
+    this.saveState();
   }
 
   /**
@@ -236,7 +299,11 @@ export class StreamProcessorService {
         // Direct handler call instead of event
         this.notifyUpdates(updates);
       }
-      this.saveState();
+      // While batching, `endBatch` persists once for the whole batch — skip the
+      // redundant per-record snapshot here.
+      if (!this.batching) {
+        this.saveState();
+      }
       return rawUpdates;
     } catch (e) {
       this.logger.error(

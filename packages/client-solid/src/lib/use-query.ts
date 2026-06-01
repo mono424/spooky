@@ -36,7 +36,12 @@ export function useQuery<
 >(
   finalQuery: QueryArg<S, TableName, T, RelatedFields, IsOne>,
   options?: QueryOptions,
-): { data: () => TData | undefined; error: () => Error | undefined; isLoading: () => boolean };
+): {
+  data: () => TData | undefined;
+  error: () => Error | undefined;
+  isLoading: () => boolean;
+  isFetching: () => boolean;
+};
 
 // Overload: explicit db (backward-compatible)
 export function useQuery<
@@ -50,7 +55,12 @@ export function useQuery<
   db: SyncedDb<S>,
   finalQuery: QueryArg<S, TableName, T, RelatedFields, IsOne>,
   options?: QueryOptions,
-): { data: () => TData | undefined; error: () => Error | undefined; isLoading: () => boolean };
+): {
+  data: () => TData | undefined;
+  error: () => Error | undefined;
+  isLoading: () => boolean;
+  isFetching: () => boolean;
+};
 
 // Implementation
 export function useQuery<
@@ -97,6 +107,7 @@ export function useQuery<
   const [data, setData] = createSignal<TData | undefined>(undefined);
   const [error, setError] = createSignal<Error | undefined>(undefined);
   const [isFetched, setIsFetched] = createSignal(false);
+  const [isFetching, setIsFetching] = createSignal(false);
   const [unsubscribe, setUnsubscribe] = createSignal<(() => void) | undefined>(undefined);
   let prevQueryString: string | undefined;
 
@@ -125,7 +136,18 @@ export function useQuery<
       { immediate: true }
     );
 
-    setUnsubscribe(() => unsub);
+    // Mirror the query's fetch status so the UI can show a "loading more"
+    // state while the sync engine pulls missing records in the background.
+    const unsubStatus = sp00ky.subscribeQueryStatus(
+      hash,
+      (status) => setIsFetching(status === 'fetching'),
+      { immediate: true }
+    );
+
+    setUnsubscribe(() => () => {
+      unsub();
+      unsubStatus();
+    });
   };
 
   createEffect(() => {
@@ -168,5 +190,6 @@ export function useQuery<
     data,
     error,
     isLoading,
+    isFetching,
   };
 }
