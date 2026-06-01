@@ -7,6 +7,7 @@ import 'modules/sync/queue/queue_down.dart';
 import 'modules/sync/queue/queue_up.dart';
 import 'modules/sync/sync.dart';
 import 'services/database/local_database_service.dart';
+import 'services/database/local_migrator.dart';
 import 'services/database/remote_database_service.dart';
 import 'services/logger/logger.dart';
 import 'services/persistence/memory_persistence.dart';
@@ -66,6 +67,10 @@ class Sp00kyClient {
 
     _local = LocalDatabaseService.open(_logger, store: config.database.store);
     _local.provision();
+
+    // Migrate before the stream processor loads state, so a schema change
+    // wipes stale circuit state instead of restoring views over old tables.
+    await LocalMigrator(_local, _logger).provision(config.schemaSurql);
 
     _persistence = _resolvePersistence();
     _streamProcessor = StreamProcessorService(_persistence, _logger);

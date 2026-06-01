@@ -260,6 +260,19 @@ class LocalDatabaseService {
     );
   }
 
+  // ---- migration ------------------------------------------------------------
+
+  /// Wipe cached domain data, query registrations, the outbox, and the
+  /// persisted circuit state on a schema change. Preserves the schema-hash
+  /// table and the auth token (the `sp00ky_auth_token` kv key).
+  void resetLocalData() {
+    _db.execute('DELETE FROM records');
+    _db.execute('DELETE FROM _00_query');
+    _db.execute('DELETE FROM _00_pending_mutations');
+    _db.execute('DELETE FROM _00_stream_processor_state');
+    kvRemove('_00_stream_processor_state');
+  }
+
   // ---- transactions ---------------------------------------------------------
 
   T tx<T>(T Function() body) {
