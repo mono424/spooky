@@ -51,16 +51,78 @@ class StreamProcessorService {
   bool _initialized = false;
   final List<StreamUpdateReceiver> _receivers = [];
 
+  /// When true, [_notifyUpdates] coalesces updates into [_batchBuffer] (keyed
+  /// by queryHash) instead of dispatching them. Used to collapse the per-record
+  /// stream updates produced by a batched ingest into a single notification per
+  /// query, so the UI updates once after the whole batch rather than row-by-row.
+  bool _batching = false;
+  final Map<String, StreamUpdate> _batchBuffer = {};
+
   static const _stateKey = '_00_stream_processor_state';
 
   void addReceiver(StreamUpdateReceiver receiver) => _receivers.add(receiver);
 
   void _notifyUpdates(List<StreamUpdate> updates) {
+    if (_batching) {
+      // Coalesce by queryHash instead of dispatching. The FFI `result_data`
+      // (localArray) is the full materialized array, so last-write-wins already
+      // reflects every prior ingest in the batch. We sum the materialization
+      // times so the single recorded sample reflects the batch's total work,
+      // and emit `op: 'CREATE'` on flush so the coalesced update takes
+      // DataModule's immediate (non-debounced) path.
+      for (final update in updates) {
+        final prev = _batchBuffer[update.queryHash];
+        final summedTime = (prev?.materializationTimeMs ?? 0) +
+            (update.materializationTimeMs ?? 0);
+        _batchBuffer[update.queryHash] = StreamUpdate(
+          queryHash: update.queryHash,
+          localArray: update.localArray,
+          resultHash: update.resultHash,
+          delta: update.delta,
+          op: 'CREATE',
+          materializationTimeMs: summedTime,
+        );
+      }
+      return;
+    }
+    _dispatchUpdates(updates);
+  }
+
+  void _dispatchUpdates(List<StreamUpdate> updates) {
     for (final update in updates) {
       for (final receiver in _receivers) {
         receiver.onStreamUpdate(update);
       }
     }
+  }
+
+  /// Open a coalescing window. While open, the per-record stream updates emitted
+  /// by [ingest] are buffered (one entry per queryHash) instead of dispatched.
+  /// Pair with [endBatch] in a try/finally so the window always closes,
+  /// otherwise the processor stays stuck buffering forever.
+  ///
+  /// No-op if a batch is already open (nested batches aren't expected here).
+  void beginBatch() {
+    if (_batching) return;
+    _batching = true;
+    _batchBuffer.clear();
+  }
+
+  /// Close the coalescing window and flush: dispatch one coalesced
+  /// [StreamUpdate] per buffered queryHash, then persist processor state once
+  /// for the whole batch (instead of once per ingest).
+  void endBatch() {
+    if (!_batching) return;
+    _batching = false;
+    final buffered = _batchBuffer.values.toList();
+    _batchBuffer.clear();
+    if (buffered.isNotEmpty) {
+      _dispatchUpdates(buffered);
+    }
+    // The processor state after the last ingest is cumulative, so a single
+    // snapshot covers the whole batch. Kept fire-and-forget like the per-ingest
+    // call it replaces.
+    saveState();
   }
 
   /// Initialize the native processor and load any persisted circuit state.
@@ -138,7 +200,11 @@ class StreamProcessorService {
             .toList();
         _notifyUpdates(updates);
       }
-      saveState();
+      // While batching, `endBatch` persists once for the whole batch, so skip
+      // the redundant per-record snapshot here.
+      if (!_batching) {
+        saveState();
+      }
       return rawUpdates;
     } catch (e) {
       _logger.error('Ingest failed', e);

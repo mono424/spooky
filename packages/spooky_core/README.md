@@ -90,6 +90,8 @@ Implemented and tested (54 tests):
   schema change (preserving the auth token).
 - `run()` backend job outbox and `bucket()` file storage (`BucketHandle`:
   put/get/delete/exists/head/copy/rename/list).
+- Fluent `QueryBuilder` (`client.query('table').where(...).orderBy(...).limit(...)
+  .stream()`) compiling to the same SURQL shape as the JS builder.
 
 The full sync orchestration (up-queue -> remote, down-queue register + initial
 fetch, LIVE -> down-sync -> Stream) is verified end-to-end against a fake

@@ -60,18 +60,26 @@ class CacheModule implements StreamUpdateReceiver {
       {bool skipDbInsert = false}) async {
     if (records.isEmpty) return;
 
-    for (final record in records) {
-      final recordId = _idString(record.record['id']);
-      final content = {...record.record, '_00_rv': record.version};
+    // Open a coalescing window so the per-record stream updates collapse into a
+    // single notification per affected query: the UI then updates once, after
+    // the whole batch is ingested, instead of row-by-row.
+    _streamProcessor.beginBatch();
+    try {
+      for (final record in records) {
+        final recordId = _idString(record.record['id']);
+        final content = {...record.record, '_00_rv': record.version};
 
-      if (!skipDbInsert) {
-        // MERGE, not REPLACE: preserve local-only fields omitted by the
-        // remote payload (`_00_crdt`, `_00_cursor`).
-        _local.upsertMerge(recordId, content);
+        if (!skipDbInsert) {
+          // MERGE, not REPLACE: preserve local-only fields omitted by the
+          // remote payload (`_00_crdt`, `_00_cursor`).
+          _local.upsertMerge(recordId, content);
+        }
+
+        _versionLookups[recordId] = record.version;
+        _streamProcessor.ingest(record.table, record.op, recordId, content);
       }
-
-      _versionLookups[recordId] = record.version;
-      _streamProcessor.ingest(record.table, record.op, recordId, content);
+    } finally {
+      _streamProcessor.endBatch();
     }
   }
 

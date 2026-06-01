@@ -32,6 +32,7 @@ Future<(DataModule, void Function())> _buildDataModule(
   return (
     data,
     () {
+      data.dispose(); // cancel heartbeat timers before tearing down the stack
       sp.close();
       local.close();
     }

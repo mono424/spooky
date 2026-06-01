@@ -4,6 +4,7 @@ import 'modules/auth/auth_service.dart';
 import 'modules/bucket.dart';
 import 'modules/cache/cache_module.dart';
 import 'modules/data/data_module.dart';
+import 'modules/query_builder.dart';
 import 'modules/sync/queue/queue_down.dart';
 import 'modules/sync/queue/queue_up.dart';
 import 'modules/sync/sync.dart';
@@ -211,6 +212,14 @@ class Sp00kyClient {
     );
     return controller.stream;
   }
+
+  /// A fluent query builder for [table]. Call `.stream()` / `.run()` to
+  /// register and subscribe (TS `query`).
+  QueryBuilder query(String table) => QueryBuilder(
+        table,
+        registrar: (sql, vars, ttl) => queryRaw(sql, vars, ttl: ttl),
+        subscriber: subscribeStream,
+      );
 
   /// Register a query and return a result [Stream] in one call.
   Future<Stream<List<Map<String, dynamic>>>> queryStream(
