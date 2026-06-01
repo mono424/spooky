@@ -1,0 +1,16 @@
+[package]
+name = "ssp-ffi"
+version = "0.0.1-canary.69"
+edition = "2021"
+description = "C ABI (Dart FFI) bindings for ssp"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+ssp = { path = "../ssp" }
+libc = "0.2"

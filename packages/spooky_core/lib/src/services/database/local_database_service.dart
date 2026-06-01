@@ -1,0 +1,268 @@
+import 'dart:convert';
+
+import 'package:sqlite3/sqlite3.dart';
+
+import '../../types.dart';
+import '../../utils/record_id_utils.dart';
+import '../logger/logger.dart';
+
+/// sqlite-backed local store, replacing the JS `@surrealdb/wasm` local engine.
+///
+/// Domain records are stored document-style as JSON in a single `records`
+/// table partitioned by logical table name, so arbitrary records round-trip.
+/// Dedicated tables hold query state, stream-processor state, the pending
+/// mutation outbox, and the schema hash. The materialization read path resolves
+/// result sets from the DBSP `localArray` via [getById] rather than executing
+/// SurrealQL (sqlite cannot run SurrealQL).
+class LocalDatabaseService {
+  LocalDatabaseService(this._db, SpookyLogger logger)
+      : _logger = logger.child('LocalDatabaseService');
+
+  final Database _db;
+  // ignore: unused_field
+  final SpookyLogger _logger;
+
+  /// Open a database. [path] of `:memory:` matches the JS `memory` store.
+  factory LocalDatabaseService.open(SpookyLogger logger,
+      {StoreType store = StoreType.memory, String? path}) {
+    final dbPath =
+        store == StoreType.memory ? ':memory:' : (path ?? 'spooky.db');
+    final db = sqlite3.open(dbPath);
+    return LocalDatabaseService(db, logger);
+  }
+
+  /// Create the system tables. Idempotent.
+  void provision() {
+    _db.execute('''
+      CREATE TABLE IF NOT EXISTS records (
+        tbl TEXT NOT NULL,
+        id  TEXT NOT NULL,
+        doc TEXT NOT NULL,
+        rv  INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (tbl, id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_records_tbl ON records(tbl);
+      CREATE TABLE IF NOT EXISTS _00_query (
+        id  TEXT PRIMARY KEY,
+        doc TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS _00_stream_processor_state (
+        id    TEXT PRIMARY KEY,
+        state TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS _00_pending_mutations (
+        id  TEXT PRIMARY KEY,
+        doc TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS _00_schema (
+        hash       TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL
+      );
+    ''');
+  }
+
+  // ---- record CRUD (logical-table aware) ----------------------------------
+
+  /// `SELECT * FROM ONLY $id` -> the full record, or null.
+  Map<String, dynamic>? getById(String id) {
+    final tbl = extractTablePart(id);
+    final rs = _db
+        .select('SELECT doc FROM records WHERE tbl = ? AND id = ?', [tbl, id]);
+    if (rs.isEmpty) return null;
+    return jsonDecode(rs.first['doc'] as String) as Map<String, dynamic>;
+  }
+
+  /// `SELECT * FROM <table>` -> all records for the logical table.
+  List<Map<String, dynamic>> getAll(String table) {
+    final rs = _db.select('SELECT doc FROM records WHERE tbl = ?', [table]);
+    return rs
+        .map((row) => jsonDecode(row['doc'] as String) as Map<String, dynamic>)
+        .toList();
+  }
+
+  /// `CREATE ONLY $id CONTENT $doc`.
+  void create(String id, Map<String, dynamic> doc) {
+    final withId = {...doc, 'id': id};
+    _writeDoc(id, withId);
+  }
+
+  /// `UPSERT ONLY $id REPLACE $doc` (rollback restore).
+  void replace(String id, Map<String, dynamic> doc) {
+    final withId = {...doc, 'id': id};
+    _writeDoc(id, withId);
+  }
+
+  /// `UPSERT ONLY $id MERGE $patch`: deep-merge into the existing doc (creating
+  /// it if absent), preserving keys the patch omits (e.g. `_00_crdt`).
+  void upsertMerge(String id, Map<String, dynamic> patch) {
+    final existing = getById(id) ?? <String, dynamic>{'id': id};
+    final merged = _deepMerge(existing, patch);
+    merged['id'] = id;
+    _writeDoc(id, merged);
+  }
+
+  /// `UPDATE ONLY $id MERGE $patch`: like [upsertMerge] but a no-op if absent.
+  void updateMerge(String id, Map<String, dynamic> patch) {
+    final existing = getById(id);
+    if (existing == null) return;
+    final merged = _deepMerge(existing, patch);
+    merged['id'] = id;
+    _writeDoc(id, merged);
+  }
+
+  /// `UPDATE $id SET <fields>`: shallow field assignment.
+  void updateSet(String id, Map<String, dynamic> fields) {
+    final existing = getById(id);
+    if (existing == null) return;
+    final updated = {...existing, ...fields, 'id': id};
+    _writeDoc(id, updated);
+  }
+
+  /// `_00_rv += 1`.
+  void incrementRv(String id) {
+    final existing = getById(id);
+    if (existing == null) return;
+    final rv = ((existing['_00_rv'] as num?) ?? 0).toInt() + 1;
+    existing['_00_rv'] = rv;
+    _writeDoc(id, existing);
+  }
+
+  /// `DELETE $id`.
+  void delete(String id) {
+    final tbl = extractTablePart(id);
+    _db.execute('DELETE FROM records WHERE tbl = ? AND id = ?', [tbl, id]);
+  }
+
+  void _writeDoc(String id, Map<String, dynamic> doc) {
+    final tbl = extractTablePart(id);
+    final rv = ((doc['_00_rv'] as num?) ?? 1).toInt();
+    _db.execute(
+      'INSERT INTO records (tbl, id, doc, rv) VALUES (?, ?, ?, ?) '
+      'ON CONFLICT(tbl, id) DO UPDATE SET doc = excluded.doc, rv = excluded.rv',
+      [tbl, id, jsonEncode(doc), rv],
+    );
+  }
+
+  // ---- _00_query registry --------------------------------------------------
+
+  Map<String, dynamic>? getQueryConfig(String id) {
+    final rs = _db.select('SELECT doc FROM _00_query WHERE id = ?', [id]);
+    if (rs.isEmpty) return null;
+    return jsonDecode(rs.first['doc'] as String) as Map<String, dynamic>;
+  }
+
+  List<Map<String, dynamic>> getAllQueryConfigs() {
+    final rs = _db.select('SELECT doc FROM _00_query');
+    return rs
+        .map((row) => jsonDecode(row['doc'] as String) as Map<String, dynamic>)
+        .toList();
+  }
+
+  void putQueryConfig(String id, Map<String, dynamic> doc) {
+    _db.execute(
+      'INSERT INTO _00_query (id, doc) VALUES (?, ?) '
+      'ON CONFLICT(id) DO UPDATE SET doc = excluded.doc',
+      [id, jsonEncode(doc)],
+    );
+  }
+
+  void patchQueryConfig(String id, Map<String, dynamic> fields) {
+    final existing = getQueryConfig(id);
+    if (existing == null) return;
+    putQueryConfig(id, {...existing, ...fields});
+  }
+
+  void deleteQueryConfig(String id) {
+    _db.execute('DELETE FROM _00_query WHERE id = ?', [id]);
+  }
+
+  // ---- pending mutations ----------------------------------------------------
+
+  void putMutation(String id, Map<String, dynamic> doc) {
+    _db.execute(
+      'INSERT INTO _00_pending_mutations (id, doc) VALUES (?, ?) '
+      'ON CONFLICT(id) DO UPDATE SET doc = excluded.doc',
+      [id, jsonEncode(doc)],
+    );
+  }
+
+  void deleteMutation(String id) {
+    _db.execute('DELETE FROM _00_pending_mutations WHERE id = ?', [id]);
+  }
+
+  /// All pending mutations ordered by their stored `created_at` (oldest first).
+  List<Map<String, dynamic>> getAllMutations() {
+    final rs = _db.select('SELECT doc FROM _00_pending_mutations');
+    final docs = rs
+        .map((row) => jsonDecode(row['doc'] as String) as Map<String, dynamic>)
+        .toList();
+    docs.sort((a, b) => (a['created_at'] as String? ?? '')
+        .compareTo(b['created_at'] as String? ?? ''));
+    return docs;
+  }
+
+  // ---- stream processor state ----------------------------------------------
+
+  String? getStreamState() {
+    final rs = _db.select(
+        "SELECT state FROM _00_stream_processor_state WHERE id = '_00_stream_processor_state'");
+    if (rs.isEmpty) return null;
+    return rs.first['state'] as String;
+  }
+
+  void setStreamState(String state) {
+    _db.execute(
+      'INSERT INTO _00_stream_processor_state (id, state) VALUES '
+      "('_00_stream_processor_state', ?) "
+      'ON CONFLICT(id) DO UPDATE SET state = excluded.state',
+      [state],
+    );
+  }
+
+  // ---- schema hash ----------------------------------------------------------
+
+  String? latestSchemaHash() {
+    final rs = _db
+        .select('SELECT hash FROM _00_schema ORDER BY created_at DESC LIMIT 1');
+    if (rs.isEmpty) return null;
+    return rs.first['hash'] as String;
+  }
+
+  void recordSchemaHash(String hash, String createdAtIso) {
+    _db.execute(
+      'INSERT INTO _00_schema (hash, created_at) VALUES (?, ?) '
+      'ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at',
+      [hash, createdAtIso],
+    );
+  }
+
+  // ---- transactions ---------------------------------------------------------
+
+  T tx<T>(T Function() body) {
+    _db.execute('BEGIN');
+    try {
+      final result = body();
+      _db.execute('COMMIT');
+      return result;
+    } catch (_) {
+      _db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  void close() => _db.dispose();
+
+  Map<String, dynamic> _deepMerge(
+      Map<String, dynamic> base, Map<String, dynamic> patch) {
+    final out = Map<String, dynamic>.from(base);
+    patch.forEach((key, value) {
+      final existing = out[key];
+      if (existing is Map<String, dynamic> && value is Map<String, dynamic>) {
+        out[key] = _deepMerge(existing, value);
+      } else {
+        out[key] = value;
+      }
+    });
+    return out;
+  }
+}

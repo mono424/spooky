@@ -7,5 +7,6 @@ members = [
     "packages/ssp",
     "packages/ssp-protocol",
     "packages/ssp-wasm",
+    "packages/ssp-ffi",
     "packages/job-runner",
 ]
