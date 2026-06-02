@@ -148,13 +148,14 @@ impl Graph {
             operator::OperatorPlan::Limit {
                 input,
                 limit,
+                start,
                 order_by,
             } => {
                 let input_id = Self::build_node(input, nodes, scan_index);
                 let id = nodes.len();
                 nodes.push(Node {
                     id,
-                    operator: Box::new(operator::TopK::new(*limit, order_by.clone())),
+                    operator: Box::new(operator::TopK::new(*limit, *start, order_by.clone())),
                     inputs: vec![input_id],
                 });
                 id
@@ -264,6 +265,7 @@ mod tests {
         OperatorPlan::Limit {
             input: Box::new(input),
             limit: n,
+            start: 0,
             order_by: order,
         }
     }

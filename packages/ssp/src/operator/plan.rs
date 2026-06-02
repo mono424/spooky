@@ -71,6 +71,10 @@ pub enum OperatorPlan {
     Limit {
         input: Box<OperatorPlan>,
         limit: usize,
+        /// Number of leading rows to skip (SurrealQL `START`). Defaults to 0,
+        /// so plans emitted before offset support deserialize unchanged.
+        #[serde(default)]
+        start: usize,
         #[serde(default)]
         order_by: Option<Vec<OrderSpec>>,
     },

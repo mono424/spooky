@@ -221,6 +221,13 @@ fn parse_limit_clause(input: &str) -> IResult<&str, usize> {
     )(input)
 }
 
+fn parse_start_clause(input: &str) -> IResult<&str, usize> {
+    preceded(
+        tag_no_case("START"),
+        ws(map_res(digit1, |s: &str| s.parse::<usize>())),
+    )(input)
+}
+
 fn parse_order_clause(input: &str) -> IResult<&str, Vec<Value>> {
     let single_order = map(
         tuple((
@@ -334,6 +341,9 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
 
     let (input, order_by) = opt(ws(parse_order_clause))(input)?;
     let (input, limit) = opt(ws(parse_limit_clause))(input)?;
+    // SurrealDB allows `LIMIT n START m`; offset is meaningless without a limit
+    // window, so it's only consumed alongside `limit` in the tree-building step.
+    let (input, start) = opt(ws(parse_start_clause))(input)?;
 
     // --- TREE BUILDING ---
     let mut current_op = json!({ "op": "scan", "table": table });
@@ -354,7 +364,8 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
     }
 
     if let Some(l) = limit {
-        let mut limit_op = json!({ "op": "limit", "limit": l, "input": current_op });
+        let mut limit_op =
+            json!({ "op": "limit", "limit": l, "start": start.unwrap_or(0), "input": current_op });
         if let Some(orders) = order_by {
             limit_op
                 .as_object_mut()

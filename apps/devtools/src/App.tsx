@@ -6,6 +6,7 @@ import { EventsTab } from './components/events/EventsTab';
 import { QueriesTab } from './components/queries/QueriesTab';
 import { DatabaseTab } from './components/database/DatabaseTab';
 import { AuthTab } from './components/auth/AuthTab';
+import { VersionsTab } from './components/versions/VersionsTab';
 import { McpTab } from './components/mcp/McpTab';
 
 function AppContent() {
@@ -38,6 +39,12 @@ function AppContent() {
         <div class="tab-content" classList={{ active: activeTab() === 'auth' }}>
           <Show when={activeTab() === 'auth'}>
             <AuthTab />
+          </Show>
+        </div>
+
+        <div class="tab-content" classList={{ active: activeTab() === 'versions' }}>
+          <Show when={activeTab() === 'versions'}>
+            <VersionsTab />
           </Show>
         </div>
 

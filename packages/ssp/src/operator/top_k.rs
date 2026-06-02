@@ -7,13 +7,17 @@ use std::collections::{BTreeSet, HashMap};
 
 /// TopK operator with sorted buffer state (Z⁻¹).
 ///
-/// Maintains a sorted buffer of all input records. On each delta:
+/// Maintains a sorted buffer of all input records and emits the window
+/// `[offset, offset + limit)` of it (SurrealQL `LIMIT limit START offset`).
+/// On each delta:
 ///   1. Insert/remove records from the buffer
-///   2. Compute which records enter/leave the top K
+///   2. Compute which records enter/leave the window
 ///   3. Emit +1 for new entrants, -1 for displaced records
 #[derive(Debug)]
 pub struct TopK {
     pub limit: usize,
+    /// Number of leading sorted rows to skip (SurrealQL `START`). 0 = top-N.
+    pub offset: usize,
     pub order_by: Option<Vec<OrderSpec>>,
     /// All records seen so far, sorted. Each entry is (sort_key_parts, row_key).
     /// Using BTreeSet for automatic sorted order.
@@ -57,9 +61,10 @@ impl SortableValue {
 }
 
 impl TopK {
-    pub fn new(limit: usize, order_by: Option<Vec<OrderSpec>>) -> Self {
+    pub fn new(limit: usize, offset: usize, order_by: Option<Vec<OrderSpec>>) -> Self {
         Self {
             limit,
+            offset,
             order_by,
             buffer: BTreeSet::new(),
             key_index: HashMap::new(),
@@ -81,9 +86,11 @@ impl TopK {
         }
     }
 
-    fn current_top_k(&self) -> Vec<String> {
+    /// The keys currently in the output window `[offset, offset + limit)`.
+    fn current_window(&self) -> Vec<String> {
         self.buffer
             .iter()
+            .skip(self.offset)
             .take(self.limit)
             .map(|(_, key)| key.clone())
             .collect()
@@ -102,7 +109,7 @@ impl super::Operator for TopK {
         items.sort();
 
         let mut out = HashMap::new();
-        for (_, key) in items.into_iter().take(self.limit) {
+        for (_, key) in items.into_iter().skip(self.offset).take(self.limit) {
             out.insert(key.clone(), 1);
         }
         out
@@ -115,7 +122,7 @@ impl super::Operator for TopK {
         _ctx: Option<&Sp00kyValue>,
     ) -> ZSet {
         let upstream_delta = input_deltas[0];
-        let old_top_k = self.current_top_k();
+        let old_top_k = self.current_window();
 
         for (key, &weight) in upstream_delta {
             if weight > 0 {
@@ -129,7 +136,7 @@ impl super::Operator for TopK {
             }
         }
 
-        let new_top_k = self.current_top_k();
+        let new_top_k = self.current_window();
 
         // Compute displacement delta
         let mut output_delta = HashMap::new();
@@ -201,6 +208,7 @@ mod tests {
 
         let top_k = TopK::new(
             2,
+            0,
             Some(vec![OrderSpec {
                 field: Path::new("score"),
                 direction: "DESC".into(),
@@ -215,6 +223,63 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_offset_skips_leading_rows() {
+        let mut store = Store::new();
+        store.ensure_collection("posts");
+        store.apply_change(&Change::create("posts", "post:1", json!({"score": 10})));
+        store.apply_change(&Change::create("posts", "post:2", json!({"score": 40})));
+        store.apply_change(&Change::create("posts", "post:3", json!({"score": 30})));
+        store.apply_change(&Change::create("posts", "post:4", json!({"score": 20})));
+
+        // ORDER BY score DESC → [40, 30, 20, 10]. LIMIT 2 START 1 → [30, 20].
+        let top_k = TopK::new(
+            2,
+            1,
+            Some(vec![OrderSpec {
+                field: Path::new("score"),
+                direction: "DESC".into(),
+            }]),
+        );
+        let input = zset(&[("posts:1", 1), ("posts:2", 1), ("posts:3", 1), ("posts:4", 1)]);
+        let result = top_k.snapshot(&[&input], &store, None);
+
+        assert_eq!(result.len(), 2);
+        assert!(result.is_present("posts:3")); // score 30 (skipped post:2 @ 40)
+        assert!(result.is_present("posts:4")); // score 20
+        assert!(!result.is_present("posts:2")); // skipped by START 1
+        assert!(!result.is_present("posts:1")); // below the window
+    }
+
+    #[test]
+    fn step_offset_emits_window_shift_on_insert() {
+        let mut store = Store::new();
+        store.ensure_collection("posts");
+        store.apply_change(&Change::create("posts", "post:1", json!({"score": 10})));
+        store.apply_change(&Change::create("posts", "post:2", json!({"score": 40})));
+        store.apply_change(&Change::create("posts", "post:3", json!({"score": 20})));
+
+        // LIMIT 1 START 1 → window is the 2nd row. Order [40, 20, 10] → [20].
+        let mut top_k = TopK::new(
+            1,
+            1,
+            Some(vec![OrderSpec {
+                field: Path::new("score"),
+                direction: "DESC".into(),
+            }]),
+        );
+        let d1 = zset(&[("posts:1", 1), ("posts:2", 1), ("posts:3", 1)]);
+        let _ = top_k.step(&[&d1], &store, None);
+
+        // Insert score 30 → order [40, 30, 20, 10], window (idx 1) is now 30.
+        store.apply_change(&Change::create("posts", "post:4", json!({"score": 30})));
+        let d2 = zset(&[("posts:4", 1)]);
+        let result = top_k.step(&[&d2], &store, None);
+
+        assert_eq!(result.get("posts:4"), Some(&1)); // enters the window
+        assert_eq!(result.get("posts:3"), Some(&-1)); // pushed out (now idx 2)
+    }
+
+    #[test]
     fn step_emits_displacement_on_insert() {
         let mut store = Store::new();
         store.ensure_collection("posts");
@@ -223,6 +288,7 @@ mod tests {
 
         let mut top_k = TopK::new(
             2,
+            0,
             Some(vec![OrderSpec {
                 field: Path::new("score"),
                 direction: "DESC".into(),
@@ -251,6 +317,7 @@ mod tests {
 
         let mut top_k = TopK::new(
             2,
+            0,
             Some(vec![OrderSpec {
                 field: Path::new("score"),
                 direction: "DESC".into(),

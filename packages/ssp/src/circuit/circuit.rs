@@ -846,8 +846,9 @@ impl Default for Circuit {
 mod tests {
     use super::*;
     use crate::algebra::ZSetOps;
-    use crate::operator::plan::{OperatorPlan, Projection};
+    use crate::operator::plan::{OperatorPlan, OrderSpec, Projection};
     use crate::circuit::store::Change;
+    use crate::types::Path;
     use serde_json::json;
 
     fn scan_query(id: &str, table: &str) -> QueryPlan {
@@ -857,6 +858,78 @@ mod tests {
                 table: table.to_string(),
             },
         }
+    }
+
+    /// SELECT * FROM <table> ORDER BY <field> <dir> LIMIT <limit> START <start>
+    fn limit_start_query(
+        id: &str,
+        table: &str,
+        limit: usize,
+        start: usize,
+        order_field: &str,
+        dir: &str,
+    ) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Limit {
+                input: Box::new(OperatorPlan::Scan {
+                    table: table.to_string(),
+                }),
+                limit,
+                start,
+                order_by: Some(vec![OrderSpec {
+                    field: Path::new(order_field),
+                    direction: dir.to_string(),
+                }]),
+            },
+        }
+    }
+
+    #[test]
+    fn limit_start_window_paginates_by_offset() {
+        let mut circuit = Circuit::new();
+        circuit.load(vec![
+            Record::new("posts", "post:1", json!({"score": 10})),
+            Record::new("posts", "post:2", json!({"score": 40})),
+            Record::new("posts", "post:3", json!({"score": 30})),
+            Record::new("posts", "post:4", json!({"score": 20})),
+        ]);
+
+        // ORDER BY score DESC → [40, 30, 20, 10]. LIMIT 2 START 1 → [30, 20].
+        circuit.add_query(limit_start_query("p1", "posts", 2, 1, "score", "DESC"), None, None);
+
+        let view = circuit.get_view("p1").unwrap();
+        assert!(view.cache.is_present("posts:3")); // score 30
+        assert!(view.cache.is_present("posts:4")); // score 20
+        assert!(!view.cache.is_present("posts:2")); // score 40 — skipped by START 1
+        assert!(!view.cache.is_present("posts:1")); // score 10 — below the window
+    }
+
+    #[test]
+    fn limit_start_window_shifts_on_insert() {
+        let mut circuit = Circuit::new();
+        circuit.load(vec![
+            Record::new("posts", "post:1", json!({"score": 10})),
+            Record::new("posts", "post:2", json!({"score": 40})),
+            Record::new("posts", "post:3", json!({"score": 20})),
+        ]);
+
+        // [40, 20, 10]. LIMIT 1 START 1 → 2nd row = post:3 (score 20).
+        circuit.add_query(limit_start_query("p1", "posts", 1, 1, "score", "DESC"), None, None);
+        assert!(circuit.get_view("p1").unwrap().cache.is_present("posts:3"));
+
+        // Insert score 30 → [40, 30, 20, 10]. 2nd row is now post:4 (30); post:3
+        // is pushed out of the window.
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::create("posts", "post:4", json!({"score": 30}))],
+        });
+        assert_eq!(deltas.len(), 1);
+        assert!(deltas[0].additions.contains(&"posts:4".to_string()));
+        assert!(deltas[0].removals.contains(&"posts:3".to_string()));
+
+        let view = circuit.get_view("p1").unwrap();
+        assert!(view.cache.is_present("posts:4"));
+        assert!(!view.cache.is_present("posts:3"));
     }
 
     #[test]
@@ -1703,6 +1776,7 @@ mod tests {
                                             },
                                         }),
                                         limit: 1,
+                                        start: 0,
                                         order_by: None,
                                     }),
                                     parent_key: Some(SubqueryParentKey {

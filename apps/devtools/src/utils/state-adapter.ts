@@ -1,9 +1,10 @@
-import type {
-  BackendDevToolsState,
-  DevToolsState,
-  Sp00kyEvent,
-  ActiveQuery,
-  AuthState,
+import {
+  DEFAULT_VERSIONS,
+  type BackendDevToolsState,
+  type DevToolsState,
+  type Sp00kyEvent,
+  type ActiveQuery,
+  type AuthState,
 } from '../types/devtools';
 
 /**
@@ -37,5 +38,6 @@ export function adaptBackendState(backendState: BackendDevToolsState): DevToolsS
     activeQueries,
     auth,
     database: backendState.database,
+    versions: backendState.versions ?? DEFAULT_VERSIONS,
   };
 }

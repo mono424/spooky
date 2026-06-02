@@ -77,6 +77,10 @@ pub struct AppState {
     /// `_00_query` / `_00_list_ref` storage layout. See
     /// `ssp_protocol::RefMode` and `crate::tables`.
     pub ref_mode: ssp_protocol::RefMode,
+    /// Version of the upstream SurrealDB server, queried once at startup
+    /// (`"unknown"` if the query failed). Surfaced via `/info` so the DevTools
+    /// can report the SurrealDB backend version.
+    pub surrealdb_version: String,
 }
 
 // --- Request/Response DTOs ---
@@ -333,13 +337,27 @@ pub fn create_app(state: AppState) -> Router {
         .route("/reset", post(reset_handler))
         .layer(middleware::from_fn(auth_middleware));
 
-    // Public routes — no auth required (health checks, info, version)
+    // Public routes — no auth required (health checks, info, version).
+    // A permissive CORS header lets the browser DevTools read these
+    // cross-origin (simple GETs, so no preflight is needed).
     let public = Router::new()
         .route("/health", get(health_handler))
         .route("/info", get(info_handler))
-        .route("/version", get(version_handler));
+        .route("/version", get(version_handler))
+        .layer(middleware::from_fn(cors_allow_all));
 
     authenticated.merge(public).with_state(state)
+}
+
+/// Add `Access-Control-Allow-Origin: *` so browser clients (e.g. the DevTools
+/// extension's page context) can read the public info/version responses.
+async fn cors_allow_all(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    res.headers_mut().insert(
+        axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        axum::http::HeaderValue::from_static("*"),
+    );
+    res
 }
 
 // --- Server Lifecycle ---
@@ -361,6 +379,15 @@ pub async fn run_server() -> anyhow::Result<()> {
 
     let config = load_config();
     let db = connect_database(&config).await?;
+
+    // Query the upstream SurrealDB server version once; surfaced via `/info`.
+    let surrealdb_version = match db.version().await {
+        Ok(v) => v.to_string(),
+        Err(e) => {
+            info!(error = %e, "Could not read SurrealDB server version");
+            "unknown".to_string()
+        }
+    };
 
     // Start with an empty circuit — self-bootstrap will populate it
     let processor_arc = Arc::new(RwLock::new(Circuit::new()));
@@ -406,6 +433,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         crdt_cache,
         view_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         ref_mode: config.ref_mode,
+        surrealdb_version,
     };
 
     let app = create_app(state);
@@ -1916,6 +1944,7 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
             "status": status_str,
             "views": circuit.view_count(),
             "version": env!("CARGO_PKG_VERSION"),
+            "surrealdb_version": state.surrealdb_version,
             "uptime_seconds": state.start_time.elapsed().as_secs(),
             "last_heartbeat_seconds_ago": null,
             "circuit_tables": circuit_tables,

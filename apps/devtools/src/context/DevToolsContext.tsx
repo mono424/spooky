@@ -7,11 +7,12 @@ import {
   type ParentComponent,
 } from 'solid-js';
 import { createStore } from 'solid-js/store';
-import type {
-  DevToolsState,
-  BackendDevToolsState,
-  TabType,
-  ChromeMessage,
+import {
+  DEFAULT_VERSIONS,
+  type DevToolsState,
+  type BackendDevToolsState,
+  type TabType,
+  type ChromeMessage,
 } from '../types/devtools';
 import { useChromeConnection } from '../hooks/useChromeConnection';
 import { useRunInHostPage } from '../hooks/useRunInHostPage';
@@ -39,6 +40,7 @@ interface DevToolsContextValue {
   setSelectedTable: (table: string | null) => void;
   clearEvents: () => void;
   refresh: () => void;
+  refreshVersions: () => void;
   fetchTableData: (tableName: string) => void;
   updateTableRow: (tableName: string, recordId: string, updates: Record<string, unknown>) => void;
   deleteTableRow: (tableName: string, recordId: string) => void;
@@ -63,6 +65,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
       tables: [],
       tableData: {},
     },
+    versions: DEFAULT_VERSIONS,
   });
 
   // UI state
@@ -216,6 +219,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
     if (frontendState.database?.tables) {
       setState('database', 'tables', frontendState.database.tables);
     }
+
+    // Update component versions
+    if (frontendState.versions) {
+      setState('versions', frontendState.versions);
+    }
   }
 
   /**
@@ -267,6 +275,26 @@ export const DevToolsProvider: ParentComponent = (props) => {
     if (currentTable) {
       fetchTableData(currentTable);
     }
+  }
+
+  /**
+   * Re-run backend version discovery in the page. Core's refreshVersions()
+   * re-fetches the ssp/scheduler/surrealdb versions and posts a state change,
+   * which arrives back through the normal SP00KY_STATE_CHANGED channel.
+   */
+  function refreshVersions() {
+    hostPage.run(
+      `(async function() {
+        if (window.__00__ && window.__00__.refreshVersions) {
+          await window.__00__.refreshVersions();
+          return { success: true };
+        }
+        return { success: false };
+      })()`,
+      {
+        onError: (error) => console.error('[DevTools] Error refreshing versions:', error),
+      }
+    );
   }
 
   /**
@@ -504,6 +532,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
     setSelectedTable,
     clearEvents,
     refresh,
+    refreshVersions,
     fetchTableData,
     updateTableRow,
     deleteTableRow,

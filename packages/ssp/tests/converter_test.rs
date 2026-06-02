@@ -23,6 +23,18 @@ fn test_simple_select_conversion() {
 }
 
 #[test]
+fn test_select_limit_start_conversion() {
+    let sql = "SELECT * FROM game ORDER BY sort_index ASC LIMIT 30 START 60";
+    let plan = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");
+
+    assert_eq!(plan["op"], "limit");
+    assert_eq!(plan["limit"], 30);
+    assert_eq!(plan["start"], 60);
+    assert_eq!(plan["input"]["op"], "scan");
+    assert_eq!(plan["input"]["table"], "game");
+}
+
+#[test]
 fn test_select_limit_conversion() {
     let sql = "SELECT name, age FROM person LIMIT 10";
     let plan = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");
@@ -31,6 +43,7 @@ fn test_select_limit_conversion() {
     let expected = json!({
         "op": "limit",
         "limit": 10,
+        "start": 0,
         "input": {
             "op": "project",
             "projections": [

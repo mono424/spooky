@@ -16,11 +16,19 @@ export interface DevToolsEvent {
 import type { DataModule } from '../data/index';
 import type { AuthService } from '../auth/index';
 import { AuthEventTypes } from '../auth/events/index';
+import {
+  type BackendVersions,
+  emptyBackendVersions,
+  fetchBackendVersions,
+} from './versions';
 
 export class DevToolsService implements StreamUpdateReceiver {
   private eventsHistory: DevToolsEvent[] = [];
   private eventIdCounter = 0;
-  private version = '1.0.0';
+  // Real bundled frontend version (injected at build time via tsdown `define`).
+  private version = __SP00KY_CORE_VERSION__;
+  // Backend versions, fetched async over HTTP; 'unavailable' until resolved.
+  private backendVersions: BackendVersions = emptyBackendVersions();
 
   constructor(
     private databaseService: LocalDatabaseService,
@@ -37,7 +45,17 @@ export class DevToolsService implements StreamUpdateReceiver {
       this.notifyDevTools();
     });
 
+    // Fire-and-forget backend version discovery; re-push state when it lands.
+    void this.refreshBackendVersions();
+
     this.logger.debug({ Category: 'sp00ky-client::DevToolsService::init' }, 'Service initialized');
+  }
+
+  /** Re-fetch backend component versions and notify the DevTools panel. */
+  private async refreshBackendVersions(): Promise<void> {
+    const endpoint = this.remoteDatabaseService.getConfig().endpoint;
+    this.backendVersions = await fetchBackendVersions(endpoint, this.logger);
+    this.notifyDevTools();
   }
 
   // Get active queries directly from DataManager (single source of truth)
@@ -164,6 +182,14 @@ export class DevToolsService implements StreamUpdateReceiver {
         userId: this.authService.currentUser?.id,
       },
       version: this.version,
+      versions: {
+        frontend: {
+          core: __SP00KY_CORE_VERSION__,
+          wasm: __SP00KY_WASM_VERSION__,
+          surrealdb: __SP00KY_SURREAL_VERSION__,
+        },
+        backend: this.backendVersions,
+      },
       database: {
         tables: this.schema.tables.map((t) => t.name),
         tableData: {},
@@ -240,6 +266,7 @@ export class DevToolsService implements StreamUpdateReceiver {
           this.eventsHistory = [];
           this.notifyDevTools();
         },
+        refreshVersions: () => this.refreshBackendVersions(),
         getTableData: async (tableName: string) => {
           try {
             // Returns the first statement result as T.

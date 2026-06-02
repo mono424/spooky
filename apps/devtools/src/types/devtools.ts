@@ -5,7 +5,23 @@ export interface BackendDevToolsState {
   activeQueries: Record<number, ActiveQuery>;
   auth: BackendAuthState;
   version: string;
+  versions?: VersionsState;
   database: DatabaseState;
+}
+
+// Frontend-vs-backend versions of the stack components. Unknown/unreachable
+// values are reported as the string 'unavailable'.
+export interface VersionsState {
+  frontend: {
+    core: string;
+    wasm: string;
+    surrealdb: string;
+  };
+  backend: {
+    ssp: string;
+    scheduler: string;
+    surrealdb: string;
+  };
 }
 
 export interface BackendEvent {
@@ -27,6 +43,7 @@ export interface DevToolsState {
   activeQueries: ActiveQuery[];
   auth: AuthState;
   database: DatabaseState;
+  versions: VersionsState;
 }
 
 export interface Sp00kyEvent {
@@ -87,7 +104,13 @@ export interface Sp00kyTableDataResponse {
 
 // UI State Types
 
-export type TabType = 'events' | 'queries' | 'database' | 'auth' | 'mcp';
+export type TabType = 'events' | 'queries' | 'database' | 'auth' | 'mcp' | 'versions';
+
+// Shared default so adapters/stores can fall back when versions are absent.
+export const DEFAULT_VERSIONS: VersionsState = {
+  frontend: { core: 'unavailable', wasm: 'unavailable', surrealdb: 'unavailable' },
+  backend: { ssp: 'unavailable', scheduler: 'unavailable', surrealdb: 'unavailable' },
+};
 
 export interface UIState {
   activeTab: TabType;

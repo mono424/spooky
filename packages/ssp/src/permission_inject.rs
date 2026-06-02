@@ -461,6 +461,7 @@ mod tests {
                 }),
             }),
             limit: 10,
+            start: 0,
             order_by: None,
         };
         let perms = perms_with(&[("thread", "published = true")]);

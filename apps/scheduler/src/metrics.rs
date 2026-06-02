@@ -1,5 +1,12 @@
 use anyhow::Result;
-use axum::{extract::State, http::StatusCode, routing::{get, put}, Json, Router};
+use axum::{
+    extract::{Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::Response,
+    routing::{get, put},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -79,7 +86,21 @@ pub fn create_metrics_router(state: MetricsState) -> Router {
         .route("/info", get(info_handler))
         .route("/info/text", get(info_text_handler))
         .route("/backends", put(update_backends_handler))
+        // Permissive CORS so browser DevTools can read /info cross-origin
+        // (simple GETs, no preflight needed).
+        .layer(middleware::from_fn(cors_allow_all))
         .with_state(state)
+}
+
+/// Add `Access-Control-Allow-Origin: *` to scheduler responses so the DevTools
+/// can read the version info cross-origin.
+async fn cors_allow_all(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    res.headers_mut().insert(
+        axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        axum::http::HeaderValue::from_static("*"),
+    );
+    res
 }
 
 /// Get metrics
