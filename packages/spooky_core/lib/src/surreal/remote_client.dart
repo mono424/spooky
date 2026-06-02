@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:meta/meta.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'value.dart';
@@ -63,10 +64,19 @@ class WebSocketSurrealClient implements RemoteSurrealClient {
   @override
   Stream<void> get onDisconnected => _disconnected.stream;
 
+  /// Opens the WebSocket for [uri]. Overridable in tests to inject a fake
+  /// channel (see `@visibleForTesting`).
+  @visibleForTesting
+  WebSocketChannel createChannel(Uri uri) => WebSocketChannel.connect(uri);
+
+  /// The RPC endpoint a raw [endpoint] normalizes to (exposed for tests).
+  @visibleForTesting
+  String rpcEndpoint(String endpoint) => _rpcEndpoint(endpoint);
+
   @override
   Future<void> connect(String endpoint) async {
     final uri = Uri.parse(_rpcEndpoint(endpoint));
-    final channel = WebSocketChannel.connect(uri);
+    final channel = createChannel(uri);
     _channel = channel;
     await channel.ready;
     channel.stream.listen(

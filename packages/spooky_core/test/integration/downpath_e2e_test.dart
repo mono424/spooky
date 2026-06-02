@@ -124,7 +124,8 @@ void main() {
 
     // Now exercise a LIVE change: update the record from the root connection
     // and confirm the new value propagates down to the client.
-    final newEmail = 'updated_${DateTime.now().microsecondsSinceEpoch}@e2e.test';
+    final newEmail =
+        'updated_${DateTime.now().microsecondsSinceEpoch}@e2e.test';
     await root.query(r'UPDATE $id SET email = $e',
         {'id': RecordId.parse(userId!), 'e': newEmail});
 

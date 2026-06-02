@@ -12,8 +12,10 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 extra_args=("--exclude-tags" "integration")
+find_expr=(test -name '*_test.dart' -not -path 'test/integration/*')
 if [[ "${1:-}" == "--integration" ]]; then
   extra_args=("--tags" "integration")
+  find_expr=(test/integration -name '*_test.dart')
 fi
 
 fail=0
@@ -31,7 +33,7 @@ while IFS= read -r file; do
     echo "FAIL  $file"
     printf '%s\n' "$out" | tail -15
   fi
-done < <(find test -name '*_test.dart' -not -path 'test/integration/*' | sort)
+done < <(find "${find_expr[@]}" | sort)
 
 echo "-----"
 if [[ $fail -eq 0 ]]; then
