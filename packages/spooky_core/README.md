@@ -92,6 +92,9 @@ Implemented and tested (54 tests):
   put/get/delete/exists/head/copy/rename/list).
 - Fluent `QueryBuilder` (`client.query('table').where(...).orderBy(...).limit(...)
   .stream()`) compiling to the same SURQL shape as the JS builder.
+- Codegen (`package:spooky_core/codegen.dart` + `dart run spooky_core:spooky_gen
+  <schema.surql> [out.dart]`): parses `DEFINE TABLE`/`DEFINE FIELD` and emits the
+  `ColumnSchema` map (for `Sp00kyConfig.schema`) plus typed model classes.
 
 The full sync orchestration (up-queue -> remote, down-queue register + initial
 fetch, LIVE -> down-sync -> Stream) is verified end-to-end against a fake
