@@ -134,20 +134,45 @@ class WebSocketSurrealClient implements RemoteSurrealClient {
     controller?.add(LiveMessage(action, value));
   }
 
+  String? _ns;
+  String? _db;
+
   @override
-  Future<void> use({required String namespace, required String database}) =>
-      _rpc('use', [namespace, database]);
+  Future<void> use({required String namespace, required String database}) {
+    _ns = namespace;
+    _db = database;
+    return _rpc('use', [namespace, database]);
+  }
 
   @override
   Future<dynamic> authenticate(String token) => _rpc('authenticate', [token]);
 
   @override
   Future<dynamic> signin(Map<String, dynamic> params) =>
-      _rpc('signin', [params]);
+      _rpc('signin', [_authParams(params)]);
 
   @override
   Future<dynamic> signup(Map<String, dynamic> params) =>
-      _rpc('signup', [params]);
+      _rpc('signup', [_authParams(params)]);
+
+  /// Normalize auth params to the SurrealDB RPC wire shape.
+  ///
+  /// `AuthService` (faithful to the JS SDK) passes `{access, variables}`; the
+  /// raw RPC instead wants `{ns, db, ac, ...variables}` with the access
+  /// variables flattened. Root logins (`{user, pass}`) pass through unchanged.
+  Map<String, dynamic> _authParams(Map<String, dynamic> params) {
+    if (!params.containsKey('access') && !params.containsKey('variables')) {
+      return params; // e.g. root {user, pass}
+    }
+    final vars =
+        (params['variables'] as Map?)?.cast<String, dynamic>() ?? const {};
+    return {
+      if (_ns != null) 'ns': _ns,
+      if (_db != null) 'db': _db,
+      if (params['access'] != null) 'ac': params['access'],
+      ...vars,
+    };
+  }
 
   @override
   Future<void> invalidate() => _rpc('invalidate', []);

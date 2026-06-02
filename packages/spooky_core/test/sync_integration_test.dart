@@ -96,6 +96,67 @@ void main() {
     );
     await sub.cancel();
   });
+
+  // Reproduces the "records sync one by one" report. The batch-coalescing
+  // window only collapses a SINGLE saveBatch (the initial registration fetch).
+  // The LIVE path is different: SurrealDB delivers one `_00_list_ref` message
+  // per record, and `_handleRemoteListRefChange` turns each into a one-record
+  // diff -> its own `syncRecords` -> its own `saveBatch([one])`. So a burst of
+  // N records that land together still produces N separate stream emissions,
+  // each growing the list by one -> the UI renders row-by-row.
+  test('a burst of remote LIVE creates syncs one record at a time (bug repro)',
+      () async {
+    final hash = await client.queryRaw('SELECT * FROM thread', {});
+    await _settle();
+
+    // Seed three records the engine will fetch when their list_ref CREATE lands.
+    final queryId = 'query:$hash';
+    for (var i = 1; i <= 3; i++) {
+      remote.records['thread:r$i'] = {
+        'id': 'thread:r$i',
+        'title': 'live $i',
+        '_00_rv': 1,
+      };
+    }
+
+    final emissions = <List<Map<String, dynamic>>>[];
+    // immediate: false so we only capture emissions caused by the LIVE burst,
+    // not the initial (empty) snapshot on subscribe.
+    final sub = client
+        .subscribeStream(hash, immediate: false)
+        .listen((e) => emissions.add(e));
+    await _settle();
+
+    // A burst: three list_ref CREATEs pushed back-to-back, as a remote bulk
+    // insert of three rows into the same query would deliver them.
+    for (var i = 1; i <= 3; i++) {
+      remote.pushLive('CREATE', {
+        'in': queryId,
+        'out': 'thread:r$i',
+        'version': 1,
+      });
+    }
+    await _settle();
+
+    // All three records arrive...
+    expect(emissions.last.map((r) => r['id']),
+        containsAll(['thread:r1', 'thread:r2', 'thread:r3']));
+
+    // ...but one emission per record (the list grows 1 -> 2 -> 3), instead of a
+    // single coalesced emission. This is the row-by-row sync being reproduced.
+    expect(
+      emissions.length,
+      3,
+      reason: 'LIVE burst currently emits once per record (row-by-row sync)',
+    );
+    expect(
+      emissions.map((e) => e.length).toList(),
+      [1, 2, 3],
+      reason: 'each emission adds exactly one more record',
+    );
+
+    await sub.cancel();
+  });
 }
 
 Future<void> _settle() =>

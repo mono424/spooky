@@ -588,7 +588,10 @@ class DataModule {
   /// `sessionId`) so the hash agrees with the JS client for a shared
   /// `_00_query` table.
   String calculateHash(Map<String, dynamic> data) {
-    final content = jsonEncode({...data, 'sessionId': _sessionId});
+    // Sanitize RecordId/DateTime params (jsonEncode can't encode them) the same
+    // way they serialize on the wire, so the hash is stable.
+    final content =
+        jsonEncode({..._jsonSafe(data) as Map, 'sessionId': _sessionId});
     return sha256.convert(utf8.encode(content)).toString();
   }
 

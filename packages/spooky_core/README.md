@@ -102,9 +102,11 @@ remote client. The `WebSocketSurrealClient` wire protocol is also validated
 against **live SurrealDB v2.1.4 and v3.1.2** (connect/signin/use, query with
 RecordId bind vars, LIVE + KILL, lifecycle), and the end-to-end mutation
 up-path (local create/update -> remote) is verified through the real client on
-both versions. The down-path (`fn::query::register` + `_00_list_ref`
-materialization) additionally needs the `ssp` server and is not yet covered by
-an automated integration test.
+both versions. The **down-path** (`fn::query::register` -> ssp materialization ->
+`_00_list_ref_user_<id>` -> LIVE/fetch -> Stream) is also validated end-to-end
+against a running ssp + SurrealDB stack, including a root-side UPDATE
+propagating via the LIVE feed (see `test/integration/downpath_e2e_test.dart`,
+point `SURREAL_DEV_WS` at the ssp's SurrealDB).
 
 ### Running tests
 
