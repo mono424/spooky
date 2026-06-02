@@ -157,9 +157,19 @@ class WebSocketSurrealClient implements RemoteSurrealClient {
     final result = await _rpc('query', [sql, _encodeVars(vars)]);
     // SurrealDB returns [{ status, result }, ...]; surface the result list to
     // match the JS `.query()` which returns the per-statement results.
+    //
+    // A statement with status 'ERR' throws (matching the JS SDK). This is
+    // load-bearing for sync: a `LIVE SELECT` on a not-yet-created
+    // `_00_list_ref_user_<id>` table fails per-statement in v3, and
+    // Sp00kySync's retry backoff relies on the throw to re-attempt.
     if (result is List) {
       return result.map((stmt) {
-        if (stmt is Map && stmt.containsKey('result')) return stmt['result'];
+        if (stmt is Map && stmt.containsKey('result')) {
+          if (stmt['status'] != null && stmt['status'] != 'OK') {
+            throw StateError('Query error: ${stmt['result']}');
+          }
+          return stmt['result'];
+        }
         return stmt;
       }).toList();
     }
