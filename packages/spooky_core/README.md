@@ -106,6 +106,21 @@ both versions. The down-path (`fn::query::register` + `_00_list_ref`
 materialization) additionally needs the `ssp` server and is not yet covered by
 an automated integration test.
 
+### Running tests
+
+The `ssp-ffi` Rust cdylib installs `std`'s signal/stack-overflow handlers when
+loaded, which the Dart `test` runner's *secondary* suite isolates don't
+tolerate (a process hosts many suites). So run each test file in its own
+process:
+
+```bash
+tool/run_tests.sh                 # unit tests, one process per file
+tool/run_tests.sh --integration   # integration tests (need a server)
+```
+
+`dart test <single_file>` also works; the aggregate `dart test` (all files in
+one process) is the only thing affected. Real single-process app usage is fine.
+
 ### Integration tests
 
 Tagged `integration` and skipped unless a server is reachable. To run:
@@ -114,9 +129,10 @@ Tagged `integration` and skipped unless a server is reachable. To run:
 docker run -d --name surreal -p 18011:8000 \
   surrealdb/surrealdb:v2.1.4 start --user root --pass root --allow-all memory
 cd packages/spooky_core
-dart test --tags integration               # uses ws://127.0.0.1:18011 by default
-SURREAL_IT_ENDPOINT=ws://host:port dart test --tags integration
+SURREAL_IT_ENDPOINT=ws://127.0.0.1:18011 dart test --tags integration
 ```
+
+Validated against SurrealDB v2.1.4 and v3.1.2.
 
 Not yet implemented (seam in place):
 - CRDT collaborative fields (`openCrdtField`).

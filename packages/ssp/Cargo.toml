@@ -7,8 +7,13 @@ edition = "2021"
 crate-type = ["rlib"]
 
 [features]
-default = ["parallel"]
+default = ["parallel", "mimalloc"]
 parallel = ["dep:rayon"]
+# mimalloc as the global allocator (native, non-wasm). Kept on by default for
+# the server/CLI, but disabled by the Dart FFI build: mimalloc's per-thread
+# init/teardown segfaults inside a dylib loaded into the Dart VM's multi-isolate
+# process. See packages/ssp-ffi.
+mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -28,7 +33,7 @@ tracing = "0.1"
 ssp-protocol = { path = "../ssp-protocol" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-mimalloc = "0.1.48"
+mimalloc = { version = "0.1.48", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

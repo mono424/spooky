@@ -70,6 +70,7 @@ class Sp00kySync {
   EventSystem get engineEvents => _syncEngine.events;
 
   bool _isInit = false;
+  bool _closed = false;
   bool _wasDisconnected = false;
   final RefMode _refMode = defaultRefMode;
 
@@ -127,6 +128,7 @@ class Sp00kySync {
         _liveRetryCount++;
         await Future<void>.delayed(Duration(milliseconds: attemptDelays[i]));
       }
+      if (_closed) return; // bail if torn down mid-backoff
       try {
         await _restartRefLiveQuery();
         return;
@@ -402,6 +404,7 @@ class Sp00kySync {
   }
 
   Future<void> close() async {
+    _closed = true;
     _stopListRefPoll();
     await _killRefLiveQuery();
   }
