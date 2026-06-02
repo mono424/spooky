@@ -1,3 +1,4 @@
+import 'openapi_parser.dart';
 import 'schema_parser.dart';
 
 /// Emit the `ColumnSchema` map literal consumed by `Sp00kyConfig.schema`.
@@ -140,18 +141,247 @@ String _pascal(String name) => name
     .map((p) => p[0].toUpperCase() + p.substring(1))
     .join();
 
-/// Emit a full, analyzable Dart source file: imports + schema map + models.
-String generateDartSource(String surql) {
-  final tables = parseSchema(surql);
+String _camel(String name) {
+  final p = _pascal(name);
+  return p.isEmpty ? p : p[0].toLowerCase() + p.substring(1);
+}
+
+/// The `TypedField` constructor for a filterable field, or null for types that
+/// can't be type-safely filtered (object/array/dynamic).
+String? _fieldTokenCtor(FieldDef f) {
+  if (f.isRecord) return "RecordField('${f.name}')";
+  if (f.isDateTime) return "DateTimeField('${f.name}')";
+  final t = f.type.toLowerCase();
+  if (t == 'string' || t == 'uuid') return "StringField('${f.name}')";
+  if (t == 'int' || t == 'number' || t == 'float' || t == 'decimal') {
+    return "NumField('${f.name}')";
+  }
+  if (t == 'bool') return "BoolField('${f.name}')";
+  return null;
+}
+
+/// Emit per-table field tokens: `abstract final class Thread$ { ... }`.
+String emitFieldTokens(List<TableDef> tables) {
+  final buf = StringBuffer();
+  for (final table in tables) {
+    final fields = [
+      FieldDef(
+          name: 'id',
+          type: 'string',
+          optional: false,
+          isRecord: false,
+          isDateTime: false),
+      ...table.fields.where((f) => f.name != 'id'),
+    ];
+    buf.writeln('abstract final class ${_pascal(table.name)}\$ {');
+    for (final f in fields) {
+      final ctor = _fieldTokenCtor(f);
+      if (ctor != null) buf.writeln('  static const ${f.name} = $ctor;');
+    }
+    buf.writeln('}');
+    buf.writeln();
+  }
+  return buf.toString().trimRight();
+}
+
+/// Emit an all-nullable `<Table>Patch` for partial updates.
+String emitPatches(List<TableDef> tables) {
+  final buf = StringBuffer();
+  for (final table in tables) {
+    final cls = '${_pascal(table.name)}Patch';
+    final fields = table.fields.where((f) => f.name != 'id').toList();
+    buf.writeln('class $cls {');
+    if (fields.isEmpty) {
+      buf.writeln('  $cls();');
+    } else {
+      buf.writeln('  $cls({');
+      for (final f in fields) {
+        buf.writeln('    this.${f.name},');
+      }
+      buf.writeln('  });');
+    }
+    buf.writeln();
+    for (final f in fields) {
+      buf.writeln('  final ${_baseDartType(f)}? ${f.name};');
+    }
+    buf.writeln();
+    buf.writeln('  Map<String, dynamic> toJson() {');
+    buf.writeln('    final m = <String, dynamic>{};');
+    for (final f in fields) {
+      final value =
+          f.isDateTime ? '${f.name}!.toUtc().toIso8601String()' : f.name;
+      buf.writeln("    if (${f.name} != null) m['${f.name}'] = $value;");
+    }
+    buf.writeln('    return m;');
+    buf.writeln('  }');
+    buf.writeln('}');
+    buf.writeln();
+  }
+  return buf.toString().trimRight();
+}
+
+/// Emit a typed collection per table.
+String emitCollections(List<TableDef> tables) {
+  final buf = StringBuffer();
+  for (final table in tables) {
+    final cls = _pascal(table.name);
+    buf.writeln('class ${cls}Collection {');
+    buf.writeln('  ${cls}Collection(this._c);');
+    buf.writeln('  final Sp00kyClient _c;');
+    buf.writeln();
+    buf.writeln('  TypedQuery<$cls> query() =>');
+    buf.writeln("      TypedQuery(_c.query('${table.name}'), $cls.fromJson);");
+    buf.writeln();
+    buf.writeln('  Future<void> create($cls model) =>');
+    buf.writeln("      _c.create(model.id, model.toJson()..remove('id'));");
+    buf.writeln();
+    buf.writeln('  Future<void> update(String id, ${cls}Patch patch) =>');
+    buf.writeln("      _c.update('${table.name}', id, patch.toJson());");
+    buf.writeln();
+    buf.writeln('  Future<void> delete(String id) =>');
+    buf.writeln("      _c.delete('${table.name}', id);");
+    buf.writeln('}');
+    buf.writeln();
+  }
+  return buf.toString().trimRight();
+}
+
+/// Emit typed auth methods per `DEFINE ACCESS` (params typed as String).
+String emitAuthApi(List<AccessDef> accesses) {
+  if (accesses.isEmpty) return '';
+  final buf = StringBuffer('class AuthApi {\n');
+  buf.writeln('  AuthApi(this._c);');
+  buf.writeln('  final Sp00kyClient _c;');
+  for (final a in accesses) {
+    final suffix = _pascal(a.name);
+    buf.writeln();
+    buf.writeln(_authMethod('signIn$suffix', a.name, 'signIn', a.signinParams));
+    buf.writeln();
+    buf.writeln(_authMethod('signUp$suffix', a.name, 'signUp', a.signupParams));
+  }
+  buf.writeln('}');
+  return buf.toString();
+}
+
+String _authMethod(
+    String method, String access, String call, List<String> params) {
+  final namedParams = params.map((p) => 'required String $p').join(', ');
+  final mapEntries = params.map((p) => "'$p': $p").join(', ');
+  return '  Future<void> $method({$namedParams}) =>\n'
+      "      _c.auth.$call('$access', {$mapEntries});";
+}
+
+String _routeMethodName(String path) {
+  final parts =
+      path.split(RegExp(r'[/_\-\s]+')).where((p) => p.isNotEmpty).toList();
+  if (parts.isEmpty) return 'call';
+  return parts.first +
+      parts.skip(1).map((p) => p[0].toUpperCase() + p.substring(1)).join();
+}
+
+/// Emit typed backend route methods.
+String emitBackends(List<BackendDef> backends) {
+  if (backends.isEmpty) return '';
+  final buf = StringBuffer();
+  // Aggregator.
+  buf.writeln('class Backends {');
+  buf.writeln('  Backends(this._c);');
+  buf.writeln('  final Sp00kyClient _c;');
+  for (final b in backends) {
+    buf.writeln('  ${_pascal(b.name)}Backend get ${_camel(b.name)} =>'
+        ' ${_pascal(b.name)}Backend(_c);');
+  }
+  buf.writeln('}');
+  buf.writeln();
+  // Per-backend classes.
+  for (final b in backends) {
+    buf.writeln('class ${_pascal(b.name)}Backend {');
+    buf.writeln('  ${_pascal(b.name)}Backend(this._c);');
+    buf.writeln('  final Sp00kyClient _c;');
+    for (final r in b.routes) {
+      final method = _routeMethodName(r.path);
+      final named = r.args
+          .map((a) => '${a.optional ? '' : 'required '}${a.type} ${a.name}')
+          .join(', ');
+      final entries = r.args.map((a) => "'${a.name}': ${a.name}").join(', ');
+      buf.writeln();
+      buf.writeln('  Future<void> $method({$named}) =>');
+      buf.writeln("      _c.run('${b.name}', '${r.path}', {$entries});");
+    }
+    buf.writeln('}');
+    buf.writeln();
+  }
+  return buf.toString().trimRight();
+}
+
+/// Emit the `AppDb` facade.
+String emitAppDb(List<TableDef> tables, List<AccessDef> accesses,
+    List<BackendDef> backends) {
+  final buf = StringBuffer('class AppDb {\n');
+  buf.writeln('  AppDb(this.client);');
+  buf.writeln('  final Sp00kyClient client;');
+  buf.writeln();
+  buf.writeln('  factory AppDb.open(DatabaseConfig database) => AppDb(');
+  buf.writeln('        Sp00kyClient(Sp00kyConfig(');
+  buf.writeln('          database: database,');
+  buf.writeln('          schema: spookySchema,');
+  buf.writeln('          schemaSurql: surqlSchema,');
+  buf.writeln('        )),');
+  buf.writeln('      );');
+  buf.writeln();
+  buf.writeln('  Future<void> init() => client.init();');
+  buf.writeln('  Future<void> close() => client.close();');
+  for (final t in tables) {
+    final cls = _pascal(t.name);
+    buf.writeln('  ${cls}Collection get ${_camel(t.name)} =>'
+        ' ${cls}Collection(client);');
+  }
+  if (backends.isNotEmpty) {
+    buf.writeln('  Backends get run => Backends(client);');
+  }
+  if (accesses.isNotEmpty) {
+    buf.writeln('  AuthApi get auth => AuthApi(client);');
+  }
+  buf.writeln('}');
+  return buf.toString();
+}
+
+/// Emit a full, analyzable Dart source file: schema map + models + patches +
+/// field tokens + collections + auth + backends + the `AppDb` facade.
+String generateDartSource(String surql,
+    {List<BackendDef> backends = const []}) {
+  final parsed = parseProject(surql);
+  final tables = parsed.tables;
   final buf = StringBuffer();
   buf.writeln('// GENERATED CODE - DO NOT EDIT BY HAND.');
   buf.writeln('// Generated from a SurrealQL schema by spooky_core codegen.');
   buf.writeln();
   buf.writeln("import 'package:spooky_core/spooky_core.dart';");
+  buf.writeln("import 'package:spooky_core/typed.dart';");
   buf.writeln();
   buf.writeln(emitSchemaMap(tables));
   buf.writeln();
+  buf.writeln('const surqlSchema = r\'\'\'\n$surql\'\'\';');
+  buf.writeln();
   buf.writeln(emitModels(tables));
+  buf.writeln();
+  buf.writeln(emitPatches(tables));
+  buf.writeln();
+  buf.writeln(emitFieldTokens(tables));
+  buf.writeln();
+  buf.writeln(emitCollections(tables));
+  final auth = emitAuthApi(parsed.accesses);
+  if (auth.isNotEmpty) {
+    buf.writeln();
+    buf.writeln(auth);
+  }
+  final be = emitBackends(backends);
+  if (be.isNotEmpty) {
+    buf.writeln();
+    buf.writeln(be);
+  }
+  buf.writeln();
+  buf.writeln(emitAppDb(tables, parsed.accesses, backends));
   buf.writeln();
   return buf.toString();
 }

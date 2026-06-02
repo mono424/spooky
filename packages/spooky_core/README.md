@@ -56,6 +56,37 @@ stream.listen((records) => print(records)); // or StreamBuilder in Flutter
 await client.create('thread:abc', {'title': 'hello'});
 ```
 
+### Compile-time-typed client (codegen)
+
+The dynamic API above (`String` tables, `Map` records) can be wrapped in a fully
+typed facade generated from the schema:
+
+```bash
+dart run spooky_core:spooky_gen schema.surql \
+    --openapi api=api/openapi.yml -o lib/app_db.g.dart
+```
+
+```dart
+final db = AppDb.open(const DatabaseConfig(namespace: 'app', database: 'app'));
+await db.init();
+
+Stream<List<Thread>> s = db.thread.query()
+    .where([Thread$.published.eq(true), Thread$.score.gt(10)])  // typed fields + operators
+    .orderBy(Thread$.createdAt, desc: true)
+    .watch();                                                   // Stream<List<Thread>>
+
+await db.thread.create(Thread(id: 'thread:a', title: 'hi', author: uid));
+await db.thread.update('thread:a', ThreadPatch(title: 'renamed'));
+await db.run.api.spookify(id: 'thread:a');                      // typed backend route
+await db.auth.signInAccount(email: 'a@b.c', password: 'pw');    // typed auth
+```
+
+Wrong table/field, wrong operand type, or a missing route/auth arg is a **compile
+error**. The generated facade wraps `Sp00kyClient` (no runtime-core change); the
+typed-query runtime lives in `package:spooky_core/typed.dart`. SurrealQL declares
+no auth-var types (params are typed `String`); backend arg types come from the
+OpenAPI spec (string/int/num/bool, else `dynamic`).
+
 ## Deliberate divergences from the JS core
 
 1. **Permission seeding.** The browser circuit is effectively permissive; the

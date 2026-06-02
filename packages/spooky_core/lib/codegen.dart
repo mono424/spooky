@@ -5,6 +5,25 @@
 /// the runtime package doesn't depend on codegen.
 library;
 
-export 'src/codegen/schema_parser.dart' show parseSchema, TableDef, FieldDef;
+export 'src/codegen/schema_parser.dart'
+    show
+        parseSchema,
+        parseProject,
+        parseAccesses,
+        TableDef,
+        FieldDef,
+        AccessDef,
+        ParsedSchema;
+export 'src/codegen/openapi_parser.dart'
+    show parseOpenApi, BackendDef, RouteDef, RouteArg;
 export 'src/codegen/dart_emitter.dart'
-    show emitSchemaMap, emitModels, generateDartSource;
+    show
+        emitSchemaMap,
+        emitModels,
+        emitPatches,
+        emitFieldTokens,
+        emitCollections,
+        emitAuthApi,
+        emitBackends,
+        emitAppDb,
+        generateDartSource;

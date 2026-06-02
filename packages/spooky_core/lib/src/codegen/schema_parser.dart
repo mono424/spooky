@@ -43,6 +43,107 @@ final _typeTerminator = RegExp(
     r'\s+(ASSERT|DEFAULT|VALUE|PERMISSIONS|READONLY|COMMENT|REFERENCE|FLEXIBLE)\b',
     caseSensitive: false);
 
+/// A `DEFINE ACCESS` definition's signup/signin variable names (the `$vars`
+/// referenced in its SIGNUP/SIGNIN bodies). SurrealQL declares no types for
+/// these, so the generator emits them as `String`.
+class AccessDef {
+  AccessDef({
+    required this.name,
+    required this.signupParams,
+    required this.signinParams,
+  });
+  final String name;
+  final List<String> signupParams;
+  final List<String> signinParams;
+}
+
+/// Tables + access methods parsed from a schema (backends come from OpenAPI).
+class ParsedSchema {
+  ParsedSchema({required this.tables, required this.accesses});
+  final List<TableDef> tables;
+  final List<AccessDef> accesses;
+}
+
+/// Parse tables and `DEFINE ACCESS` methods from a schema.
+ParsedSchema parseProject(String surql) =>
+    ParsedSchema(tables: parseSchema(surql), accesses: parseAccesses(surql));
+
+// SurrealQL built-in vars that are never user-supplied signup/signin params.
+const _builtinVars = {
+  'auth',
+  'value',
+  'access',
+  'token',
+  'session',
+  'scope',
+  'before',
+  'after',
+  'this',
+  'parent',
+  'input',
+  'event',
+};
+
+final _defineAccess =
+    RegExp(r'DEFINE\s+ACCESS\s+([A-Za-z_][A-Za-z0-9_]*)', caseSensitive: false);
+
+/// Extract [AccessDef]s by scanning the full source (access blocks span
+/// braces/parens with internal `;`, so they survive the statement splitter).
+List<AccessDef> parseAccesses(String surql) {
+  final src = _stripComments(surql);
+  final out = <AccessDef>[];
+  for (final m in _defineAccess.allMatches(src)) {
+    final name = m.group(1)!;
+    final rest = src.substring(m.end);
+    out.add(AccessDef(
+      name: name,
+      signupParams: _varsInSection(rest, 'SIGNUP'),
+      signinParams: _varsInSection(rest, 'SIGNIN'),
+    ));
+  }
+  return out;
+}
+
+/// `$var` names referenced inside the balanced `{...}`/`(...)` body following
+/// [keyword], minus SurrealQL built-ins, de-duplicated in first-seen order.
+List<String> _varsInSection(String block, String keyword) {
+  final kw = RegExp('\\b$keyword\\b', caseSensitive: false).firstMatch(block);
+  if (kw == null) return const [];
+  final body = _balancedSpan(block, kw.end);
+  if (body == null) return const [];
+  final seen = <String>{};
+  final result = <String>[];
+  for (final v in RegExp(r'\$([A-Za-z_][A-Za-z0-9_]*)').allMatches(body)) {
+    final name = v.group(1)!;
+    if (_builtinVars.contains(name)) continue;
+    if (seen.add(name)) result.add(name);
+  }
+  return result;
+}
+
+/// Starting at [from], skip whitespace to the first `{` or `(`, then return the
+/// substring up to its matching close (handling nesting). Null if none.
+String? _balancedSpan(String s, int from) {
+  var i = from;
+  while (i < s.length && s[i].trim().isEmpty) {
+    i++;
+  }
+  if (i >= s.length) return null;
+  final open = s[i];
+  final close = open == '{' ? '}' : (open == '(' ? ')' : null);
+  if (close == null) return null;
+  var depth = 0;
+  final start = i;
+  for (; i < s.length; i++) {
+    if (s[i] == open) depth++;
+    if (s[i] == close) {
+      depth--;
+      if (depth == 0) return s.substring(start + 1, i);
+    }
+  }
+  return null;
+}
+
 /// Parse a SurrealQL schema into ordered [TableDef]s. Tables are emitted in the
 /// order their `DEFINE TABLE` appears; fields in declaration order. Statements
 /// other than DEFINE TABLE/FIELD are ignored.
