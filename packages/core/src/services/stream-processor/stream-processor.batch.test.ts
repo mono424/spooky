@@ -4,11 +4,11 @@ import type { StreamUpdate, StreamUpdateReceiver } from './index';
 import type { WasmProcessor, WasmStreamUpdate } from './wasm-types';
 
 /**
- * Tests for the batch-coalescing window added to StreamProcessorService.
+ * Tests for `ingestMany` bulk insert on StreamProcessorService.
  *
  * A batched ingest (e.g. sync fetching N missing records) used to emit one
- * stream update per record, making the UI render row-by-row. beginBatch/
- * endBatch collapse those into a single coalesced update per affected query.
+ * stream update per record, making the UI render row-by-row. ingestMany
+ * collapses those into a single coalesced update per affected query.
  */
 
 function makeLogger(): any {
@@ -64,14 +64,14 @@ function makeService(queryHashesFor: (id: string) => string[]) {
   return svc;
 }
 
-describe('StreamProcessor batch coalescing', () => {
+describe('StreamProcessor ingestMany bulk insert', () => {
   let receiver: RecordingReceiver;
 
   beforeEach(() => {
     receiver = new RecordingReceiver();
   });
 
-  it('emits one update per record when NOT batching (baseline)', () => {
+  it('emits one update per record when ingesting one-by-one (baseline)', () => {
     const svc = makeService(() => ['q1']);
     svc.addReceiver(receiver);
 
@@ -82,20 +82,18 @@ describe('StreamProcessor batch coalescing', () => {
     expect(receiver.received).toHaveLength(3);
   });
 
-  it('coalesces a batch into a single update per query with the final array', () => {
+  it('coalesces a bulk insert into a single update per query with the final array', () => {
     const svc = makeService(() => ['q1']);
     svc.addReceiver(receiver);
 
-    svc.beginBatch();
-    try {
-      svc.ingest('user', 'CREATE', 'user:1', { id: 'user:1', _00_rv: 1 });
-      svc.ingest('user', 'CREATE', 'user:2', { id: 'user:2', _00_rv: 1 });
-      svc.ingest('user', 'CREATE', 'user:3', { id: 'user:3', _00_rv: 1 });
-    } finally {
-      svc.endBatch();
-    }
+    svc.ingestMany([
+      { table: 'user', op: 'CREATE', id: 'user:1', record: { id: 'user:1', _00_rv: 1 } },
+      { table: 'user', op: 'CREATE', id: 'user:2', record: { id: 'user:2', _00_rv: 1 } },
+      { table: 'user', op: 'CREATE', id: 'user:3', record: { id: 'user:3', _00_rv: 1 } },
+    ]);
 
-    // Nothing dispatched until endBatch, then exactly one coalesced update.
+    // Nothing dispatched until the whole batch is ingested, then exactly one
+    // coalesced update.
     expect(receiver.received).toHaveLength(1);
     const update = receiver.received[0];
     expect(update.queryHash).toBe('q1');
@@ -113,30 +111,25 @@ describe('StreamProcessor batch coalescing', () => {
     );
     svc.addReceiver(receiver);
 
-    svc.beginBatch();
-    try {
-      svc.ingest('user', 'CREATE', 'user:1', { id: 'user:1', _00_rv: 1 });
-      svc.ingest('user', 'CREATE', 'user:2', { id: 'user:2', _00_rv: 1 });
-      svc.ingest('user', 'CREATE', 'user:3', { id: 'user:3', _00_rv: 1 });
-    } finally {
-      svc.endBatch();
-    }
+    svc.ingestMany([
+      { table: 'user', op: 'CREATE', id: 'user:1', record: { id: 'user:1', _00_rv: 1 } },
+      { table: 'user', op: 'CREATE', id: 'user:2', record: { id: 'user:2', _00_rv: 1 } },
+      { table: 'user', op: 'CREATE', id: 'user:3', record: { id: 'user:3', _00_rv: 1 } },
+    ]);
 
     expect(receiver.received).toHaveLength(2);
     const byHash = Object.fromEntries(receiver.received.map((u) => [u.queryHash, u]));
     expect(Object.keys(byHash).sort()).toEqual(['q1', 'q2']);
   });
 
-  it('endBatch is safe with no buffered updates, and beginBatch is idempotent', () => {
+  it('is a no-op for an empty batch and leaves the window closed', () => {
     const svc = makeService(() => ['q1']);
     svc.addReceiver(receiver);
 
-    svc.beginBatch();
-    svc.beginBatch(); // no-op, must not reset/duplicate
-    svc.endBatch();
+    svc.ingestMany([]);
 
     expect(receiver.received).toHaveLength(0);
-    // A subsequent non-batched ingest dispatches normally (window fully closed).
+    // A subsequent single ingest dispatches normally (window never opened).
     svc.ingest('user', 'CREATE', 'user:1', { id: 'user:1', _00_rv: 1 });
     expect(receiver.received).toHaveLength(1);
   });

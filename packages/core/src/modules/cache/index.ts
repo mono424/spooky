@@ -119,20 +119,16 @@ export class CacheModule implements StreamUpdateReceiver {
         await this.local.execute(query, params);
       }
 
-      // 2. Batch ingest into DBSP (use populatedRecords which has _00_rv set).
-      // Open a coalescing window so the per-record stream updates collapse into
-      // a single notification per affected query — the UI then updates once,
-      // after the whole batch is ingested, instead of row-by-row.
-      this.streamProcessor.beginBatch();
-      try {
-        for (const record of populatedRecords) {
-          const recordId = encodeRecordId(record.record.id);
-          this.versionLookups[recordId] = record.version;
-          this.streamProcessor.ingest(record.table, record.op, recordId, record.record);
-        }
-      } finally {
-        this.streamProcessor.endBatch();
-      }
+      // 2. Bulk ingest into DBSP (use populatedRecords which has _00_rv set).
+      // ingestMany coalesces the per-record stream updates into a single
+      // notification per affected query — the UI then updates once, after the
+      // whole batch is ingested, instead of row-by-row.
+      const bulk = populatedRecords.map((record) => {
+        const recordId = encodeRecordId(record.record.id);
+        this.versionLookups[recordId] = record.version;
+        return { table: record.table, op: record.op, id: recordId, record: record.record };
+      });
+      this.streamProcessor.ingestMany(bulk);
 
       this.logger.debug(
         { count: records.length, Category: 'sp00ky-client::CacheModule::saveBatch' },

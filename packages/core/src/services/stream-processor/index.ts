@@ -110,14 +110,47 @@ export class StreamProcessorService {
   }
 
   /**
+   * Ingest a batch of record changes as a single bulk operation, firing only
+   * one coalesced `StreamUpdate` per affected query once every record has been
+   * ingested (instead of one update per record). Use this whenever multiple
+   * records land at once — e.g. sync fetching N missing rows — so a list query
+   * re-runs and the UI re-renders once for the whole batch rather than
+   * row-by-row.
+   *
+   * Internally opens a coalescing window, ingests each record, then flushes;
+   * processor state is persisted once for the whole batch. No-op for an empty
+   * batch.
+   */
+  ingestMany(
+    records: Array<{
+      table: string;
+      op: 'CREATE' | 'UPDATE' | 'DELETE';
+      id: string;
+      record: any;
+    }>
+  ): void {
+    if (records.length === 0) return;
+
+    this.beginCoalescing();
+    try {
+      for (const record of records) {
+        this.ingest(record.table, record.op, record.id, record.record);
+      }
+    } finally {
+      this.flushCoalescing();
+    }
+  }
+
+  /**
    * Open a coalescing window. While open, the per-record stream updates
    * emitted by `ingest` are buffered (one entry per queryHash) instead of
-   * dispatched. Pair with `endBatch()` in a try/finally so the window always
-   * closes — otherwise the processor stays stuck buffering forever.
+   * dispatched. Always paired with `flushCoalescing()` in a try/finally by
+   * `ingestMany` so the window always closes — otherwise the processor stays
+   * stuck buffering forever.
    *
-   * No-op if a batch is already open (nested batches aren't expected here).
+   * No-op if a window is already open (nested batches aren't expected here).
    */
-  beginBatch() {
+  private beginCoalescing() {
     if (this.batching) return;
     this.batching = true;
     this.batchBuffer.clear();
@@ -128,7 +161,7 @@ export class StreamProcessorService {
    * `StreamUpdate` per buffered queryHash, then persist processor state once
    * for the whole batch (instead of once per ingest).
    */
-  endBatch() {
+  private flushCoalescing() {
     if (!this.batching) return;
     this.batching = false;
     const buffered = Array.from(this.batchBuffer.values());
@@ -299,8 +332,8 @@ export class StreamProcessorService {
         // Direct handler call instead of event
         this.notifyUpdates(updates);
       }
-      // While batching, `endBatch` persists once for the whole batch — skip the
-      // redundant per-record snapshot here.
+      // While batching (inside `ingestMany`), `flushCoalescing` persists once
+      // for the whole batch — skip the redundant per-record snapshot here.
       if (!this.batching) {
         this.saveState();
       }
