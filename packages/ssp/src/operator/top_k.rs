@@ -26,37 +26,63 @@ pub struct TopK {
     key_index: HashMap<String, Vec<SortableValue>>,
 }
 
-/// A value that implements Ord for sorting purposes.
+/// One field's sort key: an orderable scalar plus the field's direction.
+///
+/// `Ord` folds the direction in, so a `Vec<SortableValue>` compares
+/// lexicographically across fields with mixed directions — which is what a
+/// multi-key `ORDER BY a ASC, b DESC` needs. Crucially this works for *every*
+/// scalar type, including strings: descending order is the reverse of the
+/// scalar comparison, not a negated value. (The previous version negated
+/// `Int`/`Bool` but left strings untouched with a "rely on reverse iteration"
+/// note — but `current_window`/`snapshot` never reverse, so `DESC` on a string
+/// or `datetime` field silently sorted ascending.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SortableValue {
+    scalar: Scalar,
+    descending: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SortableValue {
+enum Scalar {
     Null,
     Bool(bool),
     Int(i64),
     Str(String),
 }
 
+impl PartialOrd for SortableValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SortableValue {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let base = self.scalar.cmp(&other.scalar);
+        // Within a Vec the same position always carries the same direction (it
+        // comes from the same OrderSpec), so reversing on `self.descending` is
+        // well-defined.
+        if self.descending {
+            base.reverse()
+        } else {
+            base
+        }
+    }
+}
+
 impl SortableValue {
     fn from_sp00ky(val: Option<&Sp00kyValue>, descending: bool) -> Self {
-        let sv = match val {
-            None | Some(Sp00kyValue::Null) => SortableValue::Null,
-            Some(Sp00kyValue::Bool(b)) => SortableValue::Bool(*b),
+        let scalar = match val {
+            None | Some(Sp00kyValue::Null) => Scalar::Null,
+            Some(Sp00kyValue::Bool(b)) => Scalar::Bool(*b),
             Some(v) if v.as_f64().is_some() => {
                 // Use integer representation for consistent ordering
-                SortableValue::Int((v.as_f64().unwrap() * 1_000_000.0) as i64)
+                Scalar::Int((v.as_f64().unwrap() * 1_000_000.0) as i64)
             }
-            Some(Sp00kyValue::Str(s)) => SortableValue::Str(s.clone()),
-            _ => SortableValue::Null,
+            Some(Sp00kyValue::Str(s)) => Scalar::Str(s.clone()),
+            _ => Scalar::Null,
         };
-        if descending {
-            // For descending, negate the sort key
-            match sv {
-                SortableValue::Int(n) => SortableValue::Int(-n),
-                SortableValue::Bool(b) => SortableValue::Bool(!b),
-                other => other, // Strings: rely on reverse iteration
-            }
-        } else {
-            sv
-        }
+        SortableValue { scalar, descending }
     }
 }
 
@@ -82,7 +108,10 @@ impl TopK {
                     SortableValue::from_sp00ky(val, desc)
                 })
                 .collect(),
-            None => vec![SortableValue::Str(key.to_string())],
+            None => vec![SortableValue {
+                scalar: Scalar::Str(key.to_string()),
+                descending: false,
+            }],
         }
     }
 
@@ -306,6 +335,60 @@ mod tests {
 
         assert_eq!(result.get("posts:3"), Some(&1)); // enters top-K
         assert_eq!(result.get("posts:1"), Some(&-1)); // displaced
+    }
+
+    // Reproduces the solid-app game-list query window:
+    //   ORDER BY sort_index ASC, date DESC LIMIT n START m
+    // All rows share sort_index = 0 (the pre-migration default / a tie), so the
+    // secondary `date DESC` is the deciding key — newest date must come first.
+    // `date` is a SurrealDB `datetime`, which reaches the SSP as a `Str` (ISO
+    // 8601). The window pages must be complete, non-overlapping, and ordered
+    // newest→oldest.
+    fn game(id: &str, date: &str) -> Change {
+        Change::create("game", id, json!({ "sort_index": 0, "date": date }))
+    }
+
+    fn game_order() -> Option<Vec<OrderSpec>> {
+        Some(vec![
+            OrderSpec { field: Path::new("sort_index"), direction: "ASC".into() },
+            OrderSpec { field: Path::new("date"), direction: "DESC".into() },
+        ])
+    }
+
+    #[test]
+    fn paged_window_orders_datetime_string_descending() {
+        let mut store = Store::new();
+        store.ensure_collection("game");
+        store.apply_change(&game("game:a", "2020-01-01T00:00:00Z"));
+        store.apply_change(&game("game:b", "2021-01-01T00:00:00Z"));
+        store.apply_change(&game("game:c", "2022-01-01T00:00:00Z"));
+        store.apply_change(&game("game:d", "2023-01-01T00:00:00Z"));
+        store.apply_change(&game("game:e", "2024-01-01T00:00:00Z"));
+        let input = zset(&[
+            ("game:a", 1), ("game:b", 1), ("game:c", 1), ("game:d", 1), ("game:e", 1),
+        ]);
+
+        // Expected global order (sort_index ASC tie → date DESC): e, d, c, b, a.
+        // Page 0 = LIMIT 2 START 0 → [e, d] (newest two).
+        let p0 = TopK::new(2, 0, game_order()).snapshot(&[&input], &store, None);
+        assert_eq!(p0.len(), 2);
+        assert!(p0.is_present("game:e"), "page 0 must hold the newest game");
+        assert!(p0.is_present("game:d"), "page 0 must hold the 2nd-newest game");
+
+        // Page 1 = LIMIT 2 START 2 → [c, b].
+        let p1 = TopK::new(2, 2, game_order()).snapshot(&[&input], &store, None);
+        assert_eq!(p1.len(), 2, "page 1 (START 2) must be a full window");
+        assert!(p1.is_present("game:c"));
+        assert!(p1.is_present("game:b"));
+
+        // Page 2 = LIMIT 2 START 4 → [a] (short tail = real end).
+        let p2 = TopK::new(2, 4, game_order()).snapshot(&[&input], &store, None);
+        assert_eq!(p2.len(), 1);
+        assert!(p2.is_present("game:a"));
+
+        // Windows must not overlap.
+        assert!(!p0.is_present("game:c") && !p0.is_present("game:a"));
+        assert!(!p1.is_present("game:e") && !p1.is_present("game:a"));
     }
 
     #[test]
