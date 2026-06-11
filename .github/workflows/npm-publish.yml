@@ -100,7 +100,7 @@ jobs:
         run: |
           V="${{ needs.prepare.outputs.version }}"
           for f in packages/query-builder/package.json packages/ssp-wasm/package.json packages/core/package.json packages/client-solid/package.json apps/devtools-mcp/package.json; do
-            jq --arg v "$V" '(.dependencies, .optionalDependencies, .peerDependencies) |= (if . == null then . else with_entries(if (.value | type) == "string" and (.value | startswith("workspace:")) then .value = $v else . end) end)' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+            jq --arg v "$V" 'reduce ("dependencies","optionalDependencies","peerDependencies") as $k (.; if (.[$k]|type)=="object" then .[$k] |= with_entries(if (.value|type)=="string" and (.value|startswith("workspace:")) then .value=$v else . end) else . end)' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
           done
 
       # 1. Build and publish @spooky-sync/query-builder
