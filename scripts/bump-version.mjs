@@ -12,8 +12,14 @@ const CARGO_TOML_PACKAGES = [
   "apps/cli/Cargo.toml",
   "packages/ssp/Cargo.toml",
   "packages/ssp-protocol/Cargo.toml",
+  "packages/ssp-ffi/Cargo.toml",
   "packages/job-runner/Cargo.toml",
   "packages/ssp-wasm/Cargo.toml",
+];
+
+// Dart packages whose pubspec.yaml version tracks the canary release line.
+const PUBSPEC_PACKAGES = [
+  "packages/spooky_core/pubspec.yaml",
 ];
 
 const CLI_PLATFORM_PACKAGES = [
@@ -162,6 +168,31 @@ for (const rel of CARGO_TOML_PACKAGES) {
     `$1${version}$3`,
   );
   writeFileSync(cargoPath, newContent);
+  updated.push(`  ${rel}: ${oldVersion} -> ${version}`);
+}
+
+// Bump Dart pubspec.yaml files
+for (const rel of PUBSPEC_PACKAGES) {
+  const pubspecPath = join(ROOT, rel);
+  const content = readFileSync(pubspecPath, "utf-8");
+  const match = content.match(/^(version:\s*)(\S+)\s*$/m);
+
+  if (!match) {
+    console.warn(`  Warning: no version found in ${rel}`);
+    continue;
+  }
+
+  if (match[2] === version) {
+    skipped.push(rel);
+    continue;
+  }
+
+  const oldVersion = match[2];
+  const newContent = content.replace(
+    /^(version:\s*)(\S+)\s*$/m,
+    `$1${version}`,
+  );
+  writeFileSync(pubspecPath, newContent);
   updated.push(`  ${rel}: ${oldVersion} -> ${version}`);
 }
 
