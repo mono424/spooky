@@ -22,11 +22,23 @@ import {
   parseBackendInfo,
 } from './versions';
 
+// Real bundled frontend versions, injected at build time by tsdown's
+// version-define plugin (see tsdown.config.ts). The `typeof` guard keeps these
+// from throwing a ReferenceError when a downstream app bundles core from source
+// (where the plugin never runs); in that case they fall back to 'unknown' and
+// DevTools simply reports an unknown frontend version instead of crashing.
+const CORE_VERSION =
+  typeof __SP00KY_CORE_VERSION__ !== 'undefined' ? __SP00KY_CORE_VERSION__ : 'unknown';
+const WASM_VERSION =
+  typeof __SP00KY_WASM_VERSION__ !== 'undefined' ? __SP00KY_WASM_VERSION__ : 'unknown';
+const SURREAL_VERSION =
+  typeof __SP00KY_SURREAL_VERSION__ !== 'undefined' ? __SP00KY_SURREAL_VERSION__ : 'unknown';
+
 export class DevToolsService implements StreamUpdateReceiver {
   private eventsHistory: DevToolsEvent[] = [];
   private eventIdCounter = 0;
   // Real bundled frontend version (injected at build time via tsdown `define`).
-  private version = __SP00KY_CORE_VERSION__;
+  private version = CORE_VERSION;
   // Backend stack info (versions + per-entity status), read via the
   // `fn::spooky::info()` SurrealQL function; empty/'unavailable' until resolved.
   private backendInfo: BackendInfo = emptyBackendInfo();
@@ -205,9 +217,9 @@ export class DevToolsService implements StreamUpdateReceiver {
       version: this.version,
       versions: {
         frontend: {
-          core: __SP00KY_CORE_VERSION__,
-          wasm: __SP00KY_WASM_VERSION__,
-          surrealdb: __SP00KY_SURREAL_VERSION__,
+          core: CORE_VERSION,
+          wasm: WASM_VERSION,
+          surrealdb: SURREAL_VERSION,
         },
         backend: this.backendInfo.versions,
         entities: this.backendInfo.entities,
