@@ -904,7 +904,11 @@ pub fn run(action: CloudCommands) -> Result<()> {
             service,
         }),
         CloudCommands::Scale { ssp } => scale(ssp),
-        CloudCommands::Restart { clean, upgrade } => restart(clean, upgrade),
+        CloudCommands::Restart {
+            clean,
+            upgrade,
+            surreal,
+        } => restart(clean, upgrade, surreal),
         CloudCommands::Destroy => destroy(),
         CloudCommands::Backup { action } => backup(action),
         CloudCommands::Billing { action } => billing(action),
@@ -3116,11 +3120,33 @@ fn scale(ssp: u32) -> Result<()> {
     Ok(())
 }
 
-fn restart(clean: bool, upgrade: bool) -> Result<()> {
+fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (slug, pid) = resolve_project_id(&mut client)?;
 
+    // Restarting SurrealDB takes the whole deployment offline for a few
+    // seconds, so confirm before pulling the trigger.
+    if surreal {
+        let confirmed = inquire::Confirm::new(&format!(
+            "Also restart SurrealDB for '{}'? The deployment will be briefly unavailable (data is preserved).",
+            slug
+        ))
+        .with_default(false)
+        .prompt()
+        .context("Failed to read confirmation")?;
+
+        if !confirmed {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    let targets = if surreal {
+        "scheduler + SSPs + SurrealDB"
+    } else {
+        "scheduler + SSPs"
+    };
     let mut flags = Vec::new();
     if clean {
         flags.push("wipe scheduler volume");
@@ -3133,11 +3159,11 @@ fn restart(clean: bool, upgrade: bool) -> Result<()> {
     } else {
         format!(" ({})", flags.join(", "))
     };
-    println!("Restarting scheduler + SSPs for '{}'{}...", slug, suffix);
+    println!("Restarting {} for '{}'{}...", targets, slug, suffix);
 
     let resp = client.post(
         &format!("/v1/projects/{}/restart", pid),
-        &serde_json::json!({ "clean": clean, "upgrade": upgrade }),
+        &serde_json::json!({ "clean": clean, "upgrade": upgrade, "surreal": surreal }),
     )?;
     let result: serde_json::Value = resp.into_json().context("Failed to parse response")?;
     let stopped = result["stopped"].as_u64().unwrap_or(0);
@@ -4230,11 +4256,126 @@ fn link(action: CloudLinkCommands) -> Result<()> {
     match action {
         CloudLinkCommands::Setup => link_setup(),
         CloudLinkCommands::Status => link_status(),
-        CloudLinkCommands::Settings { branch, auto_deploy } => link_settings(branch, auto_deploy),
+        CloudLinkCommands::Settings { branch, auto_deploy, config_path } => link_settings(branch, auto_deploy, config_path),
         CloudLinkCommands::Unlink => link_unlink(),
         CloudLinkCommands::Trigger => link_trigger(),
         CloudLinkCommands::Runs => link_runs(),
     }
+}
+
+/// Detect the current git branch (e.g. "develop"). Returns None outside a repo
+/// or in detached-HEAD state.
+fn detect_git_branch() -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let b = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if b.is_empty() || b == "HEAD" {
+        None
+    } else {
+        Some(b)
+    }
+}
+
+/// Git repo top-level directory, falling back to the current directory.
+fn git_repo_root() -> PathBuf {
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+    {
+        if out.status.success() {
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !p.is_empty() {
+                return PathBuf::from(p);
+            }
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Scan the repo for sp00ky.yml/.yaml manifests, returning paths relative to
+/// `root` (forward-slashed). Skips common noise directories.
+fn find_manifest_candidates(root: &std::path::Path) -> Vec<String> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>, depth: usize) {
+        if depth > 6 {
+            return;
+        }
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                if matches!(
+                    name.as_str(),
+                    ".git" | "node_modules" | "target" | "dist" | "build" | ".next" | "vendor" | ".sp00ky"
+                ) {
+                    continue;
+                }
+                walk(&path, root, out, depth + 1);
+            } else if name == "sp00ky.yml" || name == "sp00ky.yaml" {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out, 0);
+    out.sort();
+    out
+}
+
+/// Autodetect branch + manifest path for `link setup`. Auto-accepts detected
+/// values; only prompts when ambiguous (multiple manifests) or detection fails.
+fn autodetect_link_settings() -> (String, String) {
+    let root = git_repo_root();
+
+    let branch = match detect_git_branch() {
+        Some(b) => b,
+        None => {
+            if is_interactive() {
+                inquire::Text::new("Branch to deploy from:")
+                    .with_default("main")
+                    .prompt()
+                    .unwrap_or_else(|_| "main".to_string())
+            } else {
+                "main".to_string()
+            }
+        }
+    };
+
+    let candidates = find_manifest_candidates(&root);
+    let config_path = match candidates.len() {
+        1 => candidates[0].clone(),
+        0 => {
+            if is_interactive() {
+                inquire::Text::new("Path to sp00ky.yml:")
+                    .with_default("sp00ky.yml")
+                    .prompt()
+                    .unwrap_or_else(|_| "sp00ky.yml".to_string())
+            } else {
+                "sp00ky.yml".to_string()
+            }
+        }
+        _ => {
+            if is_interactive() {
+                inquire::Select::new("Multiple sp00ky.yml found — pick one:", candidates.clone())
+                    .prompt()
+                    .unwrap_or_else(|_| candidates[0].clone())
+            } else {
+                candidates[0].clone()
+            }
+        }
+    };
+
+    (branch, config_path)
 }
 
 fn link_setup() -> Result<()> {
@@ -4277,11 +4418,18 @@ fn link_setup() -> Result<()> {
 
         match status {
             "linked" => {
-                let repo_owner = data["repo_owner"].as_str().unwrap_or("");
-                let repo_name = data["repo_name"].as_str().unwrap_or("");
-                let branch = data["branch"].as_str().unwrap_or("main");
+                let repo_owner = data["repo_owner"].as_str().unwrap_or("").to_string();
+                let repo_name = data["repo_name"].as_str().unwrap_or("").to_string();
 
-                println!("Linked to {}/{} on branch '{}'", repo_owner, repo_name, branch);
+                // Repo was auto-linked with defaults — apply the detected branch
+                // and manifest path.
+                let (branch, config_path) = autodetect_link_settings();
+                client.patch(
+                    &format!("/v1/projects/{}/link", pid),
+                    &serde_json::json!({ "branch": branch, "config_path": config_path }),
+                )?;
+
+                println!("Linked to {}/{} (branch '{}', manifest '{}')", repo_owner, repo_name, branch, config_path);
                 println!("  Auto-deploy: {}", if data["auto_deploy"].as_bool().unwrap_or(true) { "enabled" } else { "disabled" });
 
                 // Offer to deploy now
@@ -4326,15 +4474,18 @@ fn link_setup() -> Result<()> {
                         bail!("Invalid repository format");
                     }
 
+                    let (branch, config_path) = autodetect_link_settings();
                     client.patch(
                         &format!("/v1/projects/{}/link", pid),
                         &serde_json::json!({
                             "repo_owner": parts[0],
                             "repo_name": parts[1],
+                            "branch": branch,
+                            "config_path": config_path,
                         }),
                     )?;
 
-                    println!("Linked to {}", selection);
+                    println!("Linked to {} (branch '{}', manifest '{}')", selection, branch, config_path);
 
                     // Offer to deploy
                     if is_interactive() {
@@ -4415,13 +4566,13 @@ fn link_status() -> Result<()> {
     Ok(())
 }
 
-fn link_settings(branch: Option<String>, auto_deploy: Option<bool>) -> Result<()> {
+fn link_settings(branch: Option<String>, auto_deploy: Option<bool>, config_path: Option<String>) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (_slug, pid) = resolve_project_id(&mut client)?;
 
     // If no flags provided, use interactive prompts
-    let (branch, auto_deploy) = if branch.is_none() && auto_deploy.is_none() && is_interactive() {
+    let (branch, auto_deploy, config_path) = if branch.is_none() && auto_deploy.is_none() && config_path.is_none() && is_interactive() {
         // Get current settings first
         let resp = client.get(&format!("/v1/projects/{}/link", pid))?;
         let data: serde_json::Value = resp.into_json()?;
@@ -4431,20 +4582,26 @@ fn link_settings(branch: Option<String>, auto_deploy: Option<bool>) -> Result<()
 
         let current_branch = data["branch"].as_str().unwrap_or("main").to_string();
         let current_auto = data["auto_deploy"].as_bool().unwrap_or(true);
+        let current_config = data["config_path"].as_str().unwrap_or("sp00ky.yml").to_string();
 
         let new_branch = inquire::Text::new("Branch:")
             .with_default(&current_branch)
             .prompt()
             .context("Failed to read branch")?;
 
+        let new_config = inquire::Text::new("Path to sp00ky.yml:")
+            .with_default(&current_config)
+            .prompt()
+            .context("Failed to read manifest path")?;
+
         let new_auto = inquire::Confirm::new("Auto-deploy on push?")
             .with_default(current_auto)
             .prompt()
             .context("Failed to read auto-deploy setting")?;
 
-        (Some(new_branch), Some(new_auto))
+        (Some(new_branch), Some(new_auto), Some(new_config))
     } else {
-        (branch, auto_deploy)
+        (branch, auto_deploy, config_path)
     };
 
     let mut body = serde_json::Map::new();
@@ -4453,6 +4610,9 @@ fn link_settings(branch: Option<String>, auto_deploy: Option<bool>) -> Result<()
     }
     if let Some(a) = auto_deploy {
         body.insert("auto_deploy".to_string(), serde_json::Value::Bool(a));
+    }
+    if let Some(c) = &config_path {
+        body.insert("config_path".to_string(), serde_json::Value::String(c.clone()));
     }
 
     client.patch(
@@ -4463,6 +4623,9 @@ fn link_settings(branch: Option<String>, auto_deploy: Option<bool>) -> Result<()
     println!("Settings updated.");
     if let Some(b) = &branch {
         println!("  Branch: {}", b);
+    }
+    if let Some(c) = &config_path {
+        println!("  Manifest: {}", c);
     }
     if let Some(a) = auto_deploy {
         println!("  Auto-deploy: {}", if a { "enabled" } else { "disabled" });

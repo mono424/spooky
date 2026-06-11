@@ -93,6 +93,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Rewrite pnpm `workspace:` deps to the release version. `npm publish`
+      # (unlike `pnpm publish`) does NOT rewrite the workspace: protocol, so
+      # without this the published packages carry unresolvable workspace:* deps.
+      - name: Rewrite workspace deps to release version
+        run: |
+          V="${{ needs.prepare.outputs.version }}"
+          for f in packages/query-builder/package.json packages/ssp-wasm/package.json packages/core/package.json packages/client-solid/package.json apps/devtools-mcp/package.json; do
+            jq --arg v "$V" '(.dependencies, .optionalDependencies, .peerDependencies) |= (if . == null then . else with_entries(if (.value | type) == "string" and (.value | startswith("workspace:")) then .value = $v else . end) end)' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          done
+
       # 1. Build and publish @spooky-sync/query-builder
       - name: Set version — query-builder
         run: jq '.version = "${{ needs.prepare.outputs.version }}"' packages/query-builder/package.json > tmp.json && mv tmp.json packages/query-builder/package.json

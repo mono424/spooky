@@ -315,7 +315,8 @@ enum CloudCommands {
         ssp: u32,
     },
     /// Restart the scheduler and SSP containers for the current deployment.
-    /// Backends, frontends, and SurrealDB are left untouched.
+    /// Backends and frontends are left untouched. Pass --surreal to also
+    /// bounce the SurrealDB container.
     Restart {
         /// Also wipe the scheduler's persistent volume. Use after
         /// scheduler state corruption. Does NOT touch SurrealDB data.
@@ -324,6 +325,11 @@ enum CloudCommands {
         /// Pull the latest scheduler/SSP base images before restarting.
         #[arg(long)]
         upgrade: bool,
+        /// Also restart the SurrealDB container. This is a process restart,
+        /// not a wipe: data on the volume is preserved, but the whole
+        /// deployment is briefly unavailable while SurrealDB comes back up.
+        #[arg(long, visible_alias = "db")]
+        surreal: bool,
     },
     /// Destroy cloud project and all VMs
     Destroy,
@@ -370,7 +376,7 @@ pub enum CloudLinkCommands {
     Setup,
     /// Show link configuration and recent runs
     Status,
-    /// Change link settings (branch, auto-deploy)
+    /// Change link settings (branch, auto-deploy, manifest path)
     Settings {
         /// Branch to deploy from
         #[arg(long)]
@@ -378,6 +384,9 @@ pub enum CloudLinkCommands {
         /// Enable or disable auto-deploy on push
         #[arg(long)]
         auto_deploy: Option<bool>,
+        /// Path to sp00ky.yml within the repo (e.g. packages/schema/sp00ky.yml)
+        #[arg(long)]
+        config_path: Option<String>,
     },
     /// Remove GitHub link
     Unlink,
