@@ -15,6 +15,7 @@ dependencies:
   logging: ^1.2.0
   meta: ^1.12.0
   yaml: ^3.1.2 # codegen: parse OpenAPI backend specs
+  cbor: ^6.5.1
 
 dev_dependencies:
   test: ^1.25.0

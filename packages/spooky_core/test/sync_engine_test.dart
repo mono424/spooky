@@ -18,6 +18,8 @@ class FakeEngineRemote implements RemoteSurrealClient {
 
   @override
   Future<List<dynamic>> query(String sql, [Map<String, dynamic>? vars]) async {
+    // Record fetch: `SELECT * FROM $idsToFetch`. ($idsToFetch contains $ids as a
+    // substring, so check it first.)
     if (sql.contains(r'$idsToFetch')) {
       final ids = (vars?['idsToFetch'] as List?) ?? const [];
       return [
@@ -27,7 +29,8 @@ class FakeEngineRemote implements RemoteSurrealClient {
             .toList(),
       ];
     }
-    if (sql.contains('type::table')) {
+    // Existence check: `SELECT id FROM $ids`.
+    if (sql.contains(r'$ids')) {
       final ids = (vars?['ids'] as List?) ?? const [];
       return [
         ids

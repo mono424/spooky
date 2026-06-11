@@ -37,7 +37,6 @@ class DownQueue {
 
   final List<DownEvent> _queue = [];
   final EventSystem _events = createSyncQueueEventSystem();
-  // ignore: unused_field
   final SpookyLogger _logger;
 
   EventSystem get events => _events;

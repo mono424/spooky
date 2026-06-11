@@ -33,11 +33,11 @@ class SyncEngine {
       for (final item in toFetch) encodeRecordId(item.id): item.version,
     };
 
+    // The CBOR client sends these record ids as real records, so a bare
+    // `FROM $idsToFetch` fetches them directly (matches the TS core).
     final results = await _remote
         .query('SELECT * FROM \$idsToFetch', {'idsToFetch': idsToFetch});
-    final remoteResults = (results.isNotEmpty && results.first is List)
-        ? (results.first as List).cast<Map<String, dynamic>>()
-        : const <Map<String, dynamic>>[];
+    final remoteResults = firstRows(results).cast<Map<String, dynamic>>();
 
     final cacheBatch = <CacheRecord>[];
     for (final record in remoteResults) {
@@ -77,25 +77,18 @@ class SyncEngine {
 
   /// Verify removed records are truly gone upstream before deleting locally.
   Future<void> _handleRemovedRecords(List<RecordId> removed) async {
-    final byTable = <String, List<RecordId>>{};
-    for (final r in removed) {
-      byTable.putIfAbsent(r.table, () => []).add(r);
-    }
-
     final existingRemoteIds = <String>{};
     try {
-      for (final entry in byTable.entries) {
-        final results = await _remote.query(
-          'SELECT id FROM type::table(\$table) WHERE id IN \$ids',
-          {'table': entry.key, 'ids': entry.value},
-        );
-        final rows = (results.isNotEmpty && results.first is List)
-            ? (results.first as List)
-            : const [];
-        for (final row in rows) {
-          final id = (row as Map)['id'];
-          if (id != null) existingRemoteIds.add(id.toString());
-        }
+      // The records to check ARE the FROM target. The CBOR client sends them as
+      // real records, so `SELECT id FROM $ids` matches correctly. (We must NOT
+      // use `WHERE id IN $ids`: record-id `IN` is broken on SurrealDB v3.1 — it
+      // returns no rows even for existing records, which would report every id
+      // as gone and delete still-present records. Matches the TS core.)
+      final results = await _remote.query('SELECT id FROM \$ids', {'ids': removed});
+      final rows = firstRows(results);
+      for (final row in rows) {
+        final id = (row as Map)['id'];
+        if (id != null) existingRemoteIds.add(id.toString());
       }
     } catch (err) {
       // On verification failure, skip deletion (avoid clobbering fresh data).

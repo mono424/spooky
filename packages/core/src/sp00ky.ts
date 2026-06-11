@@ -33,8 +33,10 @@ import { DevToolsService } from './modules/devtools/index';
 import { createLogger } from './services/logger/index';
 import { AuthService } from './modules/auth/index';
 import { StreamProcessorService } from './services/stream-processor/index';
+import { extractSelectPermissions } from './services/stream-processor/permissions';
 import { EventSystem } from './events/index';
 import { CacheModule } from './modules/cache/index';
+import type { RecordWithId } from './modules/cache/index';
 import { CrdtManager, CrdtField } from './modules/crdt/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { parseParams } from './utils/index';
@@ -229,6 +231,25 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.devTools.logEvent('QUERY_STATUS_CHANGED', { queryHash, status });
     };
 
+    // Keep an actively-watched query's remote `_00_query.lastActiveAt` fresh so
+    // the server TTL sweep doesn't expire it out from under live subscribers.
+    // DataModule fires this only while the query still has ≥1 subscriber.
+    this.dataModule.onHeartbeat = (queryHash) => {
+      void this.sync.heartbeatQuery(queryHash).catch((err) => {
+        this.logger.warn(
+          { err, queryHash, Category: 'sp00ky-client::Sp00kyClient::onHeartbeat' },
+          'TTL heartbeat failed'
+        );
+      });
+    };
+
+    // Eager teardown of an opt-in deregistered query: enqueue a `cleanup`
+    // down-event so it's serialized after any in-flight register/sync for the
+    // same query (avoids out-of-order delete-before-create).
+    this.dataModule.onDeregister = (queryHash) => {
+      this.sync.enqueueDownEvent({ type: 'cleanup', payload: { hash: queryHash } });
+    };
+
     // Mutation callback for sync
     this.dataModule.onMutation((mutations: UpEvent[]) => {
       // Notify DevTools
@@ -303,6 +324,11 @@ export class Sp00kyClient<S extends SchemaStructure> {
       );
 
       await this.streamProcessor.init();
+      // Seed table `select` permissions from the schema before any query is
+      // registered — otherwise the SSP default-denies every non-`_00_` table.
+      this.streamProcessor.setPermissions(
+        extractSelectPermissions(this.config.schemaSurql)
+      );
       this.logger.debug(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
         'StreamProcessor initialized'
@@ -432,12 +458,25 @@ export class Sp00kyClient<S extends SchemaStructure> {
       throw new Error(`Table ${table} not found`);
     }
 
-    const hash = await this.dataModule.query(
-      table,
-      q.selectQuery.query,
-      parseParams(tableSchema.columns, q.selectQuery.vars ?? {}),
-      ttl
-    );
+    const params = parseParams(tableSchema.columns, q.selectQuery.vars ?? {});
+    const hash = await this.dataModule.query(table, q.selectQuery.query, params, ttl);
+
+    // Instant-hydrate: for a cold query, fetch its rows one-shot from the remote
+    // (its own surql, run directly like useRemote) and display them NOW; the full
+    // realtime registration proceeds below. Hydrated rows carry their `_00_rv`
+    // versions so the registration's syncRecords skips re-pulling unchanged bodies.
+    // Best-effort: any failure (e.g. offline) just falls through to registration.
+    if (this.config.instantHydrate !== false && this.dataModule.isCold(hash)) {
+      try {
+        const [rows] = await this.remote.query<[RecordWithId[]]>(q.selectQuery.query, params);
+        await this.dataModule.applyHydration(hash, rows ?? []);
+      } catch (err) {
+        this.logger.warn(
+          { err, hash, Category: 'sp00ky-client::Sp00kyClient::instantHydrate' },
+          'Instant hydrate failed; proceeding with registration'
+        );
+      }
+    }
 
     await this.sync.enqueueDownEvent({
       type: 'register',
@@ -463,6 +502,17 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   /**
+   * Opt-in eager teardown for a query whose last subscriber has gone away
+   * (e.g. a viewport-windowed list cancelling an off-screen window). No-op
+   * while any subscriber remains. Tears down the remote `_00_query` view +
+   * local WASM view instead of waiting for the TTL sweep. Default behavior
+   * (no call here) keeps the view resident for cheap re-subscription.
+   */
+  deregisterQuery(queryHash: string): void {
+    this.dataModule.deregisterQuery(queryHash);
+  }
+
+  /**
    * Subscribe to a query's fetch-status changes (idle/fetching). With
    * `{ immediate: true }` the callback fires synchronously with the current
    * status. Powers the `useQuery` hook's `isFetching()` accessor.
@@ -473,6 +523,15 @@ export class Sp00kyClient<S extends SchemaStructure> {
     options?: { immediate?: boolean }
   ): () => void {
     return this.dataModule.subscribeStatus(queryHash, callback, options);
+  }
+
+  /**
+   * Report the frontend processing time (ms) a client framework spent applying
+   * an update for a query (e.g. `useQuery`'s `reconcile()`), so DevTools/MCP can
+   * surface the "frontend" phase of the per-query timing breakdown.
+   */
+  reportFrontendTiming(queryHash: string, ms: number): void {
+    this.dataModule.recordFrontendTiming(queryHash, ms);
   }
 
   run<

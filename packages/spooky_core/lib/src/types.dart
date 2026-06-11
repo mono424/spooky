@@ -31,6 +31,7 @@ class DatabaseConfig {
     required this.namespace,
     required this.database,
     this.store = StoreType.memory,
+    this.localDbPath,
     this.token,
   });
 
@@ -38,6 +39,12 @@ class DatabaseConfig {
   final String namespace;
   final String database;
   final StoreType store;
+
+  /// Filesystem path for the local sqlite store when [store] is not
+  /// [StoreType.memory]. When null, a non-memory store falls back to the
+  /// default relative path (`spooky.db`). Ignored for [StoreType.memory].
+  final String? localDbPath;
+
   final String? token;
 }
 
@@ -124,6 +131,7 @@ class QueryState {
     List<double>? materializationSamples,
     this.lastIngestLatencyMs,
     this.errorCount = 0,
+    this.status = QueryStatus.idle,
   })  : records = records ?? [],
         materializationSamples = materializationSamples ?? [];
 
@@ -135,10 +143,21 @@ class QueryState {
   List<double> materializationSamples;
   double? lastIngestLatencyMs;
   int errorCount;
+
+  /// Current fetch status (idle/fetching). Driven by [Sp00kySync] around
+  /// per-query record fetches; observed via `DataModule.subscribeStatus`.
+  QueryStatus status;
 }
 
 /// Notified with the latest result set for a query (TS `QueryUpdateCallback`).
 typedef QueryUpdateCallback = void Function(List<Map<String, dynamic>> records);
+
+/// A query's fetch status (TS `QueryStatus`): `idle` when settled, `fetching`
+/// while record bodies are being pulled from the remote.
+enum QueryStatus { idle, fetching }
+
+/// Notified when a query's fetch status changes (TS `QueryStatusCallback`).
+typedef QueryStatusCallback = void Function(QueryStatus status);
 
 /// Mutation kind (TS `MutationEventType`).
 enum MutationEventType { create, update, delete }

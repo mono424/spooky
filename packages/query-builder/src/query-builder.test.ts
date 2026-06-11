@@ -92,6 +92,76 @@ describe('QueryBuilder', () => {
     });
   });
 
+  it('should build a comparison operator condition via { _op, _val }', () => {
+    const builder = new QueryBuilder(testSchema, 'user', (q) => q.selectQuery);
+    builder.where({ created_at: { _op: '<=', _val: 5 } });
+    const result = builder.build().run();
+
+    expect(result.query).toBe('SELECT * FROM user WHERE created_at <= $created_at;');
+    expect(result.vars).toEqual({ created_at: 5 });
+  });
+
+  it('should build an OR group via _or with position-indexed params', () => {
+    const builder = new QueryBuilder(testSchema, 'user', (q) => q.selectQuery);
+    builder.where({ _or: [{ username: 'x' }, { email: 'x' }] });
+    const result = builder.build().run();
+
+    expect(result.query).toBe('SELECT * FROM user WHERE (username = $or0 OR email = $or1);');
+    expect(result.vars).toEqual({ or0: 'x', or1: 'x' });
+  });
+
+  it('should not collide an _or branch with a top-level condition on the same field', () => {
+    // Mirrors the game filter where a color filter (white = me) coexists with an
+    // opponent OR on white/black: the OR branch must use its own param name.
+    const builder = new QueryBuilder(testSchema, 'user', (q) => q.selectQuery);
+    builder.where({ username: 'me', _or: [{ username: 'opp' }, { email: 'opp' }] });
+    const result = builder.build().run();
+
+    expect(result.query).toBe(
+      'SELECT * FROM user WHERE username = $username AND (username = $or0 OR email = $or1);'
+    );
+    expect(result.vars).toEqual({ username: 'me', or0: 'opp', or1: 'opp' });
+  });
+
+  it('should combine equality + comparison + OR group + order/limit/offset', () => {
+    // The shape the filtered game list produces: scope equality, a date floor as
+    // an integer sort_index comparison, an opponent OR group, paginated.
+    const builder = new QueryBuilder(testSchema, 'user', (q) => q.selectQuery);
+    builder
+      .where({ email: 'e', created_at: { _op: '<=', _val: 5 }, _or: [{ username: 'p' }, { email: 'p' }] })
+      .orderBy('created_at', 'asc')
+      .limit(50)
+      .offset(0);
+    const result = builder.build().run();
+
+    expect(result.query).toBe(
+      'SELECT * FROM user WHERE email = $email AND created_at <= $created_at AND ' +
+        '(username = $or0 OR email = $or1) ORDER BY created_at asc LIMIT 50 START 0;'
+    );
+    expect(result.vars).toEqual({ email: 'e', created_at: 5, or0: 'p', or1: 'p' });
+  });
+
+  it('should produce a stable hash for the same logical filtered query', () => {
+    const make = () =>
+      new QueryBuilder(testSchema, 'user', (q) => q.selectQuery)
+        .where({ email: 'e', _or: [{ username: 'p' }, { email: 'p' }] })
+        .orderBy('created_at', 'asc')
+        .limit(50)
+        .offset(0)
+        .build()
+        .run();
+    expect(make().hash).toBe(make().hash);
+
+    const different = new QueryBuilder(testSchema, 'user', (q) => q.selectQuery)
+      .where({ email: 'e', _or: [{ username: 'q' }, { email: 'q' }] })
+      .orderBy('created_at', 'asc')
+      .limit(50)
+      .offset(0)
+      .build()
+      .run();
+    expect(different.hash).not.toBe(make().hash);
+  });
+
   it('should build query with select fields', () => {
     const builder = new QueryBuilder(testSchema, 'user', (q) => q.selectQuery);
     builder.select('username', 'email');

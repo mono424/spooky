@@ -118,6 +118,9 @@ pub struct Scheduler {
     pub seq_counter: Arc<AtomicU64>,
     pub wal: Arc<RwLock<EventWal>>,
     start_time: std::time::Instant,
+    /// Upstream SurrealDB server version, queried once on connect and surfaced
+    /// via `/info` (`"unknown"` until the bootstrap connect populates it).
+    surrealdb_version: Arc<RwLock<String>>,
 }
 
 impl Scheduler {
@@ -169,6 +172,7 @@ impl Scheduler {
             seq_counter: Arc::new(AtomicU64::new(initial_seq)),
             wal: Arc::new(RwLock::new(wal)),
             start_time: std::time::Instant::now(),
+            surrealdb_version: Arc::new(RwLock::new("unknown".to_string())),
         })
     }
 
@@ -222,6 +226,7 @@ impl Scheduler {
             shared_backend_configs,
             ingest: self.ingest_state(),
             replica: Arc::clone(&self.replica),
+            surrealdb_version: Arc::clone(&self.surrealdb_version),
         }
     }
 
@@ -347,6 +352,13 @@ impl Scheduler {
         db.use_db(db_name).await?;
 
         info!("Connected to SurrealDB");
+
+        // Query the upstream SurrealDB server version once; surfaced via `/info`
+        // (mirrors apps/ssp/src/lib.rs).
+        match db.version().await {
+            Ok(v) => *self.surrealdb_version.write().await = v.to_string(),
+            Err(e) => info!(error = %e, "Could not read SurrealDB server version"),
+        }
 
         // Step 2: Clear stale registered views from the remote DB. Views are
         // tied to live SSPs/clients, so leftover `_00_query` rows from a prior

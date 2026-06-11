@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../services/logger/logger.dart';
 import 'queue/queue_down.dart';
 import 'queue/queue_up.dart';
@@ -20,7 +22,6 @@ class SyncScheduler {
   final DownQueue _downQueue;
   final Future<void> Function(UpEvent event) _onProcessUp;
   final Future<void> Function(DownEvent event) _onProcessDown;
-  // ignore: unused_field
   final SpookyLogger _logger;
   final RollbackCallback? _onRollback;
 
@@ -47,6 +48,9 @@ class SyncScheduler {
     if (_isSyncingUp) return;
     _isSyncingUp = true;
     try {
+      if (_upQueue.size > 0) {
+        _logger.debug('Draining up-queue (${_upQueue.size} pending)');
+      }
       while (_upQueue.size > 0) {
         await _upQueue.next(_onProcessUp, _onRollback);
       }
@@ -72,5 +76,3 @@ class SyncScheduler {
 
   bool get isSyncing => _isSyncingUp || _isSyncingDown;
 }
-
-void unawaited(Future<void> future) {}

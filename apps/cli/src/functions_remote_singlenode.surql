@@ -56,15 +56,29 @@ DEFINE FUNCTION OVERWRITE fn::query::register($config: object) {
     http::post('{{ENDPOINT}}/view/register', $module_config, { "Authorization": "Bearer {{SECRET}}" });
 };
 
+-- Stack/version discovery as a callable function. Returns the full entity
+-- list the backend `/info` endpoint exposes (ssp + scheduler + backend, each
+-- with version, surrealdb_version, status, uptime, ip, views, …) as a parsed
+-- structured value — so WS callers (the DevTools) get it natively without any
+-- HTTP/CORS round-trip. `{{ENDPOINT}}` is the ssp (singlenode) or scheduler
+-- (cluster) base URL. PERMISSIONS FULL so record-access clients may invoke it.
+DEFINE FUNCTION OVERWRITE fn::spooky::info() {
+    RETURN http::get('{{ENDPOINT}}/info', {
+        "Authorization": "Bearer {{SECRET}}"
+    });
+} PERMISSIONS FULL;
+
+-- Keep the HTTP `/spooky` custom API for external consumers (e.g. the CLI's
+-- `spooky cloud status`), delegating to the function as the single source of
+-- truth. The structured body is JSON-encoded by the Content-Type header.
 DEFINE API OVERWRITE "/spooky"
     FOR get
     THEN {
-        LET $info = http::get('{{ENDPOINT}}/info/text', {
-            "Authorization": "Bearer {{SECRET}}"
-        });
+        -- The custom-API body must be a string/bytes, so JSON-encode the
+        -- function's structured result (one source of truth: the function).
         RETURN {
             status: 200,
-            body: <string>$info,
+            body: encoding::json::encode(fn::spooky::info()),
             headers: {
                 'Content-Type': 'application/json'
             }

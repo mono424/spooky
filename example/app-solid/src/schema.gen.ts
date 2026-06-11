@@ -348,6 +348,14 @@ export const schema = {
     "api": {
       outboxTable: 'job' as const,
       routes: {
+        "/share/accept": {
+          args: {
+            "jwt": {
+              type: 'string' as const,
+              optional: false as const
+            },
+          }
+        },
         "/spookify": {
           args: {
             "id": {

@@ -16,6 +16,7 @@
 
 use anyhow::{Context, Result};
 use ssp_protocol::{list_ref_table_for, sanitize_user_id, RefMode};
+use std::collections::HashSet;
 use surrealdb::{Connection, Surreal};
 use tracing::warn;
 
@@ -115,5 +116,87 @@ pub async fn drop_user_tables<C: Connection>(
         .check()
         .with_context(|| format!("drop_user_tables: REMOVE TABLE failed for {}", auth_id))?;
 
+    Ok(())
+}
+
+/// Drop a user's per-user `_00_list_ref_user_<id>` table iff they have no
+/// remaining registered query in `_00_query`. Called after a TTL sweep cleans a
+/// query so a user's table doesn't linger once their last view expires. No-op in
+/// `RefMode::Single`.
+pub async fn drop_user_table_if_unused<C: Connection>(
+    db: &Surreal<C>,
+    mode: RefMode,
+    auth_id: &str,
+) -> Result<()> {
+    if mode == RefMode::Single {
+        return Ok(());
+    }
+    let counts: Vec<i64> = db
+        .query("SELECT VALUE count() FROM _00_query WHERE auth_id = $a GROUP ALL")
+        .bind(("a", auth_id.to_string()))
+        .await
+        .with_context(|| format!("count remaining queries for {}", auth_id))?
+        .take(0)
+        .with_context(|| format!("take remaining-query count for {}", auth_id))?;
+    if counts.first().copied().unwrap_or(0) == 0 {
+        drop_user_tables(db, mode, auth_id).await?;
+    }
+    Ok(())
+}
+
+/// Best-effort: drop every `_00_list_ref_user_<id>` table whose owner has no
+/// live query in `_00_query`. Clears leftovers accumulated before TTL cleanup
+/// removed expired views (the per-user table was never dropped, only its rows).
+/// No-op in `RefMode::Single`.
+pub async fn drop_orphaned_user_tables<C: Connection>(db: &Surreal<C>, mode: RefMode) -> Result<()> {
+    if mode == RefMode::Single {
+        return Ok(());
+    }
+
+    // Per-user list_ref tables currently defined. surrealdb v3 `take` only
+    // supports its own value types, so go via `surrealdb::types::Value`.
+    let info_val: surrealdb::types::Value = db
+        .query("INFO FOR DB")
+        .await
+        .context("INFO FOR DB")?
+        .take(0)
+        .context("take INFO FOR DB")?;
+    let info: serde_json::Value =
+        serde_json::to_value(&info_val).unwrap_or(serde_json::Value::Null);
+    // surrealdb v3 serializes `Value` externally-tagged, so the table map is at
+    // `.Object.tables.Object` (each entry value is `{"String": "DEFINE ..."}`).
+    let per_user: Vec<String> = info
+        .get("Object")
+        .and_then(|o| o.get("tables"))
+        .and_then(|t| t.get("Object"))
+        .and_then(|o| o.as_object())
+        .map(|m| {
+            m.keys()
+                .filter(|n| n.starts_with("_00_list_ref_user_"))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if per_user.is_empty() {
+        return Ok(());
+    }
+
+    // Sanitized uids that still back a live query.
+    let auth_ids: Vec<String> = db
+        .query("SELECT VALUE auth_id FROM _00_query")
+        .await
+        .context("select live auth_ids")?
+        .take(0)
+        .context("take live auth_ids")?;
+    let live_uids: HashSet<String> = auth_ids.iter().filter_map(|a| sanitize_user_id(a)).collect();
+
+    for tbl in per_user {
+        let uid = tbl.trim_start_matches("_00_list_ref_user_");
+        if !live_uids.contains(uid) {
+            if let Err(e) = db.query(format!("REMOVE TABLE IF EXISTS {tbl};")).await {
+                warn!(target: "ssp::tables", table = %tbl, error = %e, "drop orphaned per-user table failed");
+            }
+        }
+    }
     Ok(())
 }

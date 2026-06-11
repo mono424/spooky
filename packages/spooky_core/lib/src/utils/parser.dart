@@ -1,6 +1,17 @@
 import '../surreal/value.dart';
 import 'record_id_utils.dart';
 
+/// The first statement's result list from a SurrealDB multi-statement response.
+///
+/// SurrealDB returns `[<stmt0 result>, <stmt1 result>, ...]`; a `SELECT`'s rows
+/// live in `results[0]` as a `List`. Returns an empty list when the response is
+/// empty or the first result isn't a list. Callers `.cast<Map<String,
+/// dynamic>>()` when they need typed rows.
+List<dynamic> firstRows(List<dynamic> results) =>
+    (results.isNotEmpty && results.first is List)
+        ? results.first as List
+        : const [];
+
 /// Minimal column schema shape the parser needs (subset of the TS
 /// `ColumnSchema` from query-builder).
 class ColumnSchema {

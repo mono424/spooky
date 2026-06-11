@@ -70,6 +70,15 @@ impl Collection {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Store {
     pub collections: HashMap<String, Collection>,
+    /// Transient, per-step overlay of rows being deleted in the CURRENT step,
+    /// keyed by full `table:id`. A `Delete` removes the row from `collections`
+    /// immediately (the subquery/join path relies on it being gone), but the
+    /// Filter/Scan predicate evaluation still needs the row's content to decide
+    /// whether the retraction (`-1`) belongs to the view. Predicate evaluation
+    /// consults this overlay as a fallback; nothing else does. Populated before
+    /// `apply_change` and cleared after the step. Never serialized.
+    #[serde(skip)]
+    pub pending_deleted_rows: HashMap<String, Sp00kyValue>,
 }
 
 impl Store {
@@ -99,6 +108,29 @@ impl Store {
         let coll = self.collections.get(table)?;
         // Try raw ID first, then with table prefix
         coll.rows.get(id).or_else(|| coll.rows.get(key))
+    }
+
+    /// Like [`get_row_by_key`], but falls back to a row staged for deletion in
+    /// the current step (see [`pending_deleted_rows`]). Used ONLY by predicate
+    /// evaluation so a delete's `-1` retraction can be tested against the WHERE
+    /// clause even though the row is already gone from `collections`.
+    pub fn get_row_by_key_or_deleted(&self, key: &str) -> Option<&Sp00kyValue> {
+        self.get_row_by_key(key)
+            .or_else(|| self.pending_deleted_rows.get(key))
+    }
+
+    /// Stage a row's content before a `Delete` removes it, so predicate
+    /// evaluation in this step can still read it. No-op if the row is absent.
+    pub fn stage_deleted_row(&mut self, table: &str, id: &str) {
+        let key = make_key(table, id);
+        if let Some(row) = self.get_row_by_key(&key).cloned() {
+            self.pending_deleted_rows.insert(key, row);
+        }
+    }
+
+    /// Clear the per-step deleted-row overlay (call after stepping).
+    pub fn clear_pending_deleted_rows(&mut self) {
+        self.pending_deleted_rows.clear();
     }
 
     /// Get the version of a record by its zset key (format "table:id").

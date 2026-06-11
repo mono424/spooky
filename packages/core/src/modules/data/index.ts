@@ -7,7 +7,7 @@ import type {
   RoutePayload,
 } from '@spooky-sync/query-builder';
 import type { LocalDatabaseService } from '../../services/database/index';
-import type { CacheModule, RecordWithId } from '../cache/index';
+import type { CacheModule, RecordWithId, CacheRecord } from '../cache/index';
 import type { Logger } from '../../services/logger/index';
 import type { StreamUpdate } from '../../services/stream-processor/index';
 import type {
@@ -22,6 +22,9 @@ import type {
   RecordVersionArray,
   QueryConfigRecord,
   UpdateOptions,
+  QueryTimings,
+  PhaseStat,
+  RegistrationTimings,
   RunOptions} from '../../types';
 import { MATERIALIZATION_SAMPLE_WINDOW } from '../../types';
 import {
@@ -37,6 +40,23 @@ import {
 } from '../../utils/index';
 import type { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
 import type { PushEventOptions } from '../../events/index';
+import { buildWindowMaterialization } from './window-query';
+
+/** Push a timing sample (ms) into a rolling window, capped at the sample window. */
+function pushSample(samples: number[], ms: number): void {
+  samples.push(ms);
+  if (samples.length > MATERIALIZATION_SAMPLE_WINDOW) samples.shift();
+}
+
+/** Build a {lastMs,p50,p90,p99,count} summary from a rolling sample window. */
+function phaseStatOf(samples: number[], lastMs: number | null): PhaseStat {
+  if (samples.length === 0) {
+    return { lastMs, p50: null, p90: null, p99: null, count: 0 };
+  }
+  const sorted = [...samples].sort((a, b) => a - b);
+  const pick = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!;
+  return { lastMs, p50: pick(0.5), p90: pick(0.9), p99: pick(0.99), count: samples.length };
+}
 
 /**
  * DataModule - Unified query and mutation management
@@ -59,6 +79,25 @@ export class DataModule<S extends SchemaStructure> {
    * constructed after DataModule.
    */
   public onQueryStatusChange?: (hash: QueryHash, status: QueryStatus) => void;
+  /**
+   * Optional observer invoked when a still-subscribed query's TTL heartbeat
+   * fires (~90% of the TTL). Wired by Sp00kyClient to
+   * `Sp00kySync.heartbeatQuery`, which refreshes the remote `_00_query`
+   * row's `lastActiveAt` so an actively-watched query never expires. Settable
+   * field (not a constructor arg) because the sync engine is wired after
+   * DataModule is constructed — mirrors `onQueryStatusChange`.
+   */
+  public onHeartbeat?: (hash: QueryHash) => void;
+  /**
+   * Optional hook fired by {@link deregisterQuery} when an opt-in query (e.g. a
+   * viewport-windowed list cancelling an off-screen window) loses its last
+   * subscriber. Wired by Sp00kyClient to enqueue a `cleanup` down-event, which
+   * tears the remote `_00_query` view down (releasing its `_00_list_ref` edges)
+   * instead of leaving it for the TTL sweep. The local view + state are freed in
+   * {@link finalizeDeregister} only after that remote delete, so a fast
+   * re-subscribe (scroll back) can abort/heal the teardown — see `cleanupQuery`.
+   */
+  public onDeregister?: (hash: QueryHash) => void;
   // Salt for query-id hashing. Set from SurrealDB's session::id() so two
   // browser sessions registering the same logical query (same surql + params)
   // don't collide on the same `_00_query` row — each session gets its own.
@@ -199,6 +238,13 @@ export class DataModule<S extends SchemaStructure> {
         subs.delete(callback);
         if (subs.size === 0) {
           this.subscriptions.delete(queryHash);
+          // NOTE: intentionally do NOT tear down the query / free its in-browser
+          // SSP view here. The subscriber-gated heartbeat (startTTLHeartbeat)
+          // already self-stops once subscribers hit 0, so an abandoned query
+          // stops being kept alive and the server's TTL sweep removes it. Freeing
+          // the local view on every last-unsubscribe caused re-registration churn
+          // on navigation (open A → leave → open A again re-registers), which is
+          // a flakiness risk for no real benefit — keep the local view resident.
         }
       }
     };
@@ -272,26 +318,79 @@ export class DataModule<S extends SchemaStructure> {
   async onStreamUpdate(update: StreamUpdate): Promise<void> {
     const { queryHash, op } = update;
 
-    // Only debounce UPDATE operations
-    // CREATE and DELETE should propagate immediately
-    if (op === 'UPDATE') {
-      // Clear existing timer if any
-      if (this.debounceTimers.has(queryHash)) {
-        // oxlint-disable-next-line no-non-null-assertion -- guarded by .has() check above
-        clearTimeout(this.debounceTimers.get(queryHash)!);
-      }
-
-      // Set new timer
-      const timer = setTimeout(async () => {
+    // DELETE propagates immediately — a removed row should disappear without
+    // waiting on a debounce.
+    //
+    // CREATE and UPDATE are coalesced per query on a trailing timer. A list's
+    // rows stream in from sync as many small `_00_list_ref` diffs, each its own
+    // `cache.saveBatch` → one stream update per chunk. `ingestMany` only
+    // coalesces records ingested synchronously together, so chunks spread over
+    // time each re-materialize and re-notify — a 50-row window can fire 30+
+    // updates as it fills. Each StreamUpdate carries the full materialized
+    // `localArray`, so the latest one already reflects every prior chunk: keep
+    // only it and fire once on the trailing edge, settling the query in a couple
+    // of notifications instead of one per chunk.
+    if (op === 'DELETE') {
+      const existing = this.debounceTimers.get(queryHash);
+      if (existing) {
+        clearTimeout(existing);
         this.debounceTimers.delete(queryHash);
-        await this.processStreamUpdate(update);
-      }, this.streamDebounceTime);
-
-      this.debounceTimers.set(queryHash, timer);
-    } else {
-      // CREATE and DELETE - process immediately
+      }
       await this.processStreamUpdate(update);
+      return;
     }
+
+    // Clear existing timer if any
+    if (this.debounceTimers.has(queryHash)) {
+      // oxlint-disable-next-line no-non-null-assertion -- guarded by .has() check above
+      clearTimeout(this.debounceTimers.get(queryHash)!);
+    }
+
+    // Set new timer
+    const timer = setTimeout(async () => {
+      this.debounceTimers.delete(queryHash);
+      await this.processStreamUpdate(update);
+    }, this.streamDebounceTime);
+
+    this.debounceTimers.set(queryHash, timer);
+  }
+
+  // Materialize a query's result rows from the local DB. For a windowed query
+  // (`LIMIT n START m`, m>0) the original surql is NOT re-run — re-applying
+  // `START m` against the shared local store would skip the window's own rows
+  // (sparse windowing) and return nothing. Instead we select the window's
+  // record id-set directly, preferring the server's `list_ref` (`remoteArray`,
+  // authoritative) over the in-browser SSP's view (`sspArray`), and re-apply
+  // the original ORDER BY for stable order.
+  private async materializeRecords(
+    queryState: QueryState,
+    sspArray?: Array<[string, number]>
+  ): Promise<Record<string, any>[]> {
+    const t0 = performance.now();
+    const windowMat = buildWindowMaterialization(queryState.config.surql);
+    let records: Record<string, any>[];
+    if (windowMat) {
+      const win =
+        (queryState.config.remoteArray?.length && queryState.config.remoteArray) ||
+        (sspArray?.length && sspArray) ||
+        queryState.config.localArray ||
+        [];
+      const winIds = win.map(([id]) => parseRecordIdString(id));
+      const [rows] = await this.local.query<[Record<string, any>[]]>(windowMat.query, {
+        ...queryState.config.params,
+        __win: winIds,
+      });
+      records = rows || [];
+    } else {
+      const [rows] = await this.local.query<[Record<string, any>[]]>(
+        queryState.config.surql,
+        queryState.config.params
+      );
+      records = rows || [];
+    }
+    // Local SurrealDB record-fetch time → DevTools "localFetch" phase.
+    this.recordPhase(queryState, 'localFetch', performance.now() - t0);
+    return records;
   }
 
   private async processStreamUpdate(update: StreamUpdate): Promise<void> {
@@ -315,17 +414,24 @@ export class DataModule<S extends SchemaStructure> {
       }
       queryState.lastIngestLatencyMs = materializationTimeMs;
     }
+    // Record the SSP internal sub-phase timings (from the WASM binding) so
+    // DevTools can attribute ingest cost to store-apply vs circuit-step vs transform.
+    if (typeof update.storeApplyMs === 'number')
+      this.recordPhase(queryState, 'sspStoreApply', update.storeApplyMs);
+    if (typeof update.circuitStepMs === 'number')
+      this.recordPhase(queryState, 'sspCircuitStep', update.circuitStepMs);
+    if (typeof update.transformMs === 'number')
+      this.recordPhase(queryState, 'sspTransform', update.transformMs);
     const percentiles = this.computeMaterializationPercentiles(queryState.materializationSamples);
 
     try {
-      // Fetch updated records
-      const [records] = await this.local.query<[Record<string, any>[]]>(
-        queryState.config.surql,
-        queryState.config.params
-      );
-
-      // Update state
-      const newRecords = records || [];
+      // Materialize the query's rows. For a windowed (offset) query, re-running
+      // the original surql would re-apply `START n` against the shared local DB
+      // and skip the window's rows entirely; instead select the SSP's
+      // materialized window id-set (`localArray`) directly, re-applying the
+      // original ORDER BY for stable display order. Non-offset queries keep the
+      // normal re-query path.
+      const newRecords = await this.materializeRecords(queryState, localArray);
       queryState.config.localArray = localArray;
 
       const prevJson = JSON.stringify(queryState.records);
@@ -383,7 +489,7 @@ export class DataModule<S extends SchemaStructure> {
       this.logger.debug(
         {
           queryHash,
-          recordCount: records?.length,
+          recordCount: newRecords?.length,
           Category: 'sp00ky-client::DataModule::onStreamUpdate',
         },
         'Query updated from stream'
@@ -435,11 +541,149 @@ export class DataModule<S extends SchemaStructure> {
     return { p55: pick(0.55), p90: pick(0.90), p99: pick(0.99) };
   }
 
+  /** Record a per-phase timing sample (ms) on a query's rolling window. */
+  private recordPhase(qs: QueryState, phase: string, ms: number): void {
+    if (!Number.isFinite(ms)) return;
+    const arr = qs.phaseSamples[phase] ?? (qs.phaseSamples[phase] = []);
+    pushSample(arr, ms);
+    qs.phaseLast[phase] = ms;
+  }
+
+  /** Record the remote record-fetch time (ms) for a query. Called by the sync engine. */
+  recordRemoteFetch(hash: string, ms: number): void {
+    const qs = this.activeQueries.get(hash);
+    if (qs) this.recordPhase(qs, 'remoteFetch', ms);
+  }
+
+  /**
+   * Record the frontend reconcile time (ms) for a query. Called from `useQuery`
+   * via `Sp00kyClient.reportFrontendTiming` after it applies an update to its store.
+   */
+  recordFrontendTiming(hash: string, ms: number): void {
+    const qs = this.activeQueries.get(hash);
+    if (qs) this.recordPhase(qs, 'frontend', ms);
+  }
+
+  /**
+   * Build the per-query processing-time breakdown surfaced to the DevTools panel
+   * and the MCP. `ssp` is the WASM-ingest wall time (from `materializationSamples`);
+   * the rest come from the per-phase rolling windows + one-shot registration timings.
+   */
+  phaseTimings(q: QueryState): QueryTimings {
+    const stat = (phase: string) =>
+      phaseStatOf(q.phaseSamples[phase] ?? [], q.phaseLast[phase] ?? null);
+    return {
+      ssp: phaseStatOf(q.materializationSamples, q.lastIngestLatencyMs),
+      sspStoreApply: stat('sspStoreApply'),
+      sspCircuitStep: stat('sspCircuitStep'),
+      sspTransform: stat('sspTransform'),
+      localFetch: stat('localFetch'),
+      remoteFetch: stat('remoteFetch'),
+      frontend: stat('frontend'),
+      registration: q.registrationTimings,
+      updateCount: q.updateCount,
+      errorCount: q.errorCount,
+    };
+  }
+
   /**
    * Get query state (for sync and devtools)
    */
   getQueryByHash(hash: string): QueryState | undefined {
     return this.activeQueries.get(hash);
+  }
+
+  /**
+   * Cold-query guard for instant-hydrate: true when the query exists, hasn't been
+   * hydrated, and has NOT yet fetched its server result (`remoteArray` empty).
+   * We gate on `remoteArray`, not local `records`: a windowed query is often
+   * partially pre-seeded from the circuit (e.g. the dashboard's 5-row preview),
+   * but it still hasn't loaded its own full window from the server — so it should
+   * still hydrate. A warm re-subscribe (remoteArray already populated) is skipped.
+   */
+  isCold(hash: string): boolean {
+    const qs = this.activeQueries.get(hash);
+    return !!qs && !qs.hydrated && (qs.config.remoteArray?.length ?? 0) === 0;
+  }
+
+  /**
+   * Instant-hydrate: ingest rows fetched one-shot from the remote (the query's own
+   * surql run directly) so the query DISPLAYS immediately, while the full realtime
+   * registration proceeds in the background. Ingests with versions (`_00_rv`) so the
+   * later `syncRecords` dedup skips re-pulling unchanged bodies, and seeds
+   * `remoteArray` so windowed queries materialize the correct window (no sparse
+   * local-circuit issue). Runs at most once per query (the `hydrated` flag).
+   */
+  async applyHydration(hash: string, rows: RecordWithId[]): Promise<void> {
+    const queryState = this.activeQueries.get(hash);
+    if (!queryState) return;
+    queryState.hydrated = true; // run-once, even when the remote returns nothing
+    if (rows.length === 0) return;
+
+    const tableName = queryState.config.tableName;
+    const batch: CacheRecord[] = rows.map((record) => ({
+      table: tableName,
+      op: 'CREATE' as const,
+      record,
+      version: (record._00_rv as number) || 1,
+    }));
+    await this.cache.saveBatch(batch);
+
+    // Prime remoteArray from the hydrated id+version pairs: `materializeRecords`
+    // prefers it for windowed queries (correct window) and it feeds the version
+    // dedup. Registration later overwrites it with the authoritative `_00_list_ref`.
+    queryState.config.remoteArray = rows.map(
+      (r) => [encodeRecordId(r.id), (r._00_rv as number) || 1] as [string, number]
+    );
+
+    queryState.records = await this.materializeRecords(queryState);
+    const subscribers = this.subscriptions.get(hash);
+    if (subscribers) {
+      for (const cb of subscribers) cb(queryState.records);
+    }
+  }
+
+  /** True while ≥1 live subscriber is watching this query (refcount guard). */
+  hasSubscribers(hash: string): boolean {
+    return (this.subscriptions.get(hash)?.size ?? 0) > 0;
+  }
+
+  /**
+   * Opt-in eager teardown for a query whose LAST subscriber just left — used by
+   * viewport-windowed lists to cancel off-screen windows instead of leaving
+   * their remote views to expire on the TTL sweep. No-op while any subscriber
+   * remains (refcount). Only enqueues the remote cleanup here; the local WASM
+   * view + in-memory state are freed in {@link finalizeDeregister} after the
+   * remote delete completes, so a re-subscribe in between aborts/heals it.
+   *
+   * NOTE: most queries should NOT use this — the default keep-alive on
+   * unsubscribe avoids re-registration churn on navigation.
+   */
+  deregisterQuery(hash: string): void {
+    if (this.hasSubscribers(hash)) return;
+    if (!this.activeQueries.has(hash)) return;
+    this.onDeregister?.(hash);
+  }
+
+  /**
+   * Final local teardown after the remote `_00_query` row was deleted: free the
+   * WASM view, heartbeat timer, debounce timer, and in-memory state. Caller
+   * (`cleanupQuery`) guarantees no subscriber remains.
+   */
+  finalizeDeregister(hash: string): void {
+    const qs = this.activeQueries.get(hash);
+    if (qs?.ttlTimer) {
+      clearTimeout(qs.ttlTimer);
+      qs.ttlTimer = null;
+    }
+    const debounce = this.debounceTimers.get(hash);
+    if (debounce) {
+      clearTimeout(debounce);
+      this.debounceTimers.delete(hash);
+    }
+    this.cache.unregisterQuery(hash);
+    this.activeQueries.delete(hash);
+    this.subscriptions.delete(hash);
   }
 
   /**
@@ -500,12 +744,10 @@ export class DataModule<S extends SchemaStructure> {
     const queryState = this.activeQueries.get(queryHash);
     if (!queryState) return;
 
-    // Re-query local DB for latest data
-    const [records] = await this.local.query<[Record<string, any>[]]>(
-      queryState.config.surql,
-      queryState.config.params
-    );
-    const newRecords = records || [];
+    // Re-query local DB for latest data (windowed queries materialize from the
+    // list_ref window so they resolve even if the in-browser SSP never emits —
+    // it can't compute a high offset whose preceding rows aren't resident).
+    const newRecords = await this.materializeRecords(queryState);
     const changed = JSON.stringify(queryState.records) !== JSON.stringify(newRecords);
     queryState.records = newRecords;
 
@@ -754,13 +996,37 @@ export class DataModule<S extends SchemaStructure> {
     );
 
     await withRetry(this.logger, () => this.local.execute(query, { id: rid, mid: mutationId }));
-    await this.cache.delete(table, id, true, beforeRecord);
 
-    // DBSP may not emit view updates for DELETE ops —
-    // manually notify all queries that reference this table
+    // The local DELETE has now committed. Everything below must reflect that in
+    // active live queries — so the deleted row disappears optimistically without
+    // a reload — even if the optimistic SSP-view ingest below fails. Previously a
+    // throw from `cache.delete` (the WASM ingest) aborted `delete()` after the
+    // commit, so the manual notify loop never ran and the row lingered on screen
+    // until reload. Ingesting the delete into the in-browser SSP view is
+    // best-effort: the manual re-materialize reads the local DB (which already
+    // excludes the row), so the result is correct regardless.
+    try {
+      await this.cache.delete(table, id, true, beforeRecord);
+    } catch (err) {
+      this.logger.error(
+        { err, id, Category: 'sp00ky-client::DataModule::delete' },
+        'SSP delete-ingest failed; relying on query re-materialize to reflect the delete'
+      );
+    }
+
+    // DBSP may not emit view updates for DELETE ops — manually notify all queries
+    // that reference this table. Each is isolated so one failing re-materialize
+    // can't stop the others (or the sync emit below) from running.
     for (const [queryHash, queryState] of this.activeQueries) {
       if (queryState.config.tableName === tableName) {
-        await this.notifyQuerySynced(queryHash);
+        try {
+          await this.notifyQuerySynced(queryHash);
+        } catch (err) {
+          this.logger.error(
+            { err, queryHash, Category: 'sp00ky-client::DataModule::delete' },
+            'notifyQuerySynced failed after delete'
+          );
+        }
       }
     }
 
@@ -897,7 +1163,7 @@ export class DataModule<S extends SchemaStructure> {
     });
 
     const t0 = performance.now();
-    const { localArray } = this.cache.registerQuery({
+    const { localArray, registrationTimings } = this.cache.registerQuery({
       queryHash: hash,
       surql: surqlString,
       params,
@@ -905,6 +1171,15 @@ export class DataModule<S extends SchemaStructure> {
       lastActiveAt: new Date(),
     });
     const registrationTime = performance.now() - t0;
+
+    // Record the one-shot SSP registration timings (parse/plan/snapshot from the
+    // WASM binding) + the register_view wall time for DevTools.
+    queryState.registrationTimings = {
+      parseMs: registrationTimings?.parseMs ?? null,
+      planMs: registrationTimings?.planMs ?? null,
+      snapshotMs: registrationTimings?.snapshotMs ?? null,
+      wallMs: registrationTime,
+    };
 
     await withRetry(this.logger, () =>
       this.local.query(
@@ -918,8 +1193,31 @@ export class DataModule<S extends SchemaStructure> {
       )
     );
 
+    // Windowed (`START n`) queries skipped the raw initial load in
+    // createNewQuery (O(offset) + wrong rows for sparse windows). Seed the
+    // initial rows now from the SSP's window id-set (`localArray`) via the same
+    // window-materialization path the stream updates use — O(window), and the
+    // ids are already the correct window — so the first paint isn't empty while
+    // the remote `_00_list_ref` syncs in.
+    const windowMat = buildWindowMaterialization(surqlString);
+    if (windowMat && localArray.length > 0) {
+      try {
+        const winIds = localArray.map(([id]) => parseRecordIdString(id));
+        const [seeded] = await this.local.query<[Record<string, any>[]]>(windowMat.query, {
+          ...params,
+          __win: winIds,
+        });
+        queryState.records = seeded || [];
+      } catch (err) {
+        this.logger.warn(
+          { err, hash, Category: 'sp00ky-client::DataModule::createAndRegisterQuery' },
+          'Failed to seed windowed initial records from localArray'
+        );
+      }
+    }
+
     this.activeQueries.set(hash, queryState);
-    this.startTTLHeartbeat(queryState);
+    this.startTTLHeartbeat(queryState, hash);
     this.logger.debug(
       {
         hash,
@@ -986,14 +1284,21 @@ export class DataModule<S extends SchemaStructure> {
     };
 
     let records: Record<string, any>[] = [];
-    try {
-      const [result] = await this.local.query<[Record<string, any>[]]>(surqlString, params);
-      records = result || [];
-    } catch (err) {
-      this.logger.warn(
-        { err, Category: 'sp00ky-client::DataModule::createNewQuery' },
-        'Failed to load initial cached records'
-      );
+    // Windowed (`START n`) queries: do NOT seed from the raw surql here. Running
+    // `… LIMIT n START m` against the shared local store is O(m) — it sorts and
+    // skips m rows on every window open — AND returns the wrong rows for sparse
+    // windows (the reason `buildWindowMaterialization` exists). Those windows are
+    // seeded from the SSP `localArray` in `createAndRegisterQuery` instead.
+    if (buildWindowMaterialization(surqlString) === null) {
+      try {
+        const [result] = await this.local.query<[Record<string, any>[]]>(surqlString, params);
+        records = result || [];
+      } catch (err) {
+        this.logger.warn(
+          { err, Category: 'sp00ky-client::DataModule::createNewQuery' },
+          'Failed to load initial cached records'
+        );
+      }
     }
 
     // Persisted counters survive a restart even though the rolling
@@ -1017,6 +1322,9 @@ export class DataModule<S extends SchemaStructure> {
       lastIngestLatencyMs: null,
       errorCount: persistedErrorCount,
       status: 'idle',
+      phaseSamples: {},
+      phaseLast: {},
+      registrationTimings: { parseMs: null, planMs: null, snapshotMs: null, wallMs: null },
     };
   }
 
@@ -1031,29 +1339,38 @@ export class DataModule<S extends SchemaStructure> {
     return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   }
 
-  private startTTLHeartbeat(queryState: QueryState): void {
+  private startTTLHeartbeat(queryState: QueryState, hash: QueryHash): void {
     if (queryState.ttlTimer) return;
 
     const heartbeatTime = Math.floor(queryState.ttlDurationMs * 0.9);
 
     queryState.ttlTimer = setTimeout(() => {
-      // TODO: Emit heartbeat event for sync
+      queryState.ttlTimer = null;
+      // Only keep the remote query alive while something is actually watching
+      // it. With the server now sweeping ALL expired views (not just in-circuit
+      // ones), an un-refreshed query WOULD be swept after its TTL — so a live
+      // subscriber must heartbeat. An abandoned query (no subscribers) is left
+      // to expire and get swept; its local view was already torn down at the
+      // last unsubscribe, so we just stop the timer here.
+      const subscriberCount = this.subscriptions.get(hash)?.size ?? 0;
+      if (subscriberCount === 0) {
+        this.logger.debug(
+          { hash, Category: 'sp00ky-client::DataModule::startTTLHeartbeat' },
+          'TTL heartbeat: no subscribers, stopping'
+        );
+        return;
+      }
+      this.onHeartbeat?.(hash);
       this.logger.debug(
         {
+          hash,
           id: encodeRecordId(queryState.config.id),
           Category: 'sp00ky-client::DataModule::startTTLHeartbeat',
         },
-        'TTL heartbeat'
+        'TTL heartbeat sent'
       );
-      this.startTTLHeartbeat(queryState);
+      this.startTTLHeartbeat(queryState, hash);
     }, heartbeatTime);
-  }
-
-  private stopTTLHeartbeat(queryState: QueryState): void {
-    if (queryState.ttlTimer) {
-      clearTimeout(queryState.ttlTimer);
-      queryState.ttlTimer = null;
-    }
   }
 
   private async replaceRecordInQueries(record: Record<string, any>): Promise<void> {

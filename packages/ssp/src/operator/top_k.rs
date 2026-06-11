@@ -3,7 +3,8 @@ use crate::circuit::store::Store;
 use crate::eval::value_ops::resolve_field;
 use crate::operator::plan::OrderSpec;
 use crate::types::Sp00kyValue;
-use std::collections::{BTreeSet, HashMap};
+use indexset::BTreeSet;
+use std::collections::HashMap;
 
 /// TopK operator with sorted buffer state (Z⁻¹).
 ///
@@ -116,12 +117,18 @@ impl TopK {
     }
 
     /// The keys currently in the output window `[offset, offset + limit)`.
+    ///
+    /// Reads the window by rank via `get_index` (O(log n) per lookup on the
+    /// Fenwick-indexed B-tree) rather than `iter().skip(offset)` (O(offset)), so
+    /// the cost is O(limit · log n) — independent of how deep the window is.
     fn current_window(&self) -> Vec<String> {
-        self.buffer
-            .iter()
-            .skip(self.offset)
-            .take(self.limit)
-            .map(|(_, key)| key.clone())
+        let n = self.buffer.len();
+        if self.offset >= n {
+            return Vec::new();
+        }
+        let end = (self.offset + self.limit).min(n);
+        (self.offset..end)
+            .filter_map(|i| self.buffer.get_index(i).map(|(_, key)| key.clone()))
             .collect()
     }
 }
@@ -415,5 +422,74 @@ mod tests {
         let result = top_k.step(&[&d2], &store, None);
 
         assert!(result.is_empty());
+    }
+
+    // Regression guard for the deep-window slowdown: `current_window()` must read
+    // its window by rank (O(limit·log n)), NOT by `iter().skip(offset)` (O(offset)).
+    // With the rank-based read the cost is ~flat across offsets; the old skip made
+    // offset 10000 hundreds of times slower than offset 0. We assert a generous
+    // ratio so it only trips on a true O(offset) regression, never on CI noise.
+    #[test]
+    fn current_window_cost_is_offset_independent() {
+        use std::time::Instant;
+
+        let mut store = Store::new();
+        store.ensure_collection("posts");
+        let n: usize = 20_000;
+        let mut items: Vec<(String, i64)> = Vec::with_capacity(n);
+        for i in 0..n {
+            let id = format!("post:{}", i);
+            store.apply_change(&Change::create("posts", &id, json!({ "score": i as i64 })));
+            items.push((format!("posts:{}", i), 1));
+        }
+
+        let mut top_k = TopK::new(
+            30,
+            0,
+            Some(vec![OrderSpec {
+                field: Path::new("score"),
+                direction: "ASC".into(),
+            }]),
+        );
+        // Seed all rows in one delta (mirrors Circuit::run_initial_snapshot).
+        let delta: ZSet = items.into_iter().collect();
+        let _ = top_k.step(&[&delta], &store, None);
+        assert_eq!(top_k.buffer.len(), n);
+
+        let measure = |tk: &TopK, iters: usize| -> u128 {
+            let mut acc = 0usize;
+            let t0 = Instant::now();
+            for _ in 0..iters {
+                acc = acc.wrapping_add(tk.current_window().len());
+            }
+            // Keep `acc` observable so the loop isn't optimized away.
+            assert!(acc > 0);
+            t0.elapsed().as_nanos()
+        };
+
+        let iters = 2000;
+        let _ = measure(&top_k, 200); // warm up
+        top_k.offset = 0;
+        let t_shallow = measure(&top_k, iters);
+        top_k.offset = 1_000;
+        let t_mid = measure(&top_k, iters);
+        top_k.offset = 10_000;
+        let t_deep = measure(&top_k, iters);
+
+        eprintln!(
+            "current_window {} iters: offset0={}ns offset1k={}ns offset10k={}ns",
+            iters, t_shallow, t_mid, t_deep
+        );
+
+        // O(offset) at depth 10000 would be ~300x the work at offset 0; O(log n)
+        // is ~1-2x. 10x cleanly separates them with margin for a noisy machine. A
+        // 1µs floor keeps a near-zero shallow time from exploding the ratio.
+        let floor: u128 = 1_000;
+        assert!(
+            t_deep <= 10 * t_shallow.max(floor),
+            "current_window at offset 10000 ({}ns) scales with offset vs offset 0 ({}ns) — O(offset) regression?",
+            t_deep,
+            t_shallow
+        );
     }
 }

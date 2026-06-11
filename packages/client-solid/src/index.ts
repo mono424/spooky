@@ -160,12 +160,26 @@ export class SyncedDb<S extends SchemaStructure> {
    */
   async delete<TName extends TableNames<S>>(
     tableName: TName,
-    selector: string | InnerQuery<GetTable<S, TName>, boolean>
+    selector: string | RecordId | InnerQuery<GetTable<S, TName>, boolean>
   ): Promise<void> {
     if (!this.sp00ky) throw new Error('SyncedDb not initialized');
-    if (typeof selector !== 'string')
-      throw new Error('Only string ID selectors are supported currently with core');
-    await this.sp00ky.delete(tableName as string, selector);
+    // Accept a `"table:id"` string OR a RecordId — live-query rows carry their
+    // `id` as a RecordId, so callers can pass `db.delete('game', row.id)`
+    // directly. Build the canonical string from the raw id part (not
+    // `RecordId.toString()`, which escapes special chars) so it round-trips
+    // through the engine's `parseRecordIdString`. InnerQuery selectors are not
+    // supported yet. (cross-package RecordId instances → match by constructor name.)
+    const isRecordId =
+      selector instanceof RecordId || (selector as any)?.constructor?.name === 'RecordId';
+    let id: string;
+    if (typeof selector === 'string') {
+      id = selector;
+    } else if (isRecordId) {
+      id = `${tableName as string}:${(selector as RecordId).id}`;
+    } else {
+      throw new Error('Only string ID or RecordId selectors are supported currently with core');
+    }
+    await this.sp00ky.delete(tableName as string, id);
   }
 
   /**

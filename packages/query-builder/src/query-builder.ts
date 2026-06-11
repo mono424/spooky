@@ -7,6 +7,7 @@ import type {
   RelatedQuery,
   SchemaAwareQueryModifier,
   SchemaAwareQueryModifierBuilder,
+  WhereInput,
 } from './types';
 import type {
   TableNames,
@@ -300,7 +301,7 @@ class SchemaAwareQueryModifierBuilderImpl<
     private readonly schema: S
   ) {}
 
-  where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this {
+  where(conditions: WhereInput<TableModel<GetTable<S, TableName>>>): this {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -413,7 +414,7 @@ export class QueryBuilder<
    * Add additional where conditions
    */
   where(
-    conditions: Partial<TableModel<GetTable<S, TableName>>>
+    conditions: WhereInput<TableModel<GetTable<S, TableName>>>
   ): QueryBuilder<S, TableName, R, RelatedFields, IsOne> {
     this.options.where = { ...this.options.where, ...conditions };
     return this;
@@ -753,32 +754,52 @@ export function buildQueryFromOptions<TModel extends GenericModel, IsOne extends
   const vars: Record<string, unknown> = {};
   if (parsedWhere && Object.keys(parsedWhere).length > 0) {
     const conditions: string[] = [];
-    for (const [key, value] of Object.entries(parsedWhere)) {
-      const varName = key;
 
-      // Handle operator objects { _op, _val }
+    // Build a single condition for `field`, binding its value under `varName`.
+    // Supports operator objects `{ _op, _val, _swap }` (e.g. `{ _op: '<=', _val:
+    // 5 }`); a `$`-prefixed string `_val` references an existing param verbatim.
+    // Plain values mean equality (`field = $varName`).
+    const buildCondition = (field: string, value: unknown, varName: string): string => {
       if (value && typeof value === 'object' && '_op' in value && '_val' in value) {
         const { _op, _val, _swap } = value as { _op: string; _val: unknown; _swap?: boolean };
-
-        let rightSide = '';
+        let rightSide: string;
         if (typeof _val === 'string' && _val.startsWith('$')) {
           rightSide = _val;
         } else {
           vars[varName] = _val;
           rightSide = `$${varName}`;
         }
-
-        if (_swap) {
-          conditions.push(`${rightSide} ${_op} ${key}`);
-        } else {
-          conditions.push(`${key} ${_op} ${rightSide}`);
-        }
-      } else {
-        vars[varName] = value;
-        conditions.push(`${key} = $${varName}`);
+        return _swap ? `${rightSide} ${_op} ${field}` : `${field} ${_op} ${rightSide}`;
       }
+      vars[varName] = value;
+      return `${field} = $${varName}`;
+    };
+
+    for (const [key, value] of Object.entries(parsedWhere)) {
+      // OR-group: `{ _or: [ {field: val}, {field: {_op,_val}}, ... ] }` compiles
+      // to one parenthesised `(c1 OR c2 ...)` conjunct. Each branch condition gets
+      // a unique, position-indexed param name (`or0`, `or1`, …) so it never
+      // collides with a top-level condition on the same field (e.g. a `white =
+      // $white` filter alongside an opponent `_or` on white/black) — keeping the
+      // surql + vars, and thus the query hash, stable and deterministic.
+      if (key === '_or' && Array.isArray(value)) {
+        const orParts: string[] = [];
+        let i = 0;
+        for (const branch of value) {
+          if (branch && typeof branch === 'object') {
+            for (const [bField, bVal] of Object.entries(branch as Record<string, unknown>)) {
+              orParts.push(buildCondition(bField, bVal, `or${i++}`));
+            }
+          }
+        }
+        if (orParts.length > 0) conditions.push(`(${orParts.join(' OR ')})`);
+        continue;
+      }
+
+      conditions.push(buildCondition(key, value, key));
     }
-    query += ` WHERE ${conditions.join(' AND ')}`;
+
+    if (conditions.length > 0) query += ` WHERE ${conditions.join(' AND ')}`;
   }
 
   // Add PATCH for UPDATE

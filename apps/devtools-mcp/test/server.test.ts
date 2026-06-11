@@ -55,6 +55,33 @@ describe('createServer', () => {
       expect(data.connected).toBe(true);
       expect(data.tabs).toHaveLength(1);
     });
+
+    it('get_query_timings returns timings sorted slowest-first', async () => {
+      const bridge = mockBridge(true);
+      (bridge.request as any).mockResolvedValue({
+        activeQueries: {
+          '1': {
+            queryHash: 1,
+            query: 'SELECT * FROM a',
+            timings: { ssp: { p90: 1 }, localFetch: {}, remoteFetch: {}, frontend: {}, updateCount: 2 },
+          },
+          '2': {
+            queryHash: 2,
+            query: 'SELECT * FROM b',
+            timings: { ssp: { p90: 50 }, localFetch: {}, remoteFetch: {}, frontend: {}, updateCount: 5 },
+          },
+        },
+      });
+      const server = createServer(bridge);
+
+      const result = await callTool(server, 'get_query_timings', {});
+      const data = JSON.parse(result.content[0].text);
+
+      expect(data).toHaveLength(2);
+      expect(data[0].queryHash).toBe(2); // higher ssp.p90 → slowest first
+      expect(data[0]._score).toBeUndefined(); // internal sort key stripped
+      expect(data[0].timings.ssp.p90).toBe(50);
+    });
   });
 
   describe('with bridge disconnected, surreal available', () => {

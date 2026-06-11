@@ -343,6 +343,7 @@ pub fn create_app(state: AppState) -> Router {
     let public = Router::new()
         .route("/health", get(health_handler))
         .route("/info", get(info_handler))
+        .route("/info/text", get(info_text_handler))
         .route("/version", get(version_handler))
         .layer(middleware::from_fn(cors_allow_all));
 
@@ -1443,6 +1444,44 @@ async fn ingest_handler(
         });
     }
 
+    // Orphan-proof delete. A deleted record must not remain in ANY query's
+    // `_00_list_ref`, but the circuit only emits a removal when the record is in
+    // its in-memory `view.cache` — which can be incomplete (a missed ingest, or
+    // an SSP restart while `_00_list_ref` persists in SurrealDB). Those leftover
+    // edges are exactly why a delete in one window never reaches another window:
+    // the deleted id never leaves the other session's `_00_list_ref`, so that
+    // client sees no removal to react to. Independently of the circuit deltas,
+    // drop every edge pointing at the deleted record from the owner's per-user
+    // list_ref table. Idempotent: a no-op when the circuit already removed them.
+    if op == Operation::Delete {
+        if let Some(owner) = payload.record.get("owner").and_then(|v| v.as_str()) {
+            if parse_record_id(&payload.id).is_some() {
+                let list_ref_tbl = tables::list_ref_table(state.ref_mode, owner);
+                // Interpolate the record id directly (it's a validated record-id
+                // literal), matching the edge-write statements in `update_all_edges`.
+                let stmt = format!("DELETE {} WHERE out = {}", list_ref_tbl, payload.id);
+                let state_for_cleanup = state.clone();
+                let id_for_log = payload.id.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = state_for_cleanup.db.query(&stmt).await {
+                        error!(
+                            target: "ssp::ingest",
+                            id = %id_for_log,
+                            error = %e,
+                            "list_ref delete cleanup failed"
+                        );
+                    } else {
+                        debug!(
+                            target: "ssp::ingest",
+                            id = %id_for_log,
+                            "Removed list_ref edges for deleted record"
+                        );
+                    }
+                });
+            }
+        }
+    }
+
     // Record duration
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     state.metrics.ingest_duration.record(duration_ms, &[]);
@@ -1955,6 +1994,20 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
     ]))
 }
 
+/// Info handler (text) — the same entity list as `/info`, serialized to a
+/// JSON string and served as `text/plain`. The SurrealDB `/spooky` custom API
+/// proxies this route via `http::get` and passes the body through verbatim, so
+/// it must already be valid JSON text (mirrors the scheduler's `/info/text`).
+async fn info_text_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let json_resp = info_handler(State(state)).await;
+    let json_string = serde_json::to_string(&json_resp.0).unwrap_or_else(|_| "[]".to_string());
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain")],
+        json_string,
+    )
+}
+
 /// Debug view handler - returns cache state for a specific view
 async fn debug_view_handler(
     State(state): State<AppState>,
@@ -2010,54 +2063,54 @@ async fn version_handler() -> impl IntoResponse {
 
 /// Clean up a single expired query. Uses conditional DELETE to guard against race conditions
 /// where a client heartbeats between the sweep check and the actual delete.
-async fn cleanup_expired_query(
+pub async fn cleanup_expired_query(
     db: &SharedDb,
     processor: &Arc<RwLock<Circuit>>,
     metrics: &Arc<Metrics>,
     query_id: &str,
+    // `auth_id` is taken from the `_00_query` row (not the in-memory Circuit) so
+    // we route the per-user `_00_list_ref_user_<id>` cleanup correctly even for
+    // queries that aren't in this SSP's circuit (e.g. after a restart). Empty in
+    // `RefMode::Single` or when the row has no auth_id.
+    auth_id: &str,
     mode: ssp_protocol::RefMode,
 ) {
-    // Pull auth_id from the in-memory Circuit so we route the cleanup to
-    // the right per-user `_00_query_user_<id>` / `_00_list_ref_user_<id>`.
-    let auth_id = {
-        let circuit = processor.read().await;
-        circuit
-            .get_view(query_id)
-            .map(|v| v.auth_id.clone())
-            .unwrap_or_default()
-    };
-
-    let incantation_id = format_incantation_id(query_id);
-    let list_ref_tbl = tables::list_ref_table(mode, &auth_id);
-    let Some(record_id) = parse_record_id(&incantation_id) else {
-        error!(query_id = %query_id, "TTL cleanup: invalid record ID");
-        return;
-    };
-
-    // Conditional delete — only if TTL is STILL expired (guards against heartbeat race)
-    match db
-        .query("DELETE $id WHERE lastActiveAt + ttl < time::now() RETURN BEFORE")
-        .bind(("id", record_id.clone()))
+    let list_ref_tbl = tables::list_ref_table(mode, auth_id);
+    // Build the record id with `type::record` from the raw query id rather than
+    // parsing a literal (`RecordId::parse_simple` rejects some valid ids, which
+    // silently skipped the delete). NOTE: it's `type::record` in SurrealDB v3.1+
+    // (`type::thing` was renamed and now hard parse-errors — that error was being
+    // swallowed by `unwrap_or_default`, so nothing was ever deleted). Conditional
+    // `WHERE` so we only delete if the TTL is STILL expired (guards a heartbeat
+    // landing between the sweep's SELECT and this DELETE). `LET … ; RETURN
+    // array::len(...)` lets us read back the deleted count as a plain `i64`
+    // (surrealdb v3 `take` of `RETURN BEFORE` records or `serde_json::Value` is
+    // awkwardly tagged).
+    let deleted_count: Option<i64> = match db
+        .query(
+            "LET $d = (DELETE type::record('_00_query', $qid) \
+             WHERE lastActiveAt + ttl < time::now() RETURN BEFORE); \
+             RETURN array::len($d);",
+        )
+        .bind(("qid", query_id.to_string()))
         .await
     {
-        Ok(mut response) => {
-            let deleted: Vec<Value> = response.take(0).unwrap_or_default();
-            if deleted.is_empty() {
-                debug!(query_id = %query_id, "TTL cleanup: query refreshed, skipping");
-                return;
-            }
-        }
+        Ok(mut response) => response.take(1).unwrap_or_default(),
         Err(e) => {
             error!(query_id = %query_id, error = %e, "TTL cleanup: delete failed");
             return;
         }
+    };
+    if deleted_count.unwrap_or(0) == 0 {
+        debug!(query_id = %query_id, "TTL cleanup: query refreshed, skipping");
+        return;
     }
 
-    // Delete associated list_ref edges
-    let edge_delete = format!("DELETE $id->{}", list_ref_tbl);
+    // Delete associated list_ref edges.
+    let edge_delete = format!("DELETE type::record('_00_query', $qid)->{}", list_ref_tbl);
     if let Err(e) = db
         .query(edge_delete)
-        .bind(("id", parse_record_id(&incantation_id).unwrap()))
+        .bind(("qid", query_id.to_string()))
         .await
     {
         error!(query_id = %query_id, error = %e, "TTL cleanup: edge delete failed");
@@ -2073,26 +2126,31 @@ async fn cleanup_expired_query(
     info!(query_id = %query_id, "TTL cleanup: query expired and removed");
 }
 
-/// Perform one sweep — query SurrealDB for all expired queries and clean each one up.
-async fn ttl_cleanup_sweep(
+/// One sweep: delete every expired query view — its `_00_query` row, its per-user
+/// `_00_list_ref` edges, and the in-memory circuit view — then drop any per-user
+/// `_00_list_ref_user_<id>` table that no longer backs a live query.
+///
+/// Cleans ALL expired rows, not just those in this SSP's in-memory circuit. The
+/// previous version gated on circuit membership, so views registered before a
+/// restart (whose circuit is gone) leaked forever and accumulated. We read each
+/// row's `auth_id` from `_00_query` so the per-user list_ref cleanup routes
+/// correctly even when the query isn't in the circuit.
+pub async fn ttl_cleanup_sweep(
     db: &SharedDb,
     processor: &Arc<RwLock<Circuit>>,
     metrics: &Arc<Metrics>,
     mode: ssp_protocol::RefMode,
 ) -> usize {
-    let view_ids: Vec<String> = {
-        let circuit = processor.read().await;
-        circuit.view_ids()
-    };
-
-    if view_ids.is_empty() {
-        return 0;
-    }
-
-    // `_00_query` stays a single global table even in dedicated mode,
-    // so the sweep keeps its original shape.
-    let expired_ids: Vec<String> = match db
-        .query("SELECT VALUE id FROM _00_query WHERE lastActiveAt + ttl < time::now()")
+    // Fetch expired queries as `"<id>|<auth_id>"` strings. We deliberately
+    // return a single concatenated string per row and `take::<Vec<String>>` it:
+    // surrealdb v3's `take` deserializes scalar Strings natively, whereas going
+    // through `serde_json::to_value(Value)` yields an externally-tagged shape
+    // (`{"String": ...}`) that's awkward to read field-by-field.
+    let rows: Vec<String> = match db
+        .query(
+            "SELECT VALUE (<string>id + '|' + <string>(auth_id OR '')) \
+             FROM _00_query WHERE lastActiveAt + ttl < time::now()",
+        )
         .await
     {
         Ok(mut response) => response.take(0).unwrap_or_default(),
@@ -2102,21 +2160,33 @@ async fn ttl_cleanup_sweep(
         }
     };
 
-    // Only clean up queries that are in OUR circuit.
-    let to_cleanup: Vec<String> = expired_ids
-        .into_iter()
-        .filter_map(|id| {
-            let raw = id
-                .strip_prefix("_00_query:")
-                .unwrap_or(&id)
-                .to_string();
-            if view_ids.contains(&raw) { Some(raw) } else { None }
-        })
-        .collect();
+    let count = rows.len();
+    let mut cleaned_auth_ids: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for row in rows {
+        let mut parts = row.splitn(2, '|');
+        let id = parts.next().unwrap_or_default();
+        let auth_id = parts.next().unwrap_or_default().to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let raw = id.strip_prefix("_00_query:").unwrap_or(id).to_string();
+        cleanup_expired_query(db, processor, metrics, &raw, &auth_id, mode).await;
+        if !auth_id.is_empty() {
+            cleaned_auth_ids.insert(auth_id);
+        }
+    }
 
-    let count = to_cleanup.len();
-    for query_id in to_cleanup {
-        cleanup_expired_query(db, processor, metrics, &query_id, mode).await;
+    // Drop the per-user list_ref table for any user whose last query we just
+    // removed, then a best-effort pass for pre-existing orphan tables (whose
+    // owner has no live query at all — e.g. leftovers from older cleanups).
+    for auth_id in &cleaned_auth_ids {
+        if let Err(e) = tables::drop_user_table_if_unused(db, mode, auth_id).await {
+            warn!(auth_id = %auth_id, error = %e, "TTL cleanup: drop_user_table_if_unused failed");
+        }
+    }
+    if let Err(e) = tables::drop_orphaned_user_tables(db, mode).await {
+        warn!(error = %e, "TTL cleanup: drop_orphaned_user_tables failed");
     }
 
     if count > 0 {

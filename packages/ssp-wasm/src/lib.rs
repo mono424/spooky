@@ -4,6 +4,7 @@ use ssp::circuit::{Change, ChangeSet, Circuit, Operation, ViewDelta};
 use ssp::eval::normalize_record_id;
 use ssp::types::Sp00kyValue;
 use wasm_bindgen::prelude::*;
+use web_time::Instant;
 
 /// Version from Cargo.toml
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -38,6 +39,15 @@ struct WasmViewUpdate {
     result_hash: String,
     result_data: Vec<(String, i64)>,
     delta: WasmDelta,
+    // Per-phase SSP processing time (ms). The ingest path fills
+    // store_apply/circuit_step/transform; the register path fills
+    // parse/plan/snapshot. The unused side stays 0.
+    timing_store_apply_ms: f64,
+    timing_circuit_step_ms: f64,
+    timing_transform_ms: f64,
+    timing_parse_ms: f64,
+    timing_plan_ms: f64,
+    timing_snapshot_ms: f64,
 }
 
 /// Transform a Vec<ViewDelta> to Vec<WasmViewUpdate> with versions from the store.
@@ -84,6 +94,13 @@ fn transform_single_delta(delta: &ViewDelta, circuit: &Circuit) -> WasmViewUpdat
             removals,
             updates,
         },
+        // Timings are stamped by the caller (ingest/register); default to 0.
+        timing_store_apply_ms: 0.0,
+        timing_circuit_step_ms: 0.0,
+        timing_transform_ms: 0.0,
+        timing_parse_ms: 0.0,
+        timing_plan_ms: 0.0,
+        timing_snapshot_ms: 0.0,
     }
 }
 
@@ -99,6 +116,14 @@ export interface WasmViewUpdate {
     removals: string[];
     updates: [string, number][];
   };
+  // Per-phase SSP processing time (ms). Ingest path: store_apply/circuit_step/
+  // transform. Register path: parse/plan/snapshot. Unused side is 0.
+  timing_store_apply_ms: number;
+  timing_circuit_step_ms: number;
+  timing_transform_ms: number;
+  timing_parse_ms: number;
+  timing_plan_ms: number;
+  timing_snapshot_ms: number;
 }
 
 export interface WasmViewConfig {
@@ -170,10 +195,19 @@ impl Sp00kyProcessor {
             changes: vec![change],
         };
 
-        let deltas = self.circuit.step(changeset);
+        let (deltas, step_timings) = self.circuit.step_timed(changeset);
 
-        // Transform to include versions
-        let wasm_updates = transform_deltas(&deltas, &self.circuit);
+        // Transform to include versions — this is the "transform/materialize" phase.
+        let t_transform = Instant::now();
+        let mut wasm_updates = transform_deltas(&deltas, &self.circuit);
+        let transform_ms = t_transform.elapsed().as_secs_f64() * 1000.0;
+
+        // Stamp the per-phase ingest timings onto every produced update.
+        for u in wasm_updates.iter_mut() {
+            u.timing_store_apply_ms = step_timings.store_apply_ms;
+            u.timing_circuit_step_ms = step_timings.circuit_step_ms;
+            u.timing_transform_ms = transform_ms;
+        }
 
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         Ok(wasm_updates.serialize(&serializer)?)
@@ -190,12 +224,17 @@ impl Sp00kyProcessor {
         )
         .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 
+        let parse_ms = data.parse_ms;
         let plan_id = data.plan.id.clone();
-        let initial_delta = self
-            .circuit
-            .add_query(data.plan, data.safe_params, data.format);
+        // Match `add_query`'s empty auth_id, but capture the plan/snapshot timings.
+        let (initial_delta, reg_timings) = self.circuit.add_query_with_auth_timed(
+            data.plan,
+            data.safe_params,
+            data.format,
+            String::new(),
+        );
 
-        let wasm_result = match initial_delta {
+        let mut wasm_result = match initial_delta {
             Some(ref delta) => transform_single_delta(delta, &self.circuit),
             None => WasmViewUpdate {
                 query_id: plan_id,
@@ -206,8 +245,17 @@ impl Sp00kyProcessor {
                     removals: vec![],
                     updates: vec![],
                 },
+                timing_store_apply_ms: 0.0,
+                timing_circuit_step_ms: 0.0,
+                timing_transform_ms: 0.0,
+                timing_parse_ms: 0.0,
+                timing_plan_ms: 0.0,
+                timing_snapshot_ms: 0.0,
             },
         };
+        wasm_result.timing_parse_ms = parse_ms;
+        wasm_result.timing_plan_ms = reg_timings.plan_ms;
+        wasm_result.timing_snapshot_ms = reg_timings.snapshot_ms;
 
         let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
         Ok(wasm_result.serialize(&serializer)?)
@@ -216,6 +264,23 @@ impl Sp00kyProcessor {
     /// Unregister a view by ID
     pub fn unregister_view(&mut self, id: String) {
         self.circuit.remove_query(&id);
+    }
+
+    /// Seed per-table `select` permission predicates so `register_view` can
+    /// inject them (and so non-`_00_` tables aren't default-denied).
+    ///
+    /// Expects a `{ [table]: whereText }` object, where `whereText` is the raw
+    /// `WHERE` expression from the table's `PERMISSIONS FOR select` clause
+    /// (e.g. `"true"`, or `"owner = $auth.id"`). Called once at boot after the
+    /// schema is parsed — mirrors the native boot path that reads `INFO FOR DB`.
+    pub fn set_permissions(&mut self, permissions: JsValue) -> Result<(), JsValue> {
+        let map: std::collections::HashMap<String, String> =
+            serde_wasm_bindgen::from_value(permissions)
+                .map_err(|e| JsValue::from_str(&format!("Failed to parse permissions: {}", e)))?;
+        for (table, where_text) in map {
+            self.circuit.set_permission(table, where_text);
+        }
+        Ok(())
     }
 
     /// Save the current circuit state as a JSON string

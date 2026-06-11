@@ -24,7 +24,13 @@ Iterable<String> _defineTableStatements(String schemaSurql) sync* {
   // Statements are `;`-terminated. Naive split is sufficient because table
   // permission WHERE bodies in these schemas do not contain literal
   // semicolons (SurrealDB statement terminators).
-  for (final raw in schemaSurql.split(';')) {
+  //
+  // Strip full-line `--` comments FIRST: comment lines aren't `;`-terminated,
+  // so the `-- SECTION` headers that precede each `DEFINE TABLE` would
+  // otherwise land at the front of the split chunk (`-- GAME TABLE\n…\nDEFINE
+  // TABLE game …`), defeating the `startsWith('DEFINE TABLE')` check and
+  // leaving every table default-deny.
+  for (final raw in _stripLineComments(schemaSurql).split(';')) {
     final stmt = raw.trim();
     if (stmt.isEmpty) continue;
     final upper = stmt.toUpperCase();
@@ -33,6 +39,18 @@ Iterable<String> _defineTableStatements(String schemaSurql) sync* {
       yield stmt;
     }
   }
+}
+
+/// Drop whole-line SurrealQL comments (a line whose first non-whitespace is
+/// `--`). Leaves inline content untouched; the schemas this parses keep their
+/// comments on their own lines.
+String _stripLineComments(String schemaSurql) {
+  final out = StringBuffer();
+  for (final line in schemaSurql.split('\n')) {
+    if (line.trimLeft().startsWith('--')) continue;
+    out.writeln(line);
+  }
+  return out.toString();
 }
 
 /// Pull the table name out of a `DEFINE TABLE [IF NOT EXISTS] <name> ...` def.

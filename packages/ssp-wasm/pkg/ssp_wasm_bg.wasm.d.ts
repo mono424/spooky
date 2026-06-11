@@ -8,6 +8,7 @@ export const sp00kyprocessor_load_state: (a: number, b: number, c: number) => [n
 export const sp00kyprocessor_new: () => number;
 export const sp00kyprocessor_register_view: (a: number, b: any) => [number, number, number];
 export const sp00kyprocessor_save_state: (a: number) => [number, number, number, number];
+export const sp00kyprocessor_set_permissions: (a: number, b: any) => [number, number];
 export const sp00kyprocessor_unregister_view: (a: number, b: number, c: number) => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

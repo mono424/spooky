@@ -17,9 +17,9 @@ import type { DataModule } from '../data/index';
 import type { AuthService } from '../auth/index';
 import { AuthEventTypes } from '../auth/events/index';
 import {
-  type BackendVersions,
-  emptyBackendVersions,
-  fetchBackendVersions,
+  type BackendInfo,
+  emptyBackendInfo,
+  parseBackendInfo,
 } from './versions';
 
 export class DevToolsService implements StreamUpdateReceiver {
@@ -27,8 +27,9 @@ export class DevToolsService implements StreamUpdateReceiver {
   private eventIdCounter = 0;
   // Real bundled frontend version (injected at build time via tsdown `define`).
   private version = __SP00KY_CORE_VERSION__;
-  // Backend versions, fetched async over HTTP; 'unavailable' until resolved.
-  private backendVersions: BackendVersions = emptyBackendVersions();
+  // Backend stack info (versions + per-entity status), read via the
+  // `fn::spooky::info()` SurrealQL function; empty/'unavailable' until resolved.
+  private backendInfo: BackendInfo = emptyBackendInfo();
 
   constructor(
     private databaseService: LocalDatabaseService,
@@ -51,10 +52,26 @@ export class DevToolsService implements StreamUpdateReceiver {
     this.logger.debug({ Category: 'sp00ky-client::DevToolsService::init' }, 'Service initialized');
   }
 
-  /** Re-fetch backend component versions and notify the DevTools panel. */
+  /**
+   * Re-read backend stack info via the `fn::spooky::info()` SurrealQL function
+   * over the open remote connection (no HTTP/CORS), then notify the panel.
+   * Never throws: on failure the info stays empty/'unavailable'.
+   */
   private async refreshBackendVersions(): Promise<void> {
-    const endpoint = this.remoteDatabaseService.getConfig().endpoint;
-    this.backendVersions = await fetchBackendVersions(endpoint, this.logger);
+    try {
+      // `RETURN fn::spooky::info()` → one statement result: the /info entity array.
+      const result = await this.remoteDatabaseService.query<unknown[]>(
+        'RETURN fn::spooky::info()'
+      );
+      const first = Array.isArray(result) ? result[0] : result;
+      this.backendInfo = parseBackendInfo(first);
+    } catch (err) {
+      this.logger.debug(
+        { err, Category: 'sp00ky-client::DevToolsService::versions' },
+        'fn::spooky::info() unavailable; backend versions stay unavailable'
+      );
+      this.backendInfo = emptyBackendInfo();
+    }
     this.notifyDevTools();
   }
 
@@ -85,6 +102,10 @@ export class DevToolsService implements StreamUpdateReceiver {
         data: q.records,
         localArray: q.config.localArray,
         remoteArray: q.config.remoteArray,
+        // Detailed per-phase processing-time breakdown (SSP sub-phases, local/
+        // remote record fetch, frontend reconcile, registration). Flows to both
+        // the DevTools panel and the MCP (which returns activeQueries verbatim).
+        timings: this.dataManager.phaseTimings(q),
       });
     });
     return result;
@@ -188,7 +209,8 @@ export class DevToolsService implements StreamUpdateReceiver {
           wasm: __SP00KY_WASM_VERSION__,
           surrealdb: __SP00KY_SURREAL_VERSION__,
         },
-        backend: this.backendVersions,
+        backend: this.backendInfo.versions,
+        entities: this.backendInfo.entities,
       },
       database: {
         tables: this.schema.tables.map((t) => t.name),

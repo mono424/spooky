@@ -61,7 +61,7 @@
   "dependencies": {
     "@spooky-sync/query-builder": "workspace:*",
     "@spooky-sync/ssp-wasm": "workspace:*",
-    "@surrealdb/wasm": "^3.0.0",
+    "@surrealdb/wasm": "^3.0.3",
     "fast-json-patch": "^3.1.1",
     "loro-crdt": "^1.5.6",
     "pino": "^10.1.0",

@@ -133,6 +133,16 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * values fall back to the default (500ms).
    */
   refSyncIntervalMs?: number;
+  /**
+   * Instant-hydrate cold queries: when a query is registered with no local
+   * data yet, first run its surql directly on the remote (one-shot) and display
+   * the result immediately, THEN do the full realtime registration in the
+   * background. The hydrated rows are ingested with their versions so the
+   * registration's `syncRecords` skips re-pulling unchanged bodies. Cuts cold
+   * first-paint from ~one full registration round-trip to ~one query.
+   * Defaults to `true`; set `false` to keep the old wait-for-registration path.
+   */
+  instantHydrate?: boolean;
 }
 
 export type QueryHash = string;
@@ -195,6 +205,9 @@ export interface QueryState {
   config: QueryConfig;
   /** The current cached records for this query. */
   records: Record<string, any>[];
+  /** Set once `applyHydration` has run for this query, so the cold instant-hydrate
+   * path fires at most once per query (see DataModule.isCold/applyHydration). */
+  hydrated?: boolean;
   /** Timer for TTL expiration. */
   ttlTimer: NodeJS.Timeout | null;
   /** TTL duration in milliseconds. */
@@ -217,10 +230,66 @@ export interface QueryState {
    * pulling missing records for this query, otherwise `idle`.
    */
   status: QueryStatus;
+  /**
+   * Rolling per-phase timing samples (ms), in addition to `materializationSamples`
+   * (which holds the SSP whole-ingest wall time). Keyed by `TimingPhase` minus
+   * `ssp`. Not persisted — surfaced live to DevTools + MCP via `phaseTimings`.
+   */
+  phaseSamples: Record<string, number[]>;
+  /** Most recent sample (ms) per phase, or null. */
+  phaseLast: Record<string, number | null>;
+  /** One-shot SSP registration timings (ms). */
+  registrationTimings: RegistrationTimings;
 }
 
 /** Cap on the rolling materialization-sample window kept per query in memory. */
 export const MATERIALIZATION_SAMPLE_WINDOW = 100;
+
+/** Timed processing phases surfaced per query. `ssp` is the WASM-ingest wall
+ *  time; the `ssp*` phases are its internal breakdown from the SSP binding. */
+export type TimingPhase =
+  | 'ssp'
+  | 'sspStoreApply'
+  | 'sspCircuitStep'
+  | 'sspTransform'
+  | 'localFetch'
+  | 'remoteFetch'
+  | 'frontend';
+
+/** One-shot registration timings (ms), captured once when a query registers. */
+export interface RegistrationTimings {
+  /** SSP surql→plan parse + permission injection. */
+  parseMs: number | null;
+  /** SSP operator-DAG build. */
+  planMs: number | null;
+  /** SSP initial snapshot evaluation. */
+  snapshotMs: number | null;
+  /** Wall time of `cache.registerQuery` (register_view round-trip). */
+  wallMs: number | null;
+}
+
+/** Percentile summary for one timed phase, surfaced to DevTools + MCP. */
+export interface PhaseStat {
+  lastMs: number | null;
+  p50: number | null;
+  p90: number | null;
+  p99: number | null;
+  count: number;
+}
+
+/** Per-query processing-time breakdown surfaced via DevTools panel + MCP. */
+export interface QueryTimings {
+  ssp: PhaseStat;
+  sspStoreApply: PhaseStat;
+  sspCircuitStep: PhaseStat;
+  sspTransform: PhaseStat;
+  localFetch: PhaseStat;
+  remoteFetch: PhaseStat;
+  frontend: PhaseStat;
+  registration: RegistrationTimings;
+  updateCount: number;
+  errorCount: number;
+}
 
 // Callback types
 export type QueryUpdateCallback = (records: Record<string, any>[]) => void;

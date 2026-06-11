@@ -9,7 +9,8 @@ import {
   ArraySyncer,
   buildListRefSelect,
   createDiffFromDbOp,
-  nextPollDelayMs,
+  listRefPollDelayMs,
+  recordVersionArraysEqual,
   resolveListRefPollInterval,
 } from './utils';
 import { SyncEngine } from './engine';
@@ -83,9 +84,26 @@ export class Sp00kySync<S extends SchemaStructure> {
   private listRefPollRunning: boolean = false;
   public readonly refSyncIntervalMs: number;
 
+  // Consecutive poll cycles that observed NO list_ref change. Drives the
+  // adaptive backoff in `startListRefPoll` via `listRefPollDelayMs`: an idle
+  // page coasts from the fast base cadence toward the 5s cap, and any activity
+  // (a poll-detected change or a LIVE event) resets it to 0 so the poll snaps
+  // back to responsive. Replaces the old LIVE-liveness backoff, which kept the
+  // poll pinned at 500ms forever whenever LIVE wasn't firing (the common case
+  // on a quiet page, thanks to the cross-session LIVE-permission gap).
+  private listRefIdleStreak: number = 0;
+
+  // `${queryHash}:${recordId}` -> consecutive rounds the id has been "still
+  // remote" (left the query's list_ref but still exists upstream). Used to
+  // distinguish a PERSISTENT view-membership disagreement (the `job:` churn,
+  // converged once it crosses the threshold) from a record that's merely
+  // mid-deletion (still-remote for ~one round, then gone) — which must NOT be
+  // converged, or it gets stranded in this window before its delete is observed.
+  private stillRemoteStreaks: Map<string, number> = new Map();
+
   // Wall-clock timestamp (ms) of the most recent LIVE event delivered
-  // through `handleRemoteListRefChange`. Read by `nextPollDelayMs` to
-  // back the poll off when LIVE is healthy.
+  // through `handleRemoteListRefChange`. Kept as a diagnostic / liveness
+  // signal; the poll cadence is now driven by `listRefIdleStreak`.
   private lastLiveEventAt: number | null = null;
 
   // Number of times the initial `_00_list_ref[_user_*]` LIVE subscription
@@ -222,13 +240,18 @@ export class Sp00kySync<S extends SchemaStructure> {
     const schedule = (delayMs: number) => {
       this.listRefPollTimer = setTimeout(async () => {
         if (!this.listRefPollRunning) return;
+        let changed = false;
         try {
-          await this.pollListRefForActiveQueries();
+          changed = await this.pollListRefForActiveQueries();
         } finally {
           if (!this.listRefPollRunning) return;
-          const next = nextPollDelayMs({
-            now: Date.now(),
-            lastLiveEventAt: this.lastLiveEventAt,
+          // Reset the idle streak on any observed change so the poll snaps
+          // back to the fast base cadence; otherwise grow it so a quiet page
+          // backs off toward the cap. (`handleRemoteListRefChange` also resets
+          // it when a LIVE event lands.)
+          this.listRefIdleStreak = changed ? 0 : this.listRefIdleStreak + 1;
+          const next = listRefPollDelayMs({
+            idleStreak: this.listRefIdleStreak,
             baseIntervalMs: this.refSyncIntervalMs,
           });
           schedule(next);
@@ -246,12 +269,18 @@ export class Sp00kySync<S extends SchemaStructure> {
     }
   }
 
-  private async pollListRefForActiveQueries(): Promise<void> {
+  /**
+   * One poll cycle: refetch `_00_list_ref` for every active query. Returns
+   * whether ANY query's remoteArray actually changed — the scheduler uses this
+   * to drive the adaptive idle backoff.
+   */
+  private async pollListRefForActiveQueries(): Promise<boolean> {
     const hashes = this.dataModule.getActiveQueryHashes();
-    if (hashes.length === 0) return;
+    if (hashes.length === 0) return false;
+    let anyChanged = false;
     for (const hash of hashes) {
       try {
-        await this.refetchListRefForQuery(hash);
+        if (await this.refetchListRefForQuery(hash)) anyChanged = true;
       } catch (err) {
         this.logger.debug(
           { err: (err as Error)?.message ?? err, hash, Category: 'sp00ky-client::Sp00kySync::pollListRefForActiveQueries' },
@@ -259,6 +288,7 @@ export class Sp00kySync<S extends SchemaStructure> {
         );
       }
     }
+    return anyChanged;
   }
 
   /**
@@ -269,30 +299,49 @@ export class Sp00kySync<S extends SchemaStructure> {
    * what `handleRemoteListRefChange` does per-LIVE-event — we reuse
    * it on a timer as a fallback for missed LIVE notifications.
    */
-  private async refetchListRefForQuery(queryHash: string): Promise<void> {
+  private async refetchListRefForQuery(queryHash: string): Promise<boolean> {
     const queryState = this.dataModule.getQueryByHash(queryHash);
-    if (!queryState) return;
+    if (!queryState) return false;
     const listRefTbl = this.listRefTable();
     const [items] = await this.remote.query<[{ out: RecordId<string>; version: number }[]]>(
       buildListRefSelect(listRefTbl),
       { in: queryState.config.id }
     );
-    if (!Array.isArray(items)) return;
+    if (!Array.isArray(items)) return false;
     const fresh: RecordVersionArray = items.map((item) => [
       encodeRecordId(item.out),
       item.version,
     ]);
-    // Update the cached remoteArray and run `syncQuery` inline so the
-    // sync engine fetches any added/updated rows immediately (instead
-    // of waiting for the next scheduler pass). `syncQuery` writes
-    // through `cache.saveBatch`, which both UPSERTs the local DB row
-    // and ingests it into the in-browser SSP — the SSP's stream
-    // updates then run `processStreamUpdate`, which re-queries the
-    // local DB and notifies subscribers. We skip an explicit
-    // `notifyQuerySynced` because that path runs concurrently with
-    // the stream-update path and can race (e.g. notify with stale
-    // records).
-    await this.dataModule.updateQueryRemoteArray(queryHash, fresh);
+    // Capture which ids LEFT the query's window (present in the cached
+    // remoteArray, absent from `fresh`) BEFORE we overwrite remoteArray — these
+    // are cross-window deletes (or rows that scrolled out). They drive the
+    // forced re-render below.
+    const prevRemote = queryState.config.remoteArray ?? [];
+    const freshIds = new Set(fresh.map(([id]) => id));
+    const removedIds = prevRemote.filter(([id]) => !freshIds.has(id)).map(([id]) => id);
+    // Idempotent poll: only persist the remoteArray when it actually changed.
+    // The poll runs continuously as a LIVE fallback, so on a quiet page `fresh`
+    // equals the cached array every tick — re-writing it (an `UPDATE _00_query`
+    // each cycle, per active query) was pure churn and the bulk of the idle
+    // traffic. `recordVersionArraysEqual` is order-insensitive because the
+    // list_ref SELECT has no `ORDER BY`.
+    const changed = !recordVersionArraysEqual(fresh, queryState.config.remoteArray);
+    if (changed) {
+      // Update the cached remoteArray so the next diff/sync sees the new state.
+      // `syncQuery` (below) then writes through `cache.saveBatch`, which UPSERTs
+      // the local DB row and ingests it into the in-browser SSP — the SSP's
+      // stream updates run `processStreamUpdate`, which re-queries the local DB
+      // and notifies subscribers. We skip an explicit `notifyQuerySynced`
+      // because that path races the stream-update path (can notify with stale
+      // records).
+      await this.dataModule.updateQueryRemoteArray(queryHash, fresh);
+    }
+    // Run `syncQuery` every tick regardless: it's a no-op when localArray has
+    // caught up to remoteArray (`if (!diff) return`, issues no query), but it
+    // covers the rare case where remoteArray is stable yet localArray is behind
+    // (a prior record fetch failed) — so a missed row still gets retried.
+    // For REMOVALS it runs the ids through `handleRemovedRecords`, which deletes
+    // confirmed-gone records from the local DB.
     try {
       await this.syncQuery(queryHash);
     } catch (err) {
@@ -301,6 +350,22 @@ export class Sp00kySync<S extends SchemaStructure> {
         'syncQuery failed during poll'
       );
     }
+    // A REMOVAL needs no record fetch, so unlike the added-row path it doesn't
+    // get a re-render from the SSP stream on this code path reliably (and the
+    // non-windowed window-0 query re-queries the local DB rather than the id-set).
+    // Force a re-materialize + notify so the deleted row drops from the list in
+    // this (second) window — the reliable, LIVE-independent cross-window path.
+    if (removedIds.length > 0) {
+      try {
+        await this.dataModule.notifyQuerySynced(queryHash);
+      } catch (err) {
+        this.logger.info(
+          { err: (err as Error)?.message ?? err, queryHash, Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery' },
+          'notifyQuerySynced failed during poll-removal re-render'
+        );
+      }
+    }
+    return changed;
   }
 
   /**
@@ -363,6 +428,19 @@ export class Sp00kySync<S extends SchemaStructure> {
       for (const hash of this.dataModule.getActiveQueryHashes()) {
         this.scheduler.enqueueDownEvent({ type: 'register', payload: { hash } });
       }
+      // The WS reconnect leaves the server-side LIVE subscription dead — the
+      // re-enqueued `register` events only re-fetch initial state, they don't
+      // re-subscribe. Without this, LIVE never recovers after a reconnect and
+      // the poll silently becomes the sole sync path (and never backs off).
+      // Only when authenticated: a signed-out reconnect has no per-user table.
+      if (this.currentUserId) {
+        this.restartRefLiveQuery().catch((err) => {
+          this.logger.debug(
+            { err, Category: 'sp00ky-client::Sp00kySync::onReconnect' },
+            'LIVE restart after reconnect failed; relying on poll fallback'
+          );
+        });
+      }
     });
   }
 
@@ -385,6 +463,12 @@ export class Sp00kySync<S extends SchemaStructure> {
         'Live update received'
       );
       if (message.action === 'KILLED') return;
+      // Skip subquery entries (rows with `parent` set) — they're synthetic
+      // CRDT/cursor metadata rows. The poll filters them with `parent IS NONE`
+      // (the client's RecordVersionArray only tracks primary rows); the LIVE
+      // feed delivers every row, so without this they'd surface as spurious
+      // "added" diffs.
+      if ((message.value as { parent?: unknown }).parent != null) return;
       this.handleRemoteListRefChange(
         message.action,
         message.value.in as RecordId<string>,
@@ -405,24 +489,19 @@ export class Sp00kySync<S extends SchemaStructure> {
     recordId: RecordId,
     version: number
   ) {
-    // Any LIVE delivery is evidence that the feed is healthy — even
-    // a DELETE we'll ignore below or a notification for an unknown
-    // local query counts. `nextPollDelayMs` reads this to slow the
-    // poll fallback while LIVE is doing its job.
+    // Any LIVE delivery is evidence of activity — a CREATE/UPDATE/DELETE on a
+    // query's window, or a notification for an unknown local query. Reset the
+    // poll's idle streak so it snaps back to the fast base cadence (the page
+    // is clearly not idle), and record the timestamp as a liveness diagnostic.
     this.lastLiveEventAt = Date.now();
+    this.listRefIdleStreak = 0;
 
-    if (action === 'DELETE') {
-      this.logger.debug(
-        {
-          queryId: queryId.toString(),
-          recordId: recordId.toString(),
-          Category: 'sp00ky-client::Sp00kySync::handleRemoteListRefChange',
-        },
-        'Ignoring DELETE on list_ref — should not happen'
-      );
-      return;
-    }
-
+    // NOTE: DELETE is handled like CREATE/UPDATE below. When another window (or
+    // this one) deletes a record, the server's SSP removes it from `_00_list_ref`
+    // and the LIVE subscription delivers a DELETE here — `createDiffFromDbOp`
+    // turns it into a `removed: [recordId]` diff so the row drops from the window
+    // in realtime. (It was previously ignored, so other windows only caught up on
+    // reload / the slow poll.)
     const existing = this.dataModule.getQueryById(queryId);
 
     if (!existing) {
@@ -606,16 +685,92 @@ export class Sp00kySync<S extends SchemaStructure> {
    * means the single resulting UI update lands after this completes.
    */
   private async runSyncForQuery(hash: string, diff: RecordVersionDiff): Promise<void> {
+    // Don't let sync re-add a record the user just deleted locally. The remote
+    // delete is queued in the outbox, so until it's processed the server's
+    // `_00_list_ref` still lists the record — the diff then classifies it as
+    // `added` (present remotely, absent locally) and `syncRecords` re-fetches +
+    // re-inserts it, so a deleted database reappears a few seconds later. Drop
+    // any id with a pending local DELETE from the re-add paths. Once the remote
+    // delete lands, the pending row clears and the server drops it from
+    // `_00_list_ref`, so this guard naturally stops applying.
+    if (diff.added.length > 0 || diff.updated.length > 0) {
+      const pendingDeletes = await this.getPendingDeleteIds();
+      if (pendingDeletes.size > 0) {
+        diff = {
+          added: diff.added.filter((r) => !pendingDeletes.has(encodeRecordId(r.id))),
+          updated: diff.updated.filter((r) => !pendingDeletes.has(encodeRecordId(r.id))),
+          removed: diff.removed,
+        };
+      }
+    }
+
     const fetching = diff.added.length + diff.updated.length > 0;
     if (fetching) {
       this.dataModule.setQueryStatus(hash, 'fetching');
     }
     try {
-      await this.syncEngine.syncRecords(diff);
+      const { remoteFetchMs, stillRemoteIds } = await this.syncEngine.syncRecords(diff);
+      if (fetching) {
+        this.dataModule.recordRemoteFetch(hash, remoteFetchMs);
+      }
+      // Converge localArray to the authoritative remoteArray for ids that left
+      // the server's list_ref but still exist — a view-membership change, not a
+      // delete — so the poll's diff stops re-flagging them every tick (the `job:`
+      // churn). CRUCIAL: only converge after the id has been still-remote for
+      // several CONSECUTIVE rounds. A record that's merely mid-deletion is
+      // still-remote for ~one round (its delete hasn't committed when our
+      // existence check races it) and is gone the next round → it never reaches
+      // the threshold, so it's deleted normally instead of being stranded here.
+      if (stillRemoteIds.length > 0) {
+        const CONVERGE_AFTER = 3;
+        const toConverge: string[] = [];
+        for (const id of stillRemoteIds) {
+          const key = `${hash}:${id}`;
+          const n = (this.stillRemoteStreaks.get(key) ?? 0) + 1;
+          if (n >= CONVERGE_AFTER) {
+            this.stillRemoteStreaks.delete(key);
+            toConverge.push(id);
+          } else {
+            this.stillRemoteStreaks.set(key, n);
+          }
+        }
+        if (toConverge.length > 0) {
+          const qs = this.dataModule.getQueryByHash(hash);
+          const local = qs?.config.localArray;
+          if (local && local.length > 0) {
+            const drop = new Set(toConverge);
+            const next = local.filter(([id]) => !drop.has(id));
+            if (next.length !== local.length) {
+              await this.dataModule.updateQueryLocalArray(hash, next);
+            }
+          }
+        }
+      }
     } finally {
       if (fetching) {
         this.dataModule.setQueryStatus(hash, 'idle');
       }
+    }
+  }
+
+  /**
+   * Record ids with a pending local DELETE in the outbox (`_00_pending_mutations`).
+   * Sync must not re-fetch/re-insert these — the remote delete is async, so the
+   * server's `_00_list_ref` still lists them until it's processed, and the diff
+   * would otherwise resurrect a just-deleted record.
+   */
+  private async getPendingDeleteIds(): Promise<Set<string>> {
+    try {
+      const [rows] = await this.local.query<[{ recordId: RecordId<string> }[]]>(
+        "SELECT recordId FROM _00_pending_mutations WHERE mutationType = 'delete'"
+      );
+      return new Set((rows ?? []).map((r) => encodeRecordId(r.recordId)));
+    } catch (err) {
+      this.logger.warn(
+        { err, Category: 'sp00ky-client::Sp00kySync::getPendingDeleteIds' },
+        'Failed to read pending deletes; sync may briefly resurrect a just-deleted record'
+      );
+      return new Set();
     }
   }
 
@@ -707,7 +862,7 @@ export class Sp00kySync<S extends SchemaStructure> {
     }
   }
 
-  private async heartbeatQuery(queryHash: string) {
+  public async heartbeatQuery(queryHash: string) {
     const queryState = this.dataModule.getQueryByHash(queryHash);
     if (!queryState) {
       this.logger.warn(
@@ -721,17 +876,30 @@ export class Sp00kySync<S extends SchemaStructure> {
     });
   }
 
+  // Eager teardown of a deregistered query's remote `_00_query` view (opt-in,
+  // e.g. a viewport-windowed list cancelling an off-screen window). Query ids
+  // are a deterministic hash of (surql+params), so a DELETE racing a scroll-back
+  // re-register (same id) could nuke a freshly-recreated view — hence two
+  // guards: abort if a subscriber reappeared BEFORE the delete; re-register if
+  // one reappears DURING the delete's network await. Tolerant of a
+  // missing/already-gone query (no throw).
   private async cleanupQuery(queryHash: string) {
     const queryState = this.dataModule.getQueryByHash(queryHash);
-    if (!queryState) {
-      this.logger.warn(
-        { queryHash, Category: 'sp00ky-client::Sp00kySync::cleanupQuery' },
-        'Query to register not found'
-      );
-      throw new Error('Query to register not found');
+    if (!queryState) return; // already torn down / never registered
+
+    // Re-subscribed before the queued cleanup ran → keep everything as-is.
+    if (this.dataModule.hasSubscribers(queryHash)) return;
+
+    await this.remote.query(`DELETE $id`, { id: queryState.config.id });
+
+    // Re-subscribed while we awaited the DELETE → the remote view is now gone
+    // but a subscriber needs it; recreate it instead of leaving a zombie.
+    if (this.dataModule.hasSubscribers(queryHash)) {
+      this.enqueueDownEvent({ type: 'register', payload: { hash: queryHash } });
+      return;
     }
-    await this.remote.query(`DELETE $id`, {
-      id: queryState.config.id,
-    });
+
+    // No subscribers throughout → safe to free the local view + state.
+    this.dataModule.finalizeDeregister(queryHash);
   }
 }

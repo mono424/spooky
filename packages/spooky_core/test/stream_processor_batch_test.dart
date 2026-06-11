@@ -72,6 +72,51 @@ void main() {
       expect(update.materializationTimeMs, isNotNull);
     });
 
+    test('batch-ingest of new records matching a FILTERED query emits them', () {
+      // The app's initial down-sync path: register a record-filtered query, then
+      // bulk-fetch the matching rows and ingest them as ONE batch (the live
+      // per-record path doesn't fire for rows that pre-existed before the LIVE
+      // subscription). The batch must materialize the matching rows into the
+      // view — this is the path the live-driven e2e never exercises with NEW rows.
+      sp.seedPermissionsFromSchema(
+          'DEFINE TABLE game PERMISSIONS FOR select WHERE true;');
+      sp.registerQueryPlan(QueryPlanConfig(
+        queryHash: 'qg',
+        surql: r'SELECT * FROM game WHERE database = $db ORDER BY sort_index ASC',
+        // Param as the sanitized string form the app's local circuit receives
+        // (a RecordId is stringified for the FFI's jsonEncode).
+        params: {'db': 'game_database:DBS_x'},
+        ttl: '10m',
+        lastActiveAt: DateTime.utc(2026),
+      ));
+      received.clear();
+
+      sp.beginBatch();
+      try {
+        for (var i = 0; i < 4; i++) {
+          sp.ingest('game', 'CREATE', 'game:g$i', {
+            'id': 'game:g$i',
+            'database': 'game_database:DBS_x',
+            'white': 'W',
+            'black': 'B',
+            'pgn': '1. e4 e5',
+            'result': '1-0',
+            'status': 'Finished',
+            'sort_index': -i,
+          });
+        }
+      } finally {
+        sp.endBatch();
+      }
+
+      final gameUpdates = received.where((u) => u.queryHash == 'qg').toList();
+      expect(gameUpdates, isNotEmpty,
+          reason: 'filtered query must emit for a batch of matching rows');
+      expect(gameUpdates.last.localArray.map((e) => e.$1),
+          containsAll(['game:g0', 'game:g1', 'game:g2', 'game:g3']));
+      expect(gameUpdates.last.localArray, hasLength(4));
+    });
+
     test('endBatch is safe with no buffered updates; beginBatch is idempotent',
         () {
       sp.beginBatch();

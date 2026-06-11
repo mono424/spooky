@@ -42,7 +42,6 @@ class CacheModule implements StreamUpdateReceiver {
   final LocalDatabaseService _local;
   final StreamProcessorService _streamProcessor;
   final void Function(StreamUpdate update) _streamUpdateCallback;
-  // ignore: unused_field
   final SpookyLogger _logger;
   final Map<String, int> _versionLookups = {};
 
@@ -90,6 +89,7 @@ class CacheModule implements StreamUpdateReceiver {
     bool skipDbDelete = false,
     Map<String, dynamic> recordData = const {},
   }) async {
+    _logger.debug('Deleting $table record $id from local cache');
     if (!skipDbDelete) {
       _local.delete(id);
     }

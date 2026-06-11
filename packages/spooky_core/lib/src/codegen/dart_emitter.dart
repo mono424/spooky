@@ -2,7 +2,12 @@ import 'openapi_parser.dart';
 import 'schema_parser.dart';
 
 /// Emit the `ColumnSchema` map literal consumed by `Sp00kyConfig.schema`.
-String emitSchemaMap(List<TableDef> tables) {
+///
+/// Also emits an `'access'` entry per `DEFINE ACCESS`, which `AuthService`
+/// reads (`schema['access'][name][method]['params']`) to validate signin/signup
+/// params before issuing the RPC. Without it, auth calls throw
+/// "Access definition '<name>' not found".
+String emitSchemaMap(List<TableDef> tables, [List<AccessDef> accesses = const []]) {
   final buf = StringBuffer('final spookySchema = <String, dynamic>{\n');
   for (final table in tables) {
     buf.writeln("  '${table.name}': {");
@@ -13,9 +18,23 @@ String emitSchemaMap(List<TableDef> tables) {
     buf.writeln('    },');
     buf.writeln('  },');
   }
+  if (accesses.isNotEmpty) {
+    buf.writeln("  'access': {");
+    for (final a in accesses) {
+      buf.writeln("    '${a.name}': {");
+      // Keys match AuthService._validateAccessParams method strings.
+      buf.writeln("      'signIn': {'params': {${_accessParams(a.signinParams)}}},");
+      buf.writeln("      'signup': {'params': {${_accessParams(a.signupParams)}}},");
+      buf.writeln('    },');
+    }
+    buf.writeln('  },');
+  }
   buf.writeln('};');
   return buf.toString();
 }
+
+String _accessParams(List<String> params) =>
+    params.map((p) => "'$p': ColumnSchema(type: 'string')").join(', ');
 
 String _columnSchema(FieldDef f) {
   final args = <String>["type: '${f.type}'"];
@@ -359,7 +378,7 @@ String generateDartSource(String surql,
   buf.writeln("import 'package:spooky_core/spooky_core.dart';");
   buf.writeln("import 'package:spooky_core/typed.dart';");
   buf.writeln();
-  buf.writeln(emitSchemaMap(tables));
+  buf.writeln(emitSchemaMap(tables, parsed.accesses));
   buf.writeln();
   buf.writeln('const surqlSchema = r\'\'\'\n$surql\'\'\';');
   buf.writeln();

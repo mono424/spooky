@@ -5,6 +5,7 @@ import type { TabType } from '../types/devtools';
 const tabs: { id: TabType; label: string }[] = [
   { id: 'events', label: 'Events' },
   { id: 'queries', label: 'Queries' },
+  { id: 'timing', label: 'Timing' },
   { id: 'database', label: 'Database' },
   { id: 'auth', label: 'Auth' },
   { id: 'versions', label: 'Versions' },

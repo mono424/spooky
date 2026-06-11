@@ -1453,14 +1453,16 @@ body {
   border: 1px solid var(--sys-color-divider);
   border-radius: 6px;
   overflow: hidden;
+  font-size: var(--sys-typescale-label-size);
 }
 
 .versions-row {
   display: grid;
-  grid-template-columns: 2fr 1.3fr 1.3fr 1.2fr;
+  grid-template-columns: minmax(0, 1fr) 84px 84px 72px;
   align-items: center;
-  gap: var(--sys-spacing-3);
-  padding: var(--sys-spacing-2) var(--sys-spacing-3);
+  gap: var(--sys-spacing-2);
+  min-height: 24px;
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
   border-bottom: 1px solid var(--sys-color-divider);
 }
 
@@ -1468,35 +1470,59 @@ body {
   border-bottom: none;
 }
 
+/* Faint error-hue tint marks rows where frontend/backend versions diverge. */
+.versions-row.drift {
+  background: rgba(244, 143, 177, 0.08);
+}
+
 .versions-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   background: var(--sys-color-surface-container);
   font-family: var(--sys-typescale-label-font);
-  font-size: var(--sys-typescale-label-size);
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--sys-color-on-surface-subtle);
 }
 
+/* Header labels above the value/status columns align with their right-aligned cells. */
+.versions-row.versions-head > div:nth-child(2),
+.versions-row.versions-head > div:nth-child(3),
+.versions-row.versions-head > div:nth-child(4) {
+  text-align: right;
+}
+
 .versions-component {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  min-width: 0;
 }
 
 .versions-name {
   color: var(--sys-color-on-surface);
   font-weight: 600;
-}
-
-.versions-detail {
-  color: var(--sys-color-on-surface-subtle);
-  font-size: var(--sys-typescale-label-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .versions-value {
   font-family: var(--sys-typescale-monospace-font, monospace);
+  font-variant-numeric: tabular-nums;
   color: var(--sys-color-on-surface-variant);
+  /* rtl base direction right-aligns the value and puts the ellipsis on the
+     LEFT, so the meaningful version suffix (e.g. "…ry.69") stays visible and
+     digits line up across rows. The inner <bdi> keeps the string itself in
+     correct LTR order (no bidi reordering of dots/hyphens). */
+  direction: rtl;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.versions-value > bdi {
+  unicode-bidi: isolate;
 }
 
 .versions-value.muted {
@@ -1506,8 +1532,14 @@ body {
 .versions-status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 5px;
   font-weight: 600;
+}
+
+.versions-status .status-dot {
+  width: 6px;
+  height: 6px;
 }
 
 .versions-status.match {
@@ -1521,4 +1553,587 @@ body {
 .versions-status.unknown,
 .versions-status.na {
   color: var(--sys-color-on-surface-subtle);
+}
+
+/* --- Stack section: full per-entity backend info --- */
+.versions-stack {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--sys-color-divider);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: var(--sys-typescale-label-size);
+}
+
+.versions-stack-head {
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  background: var(--sys-color-surface-container);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--sys-color-on-surface-subtle);
+  border-bottom: 1px solid var(--sys-color-divider);
+}
+
+.versions-stack-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) auto minmax(0, 1.6fr);
+  align-items: center;
+  gap: var(--sys-spacing-2);
+  min-height: 26px;
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  border-bottom: 1px solid var(--sys-color-divider);
+}
+
+.versions-stack-row:last-child {
+  border-bottom: none;
+}
+
+.versions-stack-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.versions-stack-id .status-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+}
+
+.versions-stack-entity {
+  color: var(--sys-color-on-surface);
+  font-weight: 600;
+}
+
+.versions-stack-detail {
+  color: var(--sys-color-on-surface-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.versions-stack-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sys-spacing-2);
+  justify-content: flex-end;
+}
+
+.versions-stack-status {
+  color: var(--sys-color-on-surface-subtle);
+}
+
+.versions-stack-version {
+  font-family: var(--sys-typescale-monospace-font, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--sys-color-on-surface-variant);
+}
+
+.versions-stack-version.muted {
+  color: var(--sys-color-text-disabled);
+}
+
+.versions-stack-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sys-spacing-1) var(--sys-spacing-3);
+  justify-content: flex-end;
+}
+
+.versions-fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.versions-fact-label {
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.versions-fact-value {
+  color: var(--sys-color-on-surface-variant);
+  font-family: var(--sys-typescale-monospace-font, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Status pill (shared by Queries list + detail)
+   ============================================================ */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px 1px 6px;
+  border-radius: 999px;
+  font-family: var(--sys-typescale-label-font);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
+  text-transform: capitalize;
+  letter-spacing: 0.2px;
+  color: var(--sys-color-on-surface-subtle);
+  background: var(--sys-color-state-hover);
+}
+.status-pill .status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.status-pill.status-active {
+  color: var(--sys-color-state-on);
+  background: rgba(76, 175, 80, 0.12);
+}
+.status-pill.status-updating {
+  color: var(--sys-color-info);
+  background: rgba(33, 150, 243, 0.12);
+}
+.status-pill.status-initializing {
+  color: var(--sys-color-warning);
+  background: rgba(255, 167, 38, 0.12);
+}
+.status-pill.status-destroyed {
+  color: var(--sys-color-error);
+  background: rgba(244, 67, 54, 0.12);
+}
+
+/* ============================================================
+   Queries list — refined rows
+   ============================================================ */
+.queries-header {
+  justify-content: space-between;
+}
+.queries-count {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+  background: var(--sys-color-state-hover);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 16px;
+}
+
+.query-item {
+  padding: 7px 10px 7px 11px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--sys-color-outline-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.query-item:hover:not(.selected) {
+  background: var(--sys-color-state-hover) !important;
+}
+.query-item.selected,
+.query-item.selected:hover {
+  background: var(--sys-color-primary-container) !important;
+  border-left-color: var(--sys-color-primary);
+}
+
+.query-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.query-item .query-hash {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  color: var(--sys-color-on-surface);
+  letter-spacing: -0.1px;
+}
+.query-item .query-preview {
+  margin: 0;
+  font-size: 11px;
+  color: var(--sys-color-on-surface-subtle);
+}
+.query-item .query-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+}
+.query-meta-sep {
+  opacity: 0.5;
+}
+
+/* ============================================================
+   Query detail — header, key/value grid, blocks, code
+   ============================================================ */
+.query-detail {
+  padding: 14px 16px 24px;
+}
+.detail-empty {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 12px;
+}
+.detail-header {
+  align-items: center;
+}
+.detail-header h3 {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: var(--sys-color-on-surface);
+}
+
+/* Key/value metadata grid */
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 20px;
+  row-gap: 2px;
+  margin-bottom: 18px;
+}
+.kv-row {
+  display: contents;
+}
+.kv-k {
+  font-size: 11px;
+  color: var(--sys-color-on-surface-subtle);
+  padding: 3px 0;
+}
+.kv-v {
+  font-size: 11px;
+  color: var(--sys-color-on-surface);
+  padding: 3px 0;
+  text-align: right;
+}
+.kv-v.mono {
+  font-family: var(--sys-typescale-monospace-font);
+  font-variant-numeric: tabular-nums;
+}
+.kv-rel {
+  color: var(--sys-color-on-surface-subtle);
+}
+
+/* Collapsible-feeling content blocks */
+.detail-block {
+  margin-top: 16px;
+}
+.detail-block-title {
+  margin: 0 0 7px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--sys-color-on-surface-subtle);
+}
+.code-block {
+  margin: 0;
+  padding: 9px 11px;
+  background: var(--sys-color-surface-container-low);
+  border: 1px solid var(--sys-color-outline-variant);
+  border-radius: var(--sys-radius-md);
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--sys-color-on-surface);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
+}
+
+/* ============================================================
+   Timing breakdown (per query) — borderless, aligned, bar-backed
+   ============================================================ */
+.tb {
+  font-variant-numeric: tabular-nums;
+}
+.tb-row {
+  display: grid;
+  grid-template-columns: minmax(116px, 1fr) repeat(4, 56px) 28px;
+  align-items: center;
+  column-gap: 10px;
+  padding: 4px 6px;
+  border-radius: var(--sys-radius-sm);
+}
+.tb-row:not(.tb-row--head):hover {
+  background: var(--sys-color-state-hover);
+}
+.tb-row--head {
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--sys-color-outline-variant);
+  border-radius: 0;
+}
+.tb-row--head span {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--sys-color-on-surface-subtle);
+}
+.tb-phase {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.tb-label {
+  font-size: 11px;
+  color: var(--sys-color-on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--sys-color-state-hover);
+  overflow: hidden;
+}
+.tb-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--sys-color-primary);
+  opacity: 0.85;
+  transition: width var(--sys-transition-base);
+}
+.tb-row--sub {
+  padding-left: 16px;
+}
+.tb-row--sub .tb-label {
+  color: var(--sys-color-on-surface-subtle);
+}
+.tb-row--sub .tb-bar-fill {
+  opacity: 0.45;
+}
+.tb-num {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  text-align: right;
+  color: var(--sys-color-on-surface-subtle);
+}
+.tb-num--key {
+  color: var(--sys-color-on-surface);
+}
+.tb-row--head .tb-num--key {
+  color: var(--sys-color-primary);
+}
+.tb-n {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 10px;
+  text-align: right;
+  color: var(--sys-color-on-surface-subtle);
+  opacity: 0.7;
+}
+
+.tb-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sys-color-outline-variant);
+}
+.tb-meta-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.tb-meta-group + .tb-meta-group {
+  margin-left: auto;
+}
+.tb-meta-title {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--sys-color-on-surface-subtle);
+  margin-right: 2px;
+}
+.tb-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+  background: var(--sys-color-state-hover);
+  border-radius: var(--sys-radius-sm);
+  padding: 2px 7px;
+}
+.tb-chip-v {
+  font-family: var(--sys-typescale-monospace-font);
+  color: var(--sys-color-on-surface);
+}
+.tb-chip--err {
+  color: var(--sys-color-error);
+  background: rgba(244, 67, 54, 0.1);
+}
+.tb-chip--err .tb-chip-v {
+  color: var(--sys-color-error);
+}
+
+/* ============================================================
+   Timing tab — cross-query sortable table
+   ============================================================ */
+.tt {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tt-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--sys-color-divider);
+}
+.tt-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sys-color-on-surface);
+}
+.tt-hint {
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+}
+.tt-table {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 8px 16px;
+  font-variant-numeric: tabular-nums;
+}
+.tt-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 2fr) repeat(4, 60px) 128px 42px 42px;
+  align-items: center;
+  column-gap: 10px;
+  padding: 5px 8px;
+  border-radius: var(--sys-radius-sm);
+}
+.tt-row:not(.tt-row--head):hover {
+  background: var(--sys-color-state-hover);
+}
+.tt-row--head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--sys-color-cdt-base-container);
+  border-radius: 0;
+  border-bottom: 1px solid var(--sys-color-outline-variant);
+  padding-top: 6px;
+  padding-bottom: 8px;
+}
+.tt-row--head span {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--sys-color-on-surface-subtle);
+}
+.tt-q {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.tt-hash {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  color: var(--sys-color-on-surface);
+  flex: none;
+}
+.tt-hash--link {
+  cursor: pointer;
+  border-radius: 3px;
+}
+.tt-hash--link:hover {
+  color: var(--sys-color-primary);
+  text-decoration: underline;
+}
+.tt-hash--link:focus-visible {
+  outline: 1px solid var(--sys-color-primary);
+  outline-offset: 1px;
+}
+.tt-sql {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tt-num {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  text-align: right;
+  color: var(--sys-color-on-surface-subtle);
+}
+.tt-num.active {
+  color: var(--sys-color-on-surface);
+}
+.tt-sortable {
+  cursor: pointer;
+  user-select: none;
+  text-align: right;
+}
+.tt-sortable:hover {
+  color: var(--sys-color-on-surface);
+}
+.tt-row--head .tt-sortable.active {
+  color: var(--sys-color-primary);
+}
+.tt-total {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tt-row--head .tt-total {
+  justify-content: flex-end;
+}
+.tt-bar-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sys-color-state-hover);
+  overflow: hidden;
+}
+.tt-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--sys-color-primary);
+  opacity: 0.8;
+  transition: width var(--sys-transition-base);
+}
+.tt-total-v {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  color: var(--sys-color-on-surface);
+  min-width: 52px;
+  text-align: right;
+}
+.tt-meta {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 10px;
+  text-align: right;
+  color: var(--sys-color-on-surface-subtle);
+}
+.tt-meta.tt-err {
+  color: var(--sys-color-error);
 }

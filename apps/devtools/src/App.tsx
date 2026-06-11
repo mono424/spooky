@@ -4,6 +4,7 @@ import { useTheme } from './hooks/useTheme';
 import { Tabs } from './components/Tabs';
 import { EventsTab } from './components/events/EventsTab';
 import { QueriesTab } from './components/queries/QueriesTab';
+import { TimingTab } from './components/timing/TimingTab';
 import { DatabaseTab } from './components/database/DatabaseTab';
 import { AuthTab } from './components/auth/AuthTab';
 import { VersionsTab } from './components/versions/VersionsTab';
@@ -27,6 +28,12 @@ function AppContent() {
         <div class="tab-content" classList={{ active: activeTab() === 'queries' }}>
           <Show when={activeTab() === 'queries'}>
             <QueriesTab />
+          </Show>
+        </div>
+
+        <div class="tab-content" classList={{ active: activeTab() === 'timing' }}>
+          <Show when={activeTab() === 'timing'}>
+            <TimingTab />
           </Show>
         </div>
 

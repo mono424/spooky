@@ -172,6 +172,9 @@ export class EventSystem<E extends EventTypeMap> {
    * @param payload The data associated with the event.
    */
   emit<T extends EventType<E>, P extends EventPayload<E, T>>(type: T, payload: P): void {
+    // `{ type, payload }` structurally matches `Event<E, T>` (= the indexed
+    // access `E[T]`), but TS can't verify assignability to an indexed-access
+    // type over the generic `E`/`T`, so the constructed event is asserted.
     const event = {
       type,
       payload,

@@ -38,6 +38,8 @@ export function adaptBackendState(backendState: BackendDevToolsState): DevToolsS
     activeQueries,
     auth,
     database: backendState.database,
-    versions: backendState.versions ?? DEFAULT_VERSIONS,
+    versions: backendState.versions
+      ? { ...backendState.versions, entities: backendState.versions.entities ?? [] }
+      : DEFAULT_VERSIONS,
   };
 }

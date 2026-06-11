@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { initSync, Sp00kyProcessor } from '../pkg/ssp_wasm.js';
 import type { WasmViewUpdate } from '../pkg/ssp_wasm';
 import {
+  makeProcessor,
   makeUserRecord,
   makeAuthorRecord,
   makeThreadRecord,
@@ -37,7 +38,7 @@ describe('Simple View (Single Table Scan)', () => {
 
   describe('Scenario 1: Records ingested first, then view registered', () => {
     it('should return correct hash tree when view is registered after records exist', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Ingest some records first
       const user1 = makeUserRecord('alice', 'alice@example.com');
@@ -60,12 +61,16 @@ describe('Simple View (Single Table Scan)', () => {
       const ids = initialResult.result_data.map((i) => i[0]);
       expect(ids).toContain(user1.id);
       expect(ids).toContain(user2.id);
+      // Per-phase registration timings are present and finite.
+      expect(Number.isFinite(initialResult.timing_parse_ms)).toBe(true);
+      expect(Number.isFinite(initialResult.timing_plan_ms)).toBe(true);
+      expect(Number.isFinite(initialResult.timing_snapshot_ms)).toBe(true);
     });
   });
 
   describe('Scenario 2: View exists, new record ingested', () => {
     it('should return updated view when new record is ingested', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Ingest initial record
       const user1 = makeUserRecord('alice', 'alice@example.com');
@@ -95,12 +100,16 @@ describe('Simple View (Single Table Scan)', () => {
       expect(viewUpdate!.result_data.map((i) => i[0])).toContain(user1.id);
       expect(viewUpdate!.result_data.map((i) => i[0])).toContain(user2.id);
       expect(validateFlatArray(viewUpdate!.result_data)).toBe(true);
+      // Per-phase ingest timings are present and finite.
+      expect(Number.isFinite(viewUpdate!.timing_store_apply_ms)).toBe(true);
+      expect(Number.isFinite(viewUpdate!.timing_circuit_step_ms)).toBe(true);
+      expect(Number.isFinite(viewUpdate!.timing_transform_ms)).toBe(true);
     });
   });
 
   describe('Scenario 3: Empty start, view registered, then record ingested', () => {
     it('should return updated view when first record is ingested', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, SIMPLE_VIEW_SQL);
@@ -137,7 +146,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
   describe('Scenario 1: Records ingested first, then view registered', () => {
     it('should return correct hash tree with joined data', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Create author
       const author = makeAuthorRecord('Alice');
@@ -167,7 +176,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
   describe('Scenario 2: View exists, new thread record ingested', () => {
     it('should return updated view when new thread is added', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Setup author
       const author = makeAuthorRecord('Alice');
@@ -202,7 +211,7 @@ describe('One Nested Join (Thread with Author Subquery)', () => {
 
   describe('Scenario 3: Empty start, view registered, then records ingested', () => {
     it('should return updated view when author and thread are ingested', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, JOIN_VIEW_SQL);
@@ -249,7 +258,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
   describe('Scenario 1: Records ingested first, then view registered', () => {
     it('should return correct hash tree with joined data', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Create author
       const author = makeAuthorRecord('Alice');
@@ -283,7 +292,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
   describe('Scenario 2: View exists, new comment ingested', () => {
     it('should return updated view when new comment is added', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Setup hierarchy
       const author = makeAuthorRecord('Alice');
@@ -319,7 +328,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
   describe('Scenario 3: Empty start, view registered, then records ingested', () => {
     it('should return updated view when hierarchy is built', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Register view with no data
       const config = createViewConfig(VIEW_ID, NESTED_SUBQUERY_SQL);
@@ -362,7 +371,7 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
   describe('Dependency deletion', () => {
     it('should remove comment from view when thread is deleted', async () => {
-      const processor = new Sp00kyProcessor();
+      const processor = makeProcessor();
 
       // 1. Setup hierarchy
       const author = makeAuthorRecord('Alice');
@@ -397,8 +406,8 @@ describe('Two Nested Subqueries (Thread with Author and Comments)', () => {
 
 describe('Hash Tree Consistency', () => {
   it('should produce consistent hashes for identical data regardless of insertion order', async () => {
-    const processor1 = new Sp00kyProcessor();
-    const processor2 = new Sp00kyProcessor();
+    const processor1 = makeProcessor();
+    const processor2 = makeProcessor();
 
     const VIEW_SQL = 'SELECT * FROM user';
     const VIEW_ID = 'consistency-test-view';

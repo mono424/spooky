@@ -23,7 +23,14 @@ export class ResilientPersistenceClient implements PersistenceClient {
         { key, error: e, Category: 'sp00ky-client::ResilientPersistenceClient::get' },
         'Persistence read failed, dropping key'
       );
-      await this.inner.remove(key).catch(() => {});
+      // Best-effort cleanup of the corrupt key; if removal also fails, the key
+      // just gets dropped again on the next failed read, so the failure is safe.
+      await this.inner.remove(key).catch((removeErr) => {
+        this.logger.debug(
+          { key, error: removeErr, Category: 'sp00ky-client::ResilientPersistenceClient::get' },
+          'Failed to drop corrupt persistence key'
+        );
+      });
       return null;
     }
   }

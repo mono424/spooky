@@ -26,7 +26,8 @@ Wire into Claude / your agent via the MCP server config (`.mcp.json` at the repo
 - **`list_connections`** — which browser tabs are currently bridged.
 - **`get_state` `[tabId]`** — full devtools state: events, queries, auth, database tables (extension only).
 - **`get_auth_state` `[tabId]`** — current auth subject + scope (extension only).
-- **`get_active_queries` `[tabId]`** — registered live queries and their last result hashes.
+- **`get_active_queries` `[tabId]`** — registered live queries, their last result hashes, and a per-query `timings` breakdown.
+- **`get_query_timings` `[tabId]`** — per-query processing-time breakdown (SSP parse/plan/snapshot + store-apply/circuit-step/transform, local & remote record fetch, frontend reconcile; each as last/p50/p90/p99), sorted slowest-first. For debugging perf.
 - **`get_events` `[eventType] [limit]`** — recent event log, optionally filtered.
 - **`clear_history` `[tabId]`** — wipe the in-tab event log (extension only).
 

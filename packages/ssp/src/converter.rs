@@ -502,6 +502,40 @@ mod tests {
     }
 
     #[test]
+    fn limit_start_parses_with_3key_order_and_id() {
+        // The solid-app query after adding the `id` tiebreaker. START must still
+        // parse to 50 (a 3-key ORDER BY must not swallow the START clause).
+        let sql = "SELECT * FROM game WHERE database = $db ORDER BY sort_index asc, date desc, id asc LIMIT 50 START 50;";
+        let result = convert_surql_to_dbsp(sql).expect("parse");
+        let op: Operator = serde_json::from_value(result).expect("deser");
+        match op {
+            Operator::Limit { limit, start, order_by, .. } => {
+                assert_eq!(limit, 50, "limit");
+                assert_eq!(start, 50, "START offset dropped with 3-key ORDER BY");
+                assert_eq!(order_by.as_ref().map(|o| o.len()), Some(3), "3 order keys");
+            }
+            _ => panic!("expected Limit"),
+        }
+    }
+
+    #[test]
+    fn limit_start_parses_into_plan_offset() {
+        // The solid-app game-list page query. The `START 30` offset must reach
+        // the plan's Limit.start — otherwise every page window collapses to the
+        // first rows and infinite scroll can never advance past page 0.
+        let sql = "SELECT * FROM game WHERE database = $db ORDER BY sort_index ASC, date DESC LIMIT 30 START 30;";
+        let result = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");
+        let operator: Operator = serde_json::from_value(result).expect("Failed to deserialize");
+        match operator {
+            Operator::Limit { limit, start, .. } => {
+                assert_eq!(limit, 30);
+                assert_eq!(start, 30, "START offset was dropped during conversion");
+            }
+            _ => panic!("Expected Limit operator at top level"),
+        }
+    }
+
+    #[test]
     fn test_subquery_extracts_parent_key() {
         let sql = "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread";
         let result = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");

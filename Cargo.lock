@@ -2159,6 +2159,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
 
 [[package]]
+name = "ftree"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eeef4a9366aaf0ed0bb5292b7c489d80600a7431fca0d96271e10e23ac0bc2b0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3152,6 +3161,15 @@ dependencies = [
  "hashbrown 0.17.0",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "indexset"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38cade55ce06abcdbbc29e5f383d91b1744bc3ce18a508b065f9f8e71beec641"
+dependencies = [
+ "ftree",
 ]
 
 [[package]]
@@ -6695,6 +6713,7 @@ dependencies = [
  "blake3",
  "getrandom 0.2.17",
  "indexmap 2.14.0",
+ "indexset",
  "lazy_static",
  "mimalloc",
  "nom",
@@ -6709,6 +6728,7 @@ dependencies = [
  "tracing",
  "ulid",
  "web-sys",
+ "web-time",
 ]
 
 [[package]]
@@ -6777,6 +6797,7 @@ dependencies = [
  "tracing",
  "wasm-bindgen",
  "web-sys",
+ "web-time",
 ]
 
 [[package]]

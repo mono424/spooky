@@ -34,6 +34,15 @@ export interface StreamUpdate {
    * for the initial register_view snapshot.
    */
   materializationTimeMs?: number;
+  /** SSP internal sub-phase timings (ms) for this ingest, from the WASM binding. */
+  storeApplyMs?: number;
+  circuitStepMs?: number;
+  transformMs?: number;
+  /**
+   * One-shot registration timings (ms). Only set on the StreamUpdate returned
+   * by `registerQueryPlan` (the register_view snapshot), not on ingest updates.
+   */
+  registration?: { parseMs: number; planMs: number; snapshotMs: number };
 }
 
 // Define events map (kept for DevTools compatibility)
@@ -87,12 +96,14 @@ export class StreamProcessorService {
       // update takes DataModule's immediate (non-debounced) path.
       for (const update of updates) {
         const prev = this.batchBuffer.get(update.queryHash);
-        const summedTime =
-          (prev?.materializationTimeMs ?? 0) + (update.materializationTimeMs ?? 0);
+        const sum = (a?: number, b?: number) => (a ?? 0) + (b ?? 0);
         this.batchBuffer.set(update.queryHash, {
           ...update,
           op: 'CREATE',
-          materializationTimeMs: summedTime,
+          materializationTimeMs: sum(prev?.materializationTimeMs, update.materializationTimeMs),
+          storeApplyMs: sum(prev?.storeApplyMs, update.storeApplyMs),
+          circuitStepMs: sum(prev?.circuitStepMs, update.circuitStepMs),
+          transformMs: sum(prev?.transformMs, update.transformMs),
         });
       }
       return;
@@ -231,8 +242,8 @@ export class StreamProcessorService {
         );
         // Assuming processor has a load_state method matching the save_state behavior
         // If not, we might need to adjust based on the actual WASM API
-        if (typeof (this.processor as any).load_state === 'function') {
-          (this.processor as any).load_state(state);
+        if (typeof this.processor.load_state === 'function') {
+          this.processor.load_state(state);
         } else {
           this.logger.warn(
             { Category: 'sp00ky-client::StreamProcessorService::loadState' },
@@ -253,12 +264,36 @@ export class StreamProcessorService {
     }
   }
 
+  /**
+   * Seed per-table `select` permission predicates ({ [table]: whereText }).
+   * Must run after the processor exists and before any `register_view`, else
+   * non-`_00_` tables are default-denied and registration fails.
+   */
+  setPermissions(permissions: Record<string, string>) {
+    if (!this.processor) return;
+    if (typeof this.processor.set_permissions !== 'function') {
+      this.logger.warn(
+        { Category: 'sp00ky-client::StreamProcessorService::setPermissions' },
+        'set_permissions not found on processor (stale WASM build?)'
+      );
+      return;
+    }
+    this.processor.set_permissions(permissions);
+    this.logger.info(
+      {
+        tables: Object.keys(permissions).length,
+        Category: 'sp00ky-client::StreamProcessorService::setPermissions',
+      },
+      'Seeded table permissions'
+    );
+  }
+
   async saveState() {
     if (!this.processor) return;
     try {
       // Assuming processor has a save_state method that returns the state string/bytes
-      if (typeof (this.processor as any).save_state === 'function') {
-        const state = (this.processor as any).save_state();
+      if (typeof this.processor.save_state === 'function') {
+        const state = this.processor.save_state();
         if (state) {
           await this.persistenceClient.set('_00_stream_processor_state', state);
           this.logger.trace(
@@ -328,6 +363,9 @@ export class StreamProcessorService {
           localArray: u.result_data,
           op: op,
           materializationTimeMs,
+          storeApplyMs: u.timing_store_apply_ms,
+          circuitStepMs: u.timing_circuit_step_ms,
+          transformMs: u.timing_transform_ms,
         }));
         // Direct handler call instead of event
         this.notifyUpdates(updates);
@@ -393,6 +431,11 @@ export class StreamProcessorService {
       const update: StreamUpdate = {
         queryHash: initialUpdate.query_id,
         localArray: initialUpdate.result_data,
+        registration: {
+          parseMs: initialUpdate.timing_parse_ms ?? 0,
+          planMs: initialUpdate.timing_plan_ms ?? 0,
+          snapshotMs: initialUpdate.timing_snapshot_ms ?? 0,
+        },
       };
       this.saveState();
       this.logger.debug(

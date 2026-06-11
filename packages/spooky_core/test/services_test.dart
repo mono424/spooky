@@ -32,6 +32,24 @@ void main() {
       final perms = extractTablePermissions(schema);
       expect(perms['note'], 'true');
     });
+
+    test('-- section-header comments before a table do not hide it', () {
+      // Comment lines aren't `;`-terminated, so a `-- HEADER` above a table
+      // lands at the front of the split chunk; the parser must strip it or the
+      // table is skipped and left default-deny.
+      const schema = '''
+        -- ##############
+        -- GAME TABLE
+        -- ##############
+        DEFINE TABLE game SCHEMAFULL
+          PERMISSIONS
+            FOR select WHERE true
+            FOR update, delete, create WHERE \$access = "account" AND owner = \$auth.id
+        ;
+      ''';
+      final perms = extractTablePermissions(schema);
+      expect(perms['game'], 'true');
+    });
   });
 
   group('LocalDatabaseService (sqlite)', () {

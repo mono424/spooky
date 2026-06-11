@@ -1,8 +1,30 @@
 import { For, Show } from 'solid-js';
 import { useDevTools } from '../../context/DevToolsContext';
+import { formatDuration } from '../../utils/formatters';
+import type { BackendEntity } from '../../types/devtools';
 
 const NA = '—';
 const UNAVAILABLE = 'unavailable';
+
+/** Compact uptime label from a seconds count (e.g. 90 -> "1.5m"). */
+function formatUptime(seconds: number | undefined): string | null {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null;
+  return formatDuration(seconds * 1000);
+}
+
+/** Map a backend status string to the shared status-dot modifier class. */
+function statusDotClass(status: string | undefined): 'active' | 'inactive' | '' {
+  switch (status) {
+    case 'ready':
+    case 'healthy':
+      return 'active';
+    case 'failed':
+    case 'unhealthy':
+      return 'inactive';
+    default:
+      return '';
+  }
+}
 
 type RowStatus = 'match' | 'drift' | 'unknown' | 'na';
 
@@ -30,14 +52,27 @@ function rowStatus(row: VersionRow): RowStatus {
 }
 
 const STATUS_LABEL: Record<RowStatus, string> = {
-  match: 'In sync',
-  drift: 'Version drift',
-  unknown: 'Unknown',
-  na: 'Reported',
+  match: 'in sync',
+  drift: 'drift',
+  unknown: '·',
+  na: '·',
 };
+
+/** Ordered key facts to render per stack entity (skipped when absent). */
+function entityFacts(e: BackendEntity): { label: string; value: string }[] {
+  const facts: { label: string; value: string }[] = [];
+  const uptime = formatUptime(e.uptime_seconds);
+  if (e.surrealdb_version) facts.push({ label: 'surrealdb', value: String(e.surrealdb_version) });
+  if (typeof e.views === 'number') facts.push({ label: 'views', value: String(e.views) });
+  if (uptime) facts.push({ label: 'uptime', value: uptime });
+  if (e.ip) facts.push({ label: 'ip', value: String(e.ip) });
+  return facts;
+}
 
 export function VersionsTab() {
   const { state, refreshVersions } = useDevTools();
+
+  const entities = (): BackendEntity[] => state.versions.entities ?? [];
 
   const rows = (): VersionRow[] => {
     const v = state.versions;
@@ -51,7 +86,7 @@ export function VersionsTab() {
       },
       {
         component: 'surrealdb',
-        detail: 'JS client vs server',
+        detail: 'in-browser WASM engine vs server engine',
         frontend: v.frontend.surrealdb,
         backend: v.backend.surrealdb,
         compare: true,
@@ -80,27 +115,11 @@ export function VersionsTab() {
     ];
   };
 
-  const driftCount = () => rows().filter((r) => rowStatus(r) === 'drift').length;
-
   return (
     <div class="mcp-container">
       <div class="mcp-header">
         <h2>Versions</h2>
         <div class="mcp-header-controls">
-          <Show
-            when={driftCount() > 0}
-            fallback={
-              <div class="mcp-status-badge connected">
-                <span class="status-dot active" />
-                In sync
-              </div>
-            }
-          >
-            <div class="mcp-status-badge disconnected">
-              <span class="status-dot inactive" />
-              {driftCount()} drift
-            </div>
-          </Show>
           <button class="btn" onClick={() => refreshVersions()}>
             Refresh
           </button>
@@ -118,19 +137,26 @@ export function VersionsTab() {
           {(row) => {
             const status = rowStatus(row);
             return (
-              <div class="versions-row">
-                <div class="versions-component">
+              <div class="versions-row" classList={{ drift: status === 'drift' }}>
+                <div class="versions-component" title={row.detail}>
                   <span class="versions-name">{row.component}</span>
-                  <span class="versions-detail">{row.detail}</span>
                 </div>
-                <div class="versions-value" classList={{ muted: !isKnown(row.frontend) }}>
-                  {row.frontend}
+                <div
+                  class="versions-value"
+                  classList={{ muted: !isKnown(row.frontend) }}
+                  title={row.frontend}
+                >
+                  <bdi>{row.frontend}</bdi>
                 </div>
-                <div class="versions-value" classList={{ muted: !isKnown(row.backend) }}>
-                  {row.backend}
+                <div
+                  class="versions-value"
+                  classList={{ muted: !isKnown(row.backend) }}
+                  title={row.backend}
+                >
+                  <bdi>{row.backend}</bdi>
                 </div>
                 <div class="versions-status" classList={{ [status]: true }}>
-                  <Show when={status === 'match' || status === 'drift' || status === 'unknown'}>
+                  <Show when={status === 'match' || status === 'drift'}>
                     <span
                       class="status-dot"
                       classList={{ active: status === 'match', inactive: status === 'drift' }}
@@ -144,12 +170,57 @@ export function VersionsTab() {
         </For>
       </div>
 
+      <Show when={entities().length > 0}>
+        <div class="versions-stack">
+          <div class="versions-stack-head">Stack</div>
+          <For each={entities()}>
+            {(e) => (
+              <div class="versions-stack-row">
+                <div class="versions-stack-id">
+                  <span
+                    class="status-dot"
+                    classList={{
+                      active: statusDotClass(e.status) === 'active',
+                      inactive: statusDotClass(e.status) === 'inactive',
+                    }}
+                  />
+                  <span class="versions-stack-entity">{e.entity}</span>
+                  <Show when={e.id}>
+                    <span class="versions-stack-detail" title={e.id}>
+                      {e.id}
+                    </span>
+                  </Show>
+                </div>
+                <div class="versions-stack-meta">
+                  <Show when={e.status}>
+                    <span class="versions-stack-status">{e.status}</span>
+                  </Show>
+                  <span class="versions-stack-version" classList={{ muted: !e.version }}>
+                    <bdi>{e.version ?? NA}</bdi>
+                  </span>
+                </div>
+                <div class="versions-stack-facts">
+                  <For each={entityFacts(e)}>
+                    {(f) => (
+                      <span class="versions-fact">
+                        <span class="versions-fact-label">{f.label}</span>
+                        <span class="versions-fact-value">{f.value}</span>
+                      </span>
+                    )}
+                  </For>
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
+
       <div class="mcp-section">
         <p>
-          Frontend versions are baked into the bundle at build time. Backend versions are read over
-          HTTP from the ssp <code>/version</code> and <code>/info</code> endpoints (the SurrealDB
-          server version and scheduler URL come from ssp <code>/info</code>). Unreachable components
-          show <code>unavailable</code>; a red dot marks a frontend/backend mismatch.
+          Frontend versions are baked into the bundle at build time. Backend versions and the Stack
+          info come from the <code>fn::spooky::info()</code> function (the same data the{' '}
+          <code>/info</code> endpoint exposes), called over the live connection. Unreachable
+          components show <code>unavailable</code>; a red dot marks a frontend/backend mismatch.
         </p>
       </div>
     </div>

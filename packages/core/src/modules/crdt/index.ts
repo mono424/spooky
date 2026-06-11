@@ -302,7 +302,15 @@ export class CrdtManager {
   private killTableSubscription(table: string): void {
     const uuid = this.liveByTable.get(table);
     if (uuid) {
-      this.remote.query('KILL $uuid', { uuid }).catch(() => {});
+      // We're tearing down: KILL on an already-dead/closed LIVE throws, and the
+      // subscription may have ended on its own, so the failure is expected and
+      // safe to drop.
+      this.remote.query('KILL $uuid', { uuid }).catch((err) => {
+        this.logger.debug(
+          { err, table, Category: 'sp00ky-client::CrdtManager::killTableSubscription' },
+          'KILL of table LIVE failed (already closed?)'
+        );
+      });
       this.liveByTable.delete(table);
     }
   }

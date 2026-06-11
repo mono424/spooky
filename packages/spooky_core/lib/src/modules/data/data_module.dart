@@ -30,9 +30,11 @@ class DataModule {
     SpookyLogger logger, {
     int streamDebounceTime = 100,
     void Function(String hash)? onHeartbeat,
+    void Function(String hash)? onDeregister,
   })  : _logger = logger.child('DataModule'),
         _streamDebounceTime = streamDebounceTime,
-        _onHeartbeat = onHeartbeat;
+        _onHeartbeat = onHeartbeat,
+        _onDeregister = onDeregister;
 
   final CacheModule _cache;
   final LocalDatabaseService _local;
@@ -46,9 +48,15 @@ class DataModule {
   /// server expires it). Null in local-only mode (timer just reschedules).
   final void Function(String hash)? _onHeartbeat;
 
+  /// Fired by [deregisterQuery] when an opt-in query's last subscriber leaves,
+  /// so the client can enqueue the remote `_00_query` cleanup. Null in
+  /// local-only mode (then [deregisterQuery] is a no-op, matching the TS core).
+  final void Function(String hash)? _onDeregister;
+
   final Map<String, QueryState> _activeQueries = {};
   final Map<String, Future<String>> _pendingQueries = {};
   final Map<String, Set<QueryUpdateCallback>> _subscriptions = {};
+  final Map<String, Set<QueryStatusCallback>> _statusSubscriptions = {};
   final Set<MutationCallback> _mutationCallbacks = {};
   final Map<String, Timer> _debounceTimers = {};
 
@@ -115,6 +123,47 @@ class DataModule {
         if (s.isEmpty) _subscriptions.remove(queryHash);
       }
     };
+  }
+
+  /// Subscribe to a query's fetch-status changes (idle/fetching) (TS
+  /// `subscribeStatus`). With [immediate], fires synchronously with the current
+  /// status (defaults to [QueryStatus.idle] if the query isn't registered yet).
+  /// Returns an unsubscribe fn.
+  void Function() subscribeStatus(
+    String queryHash,
+    QueryStatusCallback callback, {
+    bool immediate = false,
+  }) {
+    final subs = _statusSubscriptions.putIfAbsent(queryHash, () => {});
+    subs.add(callback);
+
+    if (immediate) {
+      callback(_activeQueries[queryHash]?.status ?? QueryStatus.idle);
+    }
+
+    return () {
+      final s = _statusSubscriptions[queryHash];
+      if (s != null) {
+        s.remove(callback);
+        if (s.isEmpty) _statusSubscriptions.remove(queryHash);
+      }
+    };
+  }
+
+  /// Set a query's fetch status and notify status subscribers (TS
+  /// `setQueryStatus`). No-op when the status is unchanged or the query is
+  /// unknown. (The TS `onQueryStatusChange` DevTools observer is omitted here:
+  /// DevTools is not ported to the Dart core.)
+  void setQueryStatus(String queryHash, QueryStatus status) {
+    final qs = _activeQueries[queryHash];
+    if (qs == null || qs.status == status) return;
+    qs.status = status;
+
+    final subs = _statusSubscriptions[queryHash];
+    if (subs == null) return;
+    for (final callback in subs.toList()) {
+      callback(status);
+    }
   }
 
   /// Subscribe to mutations (TS `onMutation`).
@@ -521,6 +570,31 @@ class DataModule {
   void _stopTTLHeartbeat(QueryState queryState) {
     queryState.ttlTimer?.cancel();
     queryState.ttlTimer = null;
+  }
+
+  /// Opt-in eager teardown for a query whose last subscriber just left (TS
+  /// `deregisterQuery`). No-op while any subscriber remains (refcount) or if the
+  /// query isn't active. Only fires the remote-cleanup hook; the local DBSP view
+  /// and in-memory state are freed in [finalizeDeregister] after the remote
+  /// delete, so a re-subscribe in between heals it.
+  void deregisterQuery(String hash) {
+    if (_subscriptions[hash]?.isNotEmpty ?? false) return;
+    if (!_activeQueries.containsKey(hash)) return;
+    _onDeregister?.call(hash);
+  }
+
+  /// Final local teardown after the remote `_00_query` row was deleted (TS
+  /// `finalizeDeregister`): stop the heartbeat + debounce timers, free the DBSP
+  /// view, and drop in-memory query state and subscriptions. Invoked by
+  /// [Sp00kySync] once the remote delete completes.
+  void finalizeDeregister(String hash) {
+    final qs = _activeQueries[hash];
+    if (qs != null) _stopTTLHeartbeat(qs);
+    _debounceTimers.remove(hash)?.cancel();
+    _cache.unregisterQuery(hash);
+    _activeQueries.remove(hash);
+    _subscriptions.remove(hash);
+    _statusSubscriptions.remove(hash);
   }
 
   /// Cancel all heartbeat and debounce timers (call on client shutdown).

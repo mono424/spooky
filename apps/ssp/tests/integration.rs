@@ -105,6 +105,8 @@ impl TestHarness {
             start_time: self.start_time,
             crdt_cache: Arc::clone(&self.crdt_cache),
             view_metrics: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            ref_mode: ssp_protocol::RefMode::Single,
+            surrealdb_version: String::new(),
         };
         create_app(state)
     }
@@ -1132,6 +1134,17 @@ mod db_integration_tests {
                 match val {
                     Ok(v) => {
                         let json = serde_json::to_value(&v).unwrap_or(Value::Null);
+                        // surrealdb v3 serializes `Value` externally-tagged, so a
+                        // SELECT result set is the JSON *object* `{"Array": [...]}`
+                        // — NOT a bare `Value::Array`. An empty result is
+                        // `{"Array": []}`; matching `Value::Array` directly always
+                        // missed and wrapped the tag object into a bogus 1-element
+                        // vec (so even an empty table looked non-empty). Unwrap the
+                        // `Array` tag first; each element stays externally-tagged
+                        // (`{"Object": {...}}`), which the callers navigate.
+                        if let Some(arr) = json.get("Array").and_then(|a| a.as_array()) {
+                            return arr.clone();
+                        }
                         match json {
                             Value::Array(arr) => arr,
                             Value::Null => vec![],
@@ -1264,6 +1277,101 @@ mod db_integration_tests {
         assert!(
             circuit.table_names().is_empty(),
             "No tables should remain after reset"
+        );
+    }
+
+    // Does the DB still define a table with this exact name? (surrealdb v3
+    // serializes `Value` externally-tagged: table map at `.Object.tables.Object`.)
+    async fn table_exists(db: &SharedDb, name: &str) -> bool {
+        let info = query_table(db, "INFO FOR DB").await;
+        info.first()
+            .and_then(|v| v.get("Object"))
+            .and_then(|o| o.get("tables"))
+            .and_then(|t| t.get("Object"))
+            .and_then(|o| o.as_object())
+            .map(|m| m.contains_key(name))
+            .unwrap_or(false)
+    }
+
+    // Seed an expired (`lastActiveAt` in the year 2000 + 1s ttl) `_00_query` row
+    // for `auth` plus one per-user `_00_list_ref` edge. Does NOT register it in
+    // the circuit — that's the regression (the old sweep skipped non-circuit rows).
+    async fn seed_expired_view(h: &TestHarness, query_id: &str, auth: &str, uid: &str) {
+        let lr = format!("_00_list_ref_user_{uid}");
+        let surql = format!(
+            "DEFINE TABLE OVERWRITE {lr} SCHEMALESS;
+             DEFINE FIELD OVERWRITE in ON {lr} TYPE record;
+             DEFINE FIELD OVERWRITE out ON {lr} TYPE record;
+             CREATE _00_query:{query_id} SET auth_id = '{auth}', clientId = 'c', \
+                 ttl = 1s, lastActiveAt = d'2000-01-01T00:00:00Z', \
+                 surql = 'SELECT * FROM game', params = {{}};
+             RELATE _00_query:{query_id}->{lr}->game:seed SET version = 1, \
+                 auth_id = '{auth}', clientId = 'c';"
+        );
+        h.db.query(surql).await.expect("seed query failed").check().expect("seed not ok");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ttl_sweep_cleans_expired_view_not_in_circuit_and_drops_user_table() {
+        let h = create_test_harness_with_db().await;
+        seed_expired_view(&h, "ttlq", "user:ttltest", "ttltest").await;
+
+        // Sanity: the row, the edge, and the per-user table exist up front.
+        assert!(!query_table(&h.db, "SELECT * FROM _00_query").await.is_empty());
+        assert!(!query_table(&h.db, "SELECT * FROM _00_list_ref_user_ttltest").await.is_empty());
+        assert!(table_exists(&h.db, "_00_list_ref_user_ttltest").await);
+
+        let cleaned = ssp_server::ttl_cleanup_sweep(
+            &h.db,
+            &h.processor,
+            &h.metrics,
+            ssp_protocol::RefMode::Dedicated,
+        )
+        .await;
+
+        assert_eq!(cleaned, 1, "sweep should clean exactly the one expired view");
+        assert!(
+            query_table(&h.db, "SELECT * FROM _00_query").await.is_empty(),
+            "expired _00_query row must be deleted (even though it was never in the circuit)"
+        );
+        assert!(
+            query_table(&h.db, "SELECT * FROM _00_list_ref_user_ttltest").await.is_empty(),
+            "expired view's _00_list_ref edge must be deleted"
+        );
+        assert!(
+            !table_exists(&h.db, "_00_list_ref_user_ttltest").await,
+            "the now-unused per-user list_ref table must be dropped"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn ttl_sweep_keeps_unexpired_view() {
+        let h = create_test_harness_with_db().await;
+        // A fresh view (lastActiveAt = now, long ttl) — must survive the sweep.
+        h.db
+            .query(
+                "CREATE _00_query:fresh SET auth_id = 'user:fresh', clientId = 'c', \
+                 ttl = 10m, lastActiveAt = time::now(), surql = 'SELECT * FROM game', params = {};",
+            )
+            .await
+            .expect("seed fresh")
+            .check()
+            .expect("seed fresh ok");
+
+        let cleaned = ssp_server::ttl_cleanup_sweep(
+            &h.db,
+            &h.processor,
+            &h.metrics,
+            ssp_protocol::RefMode::Dedicated,
+        )
+        .await;
+
+        assert_eq!(cleaned, 0, "a fresh (unexpired) view must not be swept");
+        assert!(
+            !query_table(&h.db, "SELECT * FROM _00_query").await.is_empty(),
+            "the unexpired _00_query row must remain"
         );
     }
 

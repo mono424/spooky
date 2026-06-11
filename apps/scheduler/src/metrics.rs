@@ -74,6 +74,7 @@ pub struct MetricsState {
     pub shared_backend_configs: SharedBackendConfigs,
     pub ingest: IngestState,
     pub replica: Arc<RwLock<Replica>>,
+    pub surrealdb_version: Arc<RwLock<String>>,
 }
 
 /// Create metrics router
@@ -344,6 +345,7 @@ async fn info_handler(
     let scheduler_ip = get_local_ip();
 
     let pending = pending_events_snapshot(&state.ingest).await;
+    let surrealdb_version = state.surrealdb_version.read().await.clone();
 
     let mut entities = vec![serde_json::json!({
         "entity": "scheduler",
@@ -352,6 +354,7 @@ async fn info_handler(
         "status": scheduler_status,
         "views": total_views,
         "version": env!("CARGO_PKG_VERSION"),
+        "surrealdb_version": surrealdb_version,
         "uptime_seconds": state.start_time.elapsed().as_secs(),
         "last_heartbeat_seconds_ago": null,
         "pending_events": pending.pending_events,

@@ -2,9 +2,25 @@ import 'dart:convert';
 
 import 'package:sqlite3/sqlite3.dart';
 
+import '../../surreal/value.dart';
 import '../../types.dart';
 import '../../utils/record_id_utils.dart';
 import '../logger/logger.dart';
+
+/// Encode a record document to JSON for sqlite storage. `parseParams` coerces
+/// schema-typed fields to Dart objects (record links -> [RecordId], datetimes
+/// -> [DateTime], durations -> [SurrealDuration]) which aren't natively
+/// JSON-encodable; serialize them back to their canonical string forms so the
+/// stored doc round-trips to the same string values the typed models expect.
+String _encodeDoc(Map<String, dynamic> doc) =>
+    jsonEncode(doc, toEncodable: _jsonEncodable);
+
+Object? _jsonEncodable(Object? value) {
+  if (value is RecordId) return encodeRecordId(value);
+  if (value is DateTime) return value.toUtc().toIso8601String();
+  if (value is SurrealDuration) return value.toString();
+  throw ArgumentError('Cannot JSON-encode ${value.runtimeType}');
+}
 
 /// sqlite-backed local store, replacing the JS `@surrealdb/wasm` local engine.
 ///
@@ -19,7 +35,6 @@ class LocalDatabaseService {
       : _logger = logger.child('LocalDatabaseService');
 
   final Database _db;
-  // ignore: unused_field
   final SpookyLogger _logger;
 
   /// Open a database. [path] of `:memory:` matches the JS `memory` store.
@@ -63,6 +78,7 @@ class LocalDatabaseService {
         value TEXT NOT NULL
       );
     ''');
+    _logger.debug('Provisioned local sqlite store');
   }
 
   // ---- record CRUD (logical-table aware) ----------------------------------
@@ -143,7 +159,7 @@ class LocalDatabaseService {
     _db.execute(
       'INSERT INTO records (tbl, id, doc, rv) VALUES (?, ?, ?, ?) '
       'ON CONFLICT(tbl, id) DO UPDATE SET doc = excluded.doc, rv = excluded.rv',
-      [tbl, id, jsonEncode(doc), rv],
+      [tbl, id, _encodeDoc(doc), rv],
     );
   }
 
@@ -166,7 +182,7 @@ class LocalDatabaseService {
     _db.execute(
       'INSERT INTO _00_query (id, doc) VALUES (?, ?) '
       'ON CONFLICT(id) DO UPDATE SET doc = excluded.doc',
-      [id, jsonEncode(doc)],
+      [id, _encodeDoc(doc)],
     );
   }
 
@@ -186,7 +202,7 @@ class LocalDatabaseService {
     _db.execute(
       'INSERT INTO _00_pending_mutations (id, doc) VALUES (?, ?) '
       'ON CONFLICT(id) DO UPDATE SET doc = excluded.doc',
-      [id, jsonEncode(doc)],
+      [id, _encodeDoc(doc)],
     );
   }
 

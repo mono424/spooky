@@ -36,9 +36,40 @@ export interface RelatedQuery {
   cardinality: 'one' | 'many';
 }
 
+/**
+ * Comparison-operator descriptor for a single WHERE field, e.g.
+ * `{ _op: '<=', _val: 5 }` → `field <= $field`. A `$`-prefixed string `_val`
+ * references an existing query param verbatim; `_swap: true` flips the operands
+ * (`$val _op field`). Plain values still mean equality (`field = $field`).
+ */
+export interface ComparisonOp {
+  _op: '=' | '!=' | '>' | '>=' | '<' | '<=' | (string & {});
+  _val: unknown;
+  _swap?: boolean;
+}
+
+/** A single WHERE field value: an equality value or a comparison descriptor. */
+export type WhereFieldValue<V> = V | ComparisonOp;
+
+/** A flat conjunction of field conditions (equality or comparison). */
+export type WhereConditions<TModel extends GenericModel> = {
+  [K in keyof TModel]?: WhereFieldValue<TModel[K]>;
+};
+
+/**
+ * WHERE input for `.where()`. Supports equality (`{ field: value }`), comparison
+ * operators (`{ field: { _op, _val } }`), and a single top-level `_or` group of
+ * condition fragments that compile to a parenthesised `(... OR ...)` conjunct —
+ * e.g. `{ _or: [{ white: x }, { black: x }] }` → `(white = $or0 OR black = $or1)`.
+ * Backward-compatible with plain `Partial<TModel>` equality objects.
+ */
+export type WhereInput<TModel extends GenericModel> = WhereConditions<TModel> & {
+  _or?: WhereConditions<TModel>[];
+};
+
 export interface QueryOptions<TModel extends GenericModel, IsOne extends boolean> {
   select?: ((keyof TModel & string) | '*')[];
-  where?: Partial<TModel>;
+  where?: WhereInput<TModel>;
   limit?: number;
   offset?: number;
   orderBy?: Partial<Record<keyof TModel, 'asc' | 'desc'>>;
@@ -78,7 +109,7 @@ export type SchemaAwareQueryModifier<
 
 // Simplified query builder interface for modifying subqueries
 export interface QueryModifierBuilder<TModel extends GenericModel> {
-  where(conditions: Partial<TModel>): this;
+  where(conditions: WhereInput<TModel>): this;
   select(...fields: ((keyof TModel & string) | '*')[]): this;
   limit(count: number): this;
   offset(count: number): this;
@@ -93,7 +124,7 @@ export interface SchemaAwareQueryModifierBuilder<
   TableName extends TableNames<S>,
   RelatedFields extends Record<string, any> = {},
 > {
-  where(conditions: Partial<TableModel<GetTable<S, TableName>>>): this;
+  where(conditions: WhereInput<TableModel<GetTable<S, TableName>>>): this;
   select(...fields: ((keyof TableModel<GetTable<S, TableName>> & string) | '*')[]): this;
   limit(count: number): this;
   offset(count: number): this;

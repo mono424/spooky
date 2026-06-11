@@ -1,10 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:meta/meta.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-import 'value.dart';
+import 'cbor_codec.dart';
 
 /// A LIVE-query notification (TS SurrealDB `live` message).
 class LiveMessage {
@@ -41,14 +40,13 @@ abstract class RemoteSurrealClient {
   Future<void> close();
 }
 
-/// Minimal SurrealDB WebSocket JSON-RPC client.
+/// Minimal SurrealDB WebSocket RPC client over the **CBOR** subprotocol.
 ///
 /// Implements only what the core uses (`use`/`signin`/`signup`/`authenticate`/
-/// `invalidate`/`query`/`live`/`kill` + lifecycle). JSON wire format keeps
-/// record-id/datetime decoding explicit.
-///
-/// NOTE: this path requires a running SurrealDB/ssp server to verify
-/// end-to-end; it is the integration risk called out in the plan.
+/// `invalidate`/`query`/`live`/`kill` + lifecycle). CBOR (not JSON) is required
+/// so bind vars carry real record ids / datetimes — SurrealDB won't match a
+/// `record<…>` field against a plain string, which silently broke every
+/// record-filtered query. See [cbor_codec] for the encode/normalize rules.
 class WebSocketSurrealClient implements RemoteSurrealClient {
   WebSocketSurrealClient();
 
@@ -67,7 +65,10 @@ class WebSocketSurrealClient implements RemoteSurrealClient {
   /// Opens the WebSocket for [uri]. Overridable in tests to inject a fake
   /// channel (see `@visibleForTesting`).
   @visibleForTesting
-  WebSocketChannel createChannel(Uri uri) => WebSocketChannel.connect(uri);
+  WebSocketChannel createChannel(Uri uri) =>
+      // Negotiate SurrealDB's CBOR subprotocol so record ids / datetimes travel
+      // as typed values (frames are then binary CBOR, not JSON text).
+      WebSocketChannel.connect(uri, protocols: const ['cbor']);
 
   /// The RPC endpoint a raw [endpoint] normalizes to (exposed for tests).
   @visibleForTesting
@@ -105,12 +106,15 @@ class WebSocketSurrealClient implements RemoteSurrealClient {
     final completer = Completer<dynamic>();
     _pending[id] = completer;
     channel.sink
-        .add(jsonEncode({'id': id, 'method': method, 'params': params}));
+        .add(surrealCborEncode({'id': id, 'method': method, 'params': params}));
     return completer.future;
   }
 
   void _onMessage(dynamic raw) {
-    final decoded = jsonDecode(raw as String);
+    // CBOR frames arrive as binary (List<int>/Uint8List); normalize to the same
+    // JSON-shaped maps the rest of the client expects.
+    if (raw is! List<int>) return;
+    final decoded = surrealCborDecode(raw);
     if (decoded is! Map) return;
     final map = decoded.cast<String, dynamic>();
 
@@ -189,7 +193,7 @@ class WebSocketSurrealClient implements RemoteSurrealClient {
 
   @override
   Future<List<dynamic>> query(String sql, [Map<String, dynamic>? vars]) async {
-    final result = await _rpc('query', [sql, _encodeVars(vars)]);
+    final result = await _rpc('query', [sql, vars ?? const <String, dynamic>{}]);
     // SurrealDB returns [{ status, result }, ...]; surface the result list to
     // match the JS `.query()` which returns the per-statement results.
     //
@@ -225,20 +229,6 @@ class WebSocketSurrealClient implements RemoteSurrealClient {
   Future<void> kill(String liveId) async {
     await _rpc('kill', [liveId]);
     await _liveControllers.remove(liveId)?.close();
-  }
-
-  /// Encode bind vars to JSON-safe values ([RecordId] -> `table:id`, etc.).
-  Map<String, dynamic> _encodeVars(Map<String, dynamic>? vars) {
-    if (vars == null) return {};
-    dynamic enc(dynamic v) {
-      if (v is RecordId) return v.encode();
-      if (v is DateTime) return v.toUtc().toIso8601String();
-      if (v is Map) return v.map((k, val) => MapEntry(k.toString(), enc(val)));
-      if (v is List) return v.map(enc).toList();
-      return v;
-    }
-
-    return vars.map((k, v) => MapEntry(k, enc(v)));
   }
 
   @override

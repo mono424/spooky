@@ -226,6 +226,13 @@ export const LIVE_HEALTHY_POLL_INTERVAL_MS = 5_000;
  * The healthy interval is clamped to at least `baseIntervalMs` so
  * configuring an aggressive base (e.g. 100ms) never gets implicitly
  * widened by this helper.
+ *
+ * @deprecated Superseded by {@link listRefPollDelayMs}, which backs the
+ * poll off based on observed change activity (LIVE *or* poll-detected)
+ * rather than LIVE liveness alone — the cross-session LIVE-permission gap
+ * means LIVE often never fires, so this helper would keep the poll pinned
+ * at the aggressive base forever even on a fully idle page. Kept (and
+ * tested) for reference.
  */
 export function nextPollDelayMs(args: {
   now: number;
@@ -245,4 +252,69 @@ export function nextPollDelayMs(args: {
   const sinceLive = now - lastLiveEventAt;
   if (sinceLive < 0 || sinceLive >= cooldownMs) return baseIntervalMs;
   return Math.max(healthyIntervalMs, baseIntervalMs);
+}
+
+/**
+ * Ceiling for the adaptive list_ref poll backoff. An idle page (no LIVE
+ * events, no poll-detected list_ref changes) coasts up to this cadence;
+ * the existing healthy-LIVE safety net runs at the same 5s, so this keeps
+ * the worst-case catch-up latency for a missed cross-session change at the
+ * cadence the codebase already treats as acceptable.
+ */
+export const LIST_REF_POLL_MAX_INTERVAL_MS = 5_000;
+
+/**
+ * Adaptive poll delay: stay at the responsive `baseIntervalMs` while
+ * changes are arriving, and exponentially back off toward `maxIntervalMs`
+ * while the `_00_list_ref` is quiet.
+ *
+ * `idleStreak` is the count of consecutive poll cycles that observed *no*
+ * change. `Sp00kySync` resets it to 0 whenever a poll detects a real
+ * remoteArray change OR a LIVE event lands, so any activity snaps the poll
+ * straight back to `baseIntervalMs`. A streak of 0 (something just
+ * happened) → base; otherwise `base * 2^streak` capped at `maxIntervalMs`.
+ *
+ * This replaces {@link nextPollDelayMs}: the old helper slowed the poll
+ * only while LIVE was *delivering*, but the cross-session LIVE-permission
+ * gap means LIVE frequently never fires here, so it left a fully idle page
+ * polling every `base` ms forever (the "continuous queries while idle"
+ * symptom). Backing off on observed idleness instead covers the
+ * LIVE-healthy case for free (LIVE applies the change → the next poll sees
+ * nothing new → the streak grows → it backs off).
+ */
+export function listRefPollDelayMs(args: {
+  idleStreak: number;
+  baseIntervalMs: number;
+  maxIntervalMs?: number;
+}): number {
+  const { idleStreak, baseIntervalMs, maxIntervalMs = LIST_REF_POLL_MAX_INTERVAL_MS } = args;
+  const cap = Math.max(baseIntervalMs, maxIntervalMs);
+  if (idleStreak <= 0) return baseIntervalMs;
+  // 2^streak grows fast; clamp the exponent so it can't overflow on a
+  // page left idle for a very long time.
+  const exponent = Math.min(idleStreak, 30);
+  return Math.min(baseIntervalMs * 2 ** exponent, cap);
+}
+
+/**
+ * Order-insensitive equality for two `RecordVersionArray`s (each a list of
+ * `[recordIdString, version]`). The `_00_list_ref` SELECT has no `ORDER
+ * BY`, so row order can differ between polls without anything having
+ * actually changed — comparing as an id→version map avoids false
+ * "changed" verdicts that would defeat the idle backoff. Record ids are
+ * unique within a query's list_ref, so a map is a faithful representation.
+ */
+export function recordVersionArraysEqual(
+  a: RecordVersionArray,
+  b: RecordVersionArray
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  const byId = new Map<string, number>();
+  for (const [id, version] of a) byId.set(id, version);
+  for (const [id, version] of b) {
+    // `get` returns undefined for a missing id, which never === a number.
+    if (byId.get(id) !== version) return false;
+  }
+  return true;
 }

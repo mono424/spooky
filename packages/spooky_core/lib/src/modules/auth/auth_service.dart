@@ -100,8 +100,10 @@ class AuthService {
     await _persistence.remove(_tokenKey);
     try {
       await _remote.getClient().invalidate();
-    } catch (_) {
-      // ignore invalidation errors
+    } catch (err) {
+      // Local sign-out already cleared the token/session above; a failed remote
+      // invalidate (e.g. server unreachable) must not block signing out.
+      _logger.debug('Remote token invalidate failed during signOut: $err');
     }
     _notifyListeners();
   }

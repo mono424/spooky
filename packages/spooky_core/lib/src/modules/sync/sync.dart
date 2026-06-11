@@ -7,6 +7,7 @@ import '../../services/logger/logger.dart';
 import '../../surreal/remote_client.dart';
 import '../../surreal/value.dart';
 import '../../types.dart';
+import '../../utils/parser.dart';
 import '../../utils/record_id_utils.dart';
 import '../../utils/surql.dart';
 import '../cache/cache_module.dart';
@@ -52,7 +53,6 @@ class Sp00kySync {
     refSyncIntervalMs = resolveListRefPollInterval(options?.refSyncIntervalMs);
   }
 
-  // ignore: unused_field
   final LocalDatabaseService _local;
   final RemoteDatabaseService _remote;
   final CacheModule _cache;
@@ -152,6 +152,13 @@ class Sp00kySync {
 
   // ---- poll fallback --------------------------------------------------------
 
+  /// Periodic re-poll of `_00_list_ref` as a safety net for missed LIVE
+  /// notifications (TS `startListRefPoll`). SurrealDB v3 occasionally drops LIVE
+  /// deliveries across sessions even when the row matches the permission rule,
+  /// so the LIVE subscription alone can leave a query stale until reload; this
+  /// catches those. Self-rescheduling (not a fixed interval) so each tick picks
+  /// its own delay via [nextPollDelayMs] — an idle page coasts toward the slow
+  /// cap and any activity snaps it back to the fast base cadence.
   void _startListRefPoll() {
     if (_listRefPollRunning) return;
     _listRefPollRunning = true;
@@ -265,16 +272,27 @@ class Sp00kySync {
     int version,
   ) async {
     _lastLiveEventAt = DateTime.now().millisecondsSinceEpoch;
-    if (action == 'DELETE') return; // should not happen on list_ref
 
     final existing = _dataModule.getQueryById(queryId);
     if (existing == null) {
       _logger.warn('Received remote update for unknown local query $queryId');
       return;
     }
-    final diff = createDiffFromDbOp(
-        action, recordId, version, existing.config.localArray);
-    await _syncEngine.syncRecords(diff);
+
+    // DELETE is handled like CREATE/UPDATE (mirrors the TS core). When a record
+    // leaves a query's window — e.g. it's deleted on the website or another
+    // device — the SSP removes its `_00_list_ref` edge and LIVE delivers a
+    // DELETE here; turn that into a `removed` diff so the row drops in realtime.
+    // (Previously this returned early, so removals only caught up on the slow
+    // poll — i.e. realtime deletion appeared not to work.) A delete
+    // notification's `version` isn't reliable, so bypass the version guard;
+    // SyncEngine re-verifies the record is gone upstream before deleting
+    // locally, so a forced removal is safe.
+    final diff = action == 'DELETE'
+        ? RecordVersionDiff(added: [], updated: [], removed: [recordId])
+        : createDiffFromDbOp(
+            action, recordId, version, existing.config.localArray);
+    await _syncRecordsForQuery(extractIdPart(queryId), diff);
   }
 
   // ---- up/down processing ---------------------------------------------------
@@ -346,7 +364,21 @@ class Sp00kySync {
         ArraySyncer(queryState.config.localArray, queryState.config.remoteArray)
             .nextSet();
     if (diff == null) return;
-    return _syncEngine.syncRecords(diff);
+    return _syncRecordsForQuery(hash, diff);
+  }
+
+  /// Fetch the diff's record bodies via [SyncEngine], flipping the query's
+  /// fetch status to `fetching` while bodies are pulled and back to `idle` when
+  /// done (TS `Sp00kySync.syncRecords`). Status only flips when there is
+  /// something to fetch (adds/updates); a pure-removal diff stays idle.
+  Future<void> _syncRecordsForQuery(String hash, RecordVersionDiff diff) async {
+    final fetching = diff.added.isNotEmpty || diff.updated.isNotEmpty;
+    if (fetching) _dataModule.setQueryStatus(hash, QueryStatus.fetching);
+    try {
+      await _syncEngine.syncRecords(diff);
+    } finally {
+      if (fetching) _dataModule.setQueryStatus(hash, QueryStatus.idle);
+    }
   }
 
   Future<void> _registerQuery(String queryHash) async {
@@ -375,9 +407,7 @@ class Sp00kySync {
   Future<RecordVersionArray> _fetchListRef(RecordId queryId) async {
     final results = await _remote
         .query(buildListRefSelect(listRefTable()), {'in': queryId});
-    final items = (results.isNotEmpty && results.first is List)
-        ? (results.first as List)
-        : const [];
+    final items = firstRows(results);
     return items
         .map<({String out, int version})>((item) {
           final m = item as Map;
@@ -401,6 +431,9 @@ class Sp00kySync {
     final queryState = _dataModule.getQueryByHash(queryHash);
     if (queryState == null) throw StateError('Query to register not found');
     await _remote.query('DELETE \$id', {'id': queryState.config.id});
+    // Free the local DBSP view + in-memory state now that the remote `_00_query`
+    // row is gone (TS `cleanupQuery` -> `finalizeDeregister`).
+    _dataModule.finalizeDeregister(queryHash);
   }
 
   Future<void> close() async {

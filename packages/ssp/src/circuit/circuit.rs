@@ -5,6 +5,34 @@ use crate::circuit::view::{OutputFormat, View};
 use crate::operator::QueryPlan;
 use crate::types::{make_key, raw_id, Sp00kyValue};
 use std::collections::{BTreeMap, HashMap};
+// Portable monotonic clock: std::time on native, performance.now() on wasm32
+// (std::time::Instant panics there).
+use web_time::Instant;
+
+/// Per-phase processing-time breakdown for a single [`Circuit::step_timed`],
+/// surfaced to the binding layer / DevTools. Pure instrumentation — it never
+/// affects the delta result.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StepTimings {
+    /// Milliseconds spent applying changes to the store + building table deltas.
+    pub store_apply_ms: f64,
+    /// Milliseconds spent stepping the affected queries' operator DAGs.
+    pub circuit_step_ms: f64,
+}
+
+/// Per-phase timing for one query registration (`add_query_with_auth_timed`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RegTimings {
+    /// Milliseconds spent building the operator DAG + view + dependency map.
+    pub plan_ms: f64,
+    /// Milliseconds spent running the initial snapshot evaluation.
+    pub snapshot_ms: f64,
+}
+
+/// Elapsed milliseconds since `start`.
+fn ms_since(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
+}
 
 /// Operation type for a subquery record delta.
 #[derive(Debug, Clone, PartialEq)]
@@ -300,6 +328,23 @@ impl Circuit {
         format: Option<OutputFormat>,
         auth_id: String,
     ) -> Option<ViewDelta> {
+        self.add_query_with_auth_timed(plan, params, format, auth_id)
+            .0
+    }
+
+    /// Like [`add_query_with_auth`] but returns a per-phase timing breakdown
+    /// (plan build vs initial snapshot) for the binding layer / DevTools. The
+    /// delta result is identical to `add_query_with_auth`.
+    pub fn add_query_with_auth_timed(
+        &mut self,
+        plan: QueryPlan,
+        params: Option<serde_json::Value>,
+        format: Option<OutputFormat>,
+        auth_id: String,
+    ) -> (Option<ViewDelta>, RegTimings) {
+        let mut timings = RegTimings::default();
+
+        let t_plan = Instant::now();
         let query_id = plan.id.clone();
         let referenced_tables = plan.root.referenced_tables();
         let format = format.unwrap_or_default();
@@ -328,9 +373,14 @@ impl Circuit {
                 .or_default()
                 .push(query_id.clone());
         }
+        timings.plan_ms = ms_since(t_plan);
 
         // Run initial snapshot evaluation
-        self.run_initial_snapshot(&query_id)
+        let t_snapshot = Instant::now();
+        let delta = self.run_initial_snapshot(&query_id);
+        timings.snapshot_ms = ms_since(t_snapshot);
+
+        (delta, timings)
     }
 
     /// Remove a registered query.
@@ -347,17 +397,35 @@ impl Circuit {
 
     /// Advance the circuit by one time step.
     pub fn step(&mut self, changes: ChangeSet) -> Vec<ViewDelta> {
+        self.step_timed(changes).0
+    }
+
+    /// Like [`step`] but also returns a per-phase processing-time breakdown
+    /// (store-apply vs circuit-step) so the binding layer can surface it to
+    /// DevTools. The delta result is identical to `step`.
+    pub fn step_timed(&mut self, changes: ChangeSet) -> (Vec<ViewDelta>, StepTimings) {
+        let mut timings = StepTimings::default();
         if changes.changes.is_empty() {
-            return vec![];
+            return (vec![], timings);
         }
 
         // Phase 1: Apply changes to store and build per-table deltas
+        let t_store = Instant::now();
         let mut table_deltas: HashMap<String, ZSet> = HashMap::new();
         let mut changed_tables: Vec<String> = Vec::new();
         // Track content-only updates (Operation::Update has weight 0)
         let mut content_updates: HashMap<String, Vec<String>> = HashMap::new();
 
         for change in &changes.changes {
+            // Capture a row about to be deleted so Filter/Scan predicate
+            // evaluation can still read it this step — otherwise the `-1`
+            // retraction is tested against a missing row, the predicate fails,
+            // and a deleted row lingers in every filtered view. The overlay is
+            // cleared after stepping (below); `apply_change` still removes the
+            // row from the collection so the subquery/join path sees it gone.
+            if change.op == Operation::Delete {
+                self.store.stage_deleted_row(&change.table, &change.id);
+            }
             let (key, weight) = self.store.apply_change(change);
             if weight != 0 {
                 let delta = table_deltas.entry(change.table.clone()).or_default();
@@ -380,6 +448,7 @@ impl Circuit {
         for delta in table_deltas.values_mut() {
             delta.retain(|_, w| *w != 0);
         }
+        timings.store_apply_ms = ms_since(t_store);
 
         // Phase 2: Determine affected queries
         let mut affected_queries: Vec<String> = Vec::new();
@@ -394,14 +463,20 @@ impl Circuit {
         }
 
         // Phase 3: Step each affected query's DAG
+        let t_step = Instant::now();
         let mut results = Vec::new();
         for query_id in affected_queries {
             if let Some(delta) = self.step_query(&query_id, &table_deltas, &content_updates) {
                 results.push(delta);
             }
         }
+        timings.circuit_step_ms = ms_since(t_step);
 
-        results
+        // Drop the per-step deleted-row overlay now that every affected query
+        // has stepped (and could read the staged rows for retraction predicates).
+        self.store.clear_pending_deleted_rows();
+
+        (results, timings)
     }
 
     /// Get a reference to a view's state.
@@ -1307,6 +1382,52 @@ mod tests {
             d.updates
         );
         assert!(d.additions.is_empty());
+    }
+
+    #[test]
+    fn filtered_view_drops_row_on_delete() {
+        // Reproduces the down-sync delete gap: a record matching a WHERE filter
+        // is deleted; the filtered view must emit a removal and drop it from the
+        // cache. If the circuit removes the row before the Filter re-evaluates
+        // the retraction, the `-1` is silently dropped and the row lingers.
+        use crate::operator::predicate::Predicate;
+        use crate::types::Path;
+
+        let mut circuit = Circuit::new();
+        circuit.load(vec![Record::new(
+            "thread",
+            "thread:1",
+            json!({"title": "Hello", "published": true}),
+        )]);
+
+        let plan = filter_scan_query(
+            "q1",
+            "thread",
+            Predicate::Eq {
+                field: Path::new("published"),
+                value: json!(true),
+            },
+        );
+        circuit.add_query(plan, None, None);
+        assert!(
+            circuit.get_view("q1").unwrap().cache.contains_key("thread:1"),
+            "row should start in the view",
+        );
+
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::delete("thread", "thread:1")],
+        });
+
+        assert_eq!(deltas.len(), 1, "delete should affect the filtered view");
+        assert!(
+            deltas[0].removals.contains(&"thread:1".to_string()),
+            "delete must surface as a removal; got removals={:?}",
+            deltas[0].removals,
+        );
+        assert!(
+            !circuit.get_view("q1").unwrap().cache.contains_key("thread:1"),
+            "row must be dropped from the view cache after delete",
+        );
     }
 
     #[test]

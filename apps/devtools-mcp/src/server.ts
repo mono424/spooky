@@ -171,6 +171,45 @@ export function createServer(bridge: Bridge, surreal?: SurrealClient | null): Mc
   );
 
   server.tool(
+    'get_query_timings',
+    'Per-query processing-time breakdown for debugging: SSP phases (parse/plan/snapshot at registration; store-apply/circuit-step/transform per ingest, plus whole-ingest `ssp` wall time), local & remote record-fetch, and frontend reconcile — each as { lastMs, p50, p90, p99, count } — sorted slowest-first. Requires the Sp00ky DevTools browser extension. The SurrealDB fallback only exposes persisted materialization percentiles (the per-phase samples are in-memory).',
+    { tabId: z.number().optional().describe('Browser tab ID') },
+    async ({ tabId }) => {
+      if (bridge.isConnected) {
+        const state = (await bridge.request(BRIDGE_METHODS.GET_STATE, {}, tabId)) as any;
+        const queries: any[] = state?.activeQueries
+          ? Object.values(state.activeQueries)
+          : [];
+        // Rank by the dominant phases' p90 (fall back to last) so the slowest
+        // query/phase surfaces first.
+        const scoreOf = (t: any) =>
+          ['ssp', 'localFetch', 'remoteFetch', 'frontend'].reduce(
+            (s, k) => s + (t?.[k]?.p90 ?? t?.[k]?.lastMs ?? 0),
+            0
+          );
+        const rows = (queries as any[])
+          .map((q) => ({
+            queryHash: q.queryHash,
+            query: q.query,
+            updateCount: q.timings?.updateCount ?? q.updateCount,
+            errorCount: q.timings?.errorCount,
+            timings: q.timings ?? null,
+            _score: scoreOf(q.timings),
+          }))
+          .sort((a, b) => b._score - a._score)
+          // oxlint-disable-next-line no-unused-vars -- strip the internal sort key
+          .map(({ _score, ...rest }) => rest);
+        return json(rows);
+      }
+      if (surreal) {
+        const result = await surreal.query('SELECT * FROM _00_query;');
+        return json(result);
+      }
+      throw new Error('No extension connected and no direct database configured.');
+    }
+  );
+
+  server.tool(
     'get_events',
     'Get event history, optionally filtered by type',
     {

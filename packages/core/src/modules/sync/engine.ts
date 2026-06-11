@@ -32,7 +32,9 @@ export class SyncEngine {
    * Main entry point for sync operations.
    * Uses batch processing to minimize events emitted.
    */
-  async syncRecords(diff: RecordVersionDiff): Promise<void> {
+  async syncRecords(
+    diff: RecordVersionDiff
+  ): Promise<{ remoteFetchMs: number; stillRemoteIds: string[] }> {
     const { added, updated, removed } = diff;
 
     this.logger.debug(
@@ -45,16 +47,19 @@ export class SyncEngine {
       'SyncEngine.syncRecords diff'
     );
 
-    // Handle removed records: verify they don't exist remotely before deleting locally
+    // Handle removed records: verify they don't exist remotely before deleting
+    // locally. Returns ids that LEFT the view's list_ref but still exist upstream
+    // (so they weren't deleted) — the caller converges localArray to drop them.
+    let stillRemoteIds: string[] = [];
     if (removed.length > 0) {
-      await this.handleRemovedRecords(removed);
+      stillRemoteIds = await this.handleRemovedRecords(removed);
     }
 
     // Fetch added/updated records from remote
     const toFetch = [...added, ...updated];
     const idsToFetch = toFetch.map((x) => x.id);
     if (idsToFetch.length === 0) {
-      return;
+      return { remoteFetchMs: 0, stillRemoteIds };
     }
 
     // Build a version map from the diff (versions come from _00_list_ref)
@@ -66,10 +71,12 @@ export class SyncEngine {
     // Fetch records from remote — avoid SELECT *, <subquery> FROM $param
     // pattern which drops the * fields in SurrealDB v3 (known bug).
     // Versions are already known from the diff's list_ref data.
+    const remoteFetchStart = performance.now();
     const [remoteResults] = await this.remote.query<[RecordWithId[]]>(
       'SELECT * FROM $idsToFetch',
       { idsToFetch }
     );
+    const remoteFetchMs = performance.now() - remoteFetchStart;
 
     // Prepare batch for cache (which handles both DB and DBSP)
     const cacheBatch: CacheRecord[] = [];
@@ -125,6 +132,8 @@ export class SyncEngine {
     this.events.emit(SyncEventTypes.RemoteDataIngested, {
       records: remoteResults,
     });
+
+    return { remoteFetchMs, stillRemoteIds };
   }
 
   /**
@@ -141,7 +150,7 @@ export class SyncEngine {
    * row to a later sync round is recoverable; deleting a fresh row that
    * upstream still has is not.
    */
-  private async handleRemovedRecords(removed: RecordId[]): Promise<void> {
+  private async handleRemovedRecords(removed: RecordId[]): Promise<string[]> {
     this.logger.debug(
       {
         removed: removed.map((r) => r.toString()),
@@ -150,30 +159,28 @@ export class SyncEngine {
       'Checking removed records'
     );
 
-    // Group by table so we can issue `SELECT id FROM type::table($t)
-    // WHERE id IN $ids` per table. The earlier shape `SELECT id FROM
-    // $ids` returns Internal/0 in SurrealDB 3.0 when `$ids` is bound as
-    // an array of RecordIds; this form works because the array shows up
-    // only in the WHERE clause, not as the FROM target.
-    const byTable = new Map<string, RecordId[]>();
-    for (const r of removed) {
-      const list = byTable.get(r.table.name) ?? [];
-      list.push(r);
-      byTable.set(r.table.name, list);
-    }
-
+    // Confirm which of the "removed" ids still exist remotely by selecting the
+    // records directly: `SELECT id FROM $ids` (the records to fetch ARE the
+    // FROM target).
+    //
+    // We must NOT use `WHERE id IN $ids` here: on SurrealDB v3.1.x, record-id
+    // matching with `IN` is broken — `SELECT id FROM <table> WHERE id IN
+    // [<recordid>]` returns NO rows even for an existing record (plain-field
+    // `IN` works; record-id `IN` does not). That made this check report EVERY
+    // removed id as gone and DELETE live local records (e.g. a freshly-created
+    // collection vanished mid-session). `SELECT id FROM $ids` matches correctly.
+    // (The old comment claimed `FROM $ids` returned Internal/0 on v3.0; it works
+    // on v3.1, and even if it ever errored the catch below skips deletion —
+    // strictly safer than the silent empty-result the `IN` form produced.)
     let existingRemoteIds: Set<string>;
     try {
-      existingRemoteIds = new Set();
-      for (const [table, ids] of byTable) {
-        const [existing] = await this.remote.query<[{ id: RecordId }[]]>(
-          'SELECT id FROM type::table($table) WHERE id IN $ids',
-          { table, ids }
-        );
-        for (const row of existing) {
-          existingRemoteIds.add(encodeRecordId(row.id));
-        }
-      }
+      const [existing] = await this.remote.query<[{ id: RecordId }[]]>(
+        'SELECT id FROM $ids',
+        { ids: removed }
+      );
+      existingRemoteIds = new Set(
+        (existing ?? []).map((row) => encodeRecordId(row.id))
+      );
     } catch (err) {
       // Verification failed. Skip deletion entirely — the next sync
       // round re-derives the diff and we get another shot. The
@@ -187,9 +194,14 @@ export class SyncEngine {
         },
         'Remote existence check failed, skipping deletion to avoid clobbering fresh data'
       );
-      return;
+      return [];
     }
 
+    // Ids that left the view's list_ref but STILL exist upstream — not deletions,
+    // just a view-membership change (e.g. a record whose field changed so it no
+    // longer matches the query). The caller drops these from `localArray` so the
+    // poll's diff stops re-flagging them every tick (the `job:` churn).
+    const stillRemoteIds: string[] = [];
     for (const recordId of removed) {
       const recordIdStr = encodeRecordId(recordId);
       if (!existingRemoteIds.has(recordIdStr)) {
@@ -200,10 +212,12 @@ export class SyncEngine {
           },
           'Deleting confirmed removed record'
         );
-
         // Use CacheModule to handle both local DB and DBSP deletion
         await this.cache.delete(recordId.table.name, recordIdStr);
+      } else {
+        stillRemoteIds.push(recordIdStr);
       }
     }
+    return stillRemoteIds;
   }
 }

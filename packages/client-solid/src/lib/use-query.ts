@@ -6,6 +6,7 @@ import type {
   QueryResult,
 } from '@spooky-sync/query-builder';
 import { createEffect, createSignal, onCleanup, useContext } from 'solid-js';
+import { createStore, reconcile } from 'solid-js/store';
 import { SyncedDb } from '..';
 import type { Sp00kyQueryResultPromise } from '@spooky-sync/core';
 import { Sp00kyContext } from './context';
@@ -23,7 +24,17 @@ type QueryArg<
       | null
       | undefined);
 
-type QueryOptions = { enabled?: () => boolean };
+type QueryOptions = {
+  enabled?: () => boolean;
+  /**
+   * Tear down the query (remote `_00_query` view + local WASM view) when this
+   * hook is disposed and no other subscriber remains, instead of keeping it
+   * resident for cheap re-subscription. Use for viewport-windowed lists that
+   * mount/unmount a query per scroll window and want off-screen windows
+   * cancelled. Trade-off: scrolling back to a torn-down window re-registers it.
+   */
+  deregisterOnCleanup?: boolean;
+};
 
 // Overload: context-based (no explicit db)
 export function useQuery<
@@ -104,19 +115,56 @@ export function useQuery<
     options = queryOrOptions as QueryOptions | undefined;
   }
 
-  const [data, setData] = createSignal<TData | undefined>(undefined);
   const [error, setError] = createSignal<Error | undefined>(undefined);
   const [isFetched, setIsFetched] = createSignal(false);
   const [isFetching, setIsFetching] = createSignal(false);
-  const [unsubscribe, setUnsubscribe] = createSignal<(() => void) | undefined>(undefined);
+  // Results live in a store (not a signal) so consecutive live-query emissions
+  // are merged with `reconcile`: unchanged rows keep their object identity and
+  // changed rows are mutated in place. That keeps Solid's reference-keyed `<For>`
+  // rows — and any `useQuery` subscriptions mounted inside them — alive across
+  // updates, instead of tearing every row down and re-registering its queries.
+  const [state, setState] = createStore<{ value: TData | undefined }>({ value: undefined });
+  // `reconcile` (below) merges each emission into `state.value` IN PLACE, keeping
+  // the array reference stable. That's ideal for granular per-row reactivity, but
+  // it means a *coarse* reader of `data()` — `<For each={data()}>`, or an effect
+  // that copies the whole array elsewhere (e.g. GameList's windowed store) — is
+  // NOT re-run when rows are added/removed/reordered within a same-length result
+  // (the classic case: deleting a row in a windowed list shifts the next one in,
+  // so length stays 50 and the array ref never changes). Bump a version on every
+  // emission and read it in `data()` so every consumer re-runs on any change while
+  // reconcile still preserves row identity underneath.
+  const [version, setVersion] = createSignal(0);
+  const data = () => {
+    version();
+    return state.value;
+  };
+
   let prevQueryString: string | undefined;
+  // Monotonic token for each subscription generation. Bumped whenever the query
+  // identity changes or the hook is disposed, so a slow async `initQuery`
+  // continuation can detect it was superseded and avoid installing a stale (and
+  // leaked) subscription.
+  let runId = 0;
+  let activeUnsub: (() => void) | undefined;
+  // The hash of the currently-installed subscription, for opt-in deregister on
+  // dispose (see `deregisterOnCleanup`).
+  let activeHash: string | undefined;
+
+  const teardownActive = () => {
+    activeUnsub?.();
+    activeUnsub = undefined;
+  };
 
   const sp00ky = db.getSp00ky();
 
   const initQuery = async (
-    query: FinalQuery<S, TableName, T, RelatedFields, IsOne, Sp00kyQueryResultPromise>
+    query: FinalQuery<S, TableName, T, RelatedFields, IsOne, Sp00kyQueryResultPromise>,
+    myRun: number
   ) => {
     const { hash } = await query.run();
+    // A newer query identity (or disposal) won the race while we awaited run().
+    if (myRun !== runId) return;
+    activeHash = hash;
     setError(undefined);
 
     let isFirstCall = true;
@@ -124,7 +172,16 @@ export function useQuery<
       hash,
       (e) => {
         const queryData = (query.isOne ? e[0] : e) as TData;
-        setData(() => queryData);
+        // Merge into the store by record id: unchanged rows keep their identity,
+        // changed rows update in place. Replaces wholesale for `one()`/null.
+        // Time the reconcile → report as the "frontend" phase for DevTools/MCP.
+        const reconcileStart = performance.now();
+        setState('value', reconcile(queryData as any, { key: 'id' }));
+        // Notify coarse `data()` readers (see the `version` note above): reconcile
+        // keeps the array ref stable, so this is what re-runs `<For>`/copy-effects
+        // on add/remove/reorder.
+        setVersion((v) => v + 1);
+        sp00ky.reportFrontendTiming(hash, performance.now() - reconcileStart);
         // The first (immediate) callback with no data likely means the local DB
         // hasn't synced yet — don't mark as fetched so UI shows loading state
         const hasData = query.isOne ? queryData !== null && queryData !== undefined : (e as any[]).length > 0;
@@ -144,10 +201,17 @@ export function useQuery<
       { immediate: true }
     );
 
-    setUnsubscribe(() => () => {
+    const teardown = () => {
       unsub();
       unsubStatus();
-    });
+    };
+
+    // Superseded while awaiting subscribe()? Don't leak — tear down immediately.
+    if (myRun !== runId) {
+      teardown();
+      return;
+    }
+    activeUnsub = teardown;
   };
 
   createEffect(() => {
@@ -165,21 +229,36 @@ export function useQuery<
       return;
     }
 
-    // Prevent re-running if query hasn't changed
-    const queryString = JSON.stringify(query);
+    // Dedup on the query's stable identity hash (cyrb53 of surql + vars), not a
+    // full `JSON.stringify` of the FinalQuery (which walks the whole schema +
+    // inner query on every reactive tick and isn't guaranteed stable). When the
+    // identity is unchanged we keep the existing subscription alive.
+    const queryString = String(query.hash);
     if (queryString === prevQueryString) {
       return;
     }
     prevQueryString = queryString;
 
-    // Reset fetched state when query changes
+    // New query identity → supersede the previous subscription and start fresh.
+    const myRun = ++runId;
+    teardownActive();
     setIsFetched(false);
-    initQuery(query);
+    initQuery(query, myRun);
+  });
 
-    // Cleanup
-    onCleanup(() => {
-      unsubscribe()?.();
-    });
+  // Tear down the live subscription when the hook's owner is disposed. Registered
+  // on the hook (component) scope rather than inside the effect, so an effect
+  // re-run that early-returns (unchanged query) doesn't clean up the still-valid
+  // subscription. Bumping runId also invalidates any in-flight initQuery.
+  onCleanup(() => {
+    runId++;
+    teardownActive();
+    // Opt-in: cancel the query once this hook (its last subscriber) is gone.
+    // teardownActive() above already removed this hook's callback, so
+    // deregisterQuery's refcount guard sees the true remaining-subscriber count.
+    if (options?.deregisterOnCleanup && activeHash) {
+      sp00ky.deregisterQuery(activeHash);
+    }
   });
 
   const isLoading = () => {

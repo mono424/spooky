@@ -14,7 +14,6 @@ class RemoteDatabaseService {
 
   final DatabaseConfig _config;
   final RemoteSurrealClient _client;
-  // ignore: unused_field
   final SpookyLogger _logger;
 
   Future<void> _queryQueue = Future<void>.value();
@@ -46,7 +45,12 @@ class RemoteDatabaseService {
       } catch (err) {
         completer.completeError(err);
       }
-    }).catchError((_) {});
+    }).catchError((Object err) {
+      // The query's own error already reached the caller via `completeError`
+      // above; swallow here only so one failed link can't wedge the serialized
+      // queue for every subsequent query.
+      _logger.debug('Serialized query link failed (already surfaced): $err');
+    });
     return completer.future;
   }
 

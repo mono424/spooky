@@ -9,8 +9,23 @@ export interface BackendDevToolsState {
   database: DatabaseState;
 }
 
+// A single stack entity as reported by the backend `/info` (via
+// `fn::spooky::info()`): one per ssp / scheduler / backend.
+export interface BackendEntity {
+  entity: string;
+  id?: string;
+  ip?: string | null;
+  status?: string;
+  version?: string;
+  surrealdb_version?: string;
+  uptime_seconds?: number;
+  views?: number;
+  [key: string]: unknown;
+}
+
 // Frontend-vs-backend versions of the stack components. Unknown/unreachable
-// values are reported as the string 'unavailable'.
+// values are reported as the string 'unavailable'. `entities` carries the full
+// per-entity stack info for display.
 export interface VersionsState {
   frontend: {
     core: string;
@@ -22,6 +37,7 @@ export interface VersionsState {
     scheduler: string;
     surrealdb: string;
   };
+  entities: BackendEntity[];
 }
 
 export interface BackendEvent {
@@ -52,6 +68,36 @@ export interface Sp00kyEvent {
   data: unknown;
 }
 
+// Per-query processing-time breakdown (mirrors core's QueryTimings). Each phase
+// is a rolling-window summary; `registration` is a one-shot per query.
+export interface PhaseStat {
+  lastMs: number | null;
+  p50: number | null;
+  p90: number | null;
+  p99: number | null;
+  count: number;
+}
+
+export interface RegistrationTimings {
+  parseMs: number | null;
+  planMs: number | null;
+  snapshotMs: number | null;
+  wallMs: number | null;
+}
+
+export interface QueryTimings {
+  ssp: PhaseStat;
+  sspStoreApply: PhaseStat;
+  sspCircuitStep: PhaseStat;
+  sspTransform: PhaseStat;
+  localFetch: PhaseStat;
+  remoteFetch: PhaseStat;
+  frontend: PhaseStat;
+  registration: RegistrationTimings;
+  updateCount: number;
+  errorCount: number;
+}
+
 export interface ActiveQuery {
   queryHash: number;
   status: 'initializing' | 'active' | 'updating' | 'destroyed';
@@ -69,6 +115,8 @@ export interface ActiveQuery {
   localArray?: any;
   remoteHash?: string;
   remoteArray?: any;
+  /** Detailed per-phase processing-time breakdown (DevTools/MCP debugging). */
+  timings?: QueryTimings;
 }
 
 export interface AuthState {
@@ -104,12 +152,13 @@ export interface Sp00kyTableDataResponse {
 
 // UI State Types
 
-export type TabType = 'events' | 'queries' | 'database' | 'auth' | 'mcp' | 'versions';
+export type TabType = 'events' | 'queries' | 'database' | 'auth' | 'mcp' | 'versions' | 'timing';
 
 // Shared default so adapters/stores can fall back when versions are absent.
 export const DEFAULT_VERSIONS: VersionsState = {
   frontend: { core: 'unavailable', wasm: 'unavailable', surrealdb: 'unavailable' },
   backend: { ssp: 'unavailable', scheduler: 'unavailable', surrealdb: 'unavailable' },
+  entities: [],
 };
 
 export interface UIState {

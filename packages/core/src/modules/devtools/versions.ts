@@ -1,9 +1,7 @@
-import type { Logger } from '../../services/logger/index';
-
 /**
- * Backend versions of the stack components, as reported over HTTP by the ssp
- * and scheduler services. Any component that can't be reached degrades to
- * `'unavailable'` rather than throwing.
+ * Backend versions of the stack components, derived from the entity list the
+ * backend `/info` endpoint exposes (read via the `fn::spooky::info()` SurrealQL
+ * function). Any component that isn't reported degrades to `'unavailable'`.
  */
 export interface BackendVersions {
   ssp: string;
@@ -13,82 +11,71 @@ export interface BackendVersions {
 
 export const UNAVAILABLE = 'unavailable';
 
+/**
+ * A single stack entity as reported by `/info` (one per ssp / scheduler /
+ * backend). Carries far more than versions — status, uptime, ip, views — so the
+ * DevTools can render the whole stack. Extra fields are preserved verbatim.
+ */
+export interface BackendEntity {
+  entity: string;
+  id?: string;
+  ip?: string | null;
+  status?: string;
+  version?: string;
+  surrealdb_version?: string;
+  uptime_seconds?: number;
+  views?: number;
+  [key: string]: unknown;
+}
+
+export interface BackendInfo {
+  versions: BackendVersions;
+  entities: BackendEntity[];
+}
+
 export function emptyBackendVersions(): BackendVersions {
   return { ssp: UNAVAILABLE, scheduler: UNAVAILABLE, surrealdb: UNAVAILABLE };
 }
 
-/**
- * Derive the HTTP base URL of the ssp service from the WebSocket endpoint the
- * client connects to. ssp serves its WS upgrade and its `/version` / `/info`
- * HTTP routes on the same host:port, so `ws://h:p` -> `http://h:p` (and
- * `wss` -> `https`). Returns null for missing/invalid endpoints.
- */
-export function httpBaseFromWsEndpoint(endpoint: string | undefined): string | null {
-  if (!endpoint) return null;
-  try {
-    const u = new URL(endpoint);
-    const proto =
-      u.protocol === 'wss:' ? 'https:' : u.protocol === 'ws:' ? 'http:' : u.protocol;
-    return `${proto}//${u.host}`; // host includes the port
-  } catch {
-    return null;
-  }
+export function emptyBackendInfo(): BackendInfo {
+  return { versions: emptyBackendVersions(), entities: [] };
 }
 
-async function fetchJson(url: string, timeoutMs = 3000): Promise<any | null> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
+/** Strip a leading `surrealdb-` so versions read as bare semver (e.g. `2.0.3`). */
+function normalizeServerVersion(v: string): string {
+  return String(v).replace(/^surrealdb-/i, '').trim();
 }
 
 /**
- * Best-effort discovery of backend component versions. Reads ssp `/version`
- * (ssp + wasm-core version) and ssp `/info` (SurrealDB server version +
- * scheduler URL), then the scheduler `/info` for the scheduler version.
- *
- * Never throws: each component that can't be reached stays `'unavailable'`.
+ * Normalize whatever `RETURN fn::spooky::info()` resolves to into the entity
+ * array. The SurrealQL function returns the parsed `/info` array; depending on
+ * how the result is unwrapped it may arrive as the array itself, a single
+ * object, or `null`. Tolerant of all three.
  */
-export async function fetchBackendVersions(
-  endpoint: string | undefined,
-  logger?: Logger
-): Promise<BackendVersions> {
-  const result = emptyBackendVersions();
-  const base = httpBaseFromWsEndpoint(endpoint);
-  if (!base) {
-    logger?.debug(
-      { endpoint, Category: 'sp00ky-client::DevToolsService::versions' },
-      'No HTTP base derivable from endpoint; backend versions unavailable'
-    );
-    return result;
+export function toEntityArray(raw: unknown): BackendEntity[] {
+  if (Array.isArray(raw)) return raw.filter((e): e is BackendEntity => !!e && typeof e === 'object');
+  if (raw && typeof raw === 'object') return [raw as BackendEntity];
+  return [];
+}
+
+/**
+ * Derive component versions + the full entity list from a `/info` entity array.
+ * `surrealdb` is taken from whichever entity reports `surrealdb_version` (ssp or
+ * scheduler). Never throws; missing pieces stay `'unavailable'`.
+ */
+export function parseBackendInfo(raw: unknown): BackendInfo {
+  const entities = toEntityArray(raw);
+  const versions = emptyBackendVersions();
+
+  for (const entity of entities) {
+    const version = entity.version ? String(entity.version) : undefined;
+    if (entity.entity === 'ssp' && version) versions.ssp = version;
+    else if (entity.entity === 'scheduler' && version) versions.scheduler = version;
+
+    if (versions.surrealdb === UNAVAILABLE && entity.surrealdb_version) {
+      versions.surrealdb = normalizeServerVersion(String(entity.surrealdb_version));
+    }
   }
 
-  // ssp service version (also the backend wasm-core version: same Rust crate).
-  const version = await fetchJson(`${base}/version`);
-  if (version?.version) result.ssp = String(version.version);
-
-  // ssp /info: SurrealDB server version + scheduler URL for discovery.
-  const info = await fetchJson(`${base}/info`);
-  const sspEntity = Array.isArray(info) ? info[0] : undefined;
-  if (sspEntity?.surrealdb_version) result.surrealdb = String(sspEntity.surrealdb_version);
-  // Fallback: derive ssp version from /info if /version was unreachable.
-  if (result.ssp === UNAVAILABLE && sspEntity?.version) result.ssp = String(sspEntity.version);
-
-  const schedulerUrl: string | undefined = sspEntity?.env?.SPKY_SCHEDULER_URL;
-  if (schedulerUrl) {
-    const sInfo = await fetchJson(`${schedulerUrl.replace(/\/$/, '')}/info`);
-    const sched = Array.isArray(sInfo)
-      ? sInfo.find((e: any) => e?.entity === 'scheduler')
-      : undefined;
-    if (sched?.version) result.scheduler = String(sched.version);
-  }
-
-  logger?.debug(
-    { ...result, Category: 'sp00ky-client::DevToolsService::versions' },
-    'Fetched backend versions'
-  );
-  return result;
+  return { versions, entities };
 }

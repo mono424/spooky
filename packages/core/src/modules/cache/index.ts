@@ -179,7 +179,10 @@ export class CacheModule implements StreamUpdateReceiver {
    * Register a query with DBSP to create a materialized view
    * Returns the initial result array
    */
-  registerQuery(config: QueryConfig): { localArray: RecordVersionArray } {
+  registerQuery(config: QueryConfig): {
+    localArray: RecordVersionArray;
+    registrationTimings?: { parseMs: number; planMs: number; snapshotMs: number };
+  } {
     this.logger.debug(
       {
         queryHash: config.queryHash,
@@ -216,7 +219,7 @@ export class CacheModule implements StreamUpdateReceiver {
         'Query registered successfully'
       );
 
-      return { localArray: update.localArray };
+      return { localArray: update.localArray, registrationTimings: update.registration };
     } catch (err) {
       this.logger.error(
         { err, queryHash: config.queryHash, Category: 'sp00ky-client::CacheModule::registerQuery' },

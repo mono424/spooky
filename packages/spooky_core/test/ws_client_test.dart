@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
 
+import 'package:spooky_core/src/surreal/cbor_codec.dart';
 import 'package:spooky_core/src/surreal/remote_client.dart';
 import 'package:spooky_core/src/surreal/value.dart';
 import 'package:test/test.dart';
@@ -13,7 +13,8 @@ class FakeChannel implements WebSocketChannel {
   final List<Map<String, dynamic>> sent = [];
   late final _FakeSink _sink = _FakeSink(sent);
 
-  void push(Map<String, dynamic> frame) => _incoming.add(jsonEncode(frame));
+  void push(Map<String, dynamic> frame) =>
+      _incoming.add(surrealCborEncode(frame));
 
   /// Auto-complete the most recent RPC with [result].
   void respondLast(dynamic result) {
@@ -36,7 +37,7 @@ class _FakeSink implements WebSocketSink {
   final List<Map<String, dynamic>> sent;
   @override
   void add(dynamic data) =>
-      sent.add(jsonDecode(data as String) as Map<String, dynamic>);
+      sent.add(surrealCborDecode(data as List<int>) as Map<String, dynamic>);
   @override
   Future<void> close([int? closeCode, String? closeReason]) async {}
   @override

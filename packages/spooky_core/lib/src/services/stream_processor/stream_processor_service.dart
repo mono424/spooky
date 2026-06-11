@@ -271,6 +271,11 @@ class StreamProcessorService {
 
     if (value is RecordId) return value.toString();
 
+    // schema-coerced temporal types -> canonical strings (JSON has no native
+    // form, and the SSP filters on the string representation).
+    if (value is DateTime) return value.toUtc().toIso8601String();
+    if (value is SurrealDuration) return value.toString();
+
     if (value is Map) {
       final out = <String, dynamic>{};
       value.forEach((k, v) {

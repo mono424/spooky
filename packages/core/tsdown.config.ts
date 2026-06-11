@@ -15,12 +15,21 @@ try {
 } catch {
   wasmVersion = require('../ssp-wasm/package.json').version;
 }
-// `surrealdb`'s `exports` map blocks importing its package.json, so read the
-// bundled client version from our own pinned dependency declaration instead.
-const surrealVersion: string = String(corePkg.dependencies?.surrealdb ?? 'unknown').replace(
-  /^[\^~]/,
-  ''
-);
+// Report the SurrealDB WASM ENGINE version (`@surrealdb/wasm`) — the engine the
+// in-browser local DB actually runs — NOT the `surrealdb` JS client library
+// version. The WASM engine is the one that must stay compatible with the server
+// engine, so it's the meaningful number to compare in DevTools. Prefer the
+// actually-installed version; fall back to our pinned range if its `exports`
+// map blocks importing its package.json.
+let surrealVersion: string;
+try {
+  surrealVersion = require('@surrealdb/wasm/package.json').version;
+} catch {
+  surrealVersion = String(corePkg.dependencies?.['@surrealdb/wasm'] ?? 'unknown').replace(
+    /^[\^~]/,
+    ''
+  );
+}
 
 // tsdown 0.12.x forwards a top-level `define` to rolldown's inputOptions, which
 // rejects it — so we do the substitution ourselves with a tiny transform

@@ -115,7 +115,7 @@ fn check_predicate_recursive(
             if field.segments().len() == 1 && field.segments()[0] == "id" {
                 return key.starts_with(prefix.as_str());
             }
-            if let Some(row) = store.get_row_by_key(key) {
+            if let Some(row) = store.get_row_by_key_or_deleted(key) {
                 if let Some(val) = resolve_field(Some(row), field) {
                     if let Sp00kyValue::Str(s) = val {
                         return s.starts_with(prefix.as_str());
@@ -136,7 +136,7 @@ fn check_predicate_recursive(
             };
 
             let actual = store
-                .get_row_by_key(key)
+                .get_row_by_key_or_deleted(key)
                 .and_then(|r| resolve_field(Some(r), field).cloned());
 
             if let Some(actual) = actual {

@@ -9,6 +9,9 @@ import {
   DEFAULT_LIST_REF_POLL_INTERVAL_MS,
   buildListRefSelect,
   nextPollDelayMs,
+  listRefPollDelayMs,
+  LIST_REF_POLL_MAX_INTERVAL_MS,
+  recordVersionArraysEqual,
 } from './utils';
 import type { RecordVersionArray, RecordVersionDiff } from '../../types';
 import { encodeRecordId } from '../../utils/index';
@@ -464,5 +467,82 @@ describe('nextPollDelayMs', () => {
         healthyIntervalMs: 2_000,
       })
     ).toBe(250);
+  });
+});
+
+describe('listRefPollDelayMs', () => {
+  it('returns the base interval at idle streak 0 (something just happened)', () => {
+    expect(listRefPollDelayMs({ idleStreak: 0, baseIntervalMs: 500 })).toBe(500);
+    // Negative streak is defensively treated as "active" too.
+    expect(listRefPollDelayMs({ idleStreak: -3, baseIntervalMs: 500 })).toBe(500);
+  });
+
+  it('doubles per idle streak (exponential backoff)', () => {
+    expect(listRefPollDelayMs({ idleStreak: 1, baseIntervalMs: 500 })).toBe(1_000);
+    expect(listRefPollDelayMs({ idleStreak: 2, baseIntervalMs: 500 })).toBe(2_000);
+    expect(listRefPollDelayMs({ idleStreak: 3, baseIntervalMs: 500 })).toBe(4_000);
+  });
+
+  it('caps at LIST_REF_POLL_MAX_INTERVAL_MS (5s) once the doubling exceeds it', () => {
+    // streak 4 would be 8000ms uncapped → clamped to 5000.
+    expect(listRefPollDelayMs({ idleStreak: 4, baseIntervalMs: 500 })).toBe(5_000);
+    expect(listRefPollDelayMs({ idleStreak: 50, baseIntervalMs: 500 })).toBe(5_000);
+    expect(LIST_REF_POLL_MAX_INTERVAL_MS).toBe(5_000);
+  });
+
+  it('never returns below the configured base, even when base exceeds the cap', () => {
+    // An aggressively-large base must not be implicitly shrunk by the cap.
+    expect(listRefPollDelayMs({ idleStreak: 0, baseIntervalMs: 8_000 })).toBe(8_000);
+    expect(listRefPollDelayMs({ idleStreak: 5, baseIntervalMs: 8_000 })).toBe(8_000);
+  });
+
+  it('respects a custom max interval', () => {
+    expect(
+      listRefPollDelayMs({ idleStreak: 10, baseIntervalMs: 500, maxIntervalMs: 3_000 })
+    ).toBe(3_000);
+  });
+
+  it('does not overflow for a very long idle streak', () => {
+    // 2^1000 would be Infinity; the exponent clamp keeps it finite and capped.
+    expect(listRefPollDelayMs({ idleStreak: 1_000, baseIntervalMs: 500 })).toBe(5_000);
+  });
+});
+
+describe('recordVersionArraysEqual', () => {
+  it('treats the same reference and identical contents as equal', () => {
+    const a: RecordVersionArray = [['game:1', 1], ['game:2', 3]];
+    expect(recordVersionArraysEqual(a, a)).toBe(true);
+    expect(recordVersionArraysEqual(a, [['game:1', 1], ['game:2', 3]])).toBe(true);
+  });
+
+  it('is order-insensitive (the list_ref SELECT has no ORDER BY)', () => {
+    expect(
+      recordVersionArraysEqual(
+        [['game:1', 1], ['game:2', 3]],
+        [['game:2', 3], ['game:1', 1]]
+      )
+    ).toBe(true);
+  });
+
+  it('returns false when a version differs for the same id', () => {
+    expect(
+      recordVersionArraysEqual([['game:1', 1]], [['game:1', 2]])
+    ).toBe(false);
+  });
+
+  it('returns false on length mismatch', () => {
+    expect(
+      recordVersionArraysEqual([['game:1', 1]], [['game:1', 1], ['game:2', 1]])
+    ).toBe(false);
+  });
+
+  it('returns false when an id is present in one but not the other', () => {
+    expect(
+      recordVersionArraysEqual([['game:1', 1]], [['game:2', 1]])
+    ).toBe(false);
+  });
+
+  it('treats two empty arrays as equal', () => {
+    expect(recordVersionArraysEqual([], [])).toBe(true);
   });
 });

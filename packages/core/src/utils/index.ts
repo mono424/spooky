@@ -98,14 +98,24 @@ export function decodeFromSp00ky<S extends SchemaStructure, T extends TableNames
 // ==================== TIME/DURATION UTILITIES ====================
 
 /**
+ * Read the millisecond count off a surrealdb `Duration`. Different `surrealdb`
+ * releases expose it under `milliseconds` (current) or the older private
+ * `_milliseconds` field, so read whichever is set; returns 0 when neither is.
+ */
+function durationMillis(duration: Duration): number {
+  const d = duration as { milliseconds?: number | bigint; _milliseconds?: number | bigint };
+  return Number(d.milliseconds || d._milliseconds || 0);
+}
+
+/**
  * Parse duration string or Duration object to milliseconds
  */
 export function parseDuration(duration: QueryTimeToLive | Duration): number {
   if (duration instanceof Duration) {
-    const ms = (duration as any).milliseconds || (duration as any)._milliseconds;
-    if (ms) return Number(ms);
+    const ms = durationMillis(duration);
+    if (ms) return ms;
     const str = duration.toString();
-    if (str !== '[object Object]') return parseDuration(str as any);
+    if (str !== '[object Object]') return parseDuration(str as QueryTimeToLive);
     return 600000;
   }
 

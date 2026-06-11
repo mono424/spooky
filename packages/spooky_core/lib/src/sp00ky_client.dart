@@ -61,13 +61,19 @@ class Sp00kyClient {
   int get pendingMutationCount => _sync?.pendingMutationCount ?? 0;
   int get liveRetryCount => _sync?.liveRetryCount ?? 0;
 
+  /// Subscribe to the pending-mutation count (TS `subscribeToPendingMutations`).
+  /// Returns an unsubscribe fn; a no-op unsubscribe in local-only mode.
+  void Function() subscribeToPendingMutations(void Function(int count) cb) =>
+      _sync?.subscribeToPendingMutations(cb) ?? () {};
+
   /// Initialize the client. With a remote endpoint configured, also connects
   /// remotely, starts auth, fetches the session id, and starts sync (the JS
   /// `init` sequence). Without one, runs local-first only.
   Future<void> init() async {
     if (_initialized) return;
 
-    _local = LocalDatabaseService.open(_logger, store: config.database.store);
+    _local = LocalDatabaseService.open(_logger,
+        store: config.database.store, path: config.database.localDbPath);
     _local.provision();
 
     // Migrate before the stream processor loads state, so a schema change
@@ -95,6 +101,9 @@ class Sp00kyClient {
       // Keep the server-side registration alive: re-register on each TTL beat.
       // Reads `_sync` at fire-time (set later in init); no-op in local-only.
       onHeartbeat: (hash) => _sync?.enqueueDownEvent(HeartbeatEvent(hash)),
+      // Opt-in query teardown: enqueue the remote `_00_query` cleanup; the local
+      // view + state are freed by sync after the remote delete. No-op when local.
+      onDeregister: (hash) => _sync?.enqueueDownEvent(CleanupEvent(hash)),
     );
 
     final hasRemote =
@@ -169,12 +178,27 @@ class Sp00kyClient {
       final result = await remote.query('RETURN <string>session::id()');
       final first = result.isNotEmpty ? result.first : null;
       return first?.toString() ?? '';
-    } catch (_) {
+    } catch (err) {
+      // session::id() is only a salt for query-hash isolation; if the remote
+      // round-trip fails, fall back to an empty salt rather than failing init.
+      _logger.debug('session::id() fetch failed; using empty salt: $err');
       return '';
     }
   }
 
   // ==================== QUERIES ====================
+
+  /// One-shot direct remote query, bypassing the local sync layer (TS
+  /// `useRemote(r => r.query(...))`). Returns the per-statement results.
+  /// Throws if no remote endpoint is configured.
+  Future<List<dynamic>> queryRemote(String sql,
+      [Map<String, dynamic>? vars]) {
+    final remote = _remote;
+    if (remote == null) {
+      throw StateError('queryRemote requires a remote endpoint');
+    }
+    return remote.query(sql, vars);
+  }
 
   /// Register a raw SURQL query and return its hash. The table is parsed from
   /// the first `FROM <table>` (TS `queryRaw`).
@@ -238,6 +262,46 @@ class Sp00kyClient {
     bool immediate = false,
   }) =>
       _dataModule.subscribe(hash, callback, immediate: immediate);
+
+  /// Subscribe to a query's fetch status (idle/fetching) via callback (TS
+  /// `subscribeQueryStatus`). With [immediate] the callback fires synchronously
+  /// with the current status. Returns an unsubscribe fn.
+  void Function() subscribeQueryStatus(
+    String queryHash,
+    QueryStatusCallback callback, {
+    bool immediate = false,
+  }) =>
+      _dataModule.subscribeStatus(queryHash, callback, immediate: immediate);
+
+  /// A query's fetch status (idle/fetching) as a broadcast [Stream], for
+  /// `StreamBuilder` friendliness (consistent with [subscribeStream]).
+  /// [immediate] replays the current status on first listen.
+  Stream<QueryStatus> queryStatusStream(
+    String queryHash, {
+    bool immediate = true,
+  }) {
+    late StreamController<QueryStatus> controller;
+    void Function()? off;
+    controller = StreamController<QueryStatus>.broadcast(
+      onListen: () {
+        off = _dataModule.subscribeStatus(queryHash, controller.add,
+            immediate: immediate);
+      },
+      onCancel: () {
+        off?.call();
+        off = null;
+      },
+    );
+    return controller.stream;
+  }
+
+  /// Opt-in eager teardown of a query whose last subscriber has left (TS
+  /// `deregisterQuery`): enqueues the remote `_00_query` cleanup and frees the
+  /// local view once it completes. No-op while any subscriber remains. Most
+  /// queries should NOT call this — the default keep-alive avoids
+  /// re-registration churn on navigation.
+  void deregisterQuery(String queryHash) =>
+      _dataModule.deregisterQuery(queryHash);
 
   // ==================== MUTATIONS ====================
 

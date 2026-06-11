@@ -4,8 +4,24 @@
  */
 
 import type { WasmViewConfig } from '../pkg/ssp_wasm';
+import { Sp00kyProcessor } from '../pkg/ssp_wasm.js';
 
 let counter = 0;
+
+// Tables used across the e2e suites. The SSP default-denies any non-`_00_`
+// table without a registered `select` permission, so tests must seed one.
+const TEST_TABLES = ['user', 'product', 'thread', 'author', 'comment', 'game'];
+
+/**
+ * Create a processor with permissive (`WHERE true`) `select` permissions for
+ * the standard test tables, so `register_view` isn't default-denied. Use this
+ * instead of `new Sp00kyProcessor()` in tests. (WASM must already be init'd.)
+ */
+export function makeProcessor(): Sp00kyProcessor {
+  const processor = new Sp00kyProcessor();
+  processor.set_permissions(Object.fromEntries(TEST_TABLES.map((t) => [t, 'true'])));
+  return processor;
+}
 
 /**
  * Generate a unique ID (simple incrementing counter for deterministic tests)
