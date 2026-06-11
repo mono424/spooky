@@ -74,11 +74,13 @@ DEFINE FUNCTION OVERWRITE fn::spooky::info() {
 DEFINE API OVERWRITE "/spooky"
     FOR get
     THEN {
-        -- The custom-API body must be a string/bytes, so JSON-encode the
-        -- function's structured result (one source of truth: the function).
+        -- Return the function's structured result directly. The custom API
+        -- serializes an object body to JSON for us (per Content-Type), and
+        -- SurrealDB has no encoding::json::encode, so encoding here both
+        -- failed to parse and was unnecessary.
         RETURN {
             status: 200,
-            body: encoding::json::encode(fn::spooky::info()),
+            body: fn::spooky::info(),
             headers: {
                 'Content-Type': 'application/json'
             }
