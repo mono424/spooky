@@ -2,19 +2,21 @@
 //! assignments into `_00_user_feature` from the definitions in
 //! `_00_feature_flag`.
 //!
-//! The CLI evaluates inline on every `spky flag ...` write, so this
-//! sweep mostly catches **new users** signing up between CLI writes
-//! (and acts as a self-healing pass if a CLI run was interrupted).
+//! The CLI evaluates inline on every `spky flag ...` write and materializes
+//! every existing user, so this sweep only fills in **users who signed up
+//! since the last write**: each tick it skips any (user, flag) pair that
+//! already has a row and evaluates the rest. Steady-state (no new users) it
+//! writes nothing. It also self-heals if a CLI run was interrupted.
 //!
-//! The bucketing must match `apps/cli/src/flag.rs::rollout_hash` and
-//! `fn::feature::hash` in `apps/cli/src/meta_tables_remote.surql`. All
-//! three sites take SHA-256("<key>:<user_id>"), read the first 8 hex
-//! chars as a big-endian u32, then modulo 100, so a CLI write and a
-//! scheduler sweep produce identical assignments for the same inputs.
+//! The bucketing must match `apps/cli/src/flag.rs::rollout_hash`. Both take
+//! SHA-256("<key>:<user_id>"), read the first 8 hex chars as a big-endian
+//! u32, then modulo 100, so a CLI write and a scheduler sweep produce
+//! identical assignments for the same inputs.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use surrealdb::engine::remote::ws::Client;
@@ -24,12 +26,14 @@ use tracing::{debug, error, info, warn};
 const RULE_ALLOWLIST: &str = "allowlist";
 const RULE_ROLLOUT: &str = "rollout";
 
-/// Spawn a periodic task that re-materializes every flag's assignments.
-/// Idempotent because of `UPSERT _00_user_feature WHERE user = .. AND key = ..`.
+/// Spawn a periodic task that fills in feature-flag assignments for users
+/// who don't yet have them. Idempotent: each tick skips (user, flag) pairs
+/// that already have a `_00_user_feature` row, so it only writes for new
+/// signups.
 ///
-/// Default interval is 30 seconds: enough that a newly-signed-up user
-/// gets their flag assignments within half a minute, but infrequent
-/// enough not to thrash a multi-thousand-user table.
+/// Default interval is 30 seconds: a newly-signed-up user gets their flag
+/// assignments within half a minute, and a quiet table costs one cheap
+/// SELECT-per-flag per tick.
 pub fn spawn(db: Arc<Surreal<Client>>, interval_secs: u64) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -43,8 +47,9 @@ pub fn spawn(db: Arc<Surreal<Client>>, interval_secs: u64) {
     });
 }
 
-/// One full sweep: load every flag, every user, and UPSERT one
-/// `_00_user_feature` row per (user, flag).
+/// One sweep: for every flag, materialize a `_00_user_feature` row for any
+/// user that doesn't already have one. Existing rows are left untouched —
+/// the CLI keeps them current on every write.
 pub async fn tick(db: &Surreal<Client>) -> Result<()> {
     let flags: Vec<Value> = db
         .query("SELECT key, enabled, default_variant, variants, rules, payloads FROM _00_feature_flag;")
@@ -79,22 +84,56 @@ pub async fn tick(db: &Surreal<Client>) -> Result<()> {
             Some(k) => k.to_string(),
             None => continue,
         };
-        for user_id in &users {
-            let (variant, payload) = evaluate_one(flag, user_id);
-            let payload_str = payload
-                .map(|p| serde_json::to_string(&p).unwrap_or_else(|_| "NONE".into()))
-                .unwrap_or_else(|| "NONE".into());
 
-            let query = format!(
-                "UPSERT _00_user_feature WHERE user = {} AND key = '{}' SET user = {}, key = '{}', variant = '{}', payload = {};",
-                user_id,
-                escape_sql(&key),
-                user_id,
-                escape_sql(&key),
-                escape_sql(&variant),
-                payload_str
-            );
-            match db.query(&query).await {
+        // Users already materialized for this flag. The CLI writes every
+        // existing user on each `spky flag` mutation, so this set covers
+        // everyone except brand-new signups.
+        let assigned_rows: Vec<Value> = db
+            .query("SELECT VALUE <string>user FROM _00_user_feature WHERE key = $key;")
+            .bind(("key", key.clone()))
+            .await
+            .with_context(|| format!("Failed to load assignments for flag '{}'", key))?
+            .take(0)
+            .unwrap_or_default();
+        let assigned: HashSet<String> = assigned_rows
+            .into_iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+
+        for user_id in &users {
+            if assigned.contains(user_id) {
+                continue;
+            }
+            let (variant, payload) = evaluate_one(flag, user_id);
+
+            // `user_id` is a DB-sourced record id (e.g. `user:abc`) and is
+            // interpolated as a record reference, mirroring how replica.rs
+            // handles thing ids. Every value is bound, never interpolated.
+            let result = match payload {
+                Some(payload) => {
+                    db.query(format!(
+                        "UPSERT _00_user_feature WHERE user = {uid} AND key = $key \
+                         SET user = {uid}, key = $key, variant = $variant, payload = $payload;",
+                        uid = user_id
+                    ))
+                    .bind(("key", key.clone()))
+                    .bind(("variant", variant))
+                    .bind(("payload", payload))
+                    .await
+                }
+                None => {
+                    db.query(format!(
+                        "UPSERT _00_user_feature WHERE user = {uid} AND key = $key \
+                         SET user = {uid}, key = $key, variant = $variant;",
+                        uid = user_id
+                    ))
+                    .bind(("key", key.clone()))
+                    .bind(("variant", variant))
+                    .await
+                }
+            };
+
+            match result {
                 Ok(_) => total += 1,
                 Err(err) => {
                     error!(
@@ -108,20 +147,16 @@ pub async fn tick(db: &Surreal<Client>) -> Result<()> {
         }
     }
 
-    debug!(
-        flags = flags.len(),
-        users = users.len(),
-        upserts = total,
-        "Feature flag sweep complete"
-    );
     if total > 0 {
-        info!(upserts = total, "Feature flag assignments materialized");
+        info!(upserts = total, "Materialized feature flag assignments for new users");
+    } else {
+        debug!(
+            flags = flags.len(),
+            users = users.len(),
+            "Feature flag sweep: nothing new"
+        );
     }
     Ok(())
-}
-
-fn escape_sql(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 /// Evaluator: identical semantics to `apps/cli/src/flag.rs::evaluate_one`.

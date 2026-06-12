@@ -20,6 +20,7 @@ pub struct SchedulerConfig {
     pub ssp_poll_interval_ms: u64,
     pub wal_path: PathBuf,
     pub health_check_interval_secs: u64,
+    pub feature_flag_sweep_interval_secs: u64,
     #[serde(skip)]
     pub scheduler_id: String,
     #[serde(skip)]
@@ -78,6 +79,7 @@ impl Default for SchedulerConfig {
             ssp_poll_interval_ms: 3000,
             wal_path: PathBuf::from("./data/event_wal.log"),
             health_check_interval_secs: 15,
+            feature_flag_sweep_interval_secs: 30,
             scheduler_id: String::new(),
             backends: vec![],
         }
@@ -124,6 +126,15 @@ impl SchedulerConfig {
             if let Ok(n) = v.parse::<u64>() {
                 if n > 0 {
                     scheduler_config.snapshot_update_interval_secs = n;
+                }
+            }
+        }
+
+        // Feature-flag materialization sweep cadence. Default 30s.
+        if let Ok(v) = std::env::var("SPKY_FEATURE_FLAG_SWEEP_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                if n > 0 {
+                    scheduler_config.feature_flag_sweep_interval_secs = n;
                 }
             }
         }

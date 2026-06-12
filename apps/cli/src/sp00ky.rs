@@ -235,5 +235,78 @@ pub fn generate_sp00ky_events(
         events.push_str("};\n\n");
     }
 
+    // ===================================================================
+    // _00_user_feature (feature-flag assignments)
+    // ===================================================================
+    // Feature-flag assignments are written by the scheduler sweep and the
+    // `spky flag` CLI under the project root token, never through the client
+    // up-queue. Without an ingest-notify event the SSP never learns of the
+    // change, so a client already subscribed to its flag would not see a new
+    // variant until it re-registered. Emit the same mutation/delete events
+    // every app table gets (skipped above for `_00_` tables) so a root UPSERT
+    // reaches `/ingest`, the SSP recomputes the registered query, and the
+    // subscriber's `_00_list_ref_user_<id>` updates in real time.
+    //
+    // Server-written only, so there is no client-mutation version targeting
+    // (`$sp00ky_target_version`); the version simply increments.
+    events.push_str("-- Table: _00_user_feature Mutation (server-written; ingest-notify)\n");
+    events.push_str("DEFINE EVENT OVERWRITE _00_user_feature_mutation ON TABLE _00_user_feature\n");
+    events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
+    events.push_str("    LET $sp00ky_ver_rec = IF $event = \"CREATE\" {\n");
+    events.push_str("        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)\n");
+    events.push_str("    } ELSE {\n");
+    events.push_str("        (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)\n");
+    events.push_str("    };\n");
+    events.push_str("    LET $plain_after = {\n");
+    events.push_str("        id: <string>($after.id OR \"\"),\n");
+    events.push_str("        user: <string>($after.user OR \"\"),\n");
+    events.push_str("        key: $after.key,\n");
+    events.push_str("        variant: $after.variant,\n");
+    events.push_str("        payload: $after.payload,\n");
+    events.push_str("        evaluated_at: <string>($after.evaluated_at OR \"\"),\n");
+    events.push_str("        _00_rv: (SELECT VALUE version FROM ONLY _00_version WHERE record_id = $after.id)\n");
+    events.push_str("    };\n");
+    if is_http {
+        events.push_str("    LET $payload = {\n");
+        events.push_str("        table: '_00_user_feature',\n");
+        events.push_str("        op: $event,\n");
+        events.push_str("        id: <string>($after.id OR \"\"),\n");
+        events.push_str("        record: $plain_after,\n");
+        events.push_str("        hash: \"\"\n");
+        events.push_str("    };\n");
+        events.push_str("    http::post($sp00ky_endpoint + '/ingest', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });\n");
+    } else {
+        events.push_str("    mod::dbsp::ingest('_00_user_feature', $event, <string>($after.id OR \"\"), $plain_after);\n");
+        events.push_str("    mod::dbsp::save_state(NONE);\n");
+    }
+    events.push_str("};\n\n");
+
+    events.push_str("-- Table: _00_user_feature Deletion (ingest-notify)\n");
+    events.push_str("DEFINE EVENT OVERWRITE _00_user_feature_delete ON TABLE _00_user_feature\n");
+    events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
+    events.push_str("    DELETE _00_version WHERE record_id = $before.id;\n");
+    events.push_str("    LET $plain_before = {\n");
+    events.push_str("        id: <string>($before.id OR \"\"),\n");
+    events.push_str("        user: <string>($before.user OR \"\"),\n");
+    events.push_str("        key: $before.key,\n");
+    events.push_str("        variant: $before.variant,\n");
+    events.push_str("        payload: $before.payload,\n");
+    events.push_str("        evaluated_at: <string>($before.evaluated_at OR \"\")\n");
+    events.push_str("    };\n");
+    if is_http {
+        events.push_str("    LET $payload = {\n");
+        events.push_str("        table: '_00_user_feature',\n");
+        events.push_str("        op: \"DELETE\",\n");
+        events.push_str("        id: <string>($before.id OR \"\"),\n");
+        events.push_str("        record: $plain_before,\n");
+        events.push_str("        hash: \"\"\n");
+        events.push_str("    };\n");
+        events.push_str("    http::post($sp00ky_endpoint + '/ingest', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });\n");
+    } else {
+        events.push_str("    mod::dbsp::ingest('_00_user_feature', \"DELETE\", <string>($before.id OR \"\"), $plain_before);\n");
+        events.push_str("    mod::dbsp::save_state(NONE);\n");
+    }
+    events.push_str("};\n\n");
+
     events
 }
