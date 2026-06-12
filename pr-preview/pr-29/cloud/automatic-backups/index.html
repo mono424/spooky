@@ -13,14 +13,14 @@ Self-managed database backups usually mean a cron job, a shell script that was w
 </p> <h2>How sp00ky does it</h2> <p>
 Everything is a single command. You can run them locally, from a CI job, or wire them into
     whatever deployment flow you already have.
-</p> <ol> <li>Take a backup right now with <code>spky cloud backup create</code>.</li> <li>Name it if you are about to do something you want to be able to undo: <code>--name before-migration</code>.</li> <li>Schedule recurring backups with a cron expression, like <code>"0 2 * * *"</code> for 2am daily.</li> <li>Set a retention policy so old backups clean themselves up once you have enough newer ones.</li> <li>List them, delete them, or restore any of them with one more command.</li> </ol> <blockquote> <p>
+</p> <ol> <li>Take a backup right now with <code>spky backup create</code>.</li> <li>Name it if you are about to do something you want to be able to undo: <code>--name before-migration</code>.</li> <li>Schedule recurring backups with a cron expression, like <code>"0 2 * * *"</code> for 2am daily.</li> <li>Set a retention policy so old backups clean themselves up once you have enough newer ones.</li> <li>List them, delete them, or restore any of them with one more command.</li> </ol> <blockquote> <p>
 The best moment to take a backup is right before you do the thing you are nervous about.
       sp00ky makes that moment cost one command.
 </p> </blockquote> <h2>Name the scary ones</h2> <p>
 Scheduled backups are great. Named backups are better when you are about to do something
     specific. Before a migration, before a risky data import, before you merge the pull request
     nobody fully reviewed, run:
-</p> <ul> <li><code>spky cloud backup create --name before-migration</code></li> </ul> <p>
+</p> <ul> <li><code>spky backup create --name before-migration</code></li> </ul> <p>
 The name shows up in the list next to the backup id, so when you come back looking for "the
     one from right before we changed the schema," it is there, labeled, ready.
 </p> <h2>Restores you can actually trust</h2> <p>

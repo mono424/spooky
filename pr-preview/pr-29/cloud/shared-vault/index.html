@@ -3,7 +3,7 @@ Every team has that one Slack thread with the API keys in it. You know the one. 
     Shared Vault is how you stop adding to it.
 </p> <p>
 It is a team wide encrypted store for your environment variables, built into
-<code>spky cloud</code>. Nobody shares a master password. Nobody pastes secrets into a
+<code>spky env</code>. Nobody shares a master password. Nobody pastes secrets into a
     CI log. Nobody has to guess which <code>.env</code> was the right one.
 </p> <h2>Your passphrase stays with you</h2> <p>
 Each teammate picks their own passphrase the first time they touch the vault. It never
@@ -24,8 +24,8 @@ One honest caveat: decryption happens on the server at request time, so this is
     read it," see the comparison below, because that is not what sp00ky's vault promises.
 </p> <h2>It knows your deploys</h2> <p>
 Your <code>sp00ky.yml</code> can reference vault variables directly. Run
-<code>spky cloud deploy</code> and the right secrets land in the right service with
-    no copy paste. Rotate one value with <code>spky cloud env set</code> and the next
+<code>spky deploy</code> and the right secrets land in the right service with
+    no copy paste. Rotate one value with <code>spky env set</code> and the next
     deploy picks it up.
 </p> <p>
 Forgot your passphrase? Any admin can approve a reset from the CLI. Left the company?

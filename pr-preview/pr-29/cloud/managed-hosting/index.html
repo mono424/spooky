@@ -5,7 +5,7 @@ Production hosting is where most side projects quietly die. You stand up a datab
     whole montage.
 </p> <p>
 One file. One command. Everything your app needs, running for real.
-</p> <h2>One command, entire stack</h2> <p> <code>spky cloud deploy</code> reads your <code>sp00ky.yml</code>, builds your
+</p> <h2>One command, entire stack</h2> <p> <code>spky deploy</code> reads your <code>sp00ky.yml</code>, builds your
     backends, uploads the images, provisions the database and sync layer, runs your
     migrations, starts your frontend, and wires up TLS. You watch the steps tick past.
     Then you open your domain. It works.
@@ -14,10 +14,10 @@ Your backends can be written in anything that speaks HTTP, because we ship Docke
     images, not a proprietary runtime. Your frontend is whatever you want, served from
     the same project.
 </p> <h2>Scale with a flag</h2> <p>
-More traffic showed up? <code>spky cloud scale --ssp 3</code>. That is the ritual.
+More traffic showed up? <code>spky scale ssp 3</code>. That is the ritual.
     The sync layer grows horizontally, the rest stays put. Set a default in
 <code>sp00ky.yml</code> and you will not have to think about it again.
-</p> <h2>Logs you actually want to read</h2> <p> <code>spky cloud logs</code> tails everything live. Filter by service, stack two
+</p> <h2>Logs you actually want to read</h2> <p> <code>spky logs</code> tails everything live. Filter by service, stack two
     services in a split view, grep with a real regex on the server, or open an
     interactive TUI with scroll, search, and a follow toggle. It feels like the logging
     tool you always meant to build.
@@ -26,7 +26,7 @@ Drop a live status badge on your README while you are there. It is one markdown
     line.
 </p> <h2>Deploys that behave</h2> <p>
 Log in once with GitHub. For pipelines, generate an API key and point CI at it. Link
-    a GitHub repo with <code>spky cloud link</code> and pushes become deploys. Your
+    a GitHub repo with <code>spky link</code> and pushes become deploys. Your
     database gets backed up automatically, and you can roll the scheduler or the full
     infra with a flag when a new version of sp00ky drops.
 </p> <h2>How it stacks up</h2> <p>
