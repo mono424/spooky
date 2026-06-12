@@ -7,13 +7,13 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
-export const code9 = `spky cloud team invite alice@example.com`;
+export const code9 = `spky team invite alice@example.com`;
 
-export const code8 = `spky cloud team invitations`;
+export const code8 = `spky team invites`;
 
-export const code7 = `spky cloud team revoke alice@example.com`;
+export const code7 = `spky team revoke alice@example.com`;
 
-export const code6 = `spky cloud team list`;
+export const code6 = `spky team list`;
 
 export const code5 = `EMAIL                          ROLE       JOINED
 ------------------------------------------------------------
@@ -21,20 +21,20 @@ khadim@example.com             admin      2026-03-01
 alice@example.com              member     2026-03-15
 bob@example.com                member     2026-04-02`;
 
-export const code4 = `spky cloud team remove alice@example.com`;
+export const code4 = `spky team remove alice@example.com`;
 
 export const code3 = `# Member requests a reset (admins are notified by email)
-spky cloud vault request-reset
+spky env reset request
 
 # Admin approves the reset
-spky cloud vault approve-reset alice@example.com
+spky env reset approve alice@example.com
 
 # Member completes the reset with a new passphrase
-spky cloud vault complete-reset`;
+spky env reset complete`;
 
-export const code2 = `spky cloud team rename "My Team"`;
+export const code2 = `spky team rename "My Team"`;
 
-export const code1 = `spky cloud team <COMMAND>
+export const code1 = `spky team <COMMAND>
 
 Commands:
   list               List all team members
@@ -113,7 +113,7 @@ Example output:
 Removing a team member immediately revokes all access. Their copy of the vault encryption key is deleted and any API keys they created are revoked. This cannot be undone — you'll need to re-invite them to restore access.
 </Warning>
 
-If a removed member previously loaded sensitive values, consider rotating those variables with `spky cloud env set`.
+If a removed member previously loaded sensitive values, consider rotating those variables with `spky env set`.
 
 ## Roles
 

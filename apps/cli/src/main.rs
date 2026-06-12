@@ -37,79 +37,26 @@ use std::path::{Path, PathBuf};
 
 #[derive(ClapParser, Debug)]
 #[command(name = "spky")]
-#[command(about = "Generate types from SurrealDB schema files", long_about = None)]
+#[command(about = "Develop, generate types for, and deploy realtime SurrealDB apps", long_about = None)]
 #[command(version, disable_version_flag = true)]
 struct Args {
     #[arg(long = "version", short = 'v', action = clap::ArgAction::Version)]
     version: (),
 
-    /// Path to the project directory (defaults to current directory)
-    #[arg(long)]
+    /// Path to the project directory (defaults to the current directory)
+    #[arg(long, global = true)]
     path: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Commands>,
-
-    /// Path to the input .surql schema file
-    #[arg(short, long)]
-    input: Option<PathBuf>,
-
-    /// Path to the output file (extension determines format: .json, .ts, .dart)
-    /// Or use --format to override
-    #[arg(short, long)]
-    output: Option<PathBuf>,
-
-    /// Path to the sp00ky.yml configuration file
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-
-    /// Output format (json, typescript, dart)
-    /// If not specified, will be inferred from output file extension
-    #[arg(short, long)]
-    format: Option<String>,
-
-    /// Pretty print the JSON output (only for JSON format)
-    #[arg(short, long, default_value_t = true)]
-    pretty: bool,
-
-    /// Generate all formats (TypeScript and Dart) in addition to JSON Schema
-    #[arg(short, long, default_value_t = false)]
-    all: bool,
-
-    /// Disable the generated file comment header (enabled by default)
-    #[arg(long = "no-header", default_value_t = false)]
-    no_header: bool,
-
-    /// Path to another .surql file to append to the input
-    #[arg(long)]
-    append: Option<PathBuf>,
-
-    /// Directory containing Surrealism modules to compile and bundle
-    #[arg(long, default_value = "../../packages/surrealism-modules")]
-    modules_dir: PathBuf,
-
-    /// Generation mode: "singlenode" (HTTP to single SSP), "cluster" (HTTP to scheduler), or "surrealism" (embedded WASM)
-    #[arg(long, default_value = "singlenode")]
-    mode: String,
-
-    /// SSP/Scheduler Endpoint URL (used in "singlenode" and "cluster" modes)
-    #[arg(long)]
-    endpoint: Option<String>,
-
-    /// SSP/Scheduler Auth Secret (used in "singlenode" and "cluster" modes)
-    #[arg(long)]
-    secret: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Print version information
     Version,
-    /// Create a new Sp00ky project
-    Create,
-    /// Alias for 'create' (backward compat)
-    #[command(hide = true)]
-    Setup,
+    /// Scaffold a new Sp00ky project in the current directory
+    Init,
     /// Database migration management
     Migrate {
         #[command(subcommand)]
@@ -167,8 +114,8 @@ enum Commands {
     /// Render a cookbook recipe (live-list, optimistic-mutation, crdt-text-field).
     /// Pass `list` to print the recipe index. Recipes are parameterized by your
     /// table (and field, for CRDT recipes).
-    Scaffold {
-        /// Recipe name. Use `spky scaffold list` to see all available recipes.
+    Recipe {
+        /// Recipe name. Use `spky recipe list` to see all available recipes.
         recipe: String,
         /// Target table name. Substituted into the template (e.g., `thread`).
         #[arg(long)]
@@ -185,18 +132,11 @@ enum Commands {
         #[command(subcommand)]
         action: AgentsCommands,
     },
-    /// Generate client types from sp00ky.yml
+    /// Generate client types from sp00ky.yml, or a single .surql file via --input/--output
+    #[command(visible_alias = "gen")]
     Generate {
-        /// Path to sp00ky.yml config file
-        #[arg(short, long)]
-        config: Option<PathBuf>,
-    },
-    /// Alias for 'generate'
-    #[command(hide = true)]
-    Gen {
-        /// Path to sp00ky.yml config file
-        #[arg(short, long)]
-        config: Option<PathBuf>,
+        #[command(flatten)]
+        args: GenerateArgs,
     },
     /// Validate sp00ky.yml configuration
     Lint {
@@ -206,44 +146,8 @@ enum Commands {
     },
     /// Start an MCP server for AI assistant integration
     Mcp,
-    /// Cloud deployment and management
-    Cloud {
-        #[command(subcommand)]
-        action: CloudCommands,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum AgentsCommands {
-    /// Generate AGENTS.md in the project root, parameterized by the parsed schema.
-    Init {
-        /// Overwrite an existing AGENTS.md without prompting.
-        #[arg(long)]
-        force: bool,
-        /// Write to this path instead of `<project>/AGENTS.md`.
-        #[arg(long)]
-        out: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-enum CloudCommands {
-    /// Authenticate with Sp00ky Cloud (opens browser)
-    Login,
-    /// Clear stored credentials
-    Logout,
-    /// Create a new cloud project
-    Create {
-        /// Project slug (lowercase, alphanumeric + hyphens)
-        #[arg(long)]
-        slug: Option<String>,
-        /// Plan: starter, pro, business
-        #[arg(long, default_value = "starter")]
-        plan: String,
-    },
-    /// List cloud projects
-    List,
-    /// Deploy current project to the cloud
+    // ── Deploy & operate (act on the current project) ──────────────────────
+    /// Deploy the current project to Sp00ky Cloud
     Deploy {
         /// Also upgrade SSP and scheduler to latest version
         #[arg(long)]
@@ -256,14 +160,7 @@ enum CloudCommands {
     },
     /// Show deployment status
     Status,
-    /// Print SurrealDB root credentials for the current project
-    Credentials {
-        /// Print only the password (no URL / username label) — handy for piping
-        /// into other tools (e.g. `export SURREAL_PASS=$(spky cloud credentials --raw)`).
-        #[arg(long)]
-        raw: bool,
-    },
-    /// Tail or browse logs from cloud deployment
+    /// Tail or browse logs from the cloud deployment
     Logs {
         /// Filter by service(s): surrealdb, scheduler, ssp, backend, frontend.
         /// Supports blueprints: "spooky" = ssp+scheduler.
@@ -308,12 +205,6 @@ enum CloudCommands {
         #[arg(long, hide = true)]
         service: Option<String>,
     },
-    /// Scale SSP instances
-    Scale {
-        /// Number of SSP instances
-        #[arg(long)]
-        ssp: u32,
-    },
     /// Restart the scheduler and SSP containers for the current deployment.
     /// Backends and frontends are left untouched. Pass --surreal to also
     /// bounce the SurrealDB container.
@@ -331,48 +222,251 @@ enum CloudCommands {
         #[arg(long, visible_alias = "db")]
         surreal: bool,
     },
-    /// Destroy cloud project and all VMs
-    Destroy,
+    /// Scale a deployment component (e.g. `spky scale ssp 3`)
+    Scale {
+        #[command(subcommand)]
+        action: ScaleCommands,
+    },
+    /// Authenticate with Sp00ky Cloud (opens browser)
+    Login,
+    /// Clear stored Sp00ky Cloud credentials
+    Logout,
+
+    // ── Resources ───────────────────────────────────────────────────────────
+    /// Manage encrypted environment variables and the vault that protects them
+    Env {
+        #[command(subcommand)]
+        action: EnvCommands,
+    },
+    /// Connect custom domains to your project
+    Domain {
+        #[command(subcommand)]
+        action: CloudDomainCommands,
+    },
     /// Manage database backups
     Backup {
         #[command(subcommand)]
         action: CloudBackupCommands,
-    },
-    /// Billing management
-    Billing {
-        #[command(subcommand)]
-        action: Option<CloudBillingCommands>,
-    },
-    /// Manage API keys for CI/CD authentication
-    Keys {
-        #[command(subcommand)]
-        action: CloudKeyCommands,
     },
     /// Link a GitHub repository for automated deployments
     Link {
         #[command(subcommand)]
         action: CloudLinkCommands,
     },
-    /// Manage encrypted environment variables
-    Env {
+
+    // ── Account ─────────────────────────────────────────────────────────────
+    /// Manage cloud projects (create, list, credentials, destroy)
+    Project {
         #[command(subcommand)]
-        action: CloudEnvCommands,
+        action: ProjectCommands,
     },
     /// Manage team members and invitations
     Team {
         #[command(subcommand)]
         action: CloudTeamCommands,
     },
-    /// Manage vault passphrase resets
-    Vault {
+    /// Billing management (run without a subcommand to open the billing portal)
+    Billing {
         #[command(subcommand)]
-        action: CloudVaultCommands,
+        action: Option<CloudBillingCommands>,
+    },
+    /// Manage API tokens for CI/CD authentication
+    Token {
+        #[command(subcommand)]
+        action: CloudKeyCommands,
+    },
+
+    // ── Removed commands (kept only to print a migration hint) ───────────────
+    #[command(hide = true, name = "cloud")]
+    Cloud {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
+    #[command(hide = true, name = "create")]
+    CreateDeprecated,
+    #[command(hide = true, name = "setup")]
+    SetupDeprecated,
+    #[command(hide = true, name = "scaffold")]
+    ScaffoldDeprecated {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentsCommands {
+    /// Generate AGENTS.md in the project root, parameterized by the parsed schema.
+    Init {
+        /// Overwrite an existing AGENTS.md without prompting.
+        #[arg(long)]
+        force: bool,
+        /// Write to this path instead of `<project>/AGENTS.md`.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+}
+
+#[derive(ClapArgs, Debug)]
+struct GenerateArgs {
+    /// Path to the input .surql schema file (single-file mode)
+    #[arg(short, long)]
+    input: Option<PathBuf>,
+    /// Path to the output file; the extension picks the format (.json, .ts, .dart)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+    /// Path to the sp00ky.yml config file (config-driven mode; the default)
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+    /// Output format (json, typescript, dart, surql); inferred from --output if omitted
+    #[arg(short, long)]
+    format: Option<String>,
+    /// Also generate TypeScript and Dart alongside JSON Schema (single-file mode)
+    #[arg(short, long, default_value_t = false)]
+    all: bool,
+    /// Disable the generated file comment header (enabled by default)
+    #[arg(long = "no-header", default_value_t = false)]
+    no_header: bool,
+    /// Append another .surql file to the input (single-file mode)
+    #[arg(long)]
+    append: Option<PathBuf>,
+    /// Directory containing Surrealism modules to compile and bundle
+    #[arg(long, default_value = "../../packages/surrealism-modules")]
+    modules_dir: PathBuf,
+    /// Generation mode: "singlenode", "cluster", or "surrealism"
+    #[arg(long, default_value = "singlenode")]
+    mode: String,
+    /// SSP/Scheduler endpoint URL (singlenode/cluster modes)
+    #[arg(long)]
+    endpoint: Option<String>,
+    /// SSP/Scheduler auth secret (singlenode/cluster modes)
+    #[arg(long)]
+    secret: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+enum ScaleCommands {
+    /// Scale the number of SSP instances (e.g. `spky scale ssp 3`)
+    Ssp {
+        /// Desired number of SSP instances
+        count: u32,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ProjectCommands {
+    /// Create a new cloud project
+    Create {
+        /// Project slug (lowercase, alphanumeric + hyphens)
+        #[arg(long)]
+        slug: Option<String>,
+        /// Plan: starter, pro, business
+        #[arg(long, default_value = "starter")]
+        plan: String,
+    },
+    /// List cloud projects
+    #[command(visible_alias = "ls")]
+    List,
+    /// Print SurrealDB root credentials for the current project
+    Credentials {
+        /// Print only the password (no URL / username label) — handy for piping
+        /// into other tools (e.g. `export SURREAL_PASS=$(spky project credentials --raw)`).
+        #[arg(long)]
+        raw: bool,
+    },
+    /// Destroy the cloud project and all its VMs
+    Destroy,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EnvCommands {
+    /// Set an environment variable (prompts for the value)
+    Set {
+        /// Variable name (e.g. DATABASE_URL)
+        name: Option<String>,
+    },
+    /// List all environment variable names
+    #[command(visible_alias = "ls")]
+    List,
+    /// Delete an environment variable
+    #[command(visible_alias = "delete")]
+    Rm {
+        /// Variable name to delete
+        name: String,
+    },
+    /// Load and export environment variables to stdout
+    Pull {
+        /// Load production values instead of development
+        #[arg(long)]
+        prod: bool,
+    },
+    /// Import environment variables from a .env file
+    Import {
+        /// Path to the .env file (defaults to .env in the current directory)
+        #[arg(default_value = ".env")]
+        file: String,
+    },
+    /// Initialize or unlock the encryption vault (set a vault passphrase)
+    Unlock,
+    /// Change your vault passphrase
+    Passphrase,
+    /// Enable, disable, or check CI/CD vault access for push deploys.
+    ///
+    /// When enabled, `git push` deploys can read production secrets from the
+    /// vault (referenced in sp00ky.yml via `env: { cloud: { vault: [...] } }`).
+    /// Requires your vault passphrase. Off by default.
+    ShareCi {
+        /// Revoke CI/CD vault access
+        #[arg(long)]
+        disable: bool,
+        /// Show whether CI/CD vault access is enabled
+        #[arg(long)]
+        status: bool,
+    },
+    /// Manage vault passphrase resets (for a forgotten passphrase)
+    Reset {
+        #[command(subcommand)]
+        action: EnvResetCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EnvResetCommands {
+    /// Request a vault passphrase reset (if you forgot your passphrase)
+    Request,
+    /// Approve a pending vault reset request (admin only)
+    Approve {
+        /// Email of the member whose reset to approve
+        email: String,
+    },
+    /// Complete your vault passphrase reset (set a new passphrase after admin approval)
+    Complete,
+    /// List pending vault reset requests (admin only)
+    List,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CloudDomainCommands {
+    /// Connect a custom domain (e.g. app.example.com) to an app
+    Add {
+        /// The custom domain to connect
+        domain: String,
+        /// Which app to serve (frontend or exposed backend name); defaults to the primary frontend
+        #[arg(long)]
+        app: Option<String>,
+    },
+    /// List connected custom domains and their status
+    List,
+    /// Disconnect a custom domain
+    Remove {
+        /// The custom domain to disconnect
+        domain: String,
     },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum CloudLinkCommands {
-    /// Set up automated deployments from GitHub
+    /// Connect a GitHub repo for automated deployments
+    #[command(name = "connect")]
     Setup,
     /// Show link configuration and recent runs
     Status,
@@ -388,7 +482,8 @@ pub enum CloudLinkCommands {
         #[arg(long)]
         config_path: Option<String>,
     },
-    /// Remove GitHub link
+    /// Disconnect the GitHub repo
+    #[command(name = "disconnect")]
     Unlink,
     /// Manually trigger a deployment from the linked repo
     Trigger,
@@ -441,6 +536,7 @@ enum CloudBillingCommands {
     /// Show current usage
     Usage,
     /// Change plan or billing interval
+    #[command(name = "plan")]
     ChangePlan,
 }
 
@@ -454,6 +550,7 @@ pub enum CloudTeamCommands {
         email: String,
     },
     /// List pending invitations
+    #[command(name = "invites")]
     Invitations,
     /// Revoke a pending invitation
     Revoke {
@@ -497,38 +594,6 @@ enum CloudKeyCommands {
     Revoke {
         /// Key ID to revoke
         id: String,
-    },
-}
-
-#[derive(Subcommand, Debug)]
-pub enum CloudEnvCommands {
-    /// Initialize the encryption vault (set a vault passphrase)
-    Init,
-    /// Set an environment variable
-    Set {
-        /// Variable name (e.g. DATABASE_URL)
-        name: Option<String>,
-    },
-    /// List all environment variable names
-    List,
-    /// Load and export environment variables
-    Load {
-        /// Load production values instead of development
-        #[arg(long)]
-        prod: bool,
-    },
-    /// Delete an environment variable
-    Delete {
-        /// Variable name to delete
-        name: String,
-    },
-    /// Change your vault passphrase
-    ChangePassphrase,
-    /// Import environment variables from a .env file
-    Import {
-        /// Path to the .env file (defaults to .env in current directory)
-        #[arg(default_value = ".env")]
-        file: String,
     },
 }
 
@@ -1759,6 +1824,130 @@ fn handle_generate(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Drive `spky generate`. With no explicit `--input`/`--output` this runs in
+/// config-driven mode (every `clientTypes` entry in sp00ky.yml); with them it
+/// generates a single file (the former implicit root-codegen path).
+fn run_generate(gen: GenerateArgs) -> Result<()> {
+    if gen.input.is_none() && gen.output.is_none() {
+        let resolved_config = gen
+            .config
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+        return handle_generate(&resolved_config);
+    }
+
+    let cli_mode = match gen.mode.as_str() {
+        "cluster" => DeployMode::Cluster,
+        "surrealism" => DeployMode::Surrealism,
+        _ => DeployMode::Singlenode,
+    };
+    if cli_mode == DeployMode::Surrealism {
+        eprintln!("Warning: Surrealism mode is not supported yet.");
+        std::process::exit(1);
+    }
+
+    let input_path = gen.input.as_ref().context(
+        "--input is required for single-file generation (omit it to generate every sp00ky.yml `clientTypes` entry)",
+    )?;
+    let output_path = gen
+        .output
+        .as_ref()
+        .context("--output is required for single-file generation")?;
+
+    let output_format = if let Some(format_str) = &gen.format {
+        match format_str.to_lowercase().as_str() {
+            "json" => OutputFormat::JsonSchema,
+            "typescript" | "ts" => OutputFormat::Typescript,
+            "dart" => OutputFormat::Dart,
+            "surql" => OutputFormat::Surql,
+            _ => anyhow::bail!(
+                "Unknown format: {}. Supported formats: json, typescript, dart, surql",
+                format_str
+            ),
+        }
+    } else {
+        OutputFormat::from_extension(output_path.to_str().unwrap_or(""))
+            .unwrap_or(OutputFormat::JsonSchema)
+    };
+
+    let mut backend_processor = BackendProcessor::new();
+    if let Some(config_path) = &gen.config {
+        println!("Loading sp00ky config from {:?}", config_path);
+        backend_processor.process(config_path)?;
+    }
+
+    let append_paths: Vec<PathBuf> = gen.append.iter().cloned().collect();
+
+    run_codegen(
+        input_path,
+        &append_paths,
+        output_path,
+        output_format,
+        gen.config.as_deref(),
+        &backend_processor,
+        gen.no_header,
+        &cli_mode,
+        gen.endpoint.as_deref(),
+        gen.secret.as_deref(),
+        &gen.modules_dir,
+        gen.all,
+    )
+}
+
+/// Print a "command moved" hint for a removed command and exit non-zero.
+fn moved(old: &str, new: &str) -> ! {
+    eprintln!("`spky {old}` has moved.");
+    eprintln!("  use: spky {new}");
+    eprintln!();
+    eprintln!("Run `spky --help` for the new command layout.");
+    std::process::exit(2);
+}
+
+/// Map an old `spky cloud <...>` invocation to its new top-level form and exit.
+fn moved_cloud_hint(rest: &[String]) -> ! {
+    let joined = rest.join(" ");
+    let sub = rest.first().map(String::as_str).unwrap_or("");
+    let tail = rest.get(1..).map(|s| s.join(" ")).unwrap_or_default();
+    let trim = |s: String| s.trim().to_string();
+    let new = match sub {
+        "login" | "logout" | "deploy" | "status" | "logs" | "restart" | "domain" | "backup"
+        | "team" => joined.clone(),
+        "scale" => "scale ssp <N>".to_string(),
+        "create" => "project create".to_string(),
+        "list" => "project list".to_string(),
+        "credentials" => "project credentials".to_string(),
+        "destroy" => "project destroy".to_string(),
+        "keys" => trim(format!("token {tail}")),
+        "billing" => trim(format!("billing {}", tail.replace("change-plan", "plan"))),
+        "link" => trim(format!(
+            "link {}",
+            tail.replace("setup", "connect").replace("unlink", "disconnect")
+        )),
+        "env" => trim(format!(
+            "env {}",
+            tail.replace("init", "unlock")
+                .replace("load", "pull")
+                .replace("delete", "rm")
+                .replace("change-passphrase", "passphrase")
+                .replace("ci-access", "share-ci")
+        )),
+        "vault" => trim(format!(
+            "env reset {}",
+            tail.replace("request-reset", "request")
+                .replace("approve-reset", "approve")
+                .replace("complete-reset", "complete")
+                .replace("list-resets", "list")
+        )),
+        "" => "deploy (also: env, domain, project, team, billing, link, token)".to_string(),
+        _ => joined.clone(),
+    };
+    eprintln!("`spky cloud {joined}` has moved. The `cloud` namespace was removed.");
+    eprintln!("  use: spky {new}");
+    eprintln!();
+    eprintln!("Run `spky --help` for the full command layout.");
+    std::process::exit(2);
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -1770,125 +1959,121 @@ fn main() -> Result<()> {
     }
 
     match args.command {
-        Some(Commands::Version) => {
-            println!("spky {}", env!("CARGO_PKG_VERSION"));
-            return Ok(());
-        }
-        Some(Commands::Create) | Some(Commands::Setup) => return create_project(),
-        Some(Commands::Migrate { action }) => return handle_migrate(action),
-        Some(Commands::Bucket { action }) => return handle_bucket(action),
-        Some(Commands::Api { action }) => return handle_api(action),
-        Some(Commands::Lint { config }) => {
-            let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-            return handle_lint(&resolved_config);
-        }
-        Some(Commands::Mcp) => return mcp::run(),
-        Some(Commands::Cloud { action }) => return cloud::run(action),
+        // ── Develop ──────────────────────────────────────────────────────
+        Some(Commands::Init) => create_project(),
         Some(Commands::Dev {
             skip_migrations,
             apply_migrations,
             fix_checksums,
             clean,
             clean_db,
-        }) => {
-            return dev::run(skip_migrations, apply_migrations, fix_checksums, clean, clean_db);
-        }
-        Some(Commands::Verify { fix }) => {
-            return verify::run(fix);
-        }
-        Some(Commands::Doctor { json }) => {
-            let project_dir = args.path.as_deref().unwrap_or_else(|| Path::new("."));
-            return doctor::run(json, project_dir, false);
-        }
-        Some(Commands::Scaffold {
+        }) => dev::run(skip_migrations, apply_migrations, fix_checksums, clean, clean_db),
+        Some(Commands::Generate { args: gen }) => run_generate(gen),
+        Some(Commands::Migrate { action }) => handle_migrate(action),
+        Some(Commands::Bucket { action }) => handle_bucket(action),
+        Some(Commands::Api { action }) => handle_api(action),
+        Some(Commands::Recipe {
             recipe,
             table,
             field,
             out,
-        }) => {
-            return scaffold::run(&recipe, table.as_deref(), field.as_deref(), out.as_deref());
+        }) => scaffold::run(&recipe, table.as_deref(), field.as_deref(), out.as_deref()),
+        Some(Commands::Lint { config }) => {
+            let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            handle_lint(&resolved_config)
         }
+        Some(Commands::Doctor { json }) => {
+            let project_dir = args.path.as_deref().unwrap_or_else(|| Path::new("."));
+            doctor::run(json, project_dir, false)
+        }
+        Some(Commands::Verify { fix }) => verify::run(fix),
         Some(Commands::Agents { action }) => {
             let project_dir = args.path.as_deref().unwrap_or_else(|| Path::new("."));
-            return match action {
+            match action {
                 AgentsCommands::Init { force, out } => {
                     agents::init(force, out.as_deref(), project_dir)
                 }
-            };
-        }
-        Some(Commands::Generate { config }) | Some(Commands::Gen { config }) => {
-            let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-            return handle_generate(&resolved_config);
-        }
-        None => {} // fall through to legacy codegen mode
-    }
-
-    // Parse mode string from CLI args into DeployMode
-    let cli_mode = match args.mode.as_str() {
-        "cluster" => DeployMode::Cluster,
-        "surrealism" => DeployMode::Surrealism,
-        _ => DeployMode::Singlenode,
-    };
-
-    // Surrealism mode is not supported yet
-    if cli_mode == DeployMode::Surrealism {
-        eprintln!("Warning: Surrealism mode is not supported yet.");
-        std::process::exit(1);
-    }
-
-    // Legacy mode validation
-    let input_path = args
-        .input
-        .as_ref()
-        .context("Main argument --input is required (or use 'setup' command)")?;
-    let output_path = args
-        .output
-        .as_ref()
-        .context("Main argument --output is required (or use 'setup' command)")?;
-
-    // Determine output format
-    let output_format = if let Some(format_str) = &args.format {
-        match format_str.to_lowercase().as_str() {
-            "json" => OutputFormat::JsonSchema,
-            "typescript" | "ts" => OutputFormat::Typescript,
-            "dart" => OutputFormat::Dart,
-            "surql" => OutputFormat::Surql,
-            _ => {
-                anyhow::bail!(
-                    "Unknown format: {}. Supported formats: json, typescript, dart, surql",
-                    format_str
-                );
             }
         }
-    } else {
-        // Infer from file extension
-        OutputFormat::from_extension(output_path.to_str().unwrap_or(""))
-            .unwrap_or(OutputFormat::JsonSchema)
-    };
+        Some(Commands::Mcp) => mcp::run(),
 
-    // Process sp00ky config/backends
-    let mut backend_processor = BackendProcessor::new();
-    if let Some(config_path) = &args.config {
-        println!("Loading sp00ky config from {:?}", config_path);
-        backend_processor.process(config_path)?;
+        // ── Deploy & operate (current project) ─────────────────────────────
+        Some(Commands::Deploy { upgrade, clean }) => cloud::deploy(upgrade, clean),
+        Some(Commands::Status) => cloud::status(),
+        Some(Commands::Logs {
+            filter,
+            split,
+            since,
+            until,
+            grep,
+            interactive,
+            follow,
+            service,
+        }) => cloud::logs(cloud::LogsArgs {
+            filter,
+            split,
+            since,
+            until,
+            grep,
+            interactive,
+            follow,
+            service,
+        }),
+        Some(Commands::Restart {
+            clean,
+            upgrade,
+            surreal,
+        }) => cloud::restart(clean, upgrade, surreal),
+        Some(Commands::Scale { action }) => match action {
+            ScaleCommands::Ssp { count } => cloud::scale(count),
+        },
+        Some(Commands::Login) => cloud::login(),
+        Some(Commands::Logout) => cloud::logout(),
+
+        // ── Resources ──────────────────────────────────────────────────────
+        Some(Commands::Env { action }) => cloud::env_group(action),
+        Some(Commands::Domain { action }) => cloud::domain(action),
+        Some(Commands::Backup { action }) => cloud::backup(action),
+        Some(Commands::Link { action }) => cloud::link(action),
+
+        // ── Account ─────────────────────────────────────────────────────────
+        Some(Commands::Project { action }) => match action {
+            ProjectCommands::Create { slug, plan } => cloud::create(slug, plan),
+            ProjectCommands::List => cloud::list(),
+            ProjectCommands::Credentials { raw } => cloud::credentials(raw),
+            ProjectCommands::Destroy => cloud::destroy(),
+        },
+        Some(Commands::Team { action }) => cloud::team(action),
+        Some(Commands::Billing { action }) => cloud::billing(action),
+        Some(Commands::Token { action }) => cloud::keys(action),
+
+        Some(Commands::Version) => {
+            println!("spky {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+
+        // ── Removed commands: print a migration hint ────────────────────────
+        Some(Commands::Cloud { rest }) => moved_cloud_hint(&rest),
+        Some(Commands::CreateDeprecated) => moved("create", "init"),
+        Some(Commands::SetupDeprecated) => moved("setup", "init"),
+        Some(Commands::ScaffoldDeprecated { rest }) => {
+            let tail = rest.join(" ");
+            let new = if tail.is_empty() {
+                "recipe <name>".to_string()
+            } else {
+                format!("recipe {tail}")
+            };
+            moved("scaffold", &new)
+        }
+
+        None => {
+            // No subcommand: print help instead of the old implicit codegen.
+            use clap::CommandFactory;
+            Args::command().print_help().ok();
+            println!();
+            Ok(())
+        }
     }
-
-    let append_paths: Vec<PathBuf> = args.append.iter().cloned().collect();
-
-    run_codegen(
-        input_path,
-        &append_paths,
-        output_path,
-        output_format,
-        args.config.as_deref(),
-        &backend_processor,
-        args.no_header,
-        &cli_mode,
-        args.endpoint.as_deref(),
-        args.secret.as_deref(),
-        &args.modules_dir,
-        args.all,
-    )
 }
 
 #[cfg(test)]

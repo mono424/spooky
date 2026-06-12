@@ -8,39 +8,39 @@ import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
 export const code8 = `# 1. Log in to Sp00ky Cloud
-spky cloud login
+spky login
 
 # 2. Create a cloud project
-spky cloud create --slug my-app
+spky project create --slug my-app
 
 # 3. Deploy
-spky cloud deploy`;
+spky deploy`;
 
-export const code7 = `spky cloud login`;
+export const code7 = `spky login`;
 
-export const code6 = `spky cloud logout`;
+export const code6 = `spky logout`;
 
 export const code5 = `# Interactive — prompts for slug if not provided
-spky cloud create
+spky project create
 
 # With options
-spky cloud create --slug my-app --plan starter`;
+spky project create --slug my-app --plan starter`;
 
 export const code4 = `# sp00ky.yml
 slug: my-app
 # ... rest of config`;
 
-export const code3 = `spky cloud list`;
+export const code3 = `spky project list`;
 
-export const code2 = `spky cloud destroy`;
+export const code2 = `spky project destroy`;
 
 export const code1 = `# Open the billing portal
-spky cloud billing
+spky billing
 
 # View current month's usage
-spky cloud billing usage`;
+spky billing usage`;
 
-Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you can deploy your project with a single command. No Docker Compose files, no server setup — just `spky cloud deploy`.
+Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you can deploy your project with a single command. No Docker Compose files, no server setup — just `spky deploy`.
 
 ## Prerequisites
 
@@ -74,7 +74,7 @@ To log out:
 />
 
 <Note title="CI/CD">
-For automated pipelines, create an API key with <code>spky cloud keys create</code> and set the <code>SPOOKY_API_KEY</code> environment variable. See [CI/CD](/docs/cloud/ci-cd) for details.
+For automated pipelines, create an API key with <code>spky token create</code> and set the <code>SPOOKY_API_KEY</code> environment variable. See [CI/CD](/docs/cloud/ci-cd) for details.
 </Note>
 
 ## Creating a Project

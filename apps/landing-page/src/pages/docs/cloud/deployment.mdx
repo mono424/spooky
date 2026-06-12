@@ -6,25 +6,34 @@ title: Cloud Deployment
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Note from '../../../components/ui/Note.astro';
 
-export const code1 = `spky cloud <COMMAND>
+export const code1 = `spky <COMMAND>
 
-Commands:
-  login              Authenticate with Sp00ky Cloud (opens browser)
-  logout             Clear stored credentials
-  create             Create a new cloud project
-  list               List cloud projects
-  deploy [--upgrade] Deploy current project to the cloud
+Develop:
+  init               Scaffold a new project
+  dev                Start a local dev environment
+  generate           Generate client types
+  migrate            Database migrations
+  recipe             Render a cookbook recipe
+
+Deploy & operate:
+  deploy [--upgrade] Deploy the current project
   status             Show deployment status
-  logs [--filter]    Tail logs from cloud deployment
-  scale --ssp N      Scale SSP instances
+  logs [--filter]    Tail deployment logs
   restart [--clean]  Restart scheduler/SSP containers (data preserved)
-  destroy            Destroy cloud project and all VMs
-  backup             Manage database backups
+  scale ssp <N>      Scale SSP instances
+  login / logout     Authenticate with Sp00ky Cloud
+
+Resources:
+  env                Environment variables + the encryption vault
+  domain             Custom domains
+  backup             Database backups
+  link               GitHub auto-deploy
+
+Account:
+  project            Create, list, credentials, destroy
+  team               Members and invitations
   billing            Billing management
-  keys               Manage API keys for CI/CD
-  link               Link a GitHub repository for auto-deploy
-  env                Manage encrypted environment variables
-  team               Manage team members and invitations`;
+  token              API tokens for CI/CD`;
 
 This page has been reorganized. See:
 

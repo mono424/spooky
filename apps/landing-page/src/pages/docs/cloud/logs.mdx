@@ -7,23 +7,23 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Note from '../../../components/ui/Note.astro';
 
 export const code3 = `# All services
-spky cloud logs
+spky logs
 
 # Filter by service
-spky cloud logs --filter surrealdb
-spky cloud logs --filter ssp
-spky cloud logs --filter backend
-spky cloud logs --filter frontend
+spky logs --filter surrealdb
+spky logs --filter ssp
+spky logs --filter backend
+spky logs --filter frontend
 
 # Multiple services (comma-separated)
-spky cloud logs --filter ssp,surrealdb
+spky logs --filter ssp,surrealdb
 
 # Blueprint shorthand: "spooky" = ssp + scheduler
-spky cloud logs --filter spooky
+spky logs --filter spooky
 
 # Split view
-spky cloud logs --filter ssp,surrealdb --split h   # horizontal (stacked)
-spky cloud logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`;
+spky logs --filter ssp,surrealdb --split h   # horizontal (stacked)
+spky logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`;
 
 export const code2 = `![Sp00ky Status](https://api.sp00ky.cloud/v1/badge/your-project-slug)`;
 
@@ -51,7 +51,7 @@ Tail logs from your cloud deployment in real time:
 
 ## Setting Log Level
 
-`logLevel` in `sp00ky.yml` sets `RUST_LOG` on the Scheduler and SSP containers in both `spky dev` and `spky cloud deploy`. Default is `info`.
+`logLevel` in `sp00ky.yml` sets `RUST_LOG` on the Scheduler and SSP containers in both `spky dev` and `spky deploy`. Default is `info`.
 
 <CodeBlock code={codeLogLevel} lang="yaml" />
 
@@ -70,7 +70,7 @@ Use it to diagnose:
 - Bootstrap performance regressions — per-table `fetch_ms` / `insert_ms` are logged at `info`; per-record sequence is at `trace`.
 
 <Note>
-  Trace mode is chatty — a multi-million-row bootstrap produces a line per record. Switch back to <code>info</code> with another <code>spky cloud deploy</code> once you have what you need.
+  Trace mode is chatty — a multi-million-row bootstrap produces a line per record. Switch back to <code>info</code> with another <code>spky deploy</code> once you have what you need.
 </Note>
 
 ## Status Badge

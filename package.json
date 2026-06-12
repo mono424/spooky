@@ -8,6 +8,7 @@
     "dev:example": "pnpm --filter @example/project dev",
     "dev:example:clean": "pnpm --filter @example/project dev:clean",
     "dev:example:reset": "pnpm --filter @example/project dev:reset",
+    "dev:web": "pnpm --filter @example/app-solid dev",
     "dev:landingpage": "pnpm --filter landing-page dev:landingpage",
     "dev:build": "cargo build -p sp00ky-cli -p ssp-server -p scheduler",
     "dev:images": "pnpm --filter ssp build && pnpm --filter scheduler build",

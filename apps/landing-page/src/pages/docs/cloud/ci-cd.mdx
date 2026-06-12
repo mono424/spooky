@@ -7,34 +7,34 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Note from '../../../components/ui/Note.astro';
 
 export const code3 = `# Create a new key
-spky cloud keys create
+spky token create
 
 # List keys
-spky cloud keys list
+spky token list
 
 # Revoke a key
-spky cloud keys revoke <key-id>`;
+spky token revoke <key-id>`;
 
 export const code2 = `export SPOOKY_API_KEY=spk_live_...
-spky cloud deploy`;
+spky deploy`;
 
 export const code1 = `# Set up auto-deploy
-spky cloud link setup
+spky link connect
 
 # Check link status
-spky cloud link status
+spky link status
 
 # Configure settings
-spky cloud link settings --branch main --auto-deploy true
+spky link settings --branch main --auto-deploy true
 
 # Manually trigger a deploy
-spky cloud link trigger
+spky link trigger
 
 # View recent build runs
-spky cloud link runs
+spky link runs
 
 # Remove the link
-spky cloud link unlink`;
+spky link disconnect`;
 
 ## API Keys
 

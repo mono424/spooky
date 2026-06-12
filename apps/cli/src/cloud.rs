@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, HostingMode};
 use crate::surreal_client::MigrationDB;
-use crate::{CloudBackupCommands, CloudBillingCommands, CloudCommands, CloudEnvCommands, CloudKeyCommands, CloudLinkCommands, CloudTeamCommands, CloudVaultCommands};
+use crate::{CloudBackupCommands, CloudBillingCommands, CloudDomainCommands, CloudKeyCommands, CloudLinkCommands, CloudTeamCommands, CloudVaultCommands, EnvCommands, EnvResetCommands};
 
 /// Load vault environment variables for dev mode via the Cloud API.
 /// Returns key-value pairs. Returns empty vec (with warning) if not logged in or vault not initialized.
@@ -875,48 +875,26 @@ fn poll_scale_completion(client: &mut CloudClient, pid: &str, target_ssp: u32) -
 // Command dispatch
 // ---------------------------------------------------------------------------
 
-pub fn run(action: CloudCommands) -> Result<()> {
+/// Unified `env` group dispatch: the environment variables AND the vault that
+/// encrypts them live under one command surface. Reuses the existing leaf
+/// handlers unchanged; the `reset` subgroup maps onto the existing `vault`
+/// passphrase-reset flows.
+pub fn env_group(action: EnvCommands) -> Result<()> {
     match action {
-        CloudCommands::Login => login(),
-        CloudCommands::Logout => logout(),
-        CloudCommands::Create { slug, plan } => create(slug, plan),
-        CloudCommands::List => list(),
-        CloudCommands::Deploy { upgrade, clean } => deploy(upgrade, clean),
-        CloudCommands::Status => status(),
-        CloudCommands::Credentials { raw } => credentials(raw),
-        CloudCommands::Logs {
-            filter,
-            split,
-            since,
-            until,
-            grep,
-            interactive,
-            follow,
-            service,
-        } => logs(LogsArgs {
-            filter,
-            split,
-            since,
-            until,
-            grep,
-            interactive,
-            follow,
-            service,
+        EnvCommands::Set { name } => env_set(name),
+        EnvCommands::List => env_list(),
+        EnvCommands::Rm { name } => env_delete(name),
+        EnvCommands::Pull { prod } => env_load(prod),
+        EnvCommands::Import { file } => env_import(file),
+        EnvCommands::Unlock => env_init(),
+        EnvCommands::Passphrase => env_change_passphrase(),
+        EnvCommands::ShareCi { disable, status } => env_ci_access(disable, status),
+        EnvCommands::Reset { action } => vault(match action {
+            EnvResetCommands::Request => CloudVaultCommands::RequestReset,
+            EnvResetCommands::Approve { email } => CloudVaultCommands::ApproveReset { email },
+            EnvResetCommands::Complete => CloudVaultCommands::CompleteReset,
+            EnvResetCommands::List => CloudVaultCommands::ListResets,
         }),
-        CloudCommands::Scale { ssp } => scale(ssp),
-        CloudCommands::Restart {
-            clean,
-            upgrade,
-            surreal,
-        } => restart(clean, upgrade, surreal),
-        CloudCommands::Destroy => destroy(),
-        CloudCommands::Backup { action } => backup(action),
-        CloudCommands::Billing { action } => billing(action),
-        CloudCommands::Keys { action } => keys(action),
-        CloudCommands::Link { action } => link(action),
-        CloudCommands::Env { action } => env(action),
-        CloudCommands::Team { action } => team(action),
-        CloudCommands::Vault { action } => vault(action),
     }
 }
 
@@ -924,7 +902,7 @@ pub fn run(action: CloudCommands) -> Result<()> {
 // Commands
 // ---------------------------------------------------------------------------
 
-fn login() -> Result<()> {
+pub fn login() -> Result<()> {
     let base_url = api_base_url();
     let url = format!("{}/v1/auth/login", base_url);
 
@@ -1018,13 +996,13 @@ fn login() -> Result<()> {
     }
 }
 
-fn logout() -> Result<()> {
+pub fn logout() -> Result<()> {
     clear_credentials()?;
     println!("Logged out.");
     Ok(())
 }
 
-fn list() -> Result<()> {
+pub fn list() -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
 
@@ -1053,7 +1031,7 @@ fn list() -> Result<()> {
     Ok(())
 }
 
-fn create(slug: Option<String>, plan: String) -> Result<()> {
+pub fn create(slug: Option<String>, plan: String) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
 
@@ -1435,7 +1413,7 @@ fn build_frontend_manifest(
     })
 }
 
-fn deploy(upgrade: bool, clean: bool) -> Result<()> {
+pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
     // Guided flow: ensure login → project → billing before expensive work
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
@@ -2353,7 +2331,7 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
     }
 }
 
-fn status() -> Result<()> {
+pub fn status() -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (_, pid) = resolve_project_id(&mut client)?;
@@ -2365,7 +2343,7 @@ fn status() -> Result<()> {
     Ok(())
 }
 
-fn credentials(raw: bool) -> Result<()> {
+pub fn credentials(raw: bool) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (_, pid) = resolve_project_id(&mut client)?;
@@ -2964,7 +2942,7 @@ fn parse_time_anchor(input: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     Ok(chrono::Utc::now() - chrono_dur)
 }
 
-fn logs(args: LogsArgs) -> Result<()> {
+pub fn logs(args: LogsArgs) -> Result<()> {
     let LogsArgs {
         filter,
         split,
@@ -3102,7 +3080,7 @@ pub fn urlencode(s: &str) -> String {
     out
 }
 
-fn scale(ssp: u32) -> Result<()> {
+pub fn scale(ssp: u32) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (_, pid) = resolve_project_id(&mut client)?;
@@ -3120,7 +3098,7 @@ fn scale(ssp: u32) -> Result<()> {
     Ok(())
 }
 
-fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
+pub fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (slug, pid) = resolve_project_id(&mut client)?;
@@ -3171,7 +3149,7 @@ fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
     Ok(())
 }
 
-fn destroy() -> Result<()> {
+pub fn destroy() -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (slug, pid) = resolve_project_id(&mut client)?;
@@ -3290,7 +3268,7 @@ fn is_uuid(s: &str) -> bool {
     true
 }
 
-fn backup(action: CloudBackupCommands) -> Result<()> {
+pub fn backup(action: CloudBackupCommands) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (_slug, pid) = resolve_project_id(&mut client)?;
@@ -3634,7 +3612,7 @@ fn backup(action: CloudBackupCommands) -> Result<()> {
     Ok(())
 }
 
-fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
+pub fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
 
@@ -3764,7 +3742,7 @@ fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
 // Team management
 // ---------------------------------------------------------------------------
 
-fn team(action: CloudTeamCommands) -> Result<()> {
+pub fn team(action: CloudTeamCommands) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
 
@@ -4077,7 +4055,7 @@ fn vault(action: CloudVaultCommands) -> Result<()> {
     }
 }
 
-fn keys(action: CloudKeyCommands) -> Result<()> {
+pub fn keys(action: CloudKeyCommands) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
 
@@ -4252,7 +4230,117 @@ fn print_deployment_details(data: &serde_json::Value) {
 // Link (GitHub auto-deploy)
 // ---------------------------------------------------------------------------
 
-fn link(action: CloudLinkCommands) -> Result<()> {
+// ---------------------------------------------------------------------------
+// Custom domains
+// ---------------------------------------------------------------------------
+
+pub fn domain(action: CloudDomainCommands) -> Result<()> {
+    match action {
+        CloudDomainCommands::Add { domain, app } => domain_add(domain, app),
+        CloudDomainCommands::List => domain_list(),
+        CloudDomainCommands::Remove { domain } => domain_remove(domain),
+    }
+}
+
+fn domain_add(domain: String, app: Option<String>) -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    let resp = client.post(
+        &format!("/v1/projects/{}/domains", pid),
+        &serde_json::json!({ "domain": domain, "app": app.unwrap_or_default() }),
+    )?;
+    let data: serde_json::Value = resp.into_json()?;
+
+    println!(
+        "Connecting {} → {} ({})",
+        data["domain"].as_str().unwrap_or(&domain),
+        data["target_name"].as_str().unwrap_or("app"),
+        data["target_kind"].as_str().unwrap_or("frontend"),
+    );
+    println!();
+    println!("Add these DNS records at your registrar:");
+    if let Some(records) = data["records"].as_array() {
+        for rec in records {
+            println!(
+                "  {:<6} {}  →  {}",
+                rec["type"].as_str().unwrap_or("?"),
+                rec["name"].as_str().unwrap_or("?"),
+                rec["value"].as_str().unwrap_or("?"),
+            );
+        }
+    }
+    println!();
+    println!("Status: {} (checking automatically — run `sp00ky cloud domain list` to track)",
+        data["status"].as_str().unwrap_or("pending_dns"));
+    Ok(())
+}
+
+fn domain_list() -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    let resp = client.get(&format!("/v1/projects/{}/domains", pid))?;
+    let data: Vec<serde_json::Value> = resp.into_json()?;
+    if data.is_empty() {
+        println!("No custom domains. Connect one with `sp00ky cloud domain add <domain>`.");
+        return Ok(());
+    }
+
+    println!("{:<34} {:<12} {:<8} {}", "DOMAIN", "STATUS", "→", "TARGET");
+    for d in &data {
+        let status = d["status"].as_str().unwrap_or("-");
+        let dot = match status {
+            "active" => "\x1b[32m●\x1b[0m",   // green
+            "failed" => "\x1b[31m●\x1b[0m",   // red
+            _ => "\x1b[33m◐\x1b[0m",          // yellow (pending/verifying)
+        };
+        println!(
+            "{:<34} {} {:<10} {} {}",
+            d["domain"].as_str().unwrap_or("-"),
+            dot,
+            status,
+            "→",
+            d["target_name"].as_str().unwrap_or("-"),
+        );
+        if let Some(err) = d["verification_error"].as_str() {
+            if !err.is_empty() {
+                println!("  └ {}", err);
+            }
+        }
+        // Until active, show the DNS records the user still needs to create.
+        if status != "active" {
+            if let Some(records) = d["validation_records"].as_array() {
+                if !records.is_empty() {
+                    println!("  Add these DNS records at your registrar:");
+                    for rec in records {
+                        println!(
+                            "    {:<6} {}  →  {}",
+                            rec["type"].as_str().unwrap_or("?"),
+                            rec["name"].as_str().unwrap_or("?"),
+                            rec["value"].as_str().unwrap_or("?"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn domain_remove(domain: String) -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    client.delete(&format!("/v1/projects/{}/domains/{}", pid, domain))?;
+    println!("Disconnected {}.", domain);
+    Ok(())
+}
+
+pub fn link(action: CloudLinkCommands) -> Result<()> {
     match action {
         CloudLinkCommands::Setup => link_setup(),
         CloudLinkCommands::Status => link_status(),
@@ -4873,18 +4961,6 @@ fn ensure_vault(client: &mut CloudClient) -> Result<()> {
     Ok(())
 }
 
-fn env(action: CloudEnvCommands) -> Result<()> {
-    match action {
-        CloudEnvCommands::Init => env_init(),
-        CloudEnvCommands::Set { name } => env_set(name),
-        CloudEnvCommands::List => env_list(),
-        CloudEnvCommands::Load { prod } => env_load(prod),
-        CloudEnvCommands::Delete { name } => env_delete(name),
-        CloudEnvCommands::ChangePassphrase => env_change_passphrase(),
-        CloudEnvCommands::Import { file } => env_import(file),
-    }
-}
-
 fn env_init() -> Result<()> {
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
@@ -5203,6 +5279,44 @@ fn env_delete(name: String) -> Result<()> {
 
     client.delete(&format!("/v1/projects/{}/envs/{}", pid, name.to_uppercase()))?;
     println!("Deleted {} from project '{}'.", name.to_uppercase(), slug);
+
+    Ok(())
+}
+
+// env_ci_access manages CI/CD vault access: it lets `git push` deploys read
+// production secrets from the vault. Enabling unwraps the vault key with the
+// passphrase and hands the server a transit-encrypted copy for the build
+// pipeline (the server can't otherwise decrypt the end-to-end-encrypted vault).
+fn env_ci_access(disable: bool, status: bool) -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+
+    if status {
+        let resp = client.get("/v1/vault/ci-access")?;
+        let data: serde_json::Value = resp.into_json()?;
+        if data["enabled"].as_bool() == Some(true) {
+            println!("CI/CD vault access is ENABLED — push deploys can read production secrets.");
+        } else {
+            println!("CI/CD vault access is DISABLED. Enable it with `sp00ky cloud env ci-access`.");
+        }
+        return Ok(());
+    }
+
+    if disable {
+        client.delete("/v1/vault/ci-access")?;
+        println!("CI/CD vault access disabled. Push deploys will no longer inject vault secrets.");
+        return Ok(());
+    }
+
+    // Enable: derive the key from the passphrase, then grant the server a
+    // transit-encrypted copy of the vault key for the build pipeline.
+    let derived_key = get_derived_key(&mut client)?;
+    client.post(
+        "/v1/vault/ci-access",
+        &serde_json::json!({ "derived_key": derived_key }),
+    )?;
+    println!("CI/CD vault access enabled. Push deploys will now inject production secrets from the vault.");
+    println!("Reference them in sp00ky.yml, e.g. `env: {{ cloud: {{ vault: [KEY1, KEY2] }} }}`.");
 
     Ok(())
 }

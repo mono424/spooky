@@ -61,7 +61,7 @@ export const code5 = `apps:
     type: backend
     env:
       dev: ".env.local"         # used during spky dev
-      cloud: "vault"             # used during spky cloud deploy
+      cloud: "vault"             # used during spky deploy
     # ...`;
 
 export const code4 = `apps:
@@ -212,7 +212,7 @@ This loads **all** variables from the vault. To load only specific ones, pass a 
 />
 
 <Note>
-  Vault variables must be set up first with <code>spky cloud env init</code> and <code>spky cloud env set</code>. See <a href="/docs/cloud/env-variables">Cloud Environment Variables</a> for the full setup guide.
+  Vault variables must be set up first with <code>spky env unlock</code> and <code>spky env set</code>. See <a href="/docs/cloud/env-variables">Cloud Environment Variables</a> for the full setup guide.
 </Note>
 
 ### Per-Environment
@@ -257,8 +257,8 @@ A realistic `sp00ky.yml` showing environment variables across a frontend and two
 | :--- | :--- |
 | **`spky dev`** (npm, uv) | `SPKY_*` auto-injected + user vars set in the spawned process environment |
 | **`spky dev`** (docker) | `SPKY_*` auto-injected + user vars passed as `-e KEY=VAL` flags to `docker run` |
-| **`spky cloud deploy`** | `SPKY_*` auto-injected by the orchestrator + user vars from the deployment manifest |
-| **`"vault"` in dev** | The CLI fetches decrypted variables from the Sp00ky Cloud API (requires `spky cloud login`) |
+| **`spky deploy`** | `SPKY_*` auto-injected by the orchestrator + user vars from the deployment manifest |
+| **`"vault"` in dev** | The CLI fetches decrypted variables from the Sp00ky Cloud API (requires `spky login`) |
 | **`"vault"` in deploy** | Variables are fetched server-side and included in the manifest |
 
 User-provided variables always take precedence over auto-injected `SPKY_*` variables.

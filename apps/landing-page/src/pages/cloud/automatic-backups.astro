@@ -32,7 +32,7 @@ import FeaturePage from '../../layouts/FeaturePage.astro';
     whatever deployment flow you already have.
   </p>
   <ol>
-    <li>Take a backup right now with <code>spky cloud backup create</code>.</li>
+    <li>Take a backup right now with <code>spky backup create</code>.</li>
     <li>Name it if you are about to do something you want to be able to undo: <code>--name before-migration</code>.</li>
     <li>Schedule recurring backups with a cron expression, like <code>"0 2 * * *"</code> for 2am daily.</li>
     <li>Set a retention policy so old backups clean themselves up once you have enough newer ones.</li>
@@ -52,7 +52,7 @@ import FeaturePage from '../../layouts/FeaturePage.astro';
     nobody fully reviewed, run:
   </p>
   <ul>
-    <li><code>spky cloud backup create --name before-migration</code></li>
+    <li><code>spky backup create --name before-migration</code></li>
   </ul>
   <p>
     The name shows up in the list next to the backup id, so when you come back looking for "the

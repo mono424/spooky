@@ -51,6 +51,10 @@ apps:
       port: 80
     env:
       dev: '.env.local'
+      # `vault:` pulls these from the encrypted vault. For automatic deploys
+      # (push-to-deploy), enable CI access once with `spky env share-ci`
+      # so the build pipeline can read them; otherwise they're only injected on
+      # manual `spky deploy`.
       vault:
         - 'VITE_DB_ENDPOINT'
   api:

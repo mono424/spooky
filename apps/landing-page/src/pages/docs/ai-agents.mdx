@@ -12,15 +12,15 @@ export const codeAgentsForce = `spky agents init --force`;
 
 export const codeFindBundled = `find node_modules/@spooky-sync -name AGENTS.md`;
 
-export const codeScaffoldList = `spky scaffold list`;
+export const codeScaffoldList = `spky recipe list`;
 
-export const codeScaffoldLiveList = `spky scaffold live-list --table thread`;
+export const codeScaffoldLiveList = `spky recipe live-list --table thread`;
 
-export const codeScaffoldCrdt = `spky scaffold crdt-text-field --table thread --field content`;
+export const codeScaffoldCrdt = `spky recipe crdt-text-field --table thread --field content`;
 
-export const codeScaffoldOptimistic = `spky scaffold optimistic-mutation --table thread`;
+export const codeScaffoldOptimistic = `spky recipe optimistic-mutation --table thread`;
 
-export const codeScaffoldOut = `spky scaffold live-list --table thread --out src/components/ThreadList.tsx`;
+export const codeScaffoldOut = `spky recipe live-list --table thread --out src/components/ThreadList.tsx`;
 
 export const codeMcpConfig = `{
   "mcpServers": {
@@ -71,7 +71,7 @@ You'll find guides for `core` (sync engine), `client-solid` (`useDb`, `useQuery`
 
 ## Cookbook recipes
 
-`spky scaffold` emits framework-level patterns parameterized by your schema. Run with no arguments to list available recipes:
+`spky recipe` emits framework-level patterns parameterized by your schema. Run with no arguments to list available recipes:
 
 <CodeBlock code={codeScaffoldList} lang="bash" />
 
@@ -87,7 +87,7 @@ Or write directly to a file:
 
 <CodeBlock code={codeScaffoldOut} lang="bash" />
 
-Agents typically pipe `spky scaffold` output into a file edit, then the project's `AGENTS.md` tells them to run `spky doctor` to verify the result.
+Agents typically pipe `spky recipe` output into a file edit, then the project's `AGENTS.md` tells them to run `spky doctor` to verify the result.
 
 ## Live introspection via MCP
 

@@ -8,35 +8,35 @@ import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
 export const code30 = `# 1. Initialize your encryption vault
-spky cloud env init
+spky env unlock
 
 # 2. Set a variable (interactive — prompts for value and environment)
-spky cloud env set DATABASE_URL
+spky env set DATABASE_URL
 
 # 3. Load variables and start your app
-spky cloud env load && pnpm dev`;
+spky env pull && pnpm dev`;
 
-export const code29 = `spky cloud env init`;
+export const code29 = `spky env unlock`;
 
 export const code28 = `# With a name — goes straight to the value prompt
-spky cloud env set DATABASE_URL
+spky env set DATABASE_URL
 
 # Without a name — prompts for the name first
-spky cloud env set`;
+spky env set`;
 
 export const code27 = `# Load development variables (default) and start your app
-spky cloud env load && pnpm dev
+spky env pull && pnpm dev
 
 # Load production variables
-spky cloud env load --prod && pnpm start`;
+spky env pull --prod && pnpm start`;
 
 export const code26 = `# Export into the current shell
-eval "$(spky cloud env load)"
+eval "$(spky env pull)"
 
 # Or use with env
-env $(spky cloud env load | xargs) pnpm dev`;
+env $(spky env pull | xargs) pnpm dev`;
 
-export const code25 = `spky cloud env list`;
+export const code25 = `spky env list`;
 
 export const code24 = `NAME                           DEV    PROD   UPDATED
 -----------------------------------------------------------------
@@ -44,38 +44,40 @@ DATABASE_URL                   yes    yes    2026-04-08
 STRIPE_SECRET_KEY              yes    yes    2026-04-08
 DEBUG_MODE                     yes    -      2026-04-08`;
 
-export const code23 = `spky cloud env delete DATABASE_URL`;
+export const code23 = `spky env rm DATABASE_URL`;
 
-export const code22 = `spky cloud env import .env`;
+export const code22 = `spky env import .env`;
 
-export const code21 = `spky cloud env change-passphrase`;
+export const code21 = `spky env passphrase`;
 
 export const code20 = `# Request a reset (admins are notified by email)
-spky cloud vault request-reset
+spky env reset request
 
 # After admin approves, set your new passphrase
-spky cloud vault complete-reset`;
+spky env reset complete`;
 
 export const code19 = `rm ~/.sp00ky/vault-derived-key`;
 
-export const code18 = `spky cloud env <COMMAND>
+export const code18 = `spky env <COMMAND>
 
 Commands:
-  init               Initialize the encryption vault
-  set [NAME]         Set an environment variable
-  list               List all environment variable names
-  load [--prod]      Load and output decrypted variables
-  delete <NAME>      Delete an environment variable
-  change-passphrase  Change your vault passphrase
-  import <FILE>      Import variables from an .env file
+  set [NAME]       Set an environment variable
+  list             List all environment variable names
+  rm <NAME>        Delete an environment variable
+  pull [--prod]    Load and output decrypted variables
+  import <FILE>    Import variables from an .env file
+  unlock           Initialize or unlock the encryption vault
+  passphrase       Change your vault passphrase
+  share-ci         Enable, disable, or check CI/CD vault access
+  reset <COMMAND>  Manage vault passphrase resets
 
-spky cloud vault <COMMAND>
+spky env reset <COMMAND>
 
 Commands:
-  request-reset          Request a vault passphrase reset
-  approve-reset <EMAIL>  Approve a pending reset (admin only)
-  complete-reset         Set new passphrase after approval
-  list-resets            List pending resets (admin only)`;
+  request          Request a vault passphrase reset
+  approve <EMAIL>  Approve a pending reset (admin only)
+  complete         Set a new passphrase after approval
+  list             List pending resets (admin only)`;
 
 export const code17 = `POST /v1/vault/init
 Content-Type: application/json
@@ -191,10 +193,10 @@ You'll be prompted to:
 2. **Confirm the passphrase**
 3. **Optionally cache the derived key** locally in `~/.sp00ky/vault-derived-key` (the raw passphrase is never written to disk; only its Argon2id-derived key)
 
-If you skip `env init`, the vault will be created automatically the first time you run `env set`.
+If you skip `env unlock`, the vault will be created automatically the first time you run `env set`.
 
 <Note title="Teams">
-The first team member to run <code>env init</code> creates the tenant vault. Other members receive vault access through the invitation flow — they set their own passphrase when accepting the invitation. See <a href="/docs/cloud/vault">Shared Vault</a> for details.
+The first team member to run <code>env unlock</code> creates the tenant vault. Other members receive vault access through the invitation flow — they set their own passphrase when accepting the invitation. See <a href="/docs/cloud/vault">Shared Vault</a> for details.
 </Note>
 
 ## Setting Variables
@@ -232,7 +234,7 @@ The output format is `KEY=value`, one per line — designed for shell evaluation
   lang="bash"
 />
 
-The first time you run `env load`, you'll be prompted for your vault passphrase. You can choose to cache it locally so subsequent loads are automatic.
+The first time you run `env pull`, you'll be prompted for your vault passphrase. You can choose to cache it locally so subsequent loads are automatic.
 
 <Note title="CI/CD Usage">
 In non-interactive environments (CI/CD), set the <code>SPOOKY_API_KEY</code> environment variable for authentication and cache the derived key in <code>~/.sp00ky/vault-derived-key</code> during your pipeline setup.

@@ -7,21 +7,21 @@ import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
-export const code4 = `spky cloud env change-passphrase`;
+export const code4 = `spky env passphrase`;
 
 export const code3 = `rm ~/.sp00ky/vault-derived-key`;
 
 export const code2 = `# Step 1: Request a reset
-spky cloud vault request-reset
+spky env reset request
 
 # Step 2: Admin approves (enters their passphrase)
-spky cloud vault approve-reset alice@example.com
+spky env reset approve alice@example.com
 
 # Step 3: Set your new passphrase
-spky cloud vault complete-reset`;
+spky env reset complete`;
 
 export const code1 = `# List pending requests
-spky cloud vault list-resets`;
+spky env reset list`;
 
 The **Shared Vault** is a team-wide encrypted store that protects your environment variables at rest. All team members on a tenant share the same vault, and each member accesses it with their own passphrase. Every Starter and Pro plan includes a shared vault.
 
@@ -31,7 +31,7 @@ For CLI usage and commands, see [Environment Variables](/docs/cloud/env-variable
 
 Every tenant has a single vault containing an RSA-4096 keypair. Environment variables are encrypted with this keypair and stored in Postgres. The private key is itself encrypted, and each team member holds a personal key to unlock it — protected by their own passphrase.
 
-The vault is initialized the first time any team member runs `spky cloud env init`. Subsequent members receive access through the [invitation flow](/docs/cloud/team#inviting-team-members).
+The vault is initialized the first time any team member runs `spky env unlock`. Subsequent members receive access through the [invitation flow](/docs/cloud/team#inviting-team-members).
 
 ## Architecture
 
@@ -101,7 +101,7 @@ Variable decryption happens on the server, not on the client. However, your pass
 
 When a member sets a variable, it's encrypted with the tenant's public key — every member who has the encryption key (i.e., every member of the tenant) can decrypt it. No manual sharing is needed.
 
-**Inviting new members:** When you run `spky cloud team invite`, the CLI prompts for your passphrase if the vault is initialized. Your passphrase decrypts the encryption key, which is re-encrypted with a server-side transit key and included in the invitation. When the new member accepts, they set their own passphrase, and the encryption key is re-encrypted for them. No variables need to be re-encrypted.
+**Inviting new members:** When you run `spky team invite`, the CLI prompts for your passphrase if the vault is initialized. Your passphrase decrypts the encryption key, which is re-encrypted with a server-side transit key and included in the invitation. When the new member accepts, they set their own passphrase, and the encryption key is re-encrypted for them. No variables need to be re-encrypted.
 
 **Changing your passphrase:** Only your copy of the encryption key is re-wrapped. Other members and existing variables are unaffected.
 
@@ -116,18 +116,18 @@ When a member sets a variable, it's encrypted with the tenant's public key — e
 
 ### What the encryption does not protect
 
-- **Compromised server.** Because variable decryption happens server-side, a compromised server process could observe plaintext values during `env load` or `env set`. The encryption is at-rest protection, not end-to-end. However, the passphrase itself never reaches the server — only the derived key.
+- **Compromised server.** Because variable decryption happens server-side, a compromised server process could observe plaintext values during `env pull` or `env set`. The encryption is at-rest protection, not end-to-end. However, the passphrase itself never reaches the server — only the derived key.
 - **Compromised member machine.** If a member caches their derived key at `~/.sp00ky/vault-derived-key`, anyone with access to that machine can load variables. The derived key cannot be reversed back to the original passphrase.
 
 ### Member removal
 
-When a member is removed (`spky cloud team remove`):
+When a member is removed (`spky team remove`):
 
 1. Their copy of the encryption key is **deleted** from the server
 2. Their API keys are **revoked**
 3. The tenant keypair and encrypted variables are **unaffected**
 
-The removed member can no longer decrypt any variables — their path to the tenant's private key is destroyed. If you suspect a removed member had access to sensitive values, rotate those values with `spky cloud env set`.
+The removed member can no longer decrypt any variables — their path to the tenant's private key is destroyed. If you suspect a removed member had access to sensitive values, rotate those values with `spky env set`.
 
 <Warning>
 If all team members lose their passphrases, encrypted environment variables cannot be recovered. The passphrase is never stored on the server. Keep at least one passphrase in a secure location (e.g., a password manager).
@@ -182,7 +182,7 @@ Reset requests expire after 7 days. Only one active request per member is allowe
 ## Best Practices
 
 - **Use strong, unique passphrases.** Consider a password manager. Each member's passphrase should be independent.
-- **Rotate variables when compromised.** If you suspect a value was leaked, run `spky cloud env set` with a new value rather than rotating passphrases.
+- **Rotate variables when compromised.** If you suspect a value was leaked, run `spky env set` with a new value rather than rotating passphrases.
 - **Limit team size.** Only invite members who need access to production secrets.
-- **Audit regularly.** Use `spky cloud team list` to review who has access. Remove members who no longer need it.
+- **Audit regularly.** Use `spky team list` to review who has access. Remove members who no longer need it.
 - **Keep at least one passphrase safe.** If all passphrases are lost, there is no recovery path. Store at least one in a password manager.

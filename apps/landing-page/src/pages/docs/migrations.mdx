@@ -310,7 +310,7 @@ If migration application fails (e.g., syntax error in a migration), you can choo
 
 ## Migrations During Cloud Deploy
 
-When you run `spky cloud deploy`, migrations are applied automatically as part of the deployment flow:
+When you run `spky deploy`, migrations are applied automatically as part of the deployment flow:
 
 1. Infrastructure is provisioned (SurrealDB, SSP, Scheduler VMs)
 2. The CLI waits for SurrealDB to become reachable on its public URL
@@ -324,7 +324,7 @@ No user interaction is needed — migrations run automatically. If your `migrati
   Cloud deploy applies migrations from your local machine to the cloud database. Make sure your local migrations directory is up to date before deploying.
 </Note>
 
-The same migration flow also runs after `spky cloud backup reset` — after the database is wiped, migrations are re-applied to rebuild the schema.
+The same migration flow also runs after `spky backup reset` — after the database is wiped, migrations are re-applied to rebuild the schema.
 
 ## Safety Features
 

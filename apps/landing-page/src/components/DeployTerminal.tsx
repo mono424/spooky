@@ -186,7 +186,7 @@ export const DeployTerminal: React.FC = () => {
             <span className="text-text-primary font-medium">npx @spky/cli deploy</span>
           </div>
           <div className="h-3" />
-          <div className="text-text-tertiary">Deploying to sp00ky cloud...</div>
+          <div className="text-text-tertiary">Deploying to Sp00ky Cloud...</div>
           <div className="h-3" />
           {services.map((s) => (
             <div key={s.name}>

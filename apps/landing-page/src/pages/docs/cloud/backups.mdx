@@ -8,21 +8,21 @@ import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
 
 export const code10 = `# Create a backup
-spky cloud backup create
+spky backup create
 
 # List all backups
-spky cloud backup list
+spky backup list
 
 # Restore from a backup
-spky cloud backup restore <backup-id>`;
+spky backup restore <backup-id>`;
 
 export const code9 = `# Create a backup
-spky cloud backup create
+spky backup create
 
 # Create a named backup
-spky cloud backup create --name before-migration`;
+spky backup create --name before-migration`;
 
-export const code8 = `spky cloud backup list`;
+export const code8 = `spky backup list`;
 
 export const code7 = `ID                                    STATUS        SIZE        CREATED
 --------------------------------------------------------------------------------
@@ -30,24 +30,24 @@ before-migration (a1b2c3d4)           completed     12.4 MB     2026-04-08T10:00
 e5f6a7b8-...                          completed     11.8 MB     2026-04-07T02:00:00
 f9g0h1i2-...                          completed     10.2 MB     2026-04-06T02:00:00`;
 
-export const code6 = `spky cloud backup restore <backup-id>`;
+export const code6 = `spky backup restore <backup-id>`;
 
-export const code5 = `spky cloud backup delete <backup-id>`;
+export const code5 = `spky backup delete <backup-id>`;
 
 export const code4 = `# Enable daily backups at 2 AM, keep last 7
-spky cloud backup configure --enabled true --schedule "0 2 * * *" --retention 7
+spky backup configure --enabled true --schedule "0 2 * * *" --retention 7
 
 # Disable automatic backups
-spky cloud backup configure --enabled false
+spky backup configure --enabled false
 
 # Change retention to keep 30 backups
-spky cloud backup configure --retention 30`;
+spky backup configure --retention 30`;
 
-export const code3 = `spky cloud backup reset`;
+export const code3 = `spky backup reset`;
 
-export const code2 = `spky cloud backup reset --no-backup`;
+export const code2 = `spky backup reset --no-backup`;
 
-export const code1 = `spky cloud backup <COMMAND>
+export const code1 = `spky backup <COMMAND>
 
 Commands:
   list                          List backups
