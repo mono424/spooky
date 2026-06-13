@@ -29,7 +29,7 @@
       ]
     },
     "version": {
-      "description": "Sp00ky service versions. A string sets both SSP and Scheduler everywhere. A `{ssp, scheduler}` object splits per service. A `{dev, cloud}` object splits per environment (currently only `dev` is consumed by `spky dev`; `cloud` is reserved).",
+      "description": "Sp00ky service versions. A string sets both SSP and Scheduler everywhere. A `{ssp, scheduler}` object splits per service. A `{dev, cloud}` object splits per environment (currently only `dev` is consumed by `spky dev`; `cloud` is reserved). Each service entry may be an image version tag or a `{ path }` object pointing at a host-built binary.",
       "oneOf": [
         {
           "type": "string",
@@ -37,18 +37,10 @@
         },
         {
           "type": "object",
-          "description": "Individual version tags for SSP and Scheduler (applies to all envs).",
+          "description": "Individual versions for SSP and Scheduler (applies to all envs). Each is an image tag or a `{ path }` to a host-built binary.",
           "properties": {
-            "ssp": {
-              "type": "string",
-              "description": "SSP (Spooky Sidecar Processor) image version tag.",
-              "default": "canary"
-            },
-            "scheduler": {
-              "type": "string",
-              "description": "Scheduler image version tag.",
-              "default": "canary"
-            }
+            "ssp":       { "$ref": "#/$defs/serviceVersion" },
+            "scheduler": { "$ref": "#/$defs/serviceVersion" }
           },
           "additionalProperties": false
         },
@@ -153,8 +145,29 @@
         {
           "type": "object",
           "properties": {
-            "ssp":       { "type": "string", "default": "canary" },
-            "scheduler": { "type": "string", "default": "canary" }
+            "ssp":       { "$ref": "#/$defs/serviceVersion" },
+            "scheduler": { "$ref": "#/$defs/serviceVersion" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "serviceVersion": {
+      "description": "A single Sp00ky service version: either an image version tag (string) or a `{ path }` object pointing at a host-built binary (consumed by `spky dev`).",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Image version tag (e.g. \"canary\", \"v1.0.0\")."
+        },
+        {
+          "type": "object",
+          "description": "Run a host-built binary instead of a published image.",
+          "required": ["path"],
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Path to a locally-built binary, relative to sp00ky.yml or absolute (e.g. \"../target/debug/ssp-server\")."
+            }
           },
           "additionalProperties": false
         }
