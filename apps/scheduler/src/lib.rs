@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod ssp_management;
 pub mod wal;
 pub mod proxy;
+pub mod feature_flags;
 
 use anyhow::{Context, Result};
 
@@ -447,6 +448,15 @@ impl Scheduler {
 
         // Step 3: Spawn periodic snapshot update task
         self.spawn_snapshot_updater();
+
+        // Spawn the feature-flag materialization sweep. The `spky flag` CLI
+        // materializes existing users inline on every write; this periodic
+        // pass fills in users who signed up since (and self-heals after an
+        // interrupted CLI run). Holds its own clone of the root connection.
+        crate::feature_flags::spawn(
+            Arc::new(db.clone()),
+            self.config.feature_flag_sweep_interval_secs,
+        );
 
         // Keep running until shutdown signal
         tokio::signal::ctrl_c().await?;

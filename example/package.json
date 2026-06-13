@@ -11,9 +11,9 @@
     "generate": "spooky generate",
     "build": "spooky generate && pnpm build:surql",
     "build:surql": "pnpm build:remote:singlenode && pnpm build:remote:cluster",
-    "build:remote:surrealism": "spooky --input ./schema/src/schema.surql --output ./schema/.sp00ky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../packages/surrealism-modules --config ./sp00ky.yml",
-    "build:remote:singlenode": "spooky --input ./schema/src/schema.surql --output ./schema/.sp00ky/remote-singlenode.gen.surql --mode singlenode --endpoint http://ssp:8667 --secret mysecret --config ./sp00ky.yml",
-    "build:remote:cluster": "spooky --input ./schema/src/schema.surql --output ./schema/.sp00ky/remote-cluster.gen.surql --mode cluster --endpoint http://scheduler:9667 --config ./sp00ky.yml",
+    "build:remote:surrealism": "spooky generate --input ./schema/src/schema.surql --output ./schema/.sp00ky/remote-surrealism.gen.surql --mode surrealism --modules-dir ../packages/surrealism-modules --config ./sp00ky.yml",
+    "build:remote:singlenode": "spooky generate --input ./schema/src/schema.surql --output ./schema/.sp00ky/remote-singlenode.gen.surql --mode singlenode --endpoint http://ssp:8667 --secret mysecret --config ./sp00ky.yml",
+    "build:remote:cluster": "spooky generate --input ./schema/src/schema.surql --output ./schema/.sp00ky/remote-cluster.gen.surql --mode cluster --endpoint http://scheduler:9667 --config ./sp00ky.yml",
     "migrate:create": "spooky migrate create",
     "migrate:apply": "spooky migrate apply --url http://localhost:8666",
     "migrate:status": "spooky migrate status --url http://localhost:8666"

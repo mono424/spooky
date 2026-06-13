@@ -8,6 +8,7 @@ mod codegen;
 mod create;
 mod dev;
 mod doctor;
+mod flag;
 mod json_schema;
 mod logs_browser;
 mod mcp;
@@ -253,6 +254,11 @@ enum Commands {
         #[command(subcommand)]
         action: CloudLinkCommands,
     },
+    /// Manage feature flags for the configured project
+    Flag {
+        #[command(subcommand)]
+        action: FlagCommands,
+    },
 
     // ── Account ─────────────────────────────────────────────────────────────
     /// Manage cloud projects (create, list, credentials, destroy)
@@ -303,6 +309,122 @@ enum AgentsCommands {
         /// Write to this path instead of `<project>/AGENTS.md`.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum FlagCommands {
+    /// List all feature flag definitions
+    List {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Create a new feature flag definition (default: variants `off`, `on`)
+    Create {
+        /// Flag key (lowercase, alphanumeric + dashes)
+        key: String,
+        /// Comma-separated variant list (default: `off,on`)
+        #[arg(long)]
+        variants: Option<String>,
+        /// Default variant (default: `off`)
+        #[arg(long)]
+        default: Option<String>,
+        /// Human-readable description
+        #[arg(long)]
+        description: Option<String>,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Delete a feature flag and all its user assignments
+    Delete {
+        /// Flag key
+        key: String,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Show a flag's configuration, rules, and assignment count
+    Get {
+        /// Flag key
+        key: String,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Globally enable a flag (sets `enabled = true`, re-evaluates assignments)
+    Enable {
+        /// Flag key
+        key: String,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Globally disable a flag (sets `enabled = false`, re-evaluates assignments)
+    Disable {
+        /// Flag key
+        key: String,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Add a targeting rule. Pass exactly one of --for-user / --rollout.
+    Set {
+        /// Flag key
+        key: String,
+        /// Variant the rule should resolve to (must be one of the flag's variants)
+        #[arg(long)]
+        variant: String,
+        /// Username (or user record id) to allowlist
+        #[arg(long = "for-user")]
+        for_user: Option<String>,
+        /// Percentage rollout: integer 0..=100
+        #[arg(long)]
+        rollout: Option<u32>,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Remove a user from a flag's allowlist
+    Unset {
+        /// Flag key
+        key: String,
+        /// Username (or user record id) to remove from the allowlist
+        #[arg(long = "for-user")]
+        for_user: String,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Dry-run an evaluation for a single user without writing anything
+    Eval {
+        /// Flag key
+        key: String,
+        /// Username (or user record id) to evaluate as
+        #[arg(long = "as-user")]
+        as_user: String,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -2035,6 +2157,7 @@ fn main() -> Result<()> {
         Some(Commands::Domain { action }) => cloud::domain(action),
         Some(Commands::Backup { action }) => cloud::backup(action),
         Some(Commands::Link { action }) => cloud::link(action),
+        Some(Commands::Flag { action }) => flag::run(action),
 
         // ── Account ─────────────────────────────────────────────────────────
         Some(Commands::Project { action }) => match action {

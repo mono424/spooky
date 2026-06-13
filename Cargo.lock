@@ -6142,6 +6142,7 @@ dependencies = [
  "rust-s3",
  "serde",
  "serde_json",
+ "sha2",
  "ssp-protocol",
  "surrealdb",
  "tempfile",
