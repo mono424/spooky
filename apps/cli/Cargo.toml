@@ -1,6 +1,6 @@
 [package]
 name = "sp00ky-cli"
-version = "0.0.1-canary.78"
+version = "0.0.1-canary.79"
 edition = "2021"
 
 [[bin]]
