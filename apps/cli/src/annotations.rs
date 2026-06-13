@@ -26,13 +26,14 @@ pub fn rewrite_crdt_cursor_type(line: &str, annotations: &[FieldAnnotation]) -> 
     let type_pos = line.find("TYPE ")?;
     let before_type = &line[..type_pos + 5];
     let after_type = &line[type_pos + 5..];
-    let type_end = after_type
-        .find(" ASSERT ")
-        .or_else(|| after_type.find(" VALUE "))
-        .or_else(|| after_type.find(" PERMISSIONS "))
-        .or_else(|| after_type.find(" DEFAULT "))
-        .or_else(|| after_type.find(" READONLY "))
-        .or_else(|| after_type.find(';'))
+    // Take the EARLIEST keyword in the string, not the first in this list:
+    // clause orders like `TYPE bool DEFAULT false PERMISSIONS ...` must not
+    // stop at PERMISSIONS and drop the intervening `DEFAULT false` clause.
+    let type_end = [" ASSERT ", " VALUE ", " PERMISSIONS ", " DEFAULT ", " READONLY "]
+        .iter()
+        .filter_map(|kw| after_type.find(kw))
+        .chain(after_type.find(';'))
+        .min()
         .unwrap_or(after_type.len());
     let rest = &after_type[type_end..];
     Some(format!("{}option<object> FLEXIBLE{}", before_type, rest))
@@ -225,6 +226,23 @@ DEFINE FIELD content ON TABLE thread TYPE string;
         let anns = result.get(&("thread".to_string(), "content".to_string()));
         assert!(anns.is_some());
         assert_eq!(anns.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_crdt_cursor_rewrite_preserves_default_before_permissions() {
+        // Clause order `DEFAULT ... PERMISSIONS ...` must keep the whole
+        // tail (DEFAULT + PERMISSIONS) after the rewritten type rather than
+        // stopping at PERMISSIONS and silently dropping the DEFAULT clause.
+        let anns = [
+            FieldAnnotation { name: "crdt".into(), value: Some("text".into()) },
+            FieldAnnotation { name: "cursor".into(), value: None },
+        ];
+        let line = "DEFINE FIELD content ON TABLE thread TYPE string DEFAULT {} PERMISSIONS FOR update WHERE true";
+        let got = rewrite_crdt_cursor_type(line, &anns).expect("should rewrite");
+        assert_eq!(
+            got,
+            "DEFINE FIELD content ON TABLE thread TYPE option<object> FLEXIBLE DEFAULT {} PERMISSIONS FOR update WHERE true"
+        );
     }
 
     #[test]

@@ -1089,15 +1089,18 @@ fn make_field_nullable(line: &str) -> String {
         let before_type = &line[..type_pos + 5]; // Include "TYPE "
         let after_type = &line[type_pos + 5..];
 
-        // Extract the type (everything until the next keyword or end of line)
-        // Common keywords after TYPE: ASSERT, VALUE, PERMISSIONS, DEFAULT, READONLY
-        let type_end = after_type
-            .find(" ASSERT ")
-            .or_else(|| after_type.find(" VALUE "))
-            .or_else(|| after_type.find(" PERMISSIONS "))
-            .or_else(|| after_type.find(" DEFAULT "))
-            .or_else(|| after_type.find(" READONLY "))
-            .or_else(|| after_type.find(';'))
+        // Extract the type (everything until the next keyword or end of line).
+        // Common keywords after TYPE: ASSERT, VALUE, PERMISSIONS, DEFAULT,
+        // READONLY. We take the EARLIEST keyword that appears in the string,
+        // not the first one in this list — otherwise a clause order like
+        // `TYPE bool DEFAULT false PERMISSIONS ...` would stop at PERMISSIONS
+        // and pull `DEFAULT false` into the type, yielding the invalid
+        // `option<bool DEFAULT false>`.
+        let type_end = [" ASSERT ", " VALUE ", " PERMISSIONS ", " DEFAULT ", " READONLY "]
+            .iter()
+            .filter_map(|kw| after_type.find(kw))
+            .chain(after_type.find(';'))
+            .min()
             .unwrap_or(after_type.len());
 
         let type_str = after_type[..type_end].trim();
@@ -2749,5 +2752,70 @@ mod migration_tests {
         let engine = FlowMockEngine::all_applied();
         let output = simulate_cloud_flow(&engine);
         assert_eq!(output, "migrations_complete");
+    }
+}
+
+#[cfg(test)]
+mod make_field_nullable_tests {
+    use super::make_field_nullable;
+
+    #[test]
+    fn wraps_plain_type() {
+        let line = "DEFINE FIELD username ON TABLE user TYPE string";
+        assert_eq!(
+            make_field_nullable(line),
+            "DEFINE FIELD username ON TABLE user TYPE option<string>"
+        );
+    }
+
+    #[test]
+    fn keeps_default_clause_outside_option() {
+        let line = "DEFINE FIELD active ON TABLE user TYPE bool DEFAULT false";
+        assert_eq!(
+            make_field_nullable(line),
+            "DEFINE FIELD active ON TABLE user TYPE option<bool> DEFAULT false"
+        );
+    }
+
+    // Regression: clause order `DEFAULT ... PERMISSIONS ...` must not pull the
+    // DEFAULT into the type, which produced the invalid `option<bool DEFAULT
+    // false>` and a SurrealDB parse error at client DB init.
+    #[test]
+    fn default_before_permissions_does_not_leak_into_type() {
+        let line = "DEFINE FIELD active ON TABLE user TYPE bool DEFAULT false PERMISSIONS FOR update WHERE $access = \"account\"";
+        assert_eq!(
+            make_field_nullable(line),
+            "DEFINE FIELD active ON TABLE user TYPE option<bool> DEFAULT false PERMISSIONS FOR update WHERE $access = \"account\""
+        );
+    }
+
+    #[test]
+    fn permissions_only_stays_outside_option() {
+        let line = "DEFINE FIELD active ON TABLE user TYPE bool PERMISSIONS FOR update WHERE $access = \"account\"";
+        assert_eq!(
+            make_field_nullable(line),
+            "DEFINE FIELD active ON TABLE user TYPE option<bool> PERMISSIONS FOR update WHERE $access = \"account\""
+        );
+    }
+
+    #[test]
+    fn trailing_semicolon_is_preserved() {
+        let line = "DEFINE FIELD active ON TABLE user TYPE bool DEFAULT false;";
+        assert_eq!(
+            make_field_nullable(line),
+            "DEFINE FIELD active ON TABLE user TYPE option<bool> DEFAULT false;"
+        );
+    }
+
+    #[test]
+    fn already_optional_is_left_alone() {
+        let line = "DEFINE FIELD bio ON TABLE user TYPE option<string> DEFAULT NONE";
+        assert_eq!(make_field_nullable(line), line);
+    }
+
+    #[test]
+    fn any_type_is_not_wrapped() {
+        let line = "DEFINE FIELD payload ON TABLE event TYPE any";
+        assert_eq!(make_field_nullable(line), line);
     }
 }
