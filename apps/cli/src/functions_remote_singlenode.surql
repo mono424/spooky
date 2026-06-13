@@ -68,6 +68,29 @@ DEFINE FUNCTION OVERWRITE fn::spooky::info() {
     });
 } PERMISSIONS FULL;
 
+-- Operator job controls. `{{ENDPOINT}}` is the ssp (singlenode) or scheduler
+-- (cluster) base URL — the entry point that owns the `/job/kill` + `/job/retry`
+-- HTTP routes. Unlike `fn::spooky::info`, these intentionally OMIT
+-- `PERMISSIONS FULL`: killing/retrying jobs is an operator action, and the CLI
+-- connects as root, so leaving them system-access-only keeps record-access end
+-- users from stopping each other's jobs.
+
+-- Stop a job: cancels the in-flight request if it is currently processing, or
+-- drops it from the queue if still pending. Idempotent on terminal jobs.
+DEFINE FUNCTION OVERWRITE fn::job::kill($id: string) {
+    RETURN http::post('{{ENDPOINT}}/job/kill', { id: $id }, {
+        "Authorization": "Bearer {{SECRET}}"
+    });
+};
+
+-- Re-run a terminal (failed/success) job: resets retries/errors and re-enqueues
+-- it (a plain UPDATE would not re-trigger the CREATE-gated ingest path).
+DEFINE FUNCTION OVERWRITE fn::job::retry($id: string) {
+    RETURN http::post('{{ENDPOINT}}/job/retry', { id: $id }, {
+        "Authorization": "Bearer {{SECRET}}"
+    });
+};
+
 -- Keep the HTTP `/spooky` custom API for external consumers (e.g. the CLI's
 -- `spooky cloud status`). It proxies the SSP's `/info/text` route, which
 -- returns the info array already serialized to a JSON string (text/plain).
