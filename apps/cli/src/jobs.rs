@@ -477,16 +477,43 @@ fn list(
         return Ok(());
     }
 
-    // Aggregate metrics line.
+    // Table first, then the summary at the BOTTOM so it stays on screen without
+    // scrolling back up past a long list.
+    if rows.is_empty() {
+        println!("{DIM}No jobs found.{RESET}");
+    } else {
+        println!(
+            "{BOLD}{:<24} {:<10} {:<16} {:<12} {:>5}  {:>5}  {}{RESET}",
+            "ID", "BACKEND", "PATH", "STATUS", "RETRY", "AGE", "LAST ERROR"
+        );
+        for r in rows {
+            let (icon, color) = status_style(&r.status);
+            println!(
+                "{:<24} {:<10} {:<16} {}{} {:<10}{RESET} {:>5}  {:>5}  {DIM}{}{RESET}",
+                truncate(&r.id, 24),
+                truncate(&r.backend, 10),
+                truncate(&r.path, 16),
+                color,
+                icon,
+                r.status,
+                format!("{}/{}", r.retries, r.max_retries),
+                r.age().unwrap_or_else(|| "-".to_string()),
+                truncate(&r.last_error().unwrap_or_default(), 50),
+            );
+        }
+    }
+
+    // Aggregate summary.
     let c = &snapshot.counts;
+    let oldest = snapshot
+        .oldest_pending
+        .map(fmt_age)
+        .unwrap_or_else(|| "-".to_string());
+    println!();
     println!(
         "{BOLD}jobs{RESET}  {YELLOW}{} pending{RESET}  {CYAN}{} processing{RESET}  {GREEN}{} success{RESET}  {RED}{} failed{RESET}  {DIM}({} total){RESET}",
         c.pending, c.processing, c.success, c.failed, c.total()
     );
-    let oldest = snapshot
-        .oldest_pending
-        .map(|t| fmt_age(t))
-        .unwrap_or_else(|| "-".to_string());
     println!(
         "{DIM}fail rate {:.1}%   throughput {} ✓/min   oldest pending {}{RESET}",
         c.fail_rate(),
@@ -495,32 +522,6 @@ fn list(
     );
     for e in &snapshot.errors {
         println!("{YELLOW}warn:{RESET} {}", e);
-    }
-    println!();
-
-    if rows.is_empty() {
-        println!("{DIM}No jobs found.{RESET}");
-        return Ok(());
-    }
-
-    println!(
-        "{BOLD}{:<24} {:<10} {:<16} {:<12} {:>5}  {:>5}  {}{RESET}",
-        "ID", "BACKEND", "PATH", "STATUS", "RETRY", "AGE", "LAST ERROR"
-    );
-    for r in rows {
-        let (icon, color) = status_style(&r.status);
-        println!(
-            "{:<24} {:<10} {:<16} {}{} {:<10}{RESET} {:>5}  {:>5}  {DIM}{}{RESET}",
-            truncate(&r.id, 24),
-            truncate(&r.backend, 10),
-            truncate(&r.path, 16),
-            color,
-            icon,
-            r.status,
-            format!("{}/{}", r.retries, r.max_retries),
-            r.age().unwrap_or_else(|| "-".to_string()),
-            truncate(&r.last_error().unwrap_or_default(), 50),
-        );
     }
     Ok(())
 }
@@ -550,15 +551,76 @@ fn status_style(status: &str) -> (&'static str, &'static str) {
 // `spky jobs get`
 // =============================================================
 
+/// Resolve a user-supplied job reference to a concrete `(table, key)`. Accepts a
+/// full `table:key`, a bare key, or a (table-qualified or bare) key *prefix* — so
+/// the truncated ids shown in the list can be pasted directly. Errors if the
+/// prefix matches zero or more than one job.
+fn resolve_job_ref(
+    client: &SurrealClient,
+    tables: &BTreeMap<String, String>,
+    input: &str,
+) -> Result<(String, String)> {
+    let (search_tables, prefix): (Vec<String>, &str) = match input.split_once(':') {
+        Some((tb, key)) => (vec![tb.to_string()], key),
+        None => (tables.keys().cloned().collect(), input),
+    };
+    if prefix.is_empty() {
+        bail!("Job id must include a key, got '{}'", input);
+    }
+
+    // (table, key) pairs whose key starts with the given prefix.
+    let mut matches: Vec<(String, String)> = Vec::new();
+    for tb in &search_tables {
+        let query = format!(
+            "SELECT VALUE record::id(id) FROM {} WHERE string::starts_with(record::id(id), '{}') LIMIT 26;",
+            tb,
+            esc(prefix)
+        );
+        let responses = client
+            .execute(&query)
+            .with_context(|| format!("Failed to search job table '{}'", tb))?;
+        let keys = responses
+            .into_iter()
+            .next()
+            .and_then(|r| r.result)
+            .map(|r| result_rows(Some(&r)))
+            .unwrap_or_default();
+        for v in keys {
+            if let Some(k) = v.as_str() {
+                matches.push((tb.clone(), k.to_string()));
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => bail!("No job matching '{}'", input),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        n => {
+            let preview: Vec<String> = matches
+                .iter()
+                .take(6)
+                .map(|(tb, k)| format!("{}:{}", tb, k))
+                .collect();
+            bail!(
+                "'{}' is ambiguous ({} matches): {}{}",
+                input,
+                n,
+                preview.join(", "),
+                if n > preview.len() { ", …" } else { "" }
+            )
+        }
+    }
+}
+
 fn get(
     client: &SurrealClient,
     tables: &BTreeMap<String, String>,
     id: String,
     json: bool,
 ) -> Result<()> {
-    let (tb, key) = id
-        .split_once(':')
-        .ok_or_else(|| anyhow!("Job id must be 'table:key', got '{}'", id))?;
+    let (tb, key) = resolve_job_ref(client, tables, &id)?;
+    let tb = tb.as_str();
+    let key = key.as_str();
     let backend_name = tables.get(tb).cloned().unwrap_or_else(|| tb.to_string());
     let query = format!(
         "SELECT type::string(id) AS id, status, path, retries, max_retries, retry_strategy, \
@@ -651,7 +713,7 @@ fn print_action_result(verb: &str, id: &str, result: &Value) {
 // =============================================================
 
 const TICK: Duration = Duration::from_millis(200);
-const REFRESH_INTERVAL: Duration = Duration::from_millis(1500);
+const REFRESH_INTERVAL: Duration = Duration::from_millis(1000);
 const TUI_LIMIT: usize = 200;
 
 struct TuiApp {

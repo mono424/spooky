@@ -185,10 +185,13 @@ impl<C: Connection> JobRunner<C> {
             self.append_error(&job.id, error).await?;
         }
 
-        if job.retries < job.max_retries {
-            // Increment retries in database
-            self.increment_retries(&job.id).await?;
+        // Persist the incremented attempt count regardless of outcome, so a job
+        // that exhausts its budget ends at retries == max_retries. The terminal
+        // branch below used to skip this, leaving it one short (e.g. 2/3 on a job
+        // that actually used all its attempts).
+        self.increment_retries(&job.id).await?;
 
+        if job.retries < job.max_retries {
             // Calculate delay based on retry strategy
             let delay = calculate_delay(job.retries, &job.retry_strategy);
 
