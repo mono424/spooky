@@ -34,7 +34,10 @@ pub mod view_metrics;
 use metrics::Metrics;
 use view_metrics::{ViewMetrics, ViewMetricsState};
 
-use job_runner::{reset_for_retry_helper, JobConfig, JobControl, JobEntry, JobRunner};
+use job_runner::{
+    fail_if_pending_helper, reset_for_retry_helper, update_status_helper, BackendInfo, JobConfig,
+    JobControl, JobEntry, JobRunner,
+};
 use tokio::sync::mpsc;
 
 /// Shared database connection wrapped in Arc for zero-copy sharing across tasks
@@ -434,6 +437,41 @@ pub async fn run_server() -> anyhow::Result<()> {
             job_runner.run().await;
         });
         info!("Job runner started");
+
+        // Recovery sweep for jobs the CREATE-only pickup path can't reach (rows
+        // created while this SSP was down, or 'processing' rows orphaned by a
+        // crash). Singlenode only: in cluster mode the scheduler assigns jobs
+        // round-robin and the assignee is not persisted on the row, so a
+        // DB-driven sweep here couldn't tell ownership and might double-execute —
+        // cluster recovery is the scheduler's responsibility.
+        if config.scheduler_url.is_none() {
+            let db = db.clone();
+            let status = status.clone();
+            let job_config = job_config.clone();
+            let job_control = job_control.clone();
+            let job_queue_tx = job_queue_tx.clone();
+            tokio::spawn(async move {
+                // `interval` fires immediately on first tick, so the first pass
+                // runs as soon as the SSP is Ready (the startup sweep), then every
+                // JOB_RECOVERY_INTERVAL_SECS thereafter.
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                    JOB_RECOVERY_INTERVAL_SECS,
+                ));
+                loop {
+                    interval.tick().await;
+                    if *status.read().await != SspStatus::Ready {
+                        continue;
+                    }
+                    job_recovery_sweep(&db, &job_config, &job_control, &job_queue_tx).await;
+                }
+            });
+            info!(
+                interval_secs = JOB_RECOVERY_INTERVAL_SECS,
+                "Job recovery sweep started"
+            );
+        } else {
+            info!("Job recovery sweep disabled (cluster mode — recovery is the scheduler's responsibility)");
+        }
     }
 
     // Clone for scheduler integration
@@ -1274,14 +1312,37 @@ async fn job_kill_handler(State(state): State<AppState>, Json(req): Json<JobActi
             }
         }
         _ => {
-            // pending / unknown: drop at dequeue. Do NOT write status here — the
-            // runner owns the terminal write and fails it when it dequeues.
+            // pending / unknown. Two cooperating actions, in this order:
+            //  1. Set the drop-flag first, so if this job is sitting in the
+            //     in-memory queue the runner fails it at dequeue (and is the sole
+            //     writer in that case — no clobber).
+            //  2. Also terminalize the row directly *iff* it is still pending.
+            //     Pickup is CREATE-only, so an orphaned pending row (created while
+            //     this SSP was down) is never enqueued and the flag alone would be
+            //     a no-op forever. The `WHERE status = 'pending'` guard inside the
+            //     helper means we never clobber a row already advanced to
+            //     'processing' by the runner.
             state.job_control.killed_pending.insert(req.id.clone());
-            (
-                StatusCode::OK,
-                Json(json!({ "id": req.id, "status": status, "message": "kill flag set; will fail at dequeue" })),
-            )
-                .into_response()
+            let error_entry = json!({ "code": "killed", "reason": "killed by operator" });
+            match fail_if_pending_helper(&state.db, &req.id, error_entry).await {
+                Ok(true) => (
+                    StatusCode::OK,
+                    Json(json!({ "id": req.id, "status": "failed", "message": "killed pending job" })),
+                )
+                    .into_response(),
+                Ok(false) => (
+                    // Not pending at write time (raced to 'processing', or already
+                    // terminal). The flag still guards any queued copy.
+                    StatusCode::OK,
+                    Json(json!({ "id": req.id, "status": status, "message": "kill flag set; will fail at dequeue" })),
+                )
+                    .into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "code": "db_error", "message": e.to_string() })),
+                )
+                    .into_response(),
+            }
         }
     }
 }
@@ -1360,7 +1421,17 @@ async fn job_retry_handler(State(state): State<AppState>, Json(req): Json<JobAct
     );
     job.retries = 0;
 
+    // Guard against a concurrent retry / recovery sweep enqueueing the same id
+    // twice. If it is already queued, this retry is a no-op.
+    if !state.job_control.mark_enqueued(&req.id) {
+        return (
+            StatusCode::OK,
+            Json(json!({ "id": req.id, "status": "pending", "message": "already queued" })),
+        )
+            .into_response();
+    }
     if let Err(e) = state.job_queue_tx.send(job).await {
+        state.job_control.clear_enqueued(&req.id);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "code": "enqueue_failed", "message": e.to_string() })),
@@ -1373,6 +1444,145 @@ async fn job_retry_handler(State(state): State<AppState>, Json(req): Json<JobAct
         Json(json!({ "id": req.id, "status": "pending", "message": "re-enqueued" })),
     )
         .into_response()
+}
+
+// --- Job recovery sweep (singlenode) ---
+//
+// Job pickup is CREATE-only: the runner enqueues a job when it observes the
+// CREATE live-query event. A row that was created while this SSP was down (or
+// before its live query was established) is never enqueued, and a 'processing'
+// row whose SSP crashed mid-flight is never finished — both sit stuck forever.
+// This sweep periodically (and once at startup) re-enqueues them. Every enqueue
+// goes through `JobControl::mark_enqueued`, so it can never double-execute a job
+// the live CREATE path already queued.
+
+/// How often the recovery sweep runs.
+const JOB_RECOVERY_INTERVAL_SECS: u64 = 60;
+/// Only re-enqueue `pending` rows older than this, so the sweep never races the
+/// live CREATE-pickup path on freshly created jobs.
+const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
+/// A `processing` row untouched for longer than this is treated as orphaned (its
+/// SSP crashed mid-flight) and reset to pending. Kept well above any realistic
+/// job timeout so a legitimately long request is never reset out from under the
+/// runner.
+const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
+
+/// Run one recovery pass across every configured job table.
+async fn job_recovery_sweep<C: Connection>(
+    db: &Surreal<C>,
+    job_config: &JobConfig,
+    job_control: &JobControl,
+    job_queue_tx: &mpsc::Sender<JobEntry>,
+) {
+    for (table, backend_info) in &job_config.job_tables {
+        match recover_job_table(db, table, backend_info, job_control, job_queue_tx).await {
+            Ok(n) if n > 0 => {
+                info!(target: "ssp::job_recovery", table = %table, recovered = n, "Recovery sweep re-enqueued stuck jobs")
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!(target: "ssp::job_recovery", table = %table, error = %e, "Recovery sweep failed for table")
+            }
+        }
+    }
+}
+
+/// Recover stuck `pending` and orphaned `processing` rows for one job table.
+/// Returns the number of jobs re-enqueued.
+async fn recover_job_table<C: Connection>(
+    db: &Surreal<C>,
+    table: &str,
+    backend_info: &BackendInfo,
+    job_control: &JobControl,
+    job_queue_tx: &mpsc::Sender<JobEntry>,
+) -> anyhow::Result<usize> {
+    // `type::string(id) AS id` keeps the RecordId out of the JSON projection
+    // (deserializing a RecordId into `serde_json::Value` can fail), mirroring
+    // `load_job_record`.
+    const FIELDS: &str = "type::string(id) AS id, status, path, payload, retries, \
+                          max_retries, retry_strategy, timeout";
+    let mut recovered = 0;
+
+    // 1. Stuck pending rows (pending longer than the grace window).
+    let pending_q = format!(
+        "SELECT {FIELDS} FROM {table} \
+         WHERE status = 'pending' AND updated_at < time::now() - {grace}s",
+        grace = JOB_RECOVERY_PENDING_GRACE_SECS,
+    );
+    let mut resp = db
+        .query(&pending_q)
+        .await
+        .context("pending recovery query failed")?;
+    let rows: Vec<Value> = resp.take(0).context("reading pending recovery rows")?;
+    for row in &rows {
+        let Some(id) = row.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if enqueue_recovered(job_control, job_queue_tx, backend_info, id, row).await {
+            recovered += 1;
+            warn!(target: "ssp::job_recovery", job_id = %id, "Re-enqueued stuck pending job");
+        }
+    }
+
+    // 2. Orphaned processing rows (processing far longer than any job runs).
+    let stale_q = format!(
+        "SELECT {FIELDS} FROM {table} \
+         WHERE status = 'processing' AND updated_at < time::now() - {stale}s",
+        stale = JOB_RECOVERY_STALE_PROCESSING_SECS,
+    );
+    let mut resp = db
+        .query(&stale_q)
+        .await
+        .context("stale processing query failed")?;
+    let rows: Vec<Value> = resp.take(0).context("reading stale processing rows")?;
+    for row in &rows {
+        let Some(id) = row.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        // Never touch a request actually in-flight on this SSP.
+        if job_control.inflight.contains_key(id) {
+            continue;
+        }
+        // Reset to pending (preserving retries/errors) before re-enqueueing.
+        if let Err(e) = update_status_helper(db, id, "pending").await {
+            warn!(target: "ssp::job_recovery", job_id = %id, error = %e, "Failed to reset stale processing job");
+            continue;
+        }
+        if enqueue_recovered(job_control, job_queue_tx, backend_info, id, row).await {
+            recovered += 1;
+            warn!(target: "ssp::job_recovery", job_id = %id, "Recovered orphaned processing job");
+        }
+    }
+
+    Ok(recovered)
+}
+
+/// Enqueue a recovered job, guarded by `mark_enqueued` so a job already moving
+/// through the runner is never enqueued twice. Returns `true` if it was sent.
+async fn enqueue_recovered(
+    job_control: &JobControl,
+    job_queue_tx: &mpsc::Sender<JobEntry>,
+    backend_info: &BackendInfo,
+    id: &str,
+    row: &Value,
+) -> bool {
+    if !job_control.mark_enqueued(id) {
+        return false; // already queued or in-flight
+    }
+    let timeout_override = row.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let job_entry = JobEntry::from_record(
+        id.to_string(),
+        backend_info.base_url.clone(),
+        backend_info.auth_token.clone(),
+        row,
+        backend_info.effective_timeout(timeout_override),
+    );
+    if let Err(e) = job_queue_tx.send(job_entry).await {
+        job_control.clear_enqueued(id);
+        warn!(target: "ssp::job_recovery", job_id = %id, error = %e, "Failed to enqueue recovered job");
+        return false;
+    }
+    true
 }
 
 // --- Request Handlers ---
@@ -1519,8 +1729,17 @@ async fn ingest_handler(
                         "Queueing job for execution"
                     );
 
-                    if let Err(e) = state.job_queue_tx.send(job_entry).await {
-                        error!(error = %e, "Failed to queue job");
+                    // Mark before sending so the recovery sweep won't also
+                    // enqueue this row while it's pending-in-channel. Skip if it
+                    // is somehow already queued (e.g. a sweep beat us to it).
+                    let job_id = job_entry.id.clone();
+                    if state.job_control.mark_enqueued(&job_id) {
+                        if let Err(e) = state.job_queue_tx.send(job_entry).await {
+                            state.job_control.clear_enqueued(&job_id);
+                            error!(error = %e, "Failed to queue job");
+                        }
+                    } else {
+                        debug!(job_id = %job_id, "Skipping enqueue — already queued");
                     }
                 } else {
                     debug!(

@@ -21,11 +21,30 @@ pub struct JobControl {
     /// running it. This is the synchronization point that avoids a second writer
     /// racing the runner on the `status` field.
     pub killed_pending: Arc<DashSet<String>>,
+    /// `job_id`s currently represented in the in-memory queue on this SSP —
+    /// queued or in-flight, but not yet terminal. Inserted at every enqueue and
+    /// removed when the job reaches a terminal state. The recovery sweep consults
+    /// this so it never re-enqueues a job that is already moving through the
+    /// runner (which would double-execute it).
+    pub enqueued: Arc<DashSet<String>>,
 }
 
 impl JobControl {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Mark a job as queued. Returns `true` if it was newly marked (the caller
+    /// should send it to the runner), `false` if it was already queued/in-flight
+    /// (the caller must skip the send to avoid a double execution).
+    pub fn mark_enqueued(&self, id: &str) -> bool {
+        self.enqueued.insert(id.to_string())
+    }
+
+    /// Clear a job's queued mark once it reaches a terminal state, so a later
+    /// (e.g. retried) life of the same id can be enqueued again.
+    pub fn clear_enqueued(&self, id: &str) {
+        self.enqueued.remove(id);
     }
 }
 

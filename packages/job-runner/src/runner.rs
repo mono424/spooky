@@ -72,6 +72,7 @@ impl<C: Connection> JobRunner<C> {
             let error_entry = json!({ "code": "killed", "reason": "killed by operator" });
             self.append_error(&job.id, error_entry).await.ok();
             self.update_status(&job.id, "failed").await?;
+            self.job_control.clear_enqueued(&job.id);
             return Ok(());
         }
 
@@ -134,10 +135,12 @@ impl<C: Connection> JobRunner<C> {
                 // An operator kill is terminal: do NOT run handle_failure, so the
                 // backoff-retry path never re-queues a job the operator killed.
                 self.update_status(&job.id, "failed").await?;
+                self.job_control.clear_enqueued(&job.id);
             }
             Outcome::Responded(Ok(response)) if response.status().is_success() => {
                 info!(job_id = %job.id, status = %response.status(), "Job completed successfully");
                 self.update_status(&job.id, "success").await?;
+                self.job_control.clear_enqueued(&job.id);
             }
             Outcome::Responded(Ok(response)) => {
                 let status = response.status();
@@ -228,6 +231,10 @@ impl<C: Connection> JobRunner<C> {
                 "Job exceeded max retries - marking as failed"
             );
             self.update_status(&job.id, "failed").await?;
+            // Terminal: the retry branch above deliberately keeps the enqueued
+            // mark (the job stays in flight across the backoff), but here the
+            // job is done, so release it for any future re-enqueue.
+            self.job_control.clear_enqueued(&job.id);
         }
 
         Ok(())
@@ -307,6 +314,36 @@ pub async fn reset_for_retry_helper<C: Connection>(db: &Surreal<C>, job_id: &str
         .context("Failed to reset job for retry")?;
 
     Ok(())
+}
+
+/// Atomically fail a job **only if it is still `pending`**, appending a `killed`
+/// error. Used by `/job/kill` so an orphaned pending job (one that was never
+/// enqueued — pickup is CREATE-only) is actually stopped, instead of merely
+/// setting an in-memory flag that the runner can only honor at dequeue. The
+/// `WHERE status = 'pending'` guard keeps the single-writer invariant intact:
+/// it never clobbers a row the runner has already advanced to `processing`.
+/// Returns `true` when a row was updated (it was pending), `false` otherwise.
+pub async fn fail_if_pending_helper<C: Connection>(
+    db: &Surreal<C>,
+    job_id: &str,
+    error: Value,
+) -> Result<bool> {
+    let record_id = RecordId::parse_simple(job_id)
+        .context(format!("Invalid job ID: {}", job_id))?;
+
+    let mut resp = db
+        .query(
+            "UPDATE $id SET status = 'failed', \
+             errors = array::append(errors, $error), updated_at = time::now() \
+             WHERE status = 'pending' RETURN AFTER",
+        )
+        .bind(("id", record_id))
+        .bind(("error", error))
+        .await
+        .context("Failed to fail pending job")?;
+
+    let updated: Vec<Value> = resp.take(0).context("Failed to read kill result")?;
+    Ok(!updated.is_empty())
 }
 
 /// Calculate retry delay based on strategy
