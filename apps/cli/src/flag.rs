@@ -75,6 +75,18 @@ pub fn run(action: FlagCommands) -> Result<()> {
 // =============================================================
 
 fn client_from(conn: ConnectionArgs, config: Option<PathBuf>) -> Result<SurrealClient> {
+    // `--cloud` resolves the deployment's SurrealDB URL + root password from
+    // Sp00ky Cloud automatically; nothing else needs to be passed.
+    if let Some(c) = conn.cloud_connection(&config)? {
+        return Ok(SurrealClient::new(
+            &c.url,
+            &c.namespace,
+            &c.database,
+            &c.username,
+            &c.password,
+        ));
+    }
+
     let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
     let sp00ky_config = backend::load_config(&config_file);
     let resolved_surreal = sp00ky_config.resolved_surrealdb();

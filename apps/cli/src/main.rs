@@ -949,6 +949,58 @@ struct ConnectionArgs {
     /// SurrealDB password
     #[arg(long, env = "SURREAL_PASS", default_value = "root")]
     password: String,
+    /// Target the project's Sp00ky Cloud deployment. Resolves the SurrealDB URL
+    /// and root password automatically from your login (`spky login`) and the
+    /// `slug` in sp00ky.yml, so you don't pass --url/--password.
+    #[arg(long)]
+    cloud: bool,
+}
+
+/// Fully resolved SurrealDB connection parameters.
+pub(crate) struct ResolvedConnection {
+    pub(crate) url: String,
+    pub(crate) namespace: String,
+    pub(crate) database: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
+}
+
+impl ConnectionArgs {
+    /// When `--cloud` is set, resolve the deployment's SurrealDB endpoint and
+    /// root password from Sp00ky Cloud (the same lookup as `spky project
+    /// credentials`). `namespace`/`database` come from explicit flags when
+    /// given, otherwise from sp00ky.yml. Returns `Ok(None)` when `--cloud` was
+    /// not passed, so callers fall back to their existing local resolution.
+    pub(crate) fn cloud_connection(
+        &self,
+        config: &Option<PathBuf>,
+    ) -> Result<Option<ResolvedConnection>> {
+        if !self.cloud {
+            return Ok(None);
+        }
+        let config_file = config
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+        let resolved = backend::load_config(&config_file).resolved_surrealdb();
+        let cloud = cloud::resolve_cloud_surreal(&config_file)?;
+        let namespace = if self.namespace == "main" {
+            resolved.namespace
+        } else {
+            self.namespace.clone()
+        };
+        let database = if self.database == "main" {
+            resolved.database
+        } else {
+            self.database.clone()
+        };
+        Ok(Some(ResolvedConnection {
+            url: cloud.url,
+            namespace,
+            database,
+            username: "root".to_string(),
+            password: cloud.password,
+        }))
+    }
 }
 
 /// Filter schema content to remove field definitions with FOR select WHERE false
@@ -1187,16 +1239,28 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved = sp00ky_config.resolved_schema();
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
 
-            let resolved_surreal = sp00ky_config.resolved_surrealdb();
-            let namespace = if conn.namespace == "main" {
-                resolved_surreal.namespace
-            } else {
-                conn.namespace
-            };
-            let database = if conn.database == "main" {
-                resolved_surreal.database
-            } else {
-                conn.database
+            let conn_resolved = match conn.cloud_connection(&Some(config_file.clone()))? {
+                Some(c) => c,
+                None => {
+                    let resolved_surreal = sp00ky_config.resolved_surrealdb();
+                    let namespace = if conn.namespace == "main" {
+                        resolved_surreal.namespace
+                    } else {
+                        conn.namespace
+                    };
+                    let database = if conn.database == "main" {
+                        resolved_surreal.database
+                    } else {
+                        conn.database
+                    };
+                    ResolvedConnection {
+                        url: conn.url,
+                        namespace,
+                        database,
+                        username: conn.username,
+                        password: conn.password,
+                    }
+                }
             };
 
             let deploy_mode = match mode.as_str() {
@@ -1215,11 +1279,11 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 environment: migration::MigrationEnvironment::Production,
                 project_dir: std::env::current_dir()?,
                 migrations_dir: resolved_migrations,
-                url: conn.url,
-                namespace,
-                database,
-                username: conn.username,
-                password: conn.password,
+                url: conn_resolved.url,
+                namespace: conn_resolved.namespace,
+                database: conn_resolved.database,
+                username: conn_resolved.username,
+                password: conn_resolved.password,
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: Some(migration::InternalSchemaConfig {
                     schema_path: resolved.schema,
@@ -1243,27 +1307,39 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved_migrations =
                 migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
-            let resolved_surreal = sp00ky_config.resolved_surrealdb();
-            let namespace = if conn.namespace == "main" {
-                resolved_surreal.namespace
-            } else {
-                conn.namespace
-            };
-            let database = if conn.database == "main" {
-                resolved_surreal.database
-            } else {
-                conn.database
+            let conn_resolved = match conn.cloud_connection(&None)? {
+                Some(c) => c,
+                None => {
+                    let resolved_surreal = sp00ky_config.resolved_surrealdb();
+                    let namespace = if conn.namespace == "main" {
+                        resolved_surreal.namespace
+                    } else {
+                        conn.namespace
+                    };
+                    let database = if conn.database == "main" {
+                        resolved_surreal.database
+                    } else {
+                        conn.database
+                    };
+                    ResolvedConnection {
+                        url: conn.url,
+                        namespace,
+                        database,
+                        username: conn.username,
+                        password: conn.password,
+                    }
+                }
             };
 
             let ctx = migration::MigrationContext {
                 environment: migration::MigrationEnvironment::Production,
                 project_dir: std::env::current_dir()?,
                 migrations_dir: resolved_migrations,
-                url: conn.url,
-                namespace,
-                database,
-                username: conn.username,
-                password: conn.password,
+                url: conn_resolved.url,
+                namespace: conn_resolved.namespace,
+                database: conn_resolved.database,
+                username: conn_resolved.username,
+                password: conn_resolved.password,
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: None,
                 remote_functions: None,
@@ -1283,27 +1359,39 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved_migrations =
                 migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
-            let resolved_surreal = sp00ky_config.resolved_surrealdb();
-            let namespace = if conn.namespace == "main" {
-                resolved_surreal.namespace
-            } else {
-                conn.namespace
-            };
-            let database = if conn.database == "main" {
-                resolved_surreal.database
-            } else {
-                conn.database
+            let conn_resolved = match conn.cloud_connection(&None)? {
+                Some(c) => c,
+                None => {
+                    let resolved_surreal = sp00ky_config.resolved_surrealdb();
+                    let namespace = if conn.namespace == "main" {
+                        resolved_surreal.namespace
+                    } else {
+                        conn.namespace
+                    };
+                    let database = if conn.database == "main" {
+                        resolved_surreal.database
+                    } else {
+                        conn.database
+                    };
+                    ResolvedConnection {
+                        url: conn.url,
+                        namespace,
+                        database,
+                        username: conn.username,
+                        password: conn.password,
+                    }
+                }
             };
 
             let ctx = migration::MigrationContext {
                 environment: migration::MigrationEnvironment::Production,
                 project_dir: std::env::current_dir()?,
                 migrations_dir: resolved_migrations,
-                url: conn.url,
-                namespace,
-                database,
-                username: conn.username,
-                password: conn.password,
+                url: conn_resolved.url,
+                namespace: conn_resolved.namespace,
+                database: conn_resolved.database,
+                username: conn_resolved.username,
+                password: conn_resolved.password,
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: None,
                 remote_functions: None,

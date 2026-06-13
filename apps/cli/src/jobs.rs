@@ -55,7 +55,7 @@ pub fn run(
     config: Option<PathBuf>,
     action: Option<JobsCommands>,
 ) -> Result<()> {
-    let client = client_from(&conn, &config);
+    let client = client_from(&conn, &config)?;
     let tables = discover_job_tables(&config);
 
     match action {
@@ -76,7 +76,19 @@ pub fn run(
 // Connection + job-table discovery
 // =============================================================
 
-fn client_from(conn: &ConnectionArgs, config: &Option<PathBuf>) -> SurrealClient {
+fn client_from(conn: &ConnectionArgs, config: &Option<PathBuf>) -> Result<SurrealClient> {
+    // `--cloud` resolves the deployment's SurrealDB URL + root password from
+    // Sp00ky Cloud automatically; nothing else needs to be passed.
+    if let Some(c) = conn.cloud_connection(config)? {
+        return Ok(SurrealClient::new(
+            &c.url,
+            &c.namespace,
+            &c.database,
+            &c.username,
+            &c.password,
+        ));
+    }
+
     let config_file = config
         .clone()
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
@@ -103,7 +115,13 @@ fn client_from(conn: &ConnectionArgs, config: &Option<PathBuf>) -> SurrealClient
         conn.database.clone()
     };
 
-    SurrealClient::new(&url, &namespace, &database, &conn.username, &conn.password)
+    Ok(SurrealClient::new(
+        &url,
+        &namespace,
+        &database,
+        &conn.username,
+        &conn.password,
+    ))
 }
 
 /// Map of job table name -> backend app name, parsed from `sp00ky.yml`. Any
@@ -254,7 +272,7 @@ fn fetch_table(
          FROM {table} ORDER BY updated_at DESC LIMIT {limit}; \
          SELECT status, count() AS n FROM {table} GROUP BY status; \
          SELECT count() AS n FROM {table} WHERE status = 'success' AND updated_at > time::now() - 1m GROUP ALL; \
-         SELECT VALUE type::string(created_at) FROM {table} WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1;",
+         SELECT type::string(created_at) AS created_at FROM {table} WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1;",
         table = table,
         limit = limit
     );
@@ -284,6 +302,7 @@ fn fetch_table(
 
     let oldest_pending = result_rows(results.get(3).and_then(|r| r.as_ref()))
         .first()
+        .and_then(|v| v.get("created_at"))
         .and_then(Value::as_str)
         .and_then(parse_ts);
 

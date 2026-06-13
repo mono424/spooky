@@ -2480,6 +2480,70 @@ pub fn status() -> Result<()> {
     Ok(())
 }
 
+/// SurrealDB connection details for a cloud-hosted project.
+pub struct CloudSurreal {
+    /// HTTP(S) endpoint of the deployment's SurrealDB.
+    pub url: String,
+    /// Root password issued for the deployment.
+    pub password: String,
+}
+
+/// Resolve the SurrealDB HTTP endpoint and root password for the project
+/// configured in `sp00ky.yml` (or `SP00KY_CLOUD_PROJECT`) from Sp00ky Cloud,
+/// the same lookup `spky project credentials` performs. This is what backs the
+/// `--cloud` flag on the DB-connecting commands (`jobs`, `flag`, `migrate`):
+/// it requires a configured project slug, valid credentials, and a deployed
+/// project, erroring clearly otherwise rather than silently using local defaults.
+pub fn resolve_cloud_surreal(config_path: &std::path::Path) -> Result<CloudSurreal> {
+    let slug = std::env::var("SP00KY_CLOUD_PROJECT")
+        .ok()
+        .or_else(|| backend::load_config(config_path).slug)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No cloud project configured for --cloud. Add a `slug:` to \
+                 sp00ky.yml or set SP00KY_CLOUD_PROJECT."
+            )
+        })?;
+
+    let creds = load_credentials().ok_or_else(|| {
+        anyhow::anyhow!("Not logged in to Sp00ky Cloud. Run `spky login` first to use --cloud.")
+    })?;
+    let mut client = CloudClient::new(&creds);
+
+    let project = fetch_project(&mut client, &slug)?
+        .ok_or_else(|| anyhow::anyhow!("Cloud project '{}' not found.", slug))?;
+    let pid = project_id(&project);
+
+    let resp = client.get(&format!("/v1/projects/{}/deployment", pid))?;
+    let data: serde_json::Value = resp
+        .into_json()
+        .context("Failed to parse deployment response")?;
+
+    let url = data["urls"]["surrealdb"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No SurrealDB URL for project '{}'. Has it been deployed?",
+                slug
+            )
+        })?
+        .to_string();
+    let password = data["surrealdb_password"]
+        .as_str()
+        .or_else(|| data["db_password"].as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No SurrealDB password for project '{}'. Has it been deployed?",
+                slug
+            )
+        })?
+        .to_string();
+
+    Ok(CloudSurreal { url, password })
+}
+
 pub fn credentials(raw: bool) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
