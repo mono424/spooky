@@ -243,6 +243,20 @@ mod tests {
         }
     }
 
+    /// Golden vectors shared verbatim with the CLI evaluator
+    /// (`apps/cli/src/flag.rs`) and `fn::feature::hash` in
+    /// `meta_tables_remote.surql`. Keep all three in lockstep: if the scheduler
+    /// and CLI ever disagree on a bucket, a CLI write and a scheduler sweep
+    /// would assign the same user different variants for a percentage rollout.
+    #[test]
+    fn rollout_hash_matches_golden_vectors() {
+        assert_eq!(rollout_hash("checkout-v2", "user:alice"), 8);
+        assert_eq!(rollout_hash("checkout-v2", "user:bob"), 62);
+        assert_eq!(rollout_hash("flag-x", "user:abc"), 0);
+        assert_eq!(rollout_hash("beta", "user:42"), 90);
+        assert_eq!(rollout_hash("rollout", "user:zzz"), 17);
+    }
+
     #[test]
     fn rollout_at_zero_never_matches() {
         let flag = json!({

@@ -310,3 +310,56 @@ pub fn generate_sp00ky_events(
 
     events
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An empty table map isolates the always-emitted system-table events
+    // (the user-table loop produces nothing), so these assertions target the
+    // `_00_user_feature` ingest-notify events specifically.
+    fn gen(is_client: bool, mode: DeployMode) -> String {
+        generate_sp00ky_events(&BTreeMap::new(), "", is_client, &mode, None, None)
+    }
+
+    #[test]
+    fn user_feature_events_post_to_ingest_in_http_modes() {
+        for mode in [DeployMode::Singlenode, DeployMode::Cluster] {
+            let out = gen(false, mode);
+            assert!(
+                out.contains("DEFINE EVENT OVERWRITE _00_user_feature_mutation ON TABLE _00_user_feature"),
+                "missing mutation event"
+            );
+            assert!(
+                out.contains("DEFINE EVENT OVERWRITE _00_user_feature_delete ON TABLE _00_user_feature"),
+                "missing delete event"
+            );
+            assert!(out.contains("table: '_00_user_feature'"), "missing ingest payload table");
+            assert!(
+                out.contains("http::post($sp00ky_endpoint + '/ingest'"),
+                "feature-flag changes must notify the SSP ingest endpoint"
+            );
+        }
+    }
+
+    #[test]
+    fn user_feature_events_use_dbsp_in_surrealism_mode() {
+        let out = gen(false, DeployMode::Surrealism);
+        assert!(out.contains("mod::dbsp::ingest('_00_user_feature'"), "missing dbsp ingest");
+        assert!(
+            !out.contains("http::post"),
+            "surrealism mode must not emit http::post"
+        );
+    }
+
+    #[test]
+    fn user_feature_events_are_remote_only_not_client() {
+        // The client schema must not carry server-side ingest events for the
+        // root-written assignments table.
+        let out = gen(true, DeployMode::Singlenode);
+        assert!(
+            !out.contains("_00_user_feature_mutation"),
+            "client schema must not emit _00_user_feature ingest events"
+        );
+    }
+}

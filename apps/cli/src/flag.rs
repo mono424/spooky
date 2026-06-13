@@ -669,3 +669,134 @@ fn materialize(client: &SurrealClient, key: &str) -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- rollout_hash --------------------------------------------------
+
+    #[test]
+    fn rollout_hash_is_deterministic_and_bounded() {
+        for i in 0..1000 {
+            let user = format!("user:{}", i);
+            let h = rollout_hash("flag-x", &user);
+            assert!((0..100).contains(&h), "hash {} out of range", h);
+            assert_eq!(h, rollout_hash("flag-x", &user), "not deterministic");
+        }
+    }
+
+    /// Golden vectors. These exact values are also asserted by the scheduler's
+    /// evaluator (`apps/scheduler/src/feature_flags.rs`) and must equal
+    /// `fn::feature::hash` in `meta_tables_remote.surql`. If any of the three
+    /// implementations drifts, its copy of this test fails — that is the whole
+    /// point of pinning concrete numbers rather than just checking determinism.
+    #[test]
+    fn rollout_hash_matches_golden_vectors() {
+        assert_eq!(rollout_hash("checkout-v2", "user:alice"), 8);
+        assert_eq!(rollout_hash("checkout-v2", "user:bob"), 62);
+        assert_eq!(rollout_hash("flag-x", "user:abc"), 0);
+        assert_eq!(rollout_hash("beta", "user:42"), 90);
+        assert_eq!(rollout_hash("rollout", "user:zzz"), 17);
+    }
+
+    // ---- evaluate_one (must match feature_flags.rs::evaluate_one) -------
+
+    #[test]
+    fn disabled_flag_returns_default_regardless_of_rules() {
+        let flag = json!({
+            "key": "x", "enabled": false, "default_variant": "off",
+            "rules": [{ "kind": "allowlist", "variant": "on", "users": ["user:abc"], "priority": 10 }],
+        });
+        assert_eq!(evaluate_one(&flag, "user:abc").0, "off");
+    }
+
+    #[test]
+    fn rollout_at_zero_never_matches_and_hundred_always_matches() {
+        let zero = json!({
+            "key": "x", "enabled": true, "default_variant": "off",
+            "rules": [{ "kind": "rollout", "variant": "on", "percent": 0, "priority": 50 }],
+        });
+        let hundred = json!({
+            "key": "x", "enabled": true, "default_variant": "off",
+            "rules": [{ "kind": "rollout", "variant": "on", "percent": 100, "priority": 50 }],
+        });
+        for i in 0..50 {
+            let u = format!("user:{}", i);
+            assert_eq!(evaluate_one(&zero, &u).0, "off");
+            assert_eq!(evaluate_one(&hundred, &u).0, "on");
+        }
+    }
+
+    #[test]
+    fn allowlist_beats_lower_priority_rollout() {
+        let flag = json!({
+            "key": "x", "enabled": true, "default_variant": "off",
+            "rules": [
+                { "kind": "rollout", "variant": "on", "percent": 0, "priority": 50 },
+                { "kind": "allowlist", "variant": "on", "users": ["user:abc"], "priority": 10 },
+            ],
+        });
+        assert_eq!(evaluate_one(&flag, "user:abc").0, "on");
+        assert_eq!(evaluate_one(&flag, "user:xyz").0, "off");
+    }
+
+    #[test]
+    fn payload_resolves_for_chosen_variant() {
+        let flag = json!({
+            "key": "x", "enabled": true, "default_variant": "off",
+            "rules": [{ "kind": "allowlist", "variant": "treatment", "users": ["user:abc"], "priority": 10 }],
+            "payloads": { "treatment": { "copy": "Hello" } },
+        });
+        let (v, p) = evaluate_one(&flag, "user:abc");
+        assert_eq!(v, "treatment");
+        assert_eq!(p, Some(json!({ "copy": "Hello" })));
+    }
+
+    // ---- builder -> evaluator round-trip -------------------------------
+    // Guards that the rule shape the CLI WRITES (`kind`/`users`/`percent`/
+    // `priority`) is exactly what the evaluator READS. A drift here is the
+    // "schema doc says allowlist/rollout_percent but code uses kind/users/
+    // percent" class of bug.
+
+    #[test]
+    fn upsert_allowlist_round_trips_through_evaluator() {
+        let mut rules: Vec<Value> = vec![];
+        upsert_allowlist(&mut rules, "on", "user:abc");
+        // Idempotent: same user again does not duplicate.
+        upsert_allowlist(&mut rules, "on", "user:abc");
+        assert_eq!(rules.len(), 1);
+        let users = rules[0]["users"].as_array().unwrap();
+        assert_eq!(users.len(), 1, "allowlist must not duplicate a user");
+
+        let flag = json!({ "key": "k", "enabled": true, "default_variant": "off", "rules": rules });
+        assert_eq!(evaluate_one(&flag, "user:abc").0, "on");
+        assert_eq!(evaluate_one(&flag, "user:other").0, "off");
+    }
+
+    #[test]
+    fn upsert_rollout_round_trips_and_updates_percent() {
+        let mut rules: Vec<Value> = vec![];
+        upsert_rollout(&mut rules, "on", 100);
+        let flag = json!({ "key": "k", "enabled": true, "default_variant": "off", "rules": rules.clone() });
+        assert_eq!(evaluate_one(&flag, "user:anyone").0, "on", "100% must match everyone");
+
+        // Re-upsert lowers it to 0 in place (no duplicate rule).
+        upsert_rollout(&mut rules, "on", 0);
+        assert_eq!(rules.len(), 1, "rollout re-upsert must update in place");
+        let flag0 = json!({ "key": "k", "enabled": true, "default_variant": "off", "rules": rules });
+        assert_eq!(evaluate_one(&flag0, "user:anyone").0, "off", "0% must match no one");
+    }
+
+    #[test]
+    fn allowlist_priority_beats_rollout_when_built_via_builders() {
+        // Built only through the public builders (so the PRIORITY_* constants,
+        // not hand-written numbers, decide precedence).
+        let mut rules: Vec<Value> = vec![];
+        upsert_rollout(&mut rules, "rolled", 0);
+        upsert_allowlist(&mut rules, "listed", "user:abc");
+        let flag = json!({ "key": "k", "enabled": true, "default_variant": "off", "rules": rules });
+        assert_eq!(evaluate_one(&flag, "user:abc").0, "listed");
+    }
+}
