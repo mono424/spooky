@@ -13,7 +13,7 @@
 //! the `job-runner` crate (it pins a different surrealdb-core major), so the small
 //! discovery parse is replicated here on top of the CLI's own config types.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -31,8 +31,13 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Table
 use ratatui::{Frame, Terminal};
 
 use crate::backend::{self, AppType, DEFAULT_CONFIG_PATH};
+use crate::dev;
 use crate::surreal_client::{MigrationDB, SurrealClient};
 use crate::{ConnectionArgs, JobsCommands};
+
+/// The clap default for `--url`. When `conn.url` still equals this, the user did
+/// not override it, so we resolve the endpoint from the project config instead.
+const DEFAULT_SURREAL_URL: &str = "http://localhost:8000";
 
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
@@ -61,7 +66,7 @@ pub fn run(
             limit,
             json,
         }) => list(&client, &tables, status, table, limit, json),
-        Some(JobsCommands::Get { id, json }) => get(&client, id, json),
+        Some(JobsCommands::Get { id, json }) => get(&client, &tables, id, json),
         Some(JobsCommands::Kill { id }) => kill(&client, &id),
         Some(JobsCommands::Retry { id }) => retry(&client, &id),
     }
@@ -78,6 +83,15 @@ fn client_from(conn: &ConnectionArgs, config: &Option<PathBuf>) -> SurrealClient
     let sp00ky_config = backend::load_config(&config_file);
     let resolved = sp00ky_config.resolved_surrealdb();
 
+    // Resolve the SurrealDB endpoint from the project config (the dev stack maps
+    // SurrealDB to localhost:8666, and external hosting carries its own endpoint),
+    // using the same helper `spky dev` uses. A non-default `--url`/`SURREAL_URL`
+    // always wins; we detect "unset" by comparing against the clap default.
+    let url = if conn.url == DEFAULT_SURREAL_URL {
+        dev::surreal_connection_url(&resolved, dev::SURREAL_PORT)
+    } else {
+        conn.url.clone()
+    };
     let namespace = if conn.namespace == "main" {
         resolved.namespace
     } else {
@@ -89,13 +103,7 @@ fn client_from(conn: &ConnectionArgs, config: &Option<PathBuf>) -> SurrealClient
         conn.database.clone()
     };
 
-    SurrealClient::new(
-        &conn.url,
-        &namespace,
-        &database,
-        &conn.username,
-        &conn.password,
-    )
+    SurrealClient::new(&url, &namespace, &database, &conn.username, &conn.password)
 }
 
 /// Map of job table name -> backend app name, parsed from `sp00ky.yml`. Any
@@ -313,7 +321,7 @@ fn fetch_snapshot(
                         Some(snapshot.oldest_pending.map(|cur| cur.min(o)).unwrap_or(o));
                 }
             }
-            Err(e) => snapshot.errors.push(format!("{}: {}", table, e)),
+            Err(e) => snapshot.errors.push(format!("{}: {:#}", table, e)),
         }
     }
 
@@ -322,6 +330,25 @@ fn fetch_snapshot(
         .rows
         .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     snapshot
+}
+
+/// If *every* configured job table failed to query, the snapshot is meaningless
+/// (an empty dashboard would falsely read as "0 jobs, all healthy"). Turn that
+/// into a hard error, with a hint for the common connection-refused case.
+fn total_failure(snapshot: &Snapshot, table_count: usize) -> Option<String> {
+    if table_count == 0 || snapshot.errors.len() < table_count {
+        return None;
+    }
+    let joined = snapshot.errors.join("; ");
+    if joined.contains("Connection refused") || joined.contains("Failed to connect") {
+        Some(format!(
+            "{}\n\nCould not reach SurrealDB. Is the stack running? Start it with `spky dev`, \
+             or point at the right instance with --url / SURREAL_URL.",
+            joined
+        ))
+    } else {
+        Some(joined)
+    }
 }
 
 fn parse_job_row(v: &Value, table: &str, backend_name: &str) -> Option<JobRow> {
@@ -416,6 +443,9 @@ fn list(
     json: bool,
 ) -> Result<()> {
     let snapshot = fetch_snapshot(client, tables, limit);
+    if let Some(err) = total_failure(&snapshot, tables.len()) {
+        bail!(err);
+    }
 
     let rows: Vec<&JobRow> = snapshot
         .rows
@@ -520,10 +550,16 @@ fn status_style(status: &str) -> (&'static str, &'static str) {
 // `spky jobs get`
 // =============================================================
 
-fn get(client: &SurrealClient, id: String, json: bool) -> Result<()> {
+fn get(
+    client: &SurrealClient,
+    tables: &BTreeMap<String, String>,
+    id: String,
+    json: bool,
+) -> Result<()> {
     let (tb, key) = id
         .split_once(':')
         .ok_or_else(|| anyhow!("Job id must be 'table:key', got '{}'", id))?;
+    let backend_name = tables.get(tb).cloned().unwrap_or_else(|| tb.to_string());
     let query = format!(
         "SELECT type::string(id) AS id, status, path, retries, max_retries, retry_strategy, \
          type::string(created_at) AS created_at, type::string(updated_at) AS updated_at, errors, payload \
@@ -544,7 +580,7 @@ fn get(client: &SurrealClient, id: String, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let job = parse_job_row(&row, tb, tb).ok_or_else(|| anyhow!("Unexpected job shape"))?;
+    let job = parse_job_row(&row, tb, &backend_name).ok_or_else(|| anyhow!("Unexpected job shape"))?;
     let (icon, color) = status_style(&job.status);
     println!("{BOLD}{}{RESET}", job.id);
     println!("  status      : {}{} {}{RESET}", color, icon, job.status);
@@ -707,6 +743,13 @@ impl TuiApp {
 }
 
 fn run_tui(client: SurrealClient, tables: BTreeMap<String, String>) -> Result<()> {
+    // Probe connectivity first so we don't drop into an empty alt-screen on a
+    // dead connection (which would misleadingly look like "0 jobs").
+    let probe = fetch_snapshot(&client, &tables, TUI_LIMIT);
+    if let Some(err) = total_failure(&probe, tables.len()) {
+        bail!(err);
+    }
+
     // Restore the terminal even if a panic unwinds through the draw loop.
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -943,15 +986,21 @@ fn render_table(f: &mut Frame, area: Rect, app: &mut TuiApp) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
-    let text = match &app.status_msg {
-        Some(msg) => Line::from(Span::styled(
+    let text = if let Some(msg) = &app.status_msg {
+        Line::from(Span::styled(
             format!(" {} ", msg),
             Style::default().fg(Color::White).bg(Color::Indexed(238)),
-        )),
-        None => Line::from(Span::styled(
+        ))
+    } else if let Some(err) = app.snapshot.errors.first() {
+        Line::from(Span::styled(
+            format!(" ⚠ {} ", err),
+            Style::default().fg(Color::Red),
+        ))
+    } else {
+        Line::from(Span::styled(
             " ↑/↓ select   k kill   r retry   ⏎ details   f filter   q quit ",
             Style::default().fg(Color::DarkGray),
-        )),
+        ))
     };
     f.render_widget(Paragraph::new(text), area);
 }

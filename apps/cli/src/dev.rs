@@ -34,7 +34,7 @@ const INFRA_SERVICES_SURREALISM: &[&str] = &["surrealdb"];
 
 /// Returns the SurrealDB URL for the given config: either the external endpoint
 /// or `http://localhost:{port}` for locally hosted instances.
-fn surreal_connection_url(resolved: &ResolvedSurrealDb, local_port: u16) -> String {
+pub(crate) fn surreal_connection_url(resolved: &ResolvedSurrealDb, local_port: u16) -> String {
     match &resolved.hosting {
         HostingMode::External => resolved.endpoint.clone().unwrap_or_else(|| {
             format!("http://localhost:{}", local_port)
