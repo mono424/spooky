@@ -1495,6 +1495,7 @@ fn warn_frontend_vault_no_whitelist_deploy(name: &str, env: &Option<backend::Env
 
 /// Build a frontend manifest JSON value.
 fn build_frontend_manifest(
+    name: &str,
     slug: &str,
     image_id: &Option<String>,
     port: u16,
@@ -1504,6 +1505,10 @@ fn build_frontend_manifest(
     working_dir: &Option<String>,
 ) -> serde_json::Value {
     serde_json::json!({
+        // The frontend's name from sp00ky.yml (e.g. "web"). The control plane
+        // exposes the app at `{slug}-{name}.{domain}`; without it the server
+        // falls back to "app", silently moving the endpoint to `{slug}-app`.
+        "name": name,
         "image": format!("{}/frontend", slug),
         "image_hash": image_id,
         "port": port,
@@ -1814,7 +1819,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         if frontend_unchanged {
             println!("  Frontend image unchanged, skipping upload.");
             let cmd = get_docker_cmd(&image_tag);
-            frontend_manifest = Some(build_frontend_manifest(&slug, &frontend_image_id, port, &resources, &merged_env, &cmd, &working_dir));
+            frontend_manifest = Some(build_frontend_manifest(frontend_name, &slug, &frontend_image_id, port, &resources, &merged_env, &cmd, &working_dir));
         } else {
 
         let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-frontend.tar.gz", slug));
@@ -1864,7 +1869,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         let _ = fs::remove_file(&tmp_tar);
 
         let cmd = get_docker_cmd(&image_tag);
-        frontend_manifest = Some(build_frontend_manifest(&slug, &frontend_image_id, port, &resources, &merged_env, &cmd, &working_dir));
+        frontend_manifest = Some(build_frontend_manifest(frontend_name, &slug, &frontend_image_id, port, &resources, &merged_env, &cmd, &working_dir));
 
         println!("  Frontend ready for deployment.");
         } // end else (frontend changed)
