@@ -9,6 +9,7 @@ mod create;
 mod dev;
 mod doctor;
 mod flag;
+mod jobs;
 mod json_schema;
 mod logs_browser;
 mod mcp;
@@ -259,6 +260,17 @@ enum Commands {
         #[command(subcommand)]
         action: FlagCommands,
     },
+    /// Overview and control of background (outbox) jobs. Run without a
+    /// subcommand to open the interactive dashboard.
+    Jobs {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[command(subcommand)]
+        action: Option<JobsCommands>,
+    },
 
     // ── Account ─────────────────────────────────────────────────────────────
     /// Manage cloud projects (create, list, credentials, destroy)
@@ -425,6 +437,44 @@ enum FlagCommands {
         /// Path to sp00ky.yml config file
         #[arg(long)]
         config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum JobsCommands {
+    /// List jobs as a static table (scriptable; supports --json)
+    #[command(visible_alias = "ls")]
+    List {
+        /// Filter by status (pending, processing, success, failed)
+        #[arg(long)]
+        status: Option<String>,
+        /// Filter to a single job table
+        #[arg(long)]
+        table: Option<String>,
+        /// Maximum rows to fetch per job table
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show full detail (payload + error history) for one job
+    Get {
+        /// Job id, e.g. `job:abc123`
+        id: String,
+        /// Emit JSON instead of formatted fields
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop a job: cancel it if in-flight, or drop it if still queued
+    Kill {
+        /// Job id, e.g. `job:abc123`
+        id: String,
+    },
+    /// Re-run a terminal (failed/success) job
+    Retry {
+        /// Job id, e.g. `job:abc123`
+        id: String,
     },
 }
 
@@ -2158,6 +2208,11 @@ fn main() -> Result<()> {
         Some(Commands::Backup { action }) => cloud::backup(action),
         Some(Commands::Link { action }) => cloud::link(action),
         Some(Commands::Flag { action }) => flag::run(action),
+        Some(Commands::Jobs {
+            conn,
+            config,
+            action,
+        }) => jobs::run(conn, config, action),
 
         // ── Account ─────────────────────────────────────────────────────────
         Some(Commands::Project { action }) => match action {

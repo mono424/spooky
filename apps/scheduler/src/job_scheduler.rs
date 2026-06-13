@@ -2,18 +2,19 @@ use anyhow::Result;
 use axum::{
     extract::State,
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::post,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::router::SspPool;
-use crate::transport::HttpTransport;
+use crate::transport::{HttpTransport, SspInfo};
 
 /// Job status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -119,12 +120,94 @@ pub struct JobState {
     pub job_tracker: Arc<JobTracker>,
 }
 
+/// Identifies a single job for kill/retry. Forwarded verbatim to the owning
+/// SSP's `/job/kill` / `/job/retry` endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobActionRequest {
+    pub id: String,
+}
+
 /// Create job router
 pub fn create_job_router(state: JobState) -> Router {
     Router::new()
         .route("/job/dispatch", post(dispatch_job))
         .route("/job/result", post(handle_job_result))
+        .route("/job/kill", post(cluster_job_kill))
+        .route("/job/retry", post(cluster_job_retry))
         .with_state(state)
+}
+
+/// Cluster `/job/kill` — broadcast to every ready SSP.
+///
+/// The `JobTracker` is not populated for outbox jobs (real routing is broadcast
+/// in `ingest.rs`, not via `dispatch_job`), so we cannot look up the owner. A kill
+/// is idempotent and harmless on SSPs that don't host the job: only the SSP with
+/// the in-flight request cancels it; the rest just set a kill flag.
+async fn cluster_job_kill(State(state): State<JobState>, Json(req): Json<JobActionRequest>) -> Response {
+    let ready: Vec<SspInfo> = {
+        let pool = state.ssp_pool.read().await;
+        pool.all()
+            .into_iter()
+            .filter(|s| pool.is_ready(&s.id))
+            .cloned()
+            .collect()
+    };
+
+    if ready.is_empty() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "code": "no_ssp", "message": "no ready SSP available" })),
+        )
+            .into_response();
+    }
+
+    let results = state.transport.broadcast_to_ssps(&ready, "/job/kill", &req).await;
+    let dispatched = results.iter().filter(|(_, r)| r.is_ok()).count();
+    (
+        StatusCode::OK,
+        Json(json!({ "id": req.id, "dispatched": dispatched, "ssps": ready.len() })),
+    )
+        .into_response()
+}
+
+/// Cluster `/job/retry` — pick exactly one ready SSP and forward.
+///
+/// Retry resets the row and enqueues into one SSP's local runner. Broadcasting
+/// would reset+enqueue on every SSP and run the job N times, so we choose a single
+/// SSP fresh (the prior assignment is stale; a re-enqueued job logically gets a new
+/// one, mirroring how `ingest.rs` assigns).
+async fn cluster_job_retry(State(state): State<JobState>, Json(req): Json<JobActionRequest>) -> Response {
+    let ssp = {
+        let mut pool = state.ssp_pool.write().await;
+        match pool.select_for_query() {
+            Some(id) => pool.get(&id).map(|s| (id.clone(), s.url.clone())),
+            None => None,
+        }
+    };
+
+    let (ssp_id, ssp_url) = match ssp {
+        Some(pair) => pair,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({ "code": "no_ssp", "message": "no ready SSP available" })),
+            )
+                .into_response();
+        }
+    };
+
+    match state.transport.post_to_ssp(&ssp_url, "/job/retry", &req).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(json!({ "id": req.id, "status": "pending", "assigned_to": ssp_id })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "code": "ssp_error", "message": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 /// Dispatch job to SSP

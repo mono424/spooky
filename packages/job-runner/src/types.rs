@@ -1,6 +1,33 @@
+use dashmap::{DashMap, DashSet};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
+
+/// Shared control state for in-flight cancellation and kill-while-pending.
+///
+/// Constructed once by the SSP and cloned into both the [`crate::runner::JobRunner`]
+/// and the SSP's `/job/kill` + `/job/retry` HTTP handlers, so both sides see the
+/// same maps. Cheap to clone (all fields are `Arc`).
+#[derive(Clone, Default)]
+pub struct JobControl {
+    /// `job_id` -> cancellation token for the request currently in-flight on this
+    /// SSP. Inserted by the runner just before the HTTP POST and removed right
+    /// after. A kill handler fires the token; the runner's `select!` observes it.
+    pub inflight: Arc<DashMap<String, CancellationToken>>,
+    /// `job_id`s that were killed while still queued (not yet in-flight). The
+    /// runner checks this set at dequeue time and fails the job instead of
+    /// running it. This is the synchronization point that avoids a second writer
+    /// racing the runner on the `status` field.
+    pub killed_pending: Arc<DashSet<String>>,
+}
+
+impl JobControl {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
 
 /// Info about a single backend that handles jobs
 #[derive(Clone, Debug)]

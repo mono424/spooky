@@ -178,6 +178,14 @@ export interface QueryConfig {
   localArray: RecordVersionArray;
   /** The version array representing the remote (server) state of results. */
   remoteArray: RecordVersionArray;
+  /**
+   * In-memory only (never persisted to `_00_query`): version array of the
+   * subquery CHILD rows pulled via `parent IS NOT NONE` edges, so the
+   * child-body sync is idempotent across polls. Kept separate from
+   * `remoteArray` so related child rows never enter the primary window /
+   * `rowCount` / `localArray`.
+   */
+  subqueryRemoteArray?: RecordVersionArray;
   /** Time-To-Live for this query. */
   ttl: QueryTimeToLive;
   /** Timestamp when the query was last accessed/active. */

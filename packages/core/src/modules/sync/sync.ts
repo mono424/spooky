@@ -8,7 +8,9 @@ import type { RecordId, Uuid } from 'surrealdb';
 import {
   ArraySyncer,
   buildListRefSelect,
+  buildSubqueryListRefSelect,
   createDiffFromDbOp,
+  diffRecordVersionArray,
   listRefPollDelayMs,
   recordVersionArraysEqual,
   resolveListRefPollInterval,
@@ -350,6 +352,15 @@ export class Sp00kySync<S extends SchemaStructure> {
         'syncQuery failed during poll'
       );
     }
+    // Cross-session fallback for `.related()` child rows: the LIVE-permission
+    // gap can drop child-edge notifications, so converge their bodies on the
+    // poll too (idempotent — no-op when nothing changed).
+    await this.syncSubqueryChildren(queryHash).catch((err) => {
+      this.logger.info(
+        { err: (err as Error)?.message ?? err, queryHash, Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery' },
+        'Subquery child sync failed during poll'
+      );
+    });
     // A REMOVAL needs no record fetch, so unlike the added-row path it doesn't
     // get a re-render from the SSP stream on this code path reliably (and the
     // non-windowed window-0 query re-queries the local DB rather than the id-set).
@@ -463,12 +474,26 @@ export class Sp00kySync<S extends SchemaStructure> {
         'Live update received'
       );
       if (message.action === 'KILLED') return;
-      // Skip subquery entries (rows with `parent` set) — they're synthetic
-      // CRDT/cursor metadata rows. The poll filters them with `parent IS NONE`
-      // (the client's RecordVersionArray only tracks primary rows); the LIVE
-      // feed delivers every row, so without this they'd surface as spurious
-      // "added" diffs.
-      if ((message.value as { parent?: unknown }).parent != null) return;
+      // Subquery child edges (rows with `parent` set) are NOT primary window
+      // rows — the client's `RecordVersionArray` only tracks primary rows, so
+      // routing them through `handleRemoteListRefChange` would surface them as
+      // spurious "added" diffs and pollute the window. Instead route them to
+      // the dedicated child-body sync so `.related()` data stays realtime
+      // cross-session (the LIVE-permission gap otherwise leaves it to the poll).
+      if ((message.value as { parent?: unknown }).parent != null) {
+        this.handleRemoteSubqueryChange(
+          message.action,
+          message.value.in as RecordId<string>,
+          message.value.out as RecordId<string>,
+          message.value.version as number
+        ).catch((err) => {
+          this.logger.error(
+            { err, Category: 'sp00ky-client::Sp00kySync::startRefLiveQueries' },
+            'Error handling remote subquery change'
+          );
+        });
+        return;
+      }
       this.handleRemoteListRefChange(
         message.action,
         message.value.in as RecordId<string>,
@@ -533,6 +558,46 @@ export class Sp00kySync<S extends SchemaStructure> {
     // (a SHA-256 over query content + sessionId) — the key DataModule uses.
     const hash = extractIdPart(existing.config.id);
     await this.runSyncForQuery(hash, diff);
+  }
+
+  /**
+   * Handle a LIVE change to a SUBQUERY child edge (a `_00_list_ref` row with
+   * `parent` set) for a `.related()` query. Unlike primary rows, child rows
+   * must NOT touch the query's `localArray`/`remoteArray`/`rowCount`; we only
+   * keep the child BODY fresh in the local cache so the in-browser SSP's
+   * subquery-table dependency re-materializes the parent view.
+   *
+   * CREATE/UPDATE fetch+upsert the child body. DELETE is intentionally a
+   * no-op: a child leaving this query's set must not delete a body another
+   * query may still show (see `syncSubqueryChildren` deletion-safety note);
+   * a genuine record delete propagates via the normal delete path.
+   */
+  private async handleRemoteSubqueryChange(
+    action: 'CREATE' | 'UPDATE' | 'DELETE',
+    queryId: RecordId,
+    childId: RecordId,
+    version: number
+  ) {
+    this.lastLiveEventAt = Date.now();
+    this.listRefIdleStreak = 0;
+
+    if (action === 'DELETE') return;
+
+    const existing = this.dataModule.getQueryById(queryId);
+    if (!existing) return;
+
+    const item = { id: childId, version };
+    await this.syncEngine.syncRecords(
+      action === 'CREATE'
+        ? { added: [item], updated: [], removed: [] }
+        : { added: [], updated: [item], removed: [] }
+    );
+
+    // Keep the in-memory child array in step so the poll's idempotent diff
+    // doesn't re-fetch this body on the next tick.
+    const key = encodeRecordId(childId);
+    const prev = existing.config.subqueryRemoteArray ?? [];
+    existing.config.subqueryRemoteArray = [...prev.filter(([id]) => id !== key), [key, version]];
   }
 
   /**
@@ -860,6 +925,64 @@ export class Sp00kySync<S extends SchemaStructure> {
       /// Incantation existed already
       await this.dataModule.updateQueryRemoteArray(queryHash, array);
     }
+
+    // Pull the bodies of any `.related()` subquery children into the local
+    // cache. The primary fetch above (`parent IS NONE`) tracks only window
+    // rows, so without this a cold-reload re-materialization of the
+    // correlated surql finds no child rows and related fields come back
+    // empty. Best-effort: never fail registration over it.
+    await this.syncSubqueryChildren(queryHash).catch((err) => {
+      this.logger.info(
+        { err: (err as Error)?.message ?? err, queryHash, Category: 'sp00ky-client::Sp00kySync::createRemoteQuery' },
+        'Subquery child sync failed during registration; poll will retry'
+      );
+    });
+  }
+
+  /**
+   * Sync the BODIES of a `.related()` query's subquery child rows into the
+   * local cache, separately from the primary window array. The SSP writes
+   * each matched child as a `_00_list_ref` edge tagged `parent`/`parent_rel`;
+   * `buildSubqueryListRefSelect` pulls those `out`+`version` pairs (any
+   * nesting depth). We diff against the in-memory `subqueryRemoteArray` and
+   * fetch added/updated bodies through the SyncEngine — which `saveBatch`s
+   * them into the local DB AND the in-browser SSP, whose subquery-table
+   * dependency then re-materializes the parent view (no explicit notify).
+   *
+   * Deletion safety: we pass `removed: []` deliberately. A child body can be
+   * shared by other queries; letting `handleRemovedRecords` delete one that
+   * merely left THIS query's child set would clobber data another query still
+   * shows. Genuine record deletes flow through the normal delete path; a
+   * lingering orphan body is invisible (the correlated WHERE stops matching).
+   *
+   * Kept off `runSyncForQuery` on purpose so child fetches never flip the
+   * query to `fetching` or skew its DevTools timings.
+   */
+  private async syncSubqueryChildren(queryHash: string): Promise<void> {
+    const queryState = this.dataModule.getQueryByHash(queryHash);
+    if (!queryState) return;
+
+    const listRefTbl = this.listRefTable();
+    const [items] = await this.remote.query<[{ out: RecordId<string>; version: number }[]]>(
+      buildSubqueryListRefSelect(listRefTbl),
+      { in: queryState.config.id }
+    );
+    if (!Array.isArray(items)) return;
+
+    const fresh: RecordVersionArray = items.map((item) => [encodeRecordId(item.out), item.version]);
+    const prev = queryState.config.subqueryRemoteArray ?? [];
+    if (recordVersionArraysEqual(fresh, prev)) return; // idempotent: nothing new
+
+    const diff = diffRecordVersionArray(prev, fresh);
+    if (diff.added.length > 0 || diff.updated.length > 0) {
+      await this.syncEngine.syncRecords({
+        added: diff.added,
+        updated: diff.updated,
+        removed: [], // never delete child bodies here — see method doc
+      });
+    }
+    // In-memory only — child rows must never enter the persisted primary array.
+    queryState.config.subqueryRemoteArray = fresh;
   }
 
   public async heartbeatQuery(queryHash: string) {

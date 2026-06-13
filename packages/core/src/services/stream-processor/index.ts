@@ -68,6 +68,13 @@ export class StreamProcessorService {
   // query, so the UI updates once after the whole batch rather than row-by-row.
   private batching = false;
   private batchBuffer: Map<string, StreamUpdate> = new Map();
+  // Current session's auth identity, injected into every `register_view`'s
+  // params so the in-browser SSP can resolve `$auth`/`$access` in table
+  // permission predicates (mirrors the server's `fn::query::register`). Empty
+  // strings when logged out — a non-null `auth` keeps `permission_inject` from
+  // rejecting `$auth`-gated tables; the predicate just degrades to its public
+  // branch. Set via `setSessionAuth` on every auth state change.
+  private sessionAuth: { authId: string; access: string } = { authId: '', access: '' };
 
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
@@ -288,6 +295,28 @@ export class StreamProcessorService {
     );
   }
 
+  /**
+   * Set the current session's auth identity for permission injection,
+   * mirroring the server's `fn::query::register`
+   * (`object::extend(params, { auth: { id: $auth.id }, access: $access })`).
+   * Stored as strings (empty when logged out) and applied to every
+   * `register_view` in {@link registerQueryPlan}. Must be set before a
+   * `$auth`-gated query registers (and re-set on auth state changes), or the
+   * in-browser SSP's `permission_inject` rejects it with
+   * "requires $auth but registration params lack it".
+   */
+  setSessionAuth(authId: string | null, access: string | null) {
+    this.sessionAuth = { authId: authId ?? '', access: access ?? '' };
+    this.logger.debug(
+      {
+        authId: this.sessionAuth.authId,
+        access: this.sessionAuth.access,
+        Category: 'sp00ky-client::StreamProcessorService::setSessionAuth',
+      },
+      'Session auth context updated'
+    );
+  }
+
   async saveState() {
     if (!this.processor) return;
     try {
@@ -411,10 +440,23 @@ export class StreamProcessorService {
     try {
       const normalizedParams = this.normalizeValue(queryPlan.params);
 
+      // Mirror the server's `fn::query::register` auth injection so the
+      // in-browser SSP can resolve `$auth`/`$access` in a table's permission
+      // predicate. Without this, any `$auth`-gated table (e.g. `thread`) is
+      // rejected by `permission_inject` and its local view never materializes.
+      // Injected only into the params handed to the in-browser SSP — never into
+      // the persisted `queryState.config.params` / query hash / server payload
+      // (the server does its own injection), so the view id stays shared.
+      const paramsWithAuth = {
+        ...(normalizedParams as Record<string, unknown>),
+        auth: { id: this.sessionAuth.authId },
+        access: this.sessionAuth.access,
+      };
+
       const initialUpdate = this.processor.register_view({
         id: queryPlan.queryHash,
         surql: queryPlan.surql,
-        params: normalizedParams,
+        params: paramsWithAuth,
         clientId: 'local',
         ttl: queryPlan.ttl.toString(),
         lastActiveAt: new Date().toISOString(),

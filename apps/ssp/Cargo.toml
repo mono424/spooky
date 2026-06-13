@@ -31,6 +31,8 @@ hostname = "0.4"
 loro = "1"
 lru = "0.12"
 base64 = "0.22"
+dashmap = "6"
+tokio-util = "0.7"
 
 [build-dependencies]
 chrono = "0.4"

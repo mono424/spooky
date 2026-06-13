@@ -1,22 +1,37 @@
-use crate::types::JobEntry;
+use crate::types::{JobControl, JobEntry};
 use anyhow::{Context, Result};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::json;
-use surrealdb::{Connection, Surreal};
 use surrealdb::types::RecordId;
+use surrealdb::{Connection, Surreal};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+
+/// Result of awaiting a single job's HTTP request, distinguishing an operator
+/// cancellation from a normal response so the loop can pick exactly one terminal
+/// status write.
+enum Outcome {
+    Cancelled,
+    Responded(reqwest::Result<reqwest::Response>),
+}
 
 pub struct JobRunner<C: Connection> {
     queue_rx: mpsc::Receiver<JobEntry>,
     queue_tx: mpsc::Sender<JobEntry>,
     db: Arc<Surreal<C>>,
     http_client: reqwest::Client,
+    job_control: JobControl,
 }
 
 impl<C: Connection> JobRunner<C> {
-    pub fn new(queue_rx: mpsc::Receiver<JobEntry>, queue_tx: mpsc::Sender<JobEntry>, db: Arc<Surreal<C>>) -> Self {
+    pub fn new(
+        queue_rx: mpsc::Receiver<JobEntry>,
+        queue_tx: mpsc::Sender<JobEntry>,
+        db: Arc<Surreal<C>>,
+        job_control: JobControl,
+    ) -> Self {
         let http_client = reqwest::Client::builder()
             .build()
             .expect("Failed to create HTTP client");
@@ -26,6 +41,7 @@ impl<C: Connection> JobRunner<C> {
             queue_tx,
             db,
             http_client,
+            job_control,
         }
     }
 
@@ -46,6 +62,19 @@ impl<C: Connection> JobRunner<C> {
 
     /// Execute a single job
     async fn execute_job(&self, job: JobEntry) -> Result<()> {
+        // Killed-while-pending: an operator called /job/kill before this job was
+        // dequeued. Fail it terminally without ever firing the request. The runner
+        // is the sole writer of `status`, so doing the write here (rather than in
+        // the kill handler) avoids clobbering a job that may have just flipped to
+        // 'processing'.
+        if self.job_control.killed_pending.remove(&job.id).is_some() {
+            info!(job_id = %job.id, "Job killed while pending — failing without execution");
+            let error_entry = json!({ "code": "killed", "reason": "killed by operator" });
+            self.append_error(&job.id, error_entry).await.ok();
+            self.update_status(&job.id, "failed").await?;
+            return Ok(());
+        }
+
         // Update status to "processing"
         self.update_status(&job.id, "processing").await?;
 
@@ -74,40 +103,72 @@ impl<C: Connection> JobRunner<C> {
             request = request.header("Authorization", format!("Bearer {}", token));
         }
 
-        let result = request.send().await;
+        // Register a cancellation token for the duration of the in-flight request
+        // so `/job/kill` on a 'processing' job can abort it. `biased` below makes
+        // the select poll the cancellation branch first, so a token that already
+        // fired wins ties against a response that completed in the same poll.
+        let cancel = CancellationToken::new();
+        self.job_control
+            .inflight
+            .insert(job.id.clone(), cancel.clone());
 
-        match result {
-            Ok(response) if response.status().is_success() => {
+        let send_fut = request.send();
+        tokio::pin!(send_fut);
+
+        let outcome = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Outcome::Cancelled,
+            res = &mut send_fut => Outcome::Responded(res),
+        };
+
+        // Always release the token. The runner is the single consumer, so only one
+        // execution per job_id is ever in-flight; an unconditional remove cannot
+        // drop a different (e.g. retried) execution's token.
+        self.job_control.inflight.remove(&job.id);
+
+        match outcome {
+            Outcome::Cancelled => {
+                info!(job_id = %job.id, "Job cancelled by operator — marking failed");
+                let error_entry = json!({ "code": "cancelled", "reason": "killed by operator" });
+                self.append_error(&job.id, error_entry).await.ok();
+                // An operator kill is terminal: do NOT run handle_failure, so the
+                // backoff-retry path never re-queues a job the operator killed.
+                self.update_status(&job.id, "failed").await?;
+            }
+            Outcome::Responded(Ok(response)) if response.status().is_success() => {
                 info!(job_id = %job.id, status = %response.status(), "Job completed successfully");
                 self.update_status(&job.id, "success").await?;
             }
-            Ok(response) => {
+            Outcome::Responded(Ok(response)) => {
                 let status = response.status();
-                let error_body = response.text().await.unwrap_or_else(|_| "Failed to read response body".to_string());
+                let error_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Failed to read response body".to_string());
                 warn!(
                     job_id = %job.id,
                     status = %status,
                     error_body = %error_body,
                     "Job request failed with non-success status"
                 );
-                
+
                 // Create error entry with code and reason
                 let error_entry = json!({
                     "code": status.as_u16(),
                     "reason": error_body
                 });
-                
+
                 self.handle_failure(job, Some(error_entry)).await?;
             }
-            Err(e) => {
+            Outcome::Responded(Err(e)) => {
                 warn!(job_id = %job.id, error = %e, "Job request failed");
-                
+
                 // Create error entry for request error
                 let error_entry = json!({
                     "code": 0,
                     "reason": e.to_string()
                 });
-                
+
                 self.handle_failure(job, Some(error_entry)).await?;
             }
         }
@@ -124,10 +185,13 @@ impl<C: Connection> JobRunner<C> {
             self.append_error(&job.id, error).await?;
         }
 
-        if job.retries < job.max_retries {
-            // Increment retries in database
-            self.increment_retries(&job.id).await?;
+        // Persist the incremented attempt count regardless of outcome, so a job
+        // that exhausts its budget ends at retries == max_retries. The terminal
+        // branch below used to skip this, leaving it one short (e.g. 2/3 on a job
+        // that actually used all its attempts).
+        self.increment_retries(&job.id).await?;
 
+        if job.retries < job.max_retries {
             // Calculate delay based on retry strategy
             let delay = calculate_delay(job.retries, &job.retry_strategy);
 
@@ -145,13 +209,13 @@ impl<C: Connection> JobRunner<C> {
             let job_id = job.id.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
-                
+
                 // Update status to pending before re-queueing
                 if let Err(e) = update_status_helper(&db, &job_id, "pending").await {
                     error!(job_id = %job_id, error = %e, "Failed to update status for retry");
                     return;
                 }
-                
+
                 // Re-queue the job
                 if let Err(e) = queue_tx.send(job).await {
                     error!(job_id = %job_id, error = %e, "Failed to re-queue job");
@@ -168,20 +232,10 @@ impl<C: Connection> JobRunner<C> {
 
         Ok(())
     }
-    
+
     /// Append error to the errors array in database
     async fn append_error(&self, job_id: &str, error: serde_json::Value) -> Result<()> {
-        let record_id = RecordId::parse_simple(job_id)
-            .context(format!("Invalid job ID: {}", job_id))?;
-
-        self.db
-            .query("UPDATE $id SET errors = array::append(errors, $error), updated_at = time::now()")
-            .bind(("id", record_id))
-            .bind(("error", error))
-            .await
-            .context("Failed to append error")?;
-
-        Ok(())
+        append_error_helper(&self.db, job_id, error).await
     }
 
     /// Update job status in database
@@ -205,7 +259,7 @@ impl<C: Connection> JobRunner<C> {
 }
 
 /// Helper function to update status (used by both JobRunner and spawned tasks)
-async fn update_status_helper<C: Connection>(
+pub async fn update_status_helper<C: Connection>(
     db: &Surreal<C>,
     job_id: &str,
     status: &str,
@@ -218,6 +272,39 @@ async fn update_status_helper<C: Connection>(
         .bind(("status", status.to_string()))
         .await
         .context("Failed to update status")?;
+
+    Ok(())
+}
+
+/// Append an error object to a job's `errors` array. Shared by the runner and the
+/// SSP's `/job/kill`/`/job/retry` handlers so every writer uses identical SQL.
+pub async fn append_error_helper<C: Connection>(
+    db: &Surreal<C>,
+    job_id: &str,
+    error: Value,
+) -> Result<()> {
+    let record_id = RecordId::parse_simple(job_id)
+        .context(format!("Invalid job ID: {}", job_id))?;
+
+    db.query("UPDATE $id SET errors = array::append(errors, $error), updated_at = time::now()")
+        .bind(("id", record_id))
+        .bind(("error", error))
+        .await
+        .context("Failed to append error")?;
+
+    Ok(())
+}
+
+/// Reset a terminal job for re-execution: `status='pending'`, `retries=0`, errors
+/// cleared. Used by the SSP `/job/retry` handler before re-enqueueing the job.
+pub async fn reset_for_retry_helper<C: Connection>(db: &Surreal<C>, job_id: &str) -> Result<()> {
+    let record_id = RecordId::parse_simple(job_id)
+        .context(format!("Invalid job ID: {}", job_id))?;
+
+    db.query("UPDATE $id SET status = 'pending', retries = 0, errors = [], updated_at = time::now()")
+        .bind(("id", record_id))
+        .await
+        .context("Failed to reset job for retry")?;
 
     Ok(())
 }

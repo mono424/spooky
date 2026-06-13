@@ -100,6 +100,7 @@ impl TestHarness {
             metrics: Arc::clone(&self.metrics),
             job_config: Arc::clone(&self.job_config),
             job_queue_tx: self.job_queue_tx.clone(),
+            job_control: job_runner::JobControl::new(),
             ssp_id: "test-ssp".to_string(),
             scheduler_url: None,
             start_time: self.start_time,

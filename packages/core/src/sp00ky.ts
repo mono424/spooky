@@ -41,7 +41,7 @@ import { CrdtManager, CrdtField } from './modules/crdt/index';
 import { FeatureFlagModule, FeatureFlagHandle } from './modules/feature-flag/index';
 import type { FeatureFlagOptions } from './modules/feature-flag/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
-import { parseParams } from './utils/index';
+import { parseParams, encodeRecordId } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
 
@@ -381,6 +381,16 @@ export class Sp00kyClient<S extends SchemaStructure> {
       // table.
       this.auth.subscribe(async (userId) => {
         this.dataModule.setCurrentUserId(userId);
+        // Mirror the server's `fn::query::register` auth injection for the
+        // in-browser SSP: feed the current user's full record id + access
+        // method so `$auth`-gated table permissions (e.g. `thread`) resolve
+        // locally instead of being rejected. Set synchronously BEFORE the
+        // first `await` (like `setCurrentUserId` above) so queries that
+        // re-register on this auth flip see the fresh context, not a stale one.
+        this.streamProcessor.setSessionAuth(
+          this.auth.currentUser?.id ? encodeRecordId(this.auth.currentUser.id) : null,
+          this.auth.access
+        );
         const next = await this.fetchSessionId();
         this.dataModule.setSessionId(next);
         this.crdtManager.setSessionId(next);

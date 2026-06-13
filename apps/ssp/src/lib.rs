@@ -34,7 +34,7 @@ pub mod view_metrics;
 use metrics::Metrics;
 use view_metrics::{ViewMetrics, ViewMetricsState};
 
-use job_runner::{JobConfig, JobEntry, JobRunner};
+use job_runner::{reset_for_retry_helper, JobConfig, JobControl, JobEntry, JobRunner};
 use tokio::sync::mpsc;
 
 /// Shared database connection wrapped in Arc for zero-copy sharing across tasks
@@ -66,6 +66,10 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub job_config: Arc<JobConfig>,
     pub job_queue_tx: mpsc::Sender<JobEntry>,
+    /// Shared cancellation/kill state, also held by the `JobRunner`. Lets the
+    /// `/job/kill` and `/job/retry` handlers cancel in-flight requests and drop
+    /// queued jobs without racing the runner (which stays the sole `status` writer).
+    pub job_control: JobControl,
     pub ssp_id: String,
     pub scheduler_url: Option<String>,
     pub start_time: std::time::Instant,
@@ -298,13 +302,25 @@ fn load_job_config_from_env() -> Arc<JobConfig> {
         }
     };
 
-    let entries: Vec<serde_json::Value> = match serde_json::from_str(&json) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(error = %e, "Failed to parse SPKY_JOB_CONFIG, job runner disabled");
-            return Arc::new(JobConfig::default());
-        }
-    };
+    // The orchestrator emits a JSON array of backend entries. An empty
+    // backend list can legitimately arrive as `null` (Go's json.Marshal
+    // encodes a nil slice as null) or `[]`; both mean "no outbox backends",
+    // not a misconfiguration, so treat them as an empty config instead of a
+    // hard parse failure that masks the real (empty) state.
+    let entries: Vec<serde_json::Value> =
+        match serde_json::from_str::<Option<Vec<serde_json::Value>>>(&json) {
+            Ok(Some(v)) => v,
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                warn!(error = %e, raw = %json, "Failed to parse SPKY_JOB_CONFIG, job runner disabled");
+                return Arc::new(JobConfig::default());
+            }
+        };
+
+    if entries.is_empty() {
+        info!("SPKY_JOB_CONFIG lists no outbox backends, job runner disabled");
+        return Arc::new(JobConfig::default());
+    }
 
     let mut job_tables = std::collections::HashMap::new();
     for entry in &entries {
@@ -335,6 +351,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/view/unregister", post(unregister_view_handler))
         .route("/crdt/apply", post(crdt_apply_handler))
         .route("/reset", post(reset_handler))
+        .route("/job/kill", post(job_kill_handler))
+        .route("/job/retry", post(job_retry_handler))
         .layer(middleware::from_fn(auth_middleware));
 
     // Public routes — no auth required (health checks, info, version).
@@ -400,9 +418,18 @@ pub async fn run_server() -> anyhow::Result<()> {
     // Create job queue channel
     let (job_queue_tx, job_queue_rx) = mpsc::channel::<JobEntry>(100);
 
+    // Shared kill/cancel state. Constructed unconditionally (AppState always needs
+    // it); the runner only gets a clone when there are job tables to run.
+    let job_control = JobControl::new();
+
     // Spawn job runner if there are job tables configured
     if !job_config.job_tables.is_empty() {
-        let job_runner = JobRunner::new(job_queue_rx, job_queue_tx.clone(), db.clone());
+        let job_runner = JobRunner::new(
+            job_queue_rx,
+            job_queue_tx.clone(),
+            db.clone(),
+            job_control.clone(),
+        );
         tokio::spawn(async move {
             job_runner.run().await;
         });
@@ -428,6 +455,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         metrics: metrics.clone(),
         job_config,
         job_queue_tx,
+        job_control,
         ssp_id: config.ssp_id.clone(),
         scheduler_url: config.scheduler_url.clone(),
         start_time: std::time::Instant::now(),
@@ -1158,6 +1186,193 @@ async fn auth_middleware(req: Request, next: Next) -> Response {
         }
         _ => StatusCode::UNAUTHORIZED.into_response(),
     }
+}
+
+// --- Job control handlers (kill / retry) ---
+
+#[derive(Deserialize, Debug)]
+struct JobActionRequest {
+    id: String,
+}
+
+/// Load only the scalar fields of a job row we need (avoids deserializing the
+/// `id` RecordId / `assigned_to` record link / datetimes into `serde_json::Value`,
+/// which can fail). Returns `None` when the job does not exist.
+async fn load_job_record(state: &AppState, id: &str) -> Result<Option<Value>, surrealdb::Error> {
+    let Ok(rid) = RecordId::parse_simple(id) else {
+        return Ok(None);
+    };
+    let mut resp = state
+        .db
+        .query("SELECT status, path, payload, retries, max_retries, retry_strategy, timeout FROM ONLY $id")
+        .bind(("id", rid))
+        .await?;
+    Ok(resp.take(0).ok().flatten())
+}
+
+/// `POST /job/kill` — stop a job.
+///
+/// - `processing` and in-flight on this SSP: fire the cancellation token and let
+///   the runner write the terminal status. The handler deliberately does **not**
+///   write `status` itself — the runner is the single writer, so this avoids
+///   clobbering a request that completes in the same instant.
+/// - `pending`/queued (or `processing` but owned by another SSP): set a kill flag
+///   the runner honors at dequeue; it fails the job instead of running it.
+/// - `success`/`failed`: idempotent no-op.
+async fn job_kill_handler(State(state): State<AppState>, Json(req): Json<JobActionRequest>) -> Response {
+    if RecordId::parse_simple(&req.id).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "code": "bad_id", "message": "id must be 'table:key'" })),
+        )
+            .into_response();
+    }
+
+    let record = match load_job_record(&state, &req.id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "code": "not_found", "message": format!("job '{}' not found", req.id) })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "code": "db_error", "message": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    match status {
+        "success" | "failed" => (
+            StatusCode::OK,
+            Json(json!({ "id": req.id, "status": status, "message": "already terminal; no-op" })),
+        )
+            .into_response(),
+        "processing" => {
+            if let Some(token) = state.job_control.inflight.get(&req.id) {
+                token.cancel();
+                (
+                    StatusCode::OK,
+                    Json(json!({ "id": req.id, "status": "cancelling", "message": "cancelling in-flight request" })),
+                )
+                    .into_response()
+            } else {
+                // Processing, but not in-flight on this SSP (cluster: another SSP
+                // owns it, or a stale row). Flag it so any later re-enqueue is
+                // dropped, and report it wasn't local.
+                state.job_control.killed_pending.insert(req.id.clone());
+                (
+                    StatusCode::OK,
+                    Json(json!({ "id": req.id, "status": "processing", "message": "not in-flight on this ssp; kill flag set" })),
+                )
+                    .into_response()
+            }
+        }
+        _ => {
+            // pending / unknown: drop at dequeue. Do NOT write status here — the
+            // runner owns the terminal write and fails it when it dequeues.
+            state.job_control.killed_pending.insert(req.id.clone());
+            (
+                StatusCode::OK,
+                Json(json!({ "id": req.id, "status": status, "message": "kill flag set; will fail at dequeue" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `POST /job/retry` — re-run a terminal (`failed`/`success`) job. Resets the row
+/// (`status='pending'`, `retries=0`, `errors=[]`) and re-enqueues a fresh
+/// `JobEntry` directly, because a plain `UPDATE` would not re-trigger the
+/// CREATE-gated ingest path.
+async fn job_retry_handler(State(state): State<AppState>, Json(req): Json<JobActionRequest>) -> Response {
+    let Some((table, _)) = req.id.split_once(':') else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "code": "bad_id", "message": "id must be 'table:key'" })),
+        )
+            .into_response();
+    };
+    let table = table.to_string();
+
+    let Some(backend) = state.job_config.job_tables.get(&table) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "code": "unknown_table", "message": format!("no job backend configured for table '{}'", table) })),
+        )
+            .into_response();
+    };
+    let backend = backend.clone();
+
+    let record = match load_job_record(&state, &req.id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "code": "not_found", "message": format!("job '{}' not found", req.id) })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "code": "db_error", "message": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    if status != "failed" && status != "success" {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "code": "not_terminal", "message": format!("cannot retry job in '{}' state; only 'failed'/'success'", status) })),
+        )
+            .into_response();
+    }
+
+    // Clear any stale kill flag so the re-enqueued job isn't dropped at dequeue.
+    // Order matters: remove the flag BEFORE re-enqueueing.
+    state.job_control.killed_pending.remove(&req.id);
+
+    if let Err(e) = reset_for_retry_helper(&state.db, &req.id).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "code": "db_error", "message": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Rebuild the JobEntry. `from_record` copies `retries` from the (pre-reset)
+    // snapshot, so force it to 0 to honor the retry budget.
+    let timeout_override = record.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let mut job = JobEntry::from_record(
+        req.id.clone(),
+        backend.base_url.clone(),
+        backend.auth_token.clone(),
+        &record,
+        backend.effective_timeout(timeout_override),
+    );
+    job.retries = 0;
+
+    if let Err(e) = state.job_queue_tx.send(job).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "code": "enqueue_failed", "message": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({ "id": req.id, "status": "pending", "message": "re-enqueued" })),
+    )
+        .into_response()
 }
 
 // --- Request Handlers ---

@@ -1190,34 +1190,38 @@ impl CodeGenerator {
                 continue;
             }
 
-            // If we are inside a permissions block, skip lines starting with FOR
+            // Inside a permissions block we're rewriting to `WHERE true`: skip
+            // EVERY source line of the block until the line carrying the
+            // statement terminator `;`. The block is the tail of a DEFINE
+            // TABLE/FIELD statement (PERMISSIONS is the last clause), so the
+            // first `;` after it closes the whole block.
+            //
+            // We must skip continuation lines too, not just lines starting with
+            // `FOR`: a clause whose `WHERE` expression wraps across lines (e.g.
+            // `FOR update WHERE $access = "account"\n  AND (author.id = $auth.id\n
+            // OR $auth.id IN (SELECT … ))`) has continuation lines that don't
+            // start with `FOR`. Treating the first such line as the end of the
+            // block (the old behaviour) leaked the rest of that clause — and the
+            // following clauses — into the client schema, producing an invalid
+            // `WHERE true AND (… IN (SELECT …))` the in-browser SSP can't parse.
             if skip_permissions {
-                // If the line is just a comment, we ignore it for semicolon checking
+                // Blank/comment-only lines carry no terminator; just drop them.
                 if trimmed.is_empty() {
                     i += 1;
                     continue;
                 }
-
-                if trimmed.to_uppercase().starts_with("FOR") {
-                     // Check if this is the last line of permissions (ends with semicolon)
-                     if trimmed.ends_with(';') {
-                         skip_permissions = false;
-                         // We consumed the line with semicolon, so we must add it to our replacement
-                         if let Some(last) = result.last_mut() {
-                             last.push(';');
-                         }
-                     }
-                     i += 1;
-                     continue;
-                } else {
-                    // We encountered something that is NOT a FOR line.
-                    // This implies the permissions block ended (perhaps implicitly or we misjudged).
+                // `trimmed` is comment-stripped, so a `;` here is the real
+                // statement terminator (WHERE expressions don't contain `;`).
+                if trimmed.contains(';') {
                     skip_permissions = false;
-                    
-                    // IMPORTANT: If we misjudged, we might be on a new definition line.
-                    // We should NOT suppress it. 
-                    // Fall through to result.push(line).
+                    if let Some(last) = result.last_mut() {
+                        if !last.ends_with(';') {
+                            last.push(';');
+                        }
+                    }
                 }
+                i += 1;
+                continue;
             }
             
             result.push(line.to_string());
