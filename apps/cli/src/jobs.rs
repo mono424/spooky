@@ -684,9 +684,21 @@ fn retry(client: &SurrealClient, id: &str) -> Result<()> {
 /// Invoke `fn::job::<action>($id)` and return the (parsed) backend response value.
 fn call_job_fn(client: &SurrealClient, action: &str, id: &str) -> Result<Value> {
     let query = format!("RETURN fn::job::{}('{}');", action, esc(id));
-    let responses = client
-        .execute(&query)
-        .with_context(|| format!("Failed to {} job '{}'", action, id))?;
+    let responses = client.execute(&query).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("fn::job") && (msg.contains("not found") || msg.contains("does not exist"))
+        {
+            // The schema predates this feature: the proxy functions aren't installed.
+            anyhow!(
+                "{}\n\nThe job-control functions are not deployed. Run `spky dev` (or redeploy \
+                 the schema) to install fn::job::kill / fn::job::retry, and make sure the \
+                 SSP/scheduler are running.",
+                msg
+            )
+        } else {
+            anyhow!("Failed to {} job '{}': {}", action, id, msg)
+        }
+    })?;
     Ok(responses
         .into_iter()
         .next()
@@ -714,6 +726,8 @@ fn print_action_result(verb: &str, id: &str, result: &Value) {
 
 const TICK: Duration = Duration::from_millis(200);
 const REFRESH_INTERVAL: Duration = Duration::from_millis(1000);
+/// How long a kill/retry status (or error) stays in the footer before clearing.
+const STATUS_TTL: Duration = Duration::from_secs(5);
 const TUI_LIMIT: usize = 200;
 
 struct TuiApp {
@@ -724,6 +738,8 @@ struct TuiApp {
     detail_open: bool,
     last_refresh: Instant,
     status_msg: Option<String>,
+    /// When `status_msg` was set, so it can auto-expire.
+    status_set_at: Option<Instant>,
 }
 
 impl TuiApp {
@@ -743,6 +759,24 @@ impl TuiApp {
             detail_open: false,
             last_refresh: Instant::now(),
             status_msg: None,
+            status_set_at: None,
+        }
+    }
+
+    fn set_status(&mut self, msg: String) {
+        self.status_msg = Some(msg);
+        self.status_set_at = Some(Instant::now());
+    }
+
+    /// Clear a kill/retry status once it has been on screen long enough.
+    fn expire_status(&mut self) {
+        if self
+            .status_set_at
+            .map(|t| t.elapsed() >= STATUS_TTL)
+            .unwrap_or(false)
+        {
+            self.status_msg = None;
+            self.status_set_at = None;
         }
     }
 
@@ -866,27 +900,29 @@ fn tui_loop(
                     KeyCode::Char('f') => app.cycle_filter(),
                     KeyCode::Char('k') => {
                         if let Some(id) = app.selected_id() {
-                            app.status_msg = Some(match call_job_fn(client, "kill", &id) {
+                            let msg = match call_job_fn(client, "kill", &id) {
                                 Ok(v) => format!(
-                                    "kill {} — {}",
+                                    "killed {} — {}",
                                     id,
                                     action_message(&v).unwrap_or_else(|| "ok".into())
                                 ),
-                                Err(e) => format!("kill {} failed: {}", id, e),
-                            });
+                                Err(e) => format!("kill {} failed: {}", id, first_line(&e.to_string())),
+                            };
+                            app.set_status(msg);
                             app.refresh(client, tables);
                         }
                     }
                     KeyCode::Char('r') => {
                         if let Some(id) = app.selected_id() {
-                            app.status_msg = Some(match call_job_fn(client, "retry", &id) {
+                            let msg = match call_job_fn(client, "retry", &id) {
                                 Ok(v) => format!(
-                                    "retry {} — {}",
+                                    "retrying {} — {}",
                                     id,
                                     action_message(&v).unwrap_or_else(|| "ok".into())
                                 ),
-                                Err(e) => format!("retry {} failed: {}", id, e),
-                            });
+                                Err(e) => format!("retry {} failed: {}", id, first_line(&e.to_string())),
+                            };
+                            app.set_status(msg);
                             app.refresh(client, tables);
                         }
                     }
@@ -895,12 +931,19 @@ fn tui_loop(
             }
         }
 
+        app.expire_status();
+
         if app.last_refresh.elapsed() >= REFRESH_INTERVAL {
             app.refresh(client, tables);
         }
     }
 
     Ok(())
+}
+
+/// First line of a (possibly multi-line) error, for one-line footer display.
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or(s)
 }
 
 fn render(f: &mut Frame, app: &mut TuiApp) {
