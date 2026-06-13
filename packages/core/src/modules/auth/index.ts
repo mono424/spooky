@@ -35,11 +35,41 @@ type ExtractAccessParams<
       }>
     : never;
 
+/**
+ * Read the `AC` (access-method name) claim from a SurrealDB record-access
+ * JWT without verifying it — we only need the claim, the server enforces the
+ * token. Returns null on any malformed input. The in-browser SSP needs this
+ * to resolve `$access` in table permission predicates (mirrors the session's
+ * `$access` that the server's `fn::query::register` reads).
+ */
+function decodeAccessFromToken(token: string): string | null {
+  try {
+    const payload = token.split('.')[1];
+    if (!payload) return null;
+    let b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+    b64 += '='.repeat((4 - (b64.length % 4)) % 4);
+    const json =
+      typeof atob === 'function' ? atob(b64) : Buffer.from(b64, 'base64').toString('binary');
+    const claims = JSON.parse(json) as Record<string, unknown>;
+    const ac = claims.AC ?? claims.ac;
+    return typeof ac === 'string' ? ac : null;
+  } catch {
+    return null;
+  }
+}
+
 export class AuthService<S extends SchemaStructure> {
   // State
   public token: string | null = null;
   public currentUser: any | null = null;
   public isAuthenticated: boolean = false;
+  /**
+   * The record-access method name for the current session (e.g. `"account"`),
+   * derived from the token's `AC` claim. Consumed by the in-browser SSP's
+   * permission injection so `$access`-gated table predicates resolve locally,
+   * mirroring the server's `$access`. Null when logged out.
+   */
+  public access: string | null = null;
   public isLoading: boolean = true;
 
   private events = createAuthEventSystem();
@@ -167,6 +197,7 @@ export class AuthService<S extends SchemaStructure> {
     this.token = null;
     this.currentUser = null;
     this.isAuthenticated = false;
+    this.access = null;
 
     await this.persistenceClient.remove('sp00ky_auth_token');
 
@@ -183,8 +214,19 @@ export class AuthService<S extends SchemaStructure> {
     this.token = token;
     this.currentUser = user;
     this.isAuthenticated = true;
+    // Resolve the access-method name (e.g. "account") for in-browser SSP
+    // permission injection. Prefer the token's `AC` claim; fall back to the
+    // schema's sole record-access method if the claim is absent.
+    this.access = decodeAccessFromToken(token) ?? this.defaultAccessName();
     await this.persistenceClient.set('sp00ky_auth_token', token);
     this.notifyListeners();
+  }
+
+  /** Fallback when the token carries no `AC` claim: if the schema defines
+   *  exactly one record-access method, assume the session used it. */
+  private defaultAccessName(): string | null {
+    const names = Object.keys(this.schema.access ?? {});
+    return names.length === 1 ? names[0] : null;
   }
 
   async signUp<Name extends keyof S['access'] & string>(

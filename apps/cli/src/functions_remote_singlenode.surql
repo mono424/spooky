@@ -69,18 +69,23 @@ DEFINE FUNCTION OVERWRITE fn::spooky::info() {
 } PERMISSIONS FULL;
 
 -- Keep the HTTP `/spooky` custom API for external consumers (e.g. the CLI's
--- `spooky cloud status`), delegating to the function as the single source of
--- truth. The structured body is JSON-encoded by the Content-Type header.
+-- `spooky cloud status`). It proxies the SSP's `/info/text` route, which
+-- returns the info array already serialized to a JSON string (text/plain).
 DEFINE API OVERWRITE "/spooky"
     FOR get
     THEN {
-        -- Return the function's structured result directly. The custom API
-        -- serializes an object body to JSON for us (per Content-Type), and
-        -- SurrealDB has no encoding::json::encode, so encoding here both
-        -- failed to parse and was unnecessary.
+        -- A DEFINE API response `body` must be None/bytes/string on the
+        -- deployed SurrealDB (3.0.x). `/info/text` hands us pre-serialized
+        -- JSON text, so we pass it through verbatim and skip DB-side JSON
+        -- encoding (encoding::json::encode and object-body auto-serialization
+        -- are both 3.1.0+). `fn::spooky::info()` still calls `/info`
+        -- (structured) for WS/DevTools consumers.
+        LET $info = http::get('{{ENDPOINT}}/info/text', {
+            "Authorization": "Bearer {{SECRET}}"
+        });
         RETURN {
             status: 200,
-            body: fn::spooky::info(),
+            body: <string>$info,
             headers: {
                 'Content-Type': 'application/json'
             }

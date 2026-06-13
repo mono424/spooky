@@ -35,6 +35,7 @@ import {
   withRetry,
   surql,
   parseParams,
+  cleanRecord,
   extractTablePart,
   generateId,
 } from '../../utils/index';
@@ -607,6 +608,55 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   /**
+   * Walk a hydrated record's fields and append any EMBEDDED child records to
+   * `batch` (recursing for nested related fields). An embedded child is a
+   * value that is itself a record — a non-null object whose `id` is a
+   * `RecordId` — or an array of such records (one-to-many vs one-to-one). A
+   * bare `RecordId` (a foreign-key reference) or any other value is skipped,
+   * so this never mistakes a FK column for an embedded body. Children are
+   * keyed by their own `record.id.table`, versioned by `_00_rv`, and cleaned
+   * to their table's real columns (which strips the alias/related fields).
+   * `seen` dedupes within the batch.
+   */
+  private collectEmbeddedChildren(
+    record: Record<string, any>,
+    batch: CacheRecord[],
+    seen: Set<string>
+  ): void {
+    const isEmbeddedRecord = (v: unknown): v is RecordWithId =>
+      !!v &&
+      typeof v === 'object' &&
+      !(v instanceof RecordId) &&
+      (v as { id?: unknown }).id instanceof RecordId;
+
+    for (const value of Object.values(record)) {
+      const children = Array.isArray(value)
+        ? value.filter(isEmbeddedRecord)
+        : isEmbeddedRecord(value)
+          ? [value]
+          : [];
+      for (const child of children) {
+        const key = encodeRecordId(child.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // Recurse FIRST so nested grandchildren are captured before `cleanRecord`
+        // strips this child's alias fields.
+        this.collectEmbeddedChildren(child, batch, seen);
+        const table = child.id.table.toString();
+        const tableSchema = this.schema.tables.find((t) => t.name === table);
+        batch.push({
+          table,
+          op: 'CREATE',
+          record: (tableSchema
+            ? cleanRecord(tableSchema.columns, child)
+            : child) as RecordWithId,
+          version: (child._00_rv as number) || 1,
+        });
+      }
+    }
+  }
+
+  /**
    * Instant-hydrate: ingest rows fetched one-shot from the remote (the query's own
    * surql run directly) so the query DISPLAYS immediately, while the full realtime
    * registration proceeds in the background. Ingests with versions (`_00_rv`) so the
@@ -627,6 +677,20 @@ export class DataModule<S extends SchemaStructure> {
       record,
       version: (record._00_rv as number) || 1,
     }));
+
+    // Flicker-free related data on cold first paint: a `.related()` query's
+    // rows arrive with their child rows EMBEDDED (the correlated subquery,
+    // e.g. `(SELECT * FROM comment WHERE game=$parent.id) AS comments`). The
+    // primary batch above persists only the parent table, so the immediate
+    // `materializeRecords` below would re-run the correlated surql against a
+    // local DB with no child rows and overwrite the embedded result with
+    // empties. Extract those embedded children (any nesting depth) and
+    // persist them as their own records so the re-materialization finds them.
+    const seen = new Set<string>(rows.map((r) => encodeRecordId(r.id)));
+    for (const record of rows) {
+      this.collectEmbeddedChildren(record, batch, seen);
+    }
+
     await this.cache.saveBatch(batch);
 
     // Prime remoteArray from the hydrated id+version pairs: `materializeRecords`

@@ -3,5 +3,5 @@ pub mod runner;
 pub mod types;
 
 pub use config::{from_db_record, load_config};
-pub use runner::JobRunner;
-pub use types::{BackendInfo, JobConfig, JobEntry};
+pub use runner::{append_error_helper, reset_for_retry_helper, update_status_helper, JobRunner};
+pub use types::{BackendInfo, JobConfig, JobControl, JobEntry};

@@ -8,6 +8,7 @@ import {
   resolveListRefPollInterval,
   DEFAULT_LIST_REF_POLL_INTERVAL_MS,
   buildListRefSelect,
+  buildSubqueryListRefSelect,
   nextPollDelayMs,
   listRefPollDelayMs,
   LIST_REF_POLL_MAX_INTERVAL_MS,
@@ -373,6 +374,35 @@ describe('buildListRefSelect', () => {
     // The diff only needs the record id and its version; pulling more
     // fields would bloat the per-tick query traffic.
     const sql = buildListRefSelect('_00_list_ref');
+    expect(sql.startsWith('SELECT out, version FROM ')).toBe(true);
+  });
+});
+
+describe('buildSubqueryListRefSelect', () => {
+  it('substitutes the table name', () => {
+    expect(buildSubqueryListRefSelect('_00_list_ref')).toContain('FROM _00_list_ref ');
+    expect(buildSubqueryListRefSelect('_00_list_ref_user_abc')).toContain(
+      'FROM _00_list_ref_user_abc '
+    );
+  });
+
+  it('filters by the bound query id', () => {
+    expect(buildSubqueryListRefSelect('_00_list_ref')).toContain('WHERE in = $in');
+  });
+
+  it('selects ONLY subquery child rows via parent IS NOT NONE', () => {
+    // The mirror of `buildListRefSelect`'s `parent IS NONE`: the SSP writes
+    // `.related()` child rows into list_ref tagged with `parent`/`parent_rel`;
+    // this select pulls exactly those so their bodies can be synced into the
+    // local cache (separately from the primary window) and the correlated
+    // surql re-materializes with related data on a cold reload.
+    const sql = buildSubqueryListRefSelect('_00_list_ref');
+    expect(sql).toContain('parent IS NOT NONE');
+    expect(sql).not.toContain('parent IS NONE ');
+  });
+
+  it('selects only `out` and `version`', () => {
+    const sql = buildSubqueryListRefSelect('_00_list_ref');
     expect(sql.startsWith('SELECT out, version FROM ')).toBe(true);
   });
 });

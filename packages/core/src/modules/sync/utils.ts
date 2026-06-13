@@ -189,6 +189,22 @@ export function buildListRefSelect(table: string): string {
 }
 
 /**
+ * Build the SurrealQL select for a query's SUBQUERY child edges — the
+ * mirror of {@link buildListRefSelect}. `.related()` queries register a
+ * correlated subquery; the SSP materializes each matched child as a
+ * `_00_list_ref` edge tagged with `parent`/`parent_rel` (see
+ * `apps/ssp` edge writer). `parent IS NONE` (the primary select) drops
+ * these, so their bodies never reach the local cache and a cold-reload
+ * re-materialization of the correlated surql yields empty related
+ * fields. This `parent IS NOT NONE` variant pulls the child `out`+`version`
+ * pairs (any nesting depth) so we can sync their bodies into the local
+ * store SEPARATELY from the primary window array.
+ */
+export function buildSubqueryListRefSelect(table: string): string {
+  return `SELECT out, version FROM ${table} WHERE in = $in AND parent IS NOT NONE`;
+}
+
+/**
  * Resolve the effective list-ref poll interval. Negative or zero
  * values fall back to the default — accepting them would either
  * disable polling silently or busy-loop the event loop.

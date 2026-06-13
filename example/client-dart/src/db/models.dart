@@ -592,11 +592,7 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- visibility is recovered through the `collaborates_on`-driven UPDATE
 -- rule and an explicit client-side query for invited threads.
 DEFINE TABLE thread SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true
-      AND (author.id = \$auth.id
-           OR \$auth.id IN (SELECT VALUE in FROM collaborates_on WHERE out = \$parent.id))
-    FOR delete WHERE \$access = \"account\" AND author.id = \$auth.id
-;
+PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD title ON TABLE thread TYPE option<string>;
 
@@ -624,8 +620,7 @@ DEFINE FIELD published ON TABLE thread TYPE option<bool> VALUE \$value OR false;
 -- ##################################################################
 
 DEFINE TABLE comment SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true
-;
+PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE FIELD thread ON TABLE comment TYPE option<record<thread>>; -- @parent
 
@@ -674,9 +669,7 @@ DEFINE INDEX unique_share_jti ON TABLE share_link FIELDS jti UNIQUE;
 -- link's signature against the issuer's `share_pubkey`. Author can still
 -- kick collaborators off via FOR delete.
 DEFINE TABLE collaborates_on SCHEMAFULL TYPE RELATION FROM user TO thread
-PERMISSIONS FOR select, create, update, delete WHERE true
-      AND (in.id = \$auth.id OR out.author.id = \$auth.id)
-    FOR update WHERE false;
+PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE INDEX unique_collab ON TABLE collaborates_on FIELDS in, out UNIQUE;
 
