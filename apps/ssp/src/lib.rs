@@ -302,13 +302,25 @@ fn load_job_config_from_env() -> Arc<JobConfig> {
         }
     };
 
-    let entries: Vec<serde_json::Value> = match serde_json::from_str(&json) {
-        Ok(v) => v,
-        Err(e) => {
-            warn!(error = %e, "Failed to parse SPKY_JOB_CONFIG, job runner disabled");
-            return Arc::new(JobConfig::default());
-        }
-    };
+    // The orchestrator emits a JSON array of backend entries. An empty
+    // backend list can legitimately arrive as `null` (Go's json.Marshal
+    // encodes a nil slice as null) or `[]`; both mean "no outbox backends",
+    // not a misconfiguration, so treat them as an empty config instead of a
+    // hard parse failure that masks the real (empty) state.
+    let entries: Vec<serde_json::Value> =
+        match serde_json::from_str::<Option<Vec<serde_json::Value>>>(&json) {
+            Ok(Some(v)) => v,
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                warn!(error = %e, raw = %json, "Failed to parse SPKY_JOB_CONFIG, job runner disabled");
+                return Arc::new(JobConfig::default());
+            }
+        };
+
+    if entries.is_empty() {
+        info!("SPKY_JOB_CONFIG lists no outbox backends, job runner disabled");
+        return Arc::new(JobConfig::default());
+    }
 
     let mut job_tables = std::collections::HashMap::new();
     for entry in &entries {
