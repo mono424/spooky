@@ -1186,6 +1186,131 @@ fn resolve_deploy_env_entry(
     }
 }
 
+/// Split the host out of an `http://host:port` (or `host:port`) endpoint.
+fn endpoint_host(endpoint: &str) -> &str {
+    endpoint
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(endpoint)
+        .split([':', '/'])
+        .next()
+        .unwrap_or("")
+}
+
+/// A host is a *stable* address we can safely bake into the DB schema if it's
+/// not empty and not an ephemeral Docker bridge IP. Non-IP hostnames (DNS
+/// aliases like `scheduler`) and Firecracker `10.x` addresses are stable;
+/// any other dotted-quad IPv4 (e.g. a `172.x` Docker bridge IP) is not.
+fn is_stable_endpoint_host(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    let is_ipv4 = host.split('.').count() == 4 && host.split('.').all(|o| o.parse::<u8>().is_ok());
+    !is_ipv4 || host.starts_with("10.")
+}
+
+/// The stable per-deployment DNS alias for the remote-function entry point in
+/// Docker mode. Mirrors `roleAliasFor` in spooky-cloud: the scheduler (cluster)
+/// is reachable as `scheduler:9667`, the single SSP (singlenode) as `ssp-0:8667`.
+fn docker_alias_endpoint(mode: &backend::DeployMode) -> String {
+    if *mode == backend::DeployMode::Cluster {
+        "http://scheduler:9667".to_string()
+    } else {
+        "http://ssp-0:8667".to_string()
+    }
+}
+
+/// Derive the **stable** internal endpoint that SurrealDB's remote functions
+/// (`fn::query::register` → `/view/register`, the `/spooky` API → `/info/text`,
+/// `fn::job::kill` / `fn::job::retry`) call via `http::get` / `http::post`.
+///
+/// This value is baked into the database schema at deploy time (as the
+/// `$sp00ky_endpoint` param and inlined into each function body), so it MUST NOT
+/// be an ephemeral container IP. On Docker the scheduler/SSP get a fresh bridge
+/// IP on every redeploy; a baked IP goes stale the moment a container is
+/// recreated, and SurrealDB then hangs on a dead address — SurrealQL `http::`
+/// calls have no timeout — which stalls every live-query registration and wedges
+/// the app on "Loading database…". (Firecracker is unaffected: its scheduler has
+/// a deterministic, stable `.20` address.)
+///
+/// Resolution order:
+///   1. A canonical endpoint supplied by the control plane (`fn_endpoint`, or
+///      `scheduler_url`), as long as its host is stable.
+///   2. Firecracker (internal IPs in the `10.x` range): reuse the scheduler's
+///      own stable IP, or derive the deterministic `.20` from the subnet.
+///   3. Docker (any other IP family): the per-deployment DNS alias, which
+///      Docker's embedded DNS resolves to the live container regardless of IP
+///      churn — exactly what backends already use (`SPKY_SCHEDULER_URL`).
+fn derive_fn_endpoint(
+    mode: &backend::DeployMode,
+    deployment_status: &serde_json::Value,
+) -> Option<String> {
+    // 1. Trust a canonical endpoint from the control plane when its host is
+    //    stable; if the server still handed us a raw Docker IP, fall through to
+    //    derive the alias ourselves so an old control plane can't reintroduce
+    //    the stale-IP bug.
+    for key in ["fn_endpoint", "scheduler_url"] {
+        if let Some(ep) = deployment_status[key].as_str() {
+            if is_stable_endpoint_host(endpoint_host(ep)) {
+                return Some(ep.to_string());
+            }
+        }
+    }
+
+    let vms = deployment_status["vms"].as_array()?;
+    let ip_for = |role: &str| {
+        vms.iter()
+            .find(|v| v["role"].as_str() == Some(role))
+            .and_then(|v| v["internal_ip"].as_str())
+    };
+    let sched_ip = ip_for("scheduler");
+    let any_ip = sched_ip.or_else(|| ip_for("surrealdb")).or_else(|| ip_for("ssp"));
+
+    let subnet_of = |ip: &str| -> Option<String> {
+        let p: Vec<&str> = ip.split('.').collect();
+        (p.len() == 4).then(|| format!("{}.{}.{}", p[0], p[1], p[2]))
+    };
+
+    // 2. Firecracker — stable deterministic addressing.
+    if any_ip.map(|ip| ip.starts_with("10.")).unwrap_or(false) {
+        if *mode == backend::DeployMode::Cluster {
+            if let Some(ip) = sched_ip {
+                return Some(format!("http://{}:9667", ip));
+            }
+            return Some(format!("http://{}.20:9667", subnet_of(any_ip?)?));
+        }
+        // singlenode: the single SSP at its deterministic suffix.
+        return Some(format!("http://{}.10:8667", subnet_of(any_ip?)?));
+    }
+
+    // 3. Docker — never a raw IP; use the stable per-deployment DNS alias.
+    //    (Reached whenever we have VM rows but no Firecracker `10.x` IP.)
+    any_ip?;
+    Some(docker_alias_endpoint(mode))
+}
+
+/// Probe SurrealDB's `/spooky` custom API — the same `http::get`-to-scheduler
+/// path that `fn::query::register` exercises — to confirm the data plane
+/// actually responds. A timeout here means SurrealDB can't reach the scheduler
+/// (e.g. a stale baked endpoint), which is exactly what wedges the app on
+/// "Loading database…". Retries briefly to let a just-provisioned scheduler
+/// finish coming up. Returns `Ok` on the first `200`.
+fn verify_data_plane(db_url: &str, ns: &str, db: &str) -> Result<(), String> {
+    let url = format!("{}/api/{}/{}/spooky", db_url.trim_end_matches('/'), ns, db);
+    let mut last = "no response".to_string();
+    for attempt in 0..5 {
+        if attempt > 0 {
+            thread::sleep(Duration::from_secs(2));
+        }
+        match ureq::get(&url).timeout(Duration::from_secs(4)).call() {
+            Ok(resp) if resp.status() == 200 => return Ok(()),
+            Ok(resp) => last = format!("HTTP {}", resp.status()),
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(last)
+}
+
 /// Apply remote functions + internal sp00ky schema against the main SurrealDB.
 ///
 /// Runs after user migrations on both deploy AND restore. Without this step,
@@ -1221,35 +1346,15 @@ fn apply_remote_fns_and_internal_schema(
         )
     };
 
-    // Prefer a running scheduler's real internal IP; fall back to the
-    // deterministic .20 suffix (Firecracker) or the Docker DNS alias.
-    let fn_endpoint = deployment_status["vms"].as_array().and_then(|vms| {
-        if let Some(sched_ip) = vms
-            .iter()
-            .find(|v| v["role"].as_str() == Some("scheduler"))
-            .and_then(|v| v["internal_ip"].as_str())
-        {
-            return Some(format!("http://{}:9667", sched_ip));
-        }
-        let surreal_ip = vms
-            .iter()
-            .find(|v| v["role"].as_str() == Some("surrealdb"))
-            .and_then(|v| v["internal_ip"].as_str())?;
-        let parts: Vec<&str> = surreal_ip.split('.').collect();
-        if parts.len() == 4 && parts[0] == "10" {
-            let subnet = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
-            Some(format!("http://{}.20:9667", subnet))
-        } else {
-            Some("http://scheduler:9667".to_string())
-        }
-    });
+    let mode = config.mode.clone().unwrap_or_default();
 
-    let Some(fn_endpoint) = fn_endpoint else {
+    // Bake a STABLE internal endpoint into the DB schema — never an ephemeral
+    // container IP, which goes stale on the next Docker redeploy and hangs every
+    // SurrealQL `http::` call. See `derive_fn_endpoint`.
+    let Some(fn_endpoint) = derive_fn_endpoint(&mode, deployment_status) else {
         println!("  ▸ Warning: could not derive scheduler endpoint; skipping remote functions + internal schema.");
         return;
     };
-
-    let mode = config.mode.clone().unwrap_or_default();
     let auth_secret = deployment_status["sp00ky_auth_secret"]
         .as_str()
         .map(|s| s.to_string())
@@ -1904,6 +2009,33 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                     if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
                         if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
                             print_deployment_details(&status);
+
+                            // Data-plane gate: the Phase-1 function apply ran
+                            // before the scheduler existed, so confirm now that
+                            // the scheduler is up that SurrealDB can actually
+                            // reach it via the baked endpoint. Re-apply once if
+                            // not (defense-in-depth against a stale endpoint),
+                            // then surface a clear, actionable warning.
+                            if let Some(db_url) = status["urls"]["surrealdb"].as_str() {
+                                let resolved = config.resolved_surrealdb();
+                                if verify_data_plane(db_url, &resolved.namespace, &resolved.database).is_ok() {
+                                    println!("  ▸ Data plane healthy (/spooky responds).");
+                                } else {
+                                    println!("  ▸ Data plane not responding; re-applying remote functions...");
+                                    let db_password = status["surrealdb_password"].as_str().unwrap_or("");
+                                    apply_remote_fns_and_internal_schema(
+                                        db_url, db_password, &status, &config,
+                                        config_path.as_path(), &mut client, &pid,
+                                    );
+                                    if let Err(e) = verify_data_plane(db_url, &resolved.namespace, &resolved.database) {
+                                        println!("  ▸ WARNING: SurrealDB '/spooky' still not responding ({e}).");
+                                        println!("    The app may hang on \"Loading database…\". Verify the scheduler is running:");
+                                        println!("      {}/api/{}/{}/spooky", db_url.trim_end_matches('/'), resolved.namespace, resolved.database);
+                                    } else {
+                                        println!("  ▸ Data plane healthy after re-apply.");
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3595,8 +3727,15 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         )
                     };
                     let mode = config.mode.clone().unwrap_or_default();
+                    // Never bake an ephemeral Docker IP — fall back to the stable
+                    // DNS alias if the server handed us a raw bridge IP.
+                    let fn_endpoint = if is_stable_endpoint_host(endpoint_host(sched_url)) {
+                        sched_url.to_string()
+                    } else {
+                        docker_alias_endpoint(&mode)
+                    };
                     let functions_sql = crate::schema_builder::build_remote_functions_schema(
-                        &mode, sched_url, "",
+                        &mode, &fn_endpoint, "",
                     );
                     match surreal_client.execute(&functions_sql) {
                         Ok(_) => println!("  Remote functions applied."),
@@ -5482,6 +5621,102 @@ mod logs_tests {
     #[test]
     fn urlencode_escapes_regex_metacharacters() {
         assert_eq!(urlencode("a+b&c d/e"), "a%2Bb%26c%20d%2Fe");
+    }
+}
+
+#[cfg(test)]
+mod fn_endpoint_tests {
+    use super::*;
+    use crate::backend::DeployMode;
+    use serde_json::json;
+
+    fn vms(role_ips: &[(&str, &str)]) -> serde_json::Value {
+        json!({
+            "vms": role_ips
+                .iter()
+                .map(|(r, ip)| json!({ "role": r, "internal_ip": ip }))
+                .collect::<Vec<_>>()
+        })
+    }
+
+    // The whole point of the fix: a Docker deployment must NEVER bake a raw
+    // ephemeral container IP — it has to be the stable DNS alias.
+    #[test]
+    fn docker_cluster_uses_scheduler_alias_never_ip() {
+        let status = vms(&[("scheduler", "172.21.0.3"), ("surrealdb", "172.21.0.2")]);
+        let ep = derive_fn_endpoint(&DeployMode::Cluster, &status).unwrap();
+        assert_eq!(ep, "http://scheduler:9667");
+        assert!(!ep.contains("172."), "must not bake a Docker bridge IP: {ep}");
+    }
+
+    #[test]
+    fn docker_singlenode_uses_ssp_alias() {
+        // Singlenode has no scheduler; only surrealdb + ssp on a Docker subnet.
+        let status = vms(&[("surrealdb", "172.21.0.2"), ("ssp", "172.21.0.4")]);
+        let ep = derive_fn_endpoint(&DeployMode::Singlenode, &status).unwrap();
+        assert_eq!(ep, "http://ssp-0:8667");
+        assert!(!ep.contains("172."));
+    }
+
+    #[test]
+    fn firecracker_cluster_keeps_stable_scheduler_ip() {
+        let status = vms(&[("scheduler", "10.100.5.20"), ("surrealdb", "10.100.5.10")]);
+        let ep = derive_fn_endpoint(&DeployMode::Cluster, &status).unwrap();
+        assert_eq!(ep, "http://10.100.5.20:9667");
+    }
+
+    #[test]
+    fn firecracker_cluster_derives_dot20_when_scheduler_ip_missing() {
+        // On a redeploy the scheduler may not be listed yet; derive .20 from the
+        // surrealdb subnet rather than guessing an ephemeral address.
+        let status = vms(&[("surrealdb", "10.100.7.10")]);
+        let ep = derive_fn_endpoint(&DeployMode::Cluster, &status).unwrap();
+        assert_eq!(ep, "http://10.100.7.20:9667");
+    }
+
+    #[test]
+    fn firecracker_singlenode_uses_ssp_port() {
+        let status = vms(&[("surrealdb", "10.100.9.10")]);
+        let ep = derive_fn_endpoint(&DeployMode::Singlenode, &status).unwrap();
+        assert_eq!(ep, "http://10.100.9.10:8667");
+    }
+
+    #[test]
+    fn prefers_canonical_endpoint_when_host_is_stable() {
+        let mut status = vms(&[("scheduler", "172.21.0.3")]);
+        status["fn_endpoint"] = json!("http://scheduler:9667");
+        assert_eq!(
+            derive_fn_endpoint(&DeployMode::Cluster, &status).unwrap(),
+            "http://scheduler:9667"
+        );
+    }
+
+    #[test]
+    fn rejects_canonical_endpoint_that_is_a_raw_docker_ip() {
+        // An older control plane might still hand us a raw IP — ignore it and
+        // derive the alias so the stale-IP bug can't be reintroduced.
+        let mut status = vms(&[("scheduler", "172.21.0.3")]);
+        status["scheduler_url"] = json!("http://172.21.0.3:9667");
+        let ep = derive_fn_endpoint(&DeployMode::Cluster, &status).unwrap();
+        assert_eq!(ep, "http://scheduler:9667");
+        assert!(!ep.contains("172."));
+    }
+
+    #[test]
+    fn no_vms_yields_none() {
+        assert!(derive_fn_endpoint(&DeployMode::Cluster, &json!({ "vms": [] })).is_none());
+        assert!(derive_fn_endpoint(&DeployMode::Cluster, &json!({})).is_none());
+    }
+
+    #[test]
+    fn host_parsing_and_stability_predicate() {
+        assert_eq!(endpoint_host("http://scheduler:9667"), "scheduler");
+        assert_eq!(endpoint_host("http://172.21.0.3:9667/info"), "172.21.0.3");
+        assert_eq!(endpoint_host("http://:9667"), "");
+        assert!(is_stable_endpoint_host("scheduler"));
+        assert!(is_stable_endpoint_host("10.100.5.20")); // Firecracker
+        assert!(!is_stable_endpoint_host("172.21.0.3")); // Docker bridge IP
+        assert!(!is_stable_endpoint_host("")); // empty host
     }
 }
 
