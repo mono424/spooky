@@ -249,6 +249,14 @@ pub struct Sp00kyConfig {
     /// SurrealKit-specific configuration (only used when migrationEngine = "surrealkit").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surrealkit: Option<SurrealKitConfig>,
+    /// Optional shell command run against the freshly-provisioned SurrealDB
+    /// during a git-linked deploy's "migrating" window, before the app VMs
+    /// start (e.g. `spky migrate prod`). When unset, automated (push-to-deploy)
+    /// builds do NOT apply DB migrations — run `spky migrate prod` yourself, or
+    /// set this command. Consumed by the cloud builder; see spooky-cloud
+    /// `internal/linking/builder.go`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrate: Option<String>,
     /// `RUST_LOG` directive applied to the scheduler and SSP containers.
     /// Either a plain string (`trace`, `info`, `info,ssp=debug`, …) or a
     /// per-environment map `{ dev, cloud }`. Unset → defaults to `info`.

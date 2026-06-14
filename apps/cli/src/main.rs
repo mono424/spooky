@@ -911,6 +911,30 @@ enum MigrateCommands {
         #[arg(long)]
         secret: Option<String>,
     },
+    /// Apply pending migrations to the project's Sp00ky Cloud deployment (no deploy).
+    ///
+    /// Resolves the SurrealDB URL + root password from your login (`spky login`)
+    /// and the `slug` in sp00ky.yml, then applies any pending migrations plus the
+    /// internal Sp00ky schema. The deploy mode (singlenode/cluster/surrealism),
+    /// namespace, and database are read from sp00ky.yml — no connection flags
+    /// needed. Use this to migrate prod on demand, decoupled from a full deploy.
+    Prod {
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Migrations directory (defaults to the one in sp00ky.yml)
+        #[arg(long)]
+        migrations_dir: Option<PathBuf>,
+        /// SSP/Scheduler endpoint URL
+        #[arg(long)]
+        endpoint: Option<String>,
+        /// SSP/Scheduler auth secret
+        #[arg(long)]
+        secret: Option<String>,
+        /// Skip the production confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Show migration status
     Status {
         #[command(flatten)]
@@ -1287,6 +1311,77 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 database: conn_resolved.database,
                 username: conn_resolved.username,
                 password: conn_resolved.password,
+                surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
+                internal_schema: Some(migration::InternalSchemaConfig {
+                    schema_path: resolved.schema,
+                    config_path: config_path_opt,
+                    deploy_mode,
+                    endpoint: endpoint.clone(),
+                    secret: secret.clone(),
+                }),
+                remote_functions: None,
+            };
+
+            let engine = migration::create_engine(ctx)?;
+            engine.apply()?;
+            Ok(())
+        }
+        MigrateCommands::Prod {
+            config,
+            migrations_dir,
+            endpoint,
+            secret,
+            yes,
+        } => {
+            let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            let sp00ky_config = backend::load_config(&config_file);
+            let resolved = sp00ky_config.resolved_schema();
+            let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
+
+            // Always target the cloud deployment: resolve the SurrealDB URL + root
+            // password from the login + `slug` in sp00ky.yml (same lookup as
+            // `migrate apply --cloud` and `project credentials`).
+            let cloud = cloud::resolve_cloud_surreal(&config_file)?;
+            let resolved_surreal = sp00ky_config.resolved_surrealdb();
+            // Deploy mode comes from sp00ky.yml so the internal schema matches the
+            // deployment topology (e.g. cluster). `migrate apply --cloud` instead
+            // defaults its --mode flag to singlenode, which would push the wrong
+            // internal schema to a cluster deployment.
+            let deploy_mode = sp00ky_config.mode.clone().unwrap_or_default();
+
+            println!(
+                "Target: {} (ns={}, db={}, mode={})",
+                cloud.url, resolved_surreal.namespace, resolved_surreal.database, deploy_mode
+            );
+
+            if !yes && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                let confirmed = inquire::Confirm::new(
+                    "Apply pending migrations to this PRODUCTION database?",
+                )
+                .with_default(false)
+                .prompt()
+                .unwrap_or(false);
+                if !confirmed {
+                    println!("Aborted.");
+                    return Ok(());
+                }
+            }
+
+            let config_path_opt = if config_file.exists() {
+                Some(config_file.clone())
+            } else {
+                None
+            };
+
+            let ctx = migration::MigrationContext {
+                environment: migration::MigrationEnvironment::Production,
+                project_dir: std::env::current_dir()?,
+                migrations_dir: resolved_migrations,
+                url: cloud.url,
+                namespace: resolved_surreal.namespace,
+                database: resolved_surreal.database,
+                username: "root".to_string(),
+                password: cloud.password,
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: Some(migration::InternalSchemaConfig {
                     schema_path: resolved.schema,
