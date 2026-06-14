@@ -117,6 +117,11 @@ pub struct Config {
     pub heartbeat_interval_ms: u64,
     pub advertise_addr: Option<String>,
     pub ttl_cleanup_interval_secs: u64,
+    /// Total wall-clock budget (seconds) for retrying scheduler registration
+    /// before the process exits to let the supervisor restart it. Must comfortably
+    /// exceed a cold `--clean` re-clone window (scheduler returns 503 while
+    /// `Cloning`). Env: `SPKY_SSP_REGISTER_MAX_WAIT_SECS`, default 180.
+    pub register_max_wait_secs: u64,
     /// Storage layout for `_00_query` / `_00_list_ref`. See
     /// `ssp_protocol::RefMode`. Defaults to `Dedicated` so cross-session
     /// LIVE delivery doesn't depend on the SurrealDB v3 LIVE-permission
@@ -146,6 +151,10 @@ pub fn load_config() -> Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(60),
+        register_max_wait_secs: std::env::var("SPKY_SSP_REGISTER_MAX_WAIT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(180),
         ref_mode: std::env::var("SPKY_SSP_REF_MODE")
             .ok()
             .as_deref()
@@ -156,16 +165,39 @@ pub fn load_config() -> Config {
 
 // --- Scheduler Registration Helper ---
 
+/// Why a registration attempt failed, used by the caller's retry loop to decide
+/// whether retrying can ever succeed.
+enum RegisterError {
+    /// Transient: scheduler still cloning (503), a 5xx, a transport/timeout
+    /// error, or an unparseable response. Worth retrying — the scheduler may
+    /// just not be `Ready` yet (e.g. a cold `--clean` re-clone).
+    Retryable(String),
+    /// Permanent for this process: the scheduler rejected the request with a
+    /// 4xx (e.g. 400 bad ssp_id/url). Retrying the same payload won't help —
+    /// surface it loudly instead of silently spinning.
+    Fatal(String),
+}
+
+impl std::fmt::Display for RegisterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegisterError::Retryable(m) => write!(f, "{}", m),
+            RegisterError::Fatal(m) => write!(f, "{}", m),
+        }
+    }
+}
+
 /// Build the SSP registration payload and POST it to the scheduler.
 /// Returns the registration response (which carries `snapshot_seq` and the
-/// per-table content hashes the SSP must match after bootstrap) or an error.
+/// per-table content hashes the SSP must match after bootstrap) or an error
+/// classified as retryable vs fatal.
 async fn register_with_scheduler(
     client: &reqwest::Client,
     scheduler_url: &str,
     ssp_id: &str,
     listen_addr: &str,
     advertise_addr: Option<&str>,
-) -> Result<ssp_protocol::SspRegistrationResponse, String> {
+) -> Result<ssp_protocol::SspRegistrationResponse, RegisterError> {
     let scheduler_base = scheduler_url.trim_end_matches('/');
     let registration_url = format!("{}/ssp/register", scheduler_base);
 
@@ -199,13 +231,30 @@ async fn register_with_scheduler(
         env: if env_vars.is_empty() { None } else { Some(env_vars) },
     };
 
-    match client.post(&registration_url).json(&payload).send().await {
+    match client
+        .post(&registration_url)
+        .json(&payload)
+        // Bound a single attempt so a hung connection can't stall the retry
+        // loop. Per-request (not client-wide) so it doesn't shorten the proxy
+        // bootstrap queries that reuse the same client.
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
         Ok(resp) if resp.status().is_success() => resp
             .json::<ssp_protocol::SspRegistrationResponse>()
             .await
-            .map_err(|e| format!("Failed to parse registration response: {}", e)),
-        Ok(resp) => Err(format!("HTTP {}", resp.status())),
-        Err(e) => Err(format!("{}", e)),
+            // A 2xx with an unparseable body is almost always a transient proxy
+            // hiccup — retry rather than give up.
+            .map_err(|e| RegisterError::Retryable(format!("Failed to parse registration response: {}", e))),
+        // 503 (Cloning/Restoring) and any 5xx: scheduler not ready yet → retry.
+        Ok(resp) if resp.status() == StatusCode::SERVICE_UNAVAILABLE || resp.status().is_server_error() => {
+            Err(RegisterError::Retryable(format!("HTTP {}", resp.status())))
+        }
+        // 4xx (e.g. 400 bad ssp_id/url): a real misconfiguration → fatal.
+        Ok(resp) => Err(RegisterError::Fatal(format!("HTTP {}", resp.status()))),
+        // Connection refused / DNS not ready / timeout: scheduler not up yet → retry.
+        Err(e) => Err(RegisterError::Retryable(format!("{}", e))),
     }
 }
 
@@ -521,6 +570,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         let ssp_id = config.ssp_id.clone();
         let listen_addr = config.listen_addr.clone();
         let advertise_addr = config.advertise_addr.clone();
+        let register_max_wait_secs = config.register_max_wait_secs;
 
         tokio::spawn(async move {
             // Choose bootstrap source based on mode. The metadata source
@@ -535,25 +585,73 @@ pub async fn run_server() -> anyhow::Result<()> {
 
                 info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_base);
 
-                let registration = match register_with_scheduler(
-                    &client,
-                    scheduler_url,
-                    &ssp_id,
-                    &listen_addr,
-                    advertise_addr.as_deref(),
-                ).await {
-                    Ok(r) => {
-                        info!(
-                            snapshot_seq = r.snapshot_seq,
-                            tables = r.table_hashes.len(),
-                            "Successfully registered with scheduler"
-                        );
-                        r
-                    }
-                    Err(e) => {
-                        error!("Failed to register with scheduler: {}", e);
-                        *status.write().await = SspStatus::Failed;
-                        return;
+                // Retry registration with exponential backoff. The scheduler
+                // returns 503 while `Cloning`/`Restoring` (e.g. a cold
+                // `--clean` re-clone), and may be unreachable for a moment
+                // while DNS/the container comes up — both are transient. A
+                // single attempt that gave up (the old behaviour) left the SSP
+                // a permanently-unregistered zombie: it never exited, so the
+                // supervisor's restart-on-failure policy never fired, and the
+                // heartbeat loop only runs once status==Ready. Now we keep
+                // trying within a budget, then exit so the supervisor reruns
+                // the whole handshake against a (by then) Ready scheduler.
+                let registration = {
+                    let max_wait = std::time::Duration::from_secs(register_max_wait_secs);
+                    let start = std::time::Instant::now();
+                    let mut backoff_ms: u64 = 1000;
+                    loop {
+                        match register_with_scheduler(
+                            &client,
+                            scheduler_url,
+                            &ssp_id,
+                            &listen_addr,
+                            advertise_addr.as_deref(),
+                        ).await {
+                            Ok(r) => {
+                                info!(
+                                    snapshot_seq = r.snapshot_seq,
+                                    tables = r.table_hashes.len(),
+                                    waited_secs = start.elapsed().as_secs(),
+                                    "Successfully registered with scheduler"
+                                );
+                                break r;
+                            }
+                            Err(RegisterError::Fatal(e)) => {
+                                error!(
+                                    error = %e,
+                                    "Scheduler rejected registration (non-retryable) — exiting for visibility"
+                                );
+                                *status.write().await = SspStatus::Failed;
+                                // exit(6): distinct from the data-bootstrap
+                                // exit(2) and heartbeat exit(3)/exit(4) so the
+                                // failure mode is identifiable in logs.
+                                std::process::exit(6);
+                            }
+                            Err(RegisterError::Retryable(e)) => {
+                                let elapsed = start.elapsed();
+                                if elapsed >= max_wait {
+                                    error!(
+                                        error = %e,
+                                        waited_secs = elapsed.as_secs(),
+                                        max_wait_secs = register_max_wait_secs,
+                                        "Scheduler registration still failing after max wait — exiting for restart"
+                                    );
+                                    *status.write().await = SspStatus::Failed;
+                                    // exit(5): exhausted the retry budget; let
+                                    // the supervisor restart us so the full
+                                    // register→bootstrap handshake reruns.
+                                    std::process::exit(5);
+                                }
+                                warn!(
+                                    error = %e,
+                                    backoff_ms,
+                                    waited_secs = elapsed.as_secs(),
+                                    "Scheduler not ready for registration, retrying"
+                                );
+                                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                                backoff_ms = (backoff_ms * 2).min(10_000);
+                            }
+                        }
                     }
                 };
 
