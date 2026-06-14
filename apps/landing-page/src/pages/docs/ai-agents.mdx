@@ -93,6 +93,12 @@ Agents typically pipe `spky recipe` output into a file edit, then the project's 
 
 The devtools MCP server gives agents direct access to a running sp00ky app's local cache, active live queries, auth state, and event history — plus it can execute SurrealQL against either the local replica or the remote DB.
 
+<Note title="Two different MCP servers">
+  This <strong>devtools</strong> MCP introspects a running app locally. To let an agent manage your
+  cloud account — projects, deployments, logs, env vars — use the hosted
+  <a href="/docs/cloud/mcp">Cloud MCP server</a> instead.
+</Note>
+
 Wire it into your agent's MCP configuration:
 
 <CodeBlock code={codeMcpConfig} lang="json" />

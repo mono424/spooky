@@ -44,6 +44,7 @@ export const docsNav = [
       { text: 'Deploying', href: `${basePath}/docs/cloud/deploying` },
       { text: 'Logs & Monitoring', href: `${basePath}/docs/cloud/logs` },
       { text: 'CI/CD', href: `${basePath}/docs/cloud/ci-cd` },
+      { text: 'MCP Server', href: `${basePath}/docs/cloud/mcp` },
       { text: 'Environment Variables', href: `${basePath}/docs/cloud/env-variables` },
       { text: 'Teams', href: `${basePath}/docs/cloud/team` },
       { text: 'Backups', href: `${basePath}/docs/cloud/backups` },

@@ -13,12 +13,14 @@ mod jobs;
 mod json_schema;
 mod logs_browser;
 mod mcp;
+mod mcp_cloud;
 mod migrate;
 mod migration;
 mod modules;
 mod package_manager;
 mod parser;
 mod port_check;
+mod query;
 mod scaffold;
 mod schema_builder;
 mod schema_diff;
@@ -146,8 +148,11 @@ enum Commands {
         #[arg(short, long)]
         config: Option<PathBuf>,
     },
-    /// Start an MCP server for AI assistant integration
-    Mcp,
+    /// MCP server tooling: local dev server, cloud tokens, and editor setup
+    Mcp {
+        #[command(subcommand)]
+        action: Option<McpCommands>,
+    },
     // ── Deploy & operate (act on the current project) ──────────────────────
     /// Deploy the current project to Sp00ky Cloud
     Deploy {
@@ -270,6 +275,21 @@ enum Commands {
         config: Option<PathBuf>,
         #[command(subcommand)]
         action: Option<JobsCommands>,
+    },
+    /// Run SurrealQL against the database. With a positional query it runs once
+    /// and prints the result; without one it opens an interactive REPL. Use
+    /// `--cloud` to target the production deployment.
+    Query {
+        /// SurrealQL to execute. Omit to enter interactive (REPL) mode.
+        query: Option<String>,
+        /// Print raw pretty JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
 
     // ── Account ─────────────────────────────────────────────────────────────
@@ -766,6 +786,49 @@ enum CloudKeyCommands {
     Revoke {
         /// Key ID to revoke
         id: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum McpCommands {
+    /// Run the local SurrealDB devtools MCP server (default for `spky mcp`)
+    Serve,
+    /// Generate a cloud MCP token with scopes, then print setup instructions
+    Token {
+        /// Token name/label (defaults to "spooky-mcp")
+        #[arg(long)]
+        name: Option<String>,
+        /// Comma-separated scopes (skips the interactive picker), e.g. "mcp:read,deployments:write"
+        #[arg(long)]
+        scopes: Option<String>,
+        /// Shortcut for read-only access (mcp:read)
+        #[arg(long)]
+        read_only: bool,
+        /// Register the server with an editor after creating the token
+        #[arg(long)]
+        install: bool,
+        /// Editor to register with: claude | cursor | vscode
+        #[arg(long)]
+        client: Option<String>,
+        /// Skip all interactive prompts (uses read-only scopes unless --scopes given)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// List your cloud MCP tokens
+    Tokens,
+    /// Revoke a cloud MCP token by ID
+    Revoke {
+        /// Token ID to revoke
+        id: String,
+    },
+    /// Register the MCP server with an editor using an existing token
+    Install {
+        /// MCP token (mcp_live_…); prompted for if omitted
+        #[arg(long)]
+        token: Option<String>,
+        /// Editor to register with: claude | cursor | vscode
+        #[arg(long)]
+        client: Option<String>,
     },
 }
 
@@ -2353,7 +2416,20 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Some(Commands::Mcp) => mcp::run(),
+        Some(Commands::Mcp { action }) => match action {
+            None | Some(McpCommands::Serve) => mcp::run(),
+            Some(McpCommands::Token {
+                name,
+                scopes,
+                read_only,
+                install,
+                client,
+                yes,
+            }) => mcp_cloud::token(name, scopes, read_only, install, client, yes),
+            Some(McpCommands::Tokens) => mcp_cloud::list_tokens(),
+            Some(McpCommands::Revoke { id }) => mcp_cloud::revoke(id),
+            Some(McpCommands::Install { token, client }) => mcp_cloud::install(token, client),
+        },
 
         // ── Deploy & operate (current project) ─────────────────────────────
         Some(Commands::Deploy { upgrade, clean }) => cloud::deploy(upgrade, clean),
@@ -2399,6 +2475,12 @@ fn main() -> Result<()> {
             config,
             action,
         }) => jobs::run(conn, config, action),
+        Some(Commands::Query {
+            query,
+            json,
+            conn,
+            config,
+        }) => query::run(query, json, conn, config),
 
         // ── Account ─────────────────────────────────────────────────────────
         Some(Commands::Project { action }) => match action {

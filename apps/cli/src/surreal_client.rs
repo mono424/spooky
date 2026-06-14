@@ -67,12 +67,15 @@ impl SurrealClient {
     }
 }
 
-/// Send a raw SQL query to SurrealDB via HTTP, returning parsed responses.
+/// Send a raw SQL query to SurrealDB via HTTP, returning every parsed response
+/// as-is (including those with `status == "ERR"`).
 ///
-/// This is the shared helper for all ureq call sites. It extracts the response
-/// body from HTTP errors (so we see the actual SurrealDB message) and checks
-/// for ERR status in the parsed response.
-fn send_raw_sql(
+/// This is the transport-only half: it extracts the response body from HTTP
+/// errors (so we see the actual SurrealDB message) but does NOT inspect the
+/// per-statement status. Callers that want fail-fast behavior should use
+/// `send_raw_sql`; callers that want to render every statement's outcome
+/// themselves (e.g. the `query` REPL) use this directly.
+fn send_raw_sql_unchecked(
     url: &str,
     auth_header: &str,
     ns_header: Option<&str>,
@@ -107,6 +110,23 @@ fn send_raw_sql(
     let body: Vec<SurrealResponse> = resp
         .into_json()
         .context("Failed to parse SurrealDB response")?;
+
+    Ok(body)
+}
+
+/// Send a raw SQL query to SurrealDB via HTTP, returning parsed responses.
+///
+/// This is the shared helper for all ureq call sites. It extracts the response
+/// body from HTTP errors (so we see the actual SurrealDB message) and checks
+/// for ERR status in the parsed response.
+fn send_raw_sql(
+    url: &str,
+    auth_header: &str,
+    ns_header: Option<&str>,
+    db_header: Option<&str>,
+    query: &str,
+) -> Result<Vec<SurrealResponse>> {
+    let body = send_raw_sql_unchecked(url, auth_header, ns_header, db_header, query)?;
 
     for r in &body {
         if r.status == "ERR" {
@@ -148,6 +168,20 @@ impl SurrealClient {
             .and_then(|r| r.result)
             .unwrap_or(serde_json::Value::Null);
         Ok(result)
+    }
+
+    /// Run an arbitrary SurrealQL batch and return EVERY statement's response,
+    /// including those with `status == "ERR"`. Unlike `execute`, this does not
+    /// abort on the first failing statement, so a caller (e.g. `spky query`)
+    /// can render the outcome of each statement in the batch.
+    pub fn query(&self, query: &str) -> Result<Vec<SurrealResponse>> {
+        send_raw_sql_unchecked(
+            &format!("{}/sql", self.url),
+            &self.auth_header,
+            Some(&self.namespace),
+            Some(&self.database),
+            query,
+        )
     }
 
     /// Internal execute that returns parsed responses (shared by trait impl and info methods).

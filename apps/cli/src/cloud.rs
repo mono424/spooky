@@ -87,7 +87,7 @@ const DEFAULT_API_URL: &str = "https://api.sp00ky.cloud";
 const CREDENTIALS_FILE: &str = "credentials.json";
 const SP00KY_DIR: &str = ".sp00ky";
 
-fn api_base_url() -> String {
+pub(crate) fn api_base_url() -> String {
     // Priority: env var > sp00ky.yml cloudApi > default
     if let Ok(url) = std::env::var("SP00KY_CLOUD_API") {
         return url;
@@ -152,7 +152,7 @@ fn credentials_path() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Credentials {
+pub(crate) struct Credentials {
     access_token: String,
     refresh_token: String,
 }
@@ -191,7 +191,7 @@ fn clear_credentials() -> Result<()> {
     Ok(())
 }
 
-fn require_credentials() -> Result<Credentials> {
+pub(crate) fn require_credentials() -> Result<Credentials> {
     load_credentials().ok_or_else(|| {
         anyhow::anyhow!("Not logged in. Run `sp00ky cloud login` first.")
     })
@@ -201,7 +201,7 @@ fn require_credentials() -> Result<Credentials> {
 // Cloud HTTP Client
 // ---------------------------------------------------------------------------
 
-struct CloudClient {
+pub(crate) struct CloudClient {
     base_url: String,
     token: String,
     refresh_token: String,
@@ -209,7 +209,7 @@ struct CloudClient {
 }
 
 impl CloudClient {
-    fn new(creds: &Credentials) -> Self {
+    pub(crate) fn new(creds: &Credentials) -> Self {
         let is_api_key = creds.access_token.starts_with("spk_live_");
         Self {
             base_url: api_base_url(),
@@ -278,7 +278,7 @@ impl CloudClient {
         }
     }
 
-    fn get(&mut self, path: &str) -> Result<ureq::Response> {
+    pub(crate) fn get(&mut self, path: &str) -> Result<ureq::Response> {
         let url = format!("{}{}", self.base_url, path);
         match ureq::get(&url)
             .set("Authorization", &self.auth_header())
@@ -316,7 +316,7 @@ impl CloudClient {
         }
     }
 
-    fn post(&mut self, path: &str, body: &serde_json::Value) -> Result<ureq::Response> {
+    pub(crate) fn post(&mut self, path: &str, body: &serde_json::Value) -> Result<ureq::Response> {
         let url = format!("{}{}", self.base_url, path);
         match ureq::post(&url)
             .set("Authorization", &self.auth_header())
@@ -354,7 +354,7 @@ impl CloudClient {
         }
     }
 
-    fn delete(&mut self, path: &str) -> Result<ureq::Response> {
+    pub(crate) fn delete(&mut self, path: &str) -> Result<ureq::Response> {
         let url = format!("{}{}", self.base_url, path);
         match ureq::delete(&url)
             .set("Authorization", &self.auth_header())

@@ -24,7 +24,20 @@ pub fn hash_table<I>(records: I) -> String
 where
     I: IntoIterator<Item = (String, Value)>,
 {
-    let mut pairs: Vec<(String, Value)> = records.into_iter().collect();
+    // Drop reserved `_00_*` metadata keys (notably `_00_rv`) before hashing so
+    // the two producers stay bit-identical. The SSP circuit stores rows
+    // verbatim from the ingest event payload, which the `_00_<table>_mutation`
+    // DB events stamp with `_00_rv` (the record version, read back in
+    // `Collection::get_record_version`). The scheduler replica instead hashes a
+    // SCHEMAFULL `SELECT *`, which never returns that undefined field. Without
+    // this, any table touched by event replay (e.g. `comment` after a write)
+    // hashes differently on the two sides, fails the post-replay integrity
+    // check, and force-re-bootstraps the SSP in an endless loop. See
+    // `strip_reserved_keys`.
+    let mut pairs: Vec<(String, Value)> = records
+        .into_iter()
+        .map(|(id, value)| (id, strip_reserved_keys(value)))
+        .collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut hasher = blake3::Hasher::new();
@@ -43,6 +56,24 @@ where
 /// side but not the other.
 pub fn empty_table_hash() -> String {
     hash_table(std::iter::empty())
+}
+
+/// Drop reserved `_00_*` metadata keys from a record's top-level object.
+///
+/// `_00_` is a reserved sp00ky metadata prefix and is never user content, so
+/// removing it is safe. Only **top-level** keys are stripped — matching the
+/// scheduler replica's SCHEMAFULL `SELECT *`, which drops only undefined
+/// top-level fields while preserving nested object content inside a defined
+/// field. Non-object values pass through unchanged.
+fn strip_reserved_keys(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .filter(|(k, _)| !k.starts_with("_00_"))
+                .collect(),
+        ),
+        other => other,
+    }
 }
 
 /// Recursively-keyed canonical JSON serialization. Objects are emitted with
@@ -189,6 +220,33 @@ mod tests {
         let a = vec![("r1".to_string(), json!({"a": {"x": 1, "y": 2}, "b": [1, 2]}))];
         let b = vec![("r1".to_string(), json!({"b": [1, 2], "a": {"y": 2, "x": 1}}))];
         assert_eq!(hash_table(a), hash_table(b));
+    }
+
+    #[test]
+    fn ignores_reserved_metadata_keys() {
+        // The SSP circuit keeps `_00_rv` (injected by the ingest event payload);
+        // the SCHEMAFULL replica row never has it. The two MUST hash identically
+        // — otherwise every replayed table (e.g. `comment`) trips the integrity
+        // check and the SSP re-bootstraps forever.
+        let circuit = vec![(
+            "CM_x".to_string(),
+            json!({"id": "comment:CM_x", "content": "hi", "game": "game:g1", "_00_rv": 7}),
+        )];
+        let replica = vec![(
+            "CM_x".to_string(),
+            json!({"id": "comment:CM_x", "content": "hi", "game": "game:g1"}),
+        )];
+        assert_eq!(hash_table(circuit), hash_table(replica));
+    }
+
+    #[test]
+    fn reserved_strip_is_top_level_only() {
+        // SCHEMAFULL drops only undefined *top-level* fields; nested content
+        // inside a defined object field is preserved on both sides, so a change
+        // there must still change the hash (don't over-strip).
+        let a = vec![("r1".to_string(), json!({"meta": {"_00_rv": 1}}))];
+        let b = vec![("r1".to_string(), json!({"meta": {"_00_rv": 2}}))];
+        assert_ne!(hash_table(a), hash_table(b));
     }
 
     #[test]
