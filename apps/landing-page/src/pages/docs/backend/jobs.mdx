@@ -210,6 +210,42 @@ export const permissionsCode = `DEFINE TABLE job SCHEMAFULL
     FOR select, create, update, delete 
     WHERE $access = "account" AND assigned_to.author.id = $auth.id;`;
 
+export const jobsTuiCode = `# Live dashboard against your local dev database
+spky jobs
+
+# ...against the deployed (cloud) database
+spky jobs --cloud`;
+
+export const jobsListCode = `# List recent jobs as a static, scriptable table (alias: ls)
+spky jobs list
+
+# Filter by status and/or a single job table
+spky jobs list --status failed
+spky jobs list --status pending --table job
+
+# Raise the per-table row cap (default 200) and emit JSON for scripts
+spky jobs list --limit 1000 --json`;
+
+export const jobsManageCode = `# Full payload + error history for one job
+spky jobs get job:abc123
+
+# Stop a job: cancel it if in-flight, or drop it if still queued
+spky jobs kill job:abc123
+
+# Re-run a terminal (failed or success) job
+spky jobs retry job:abc123`;
+
+export const jobsEnvCode = `# Default: the local dev database (the "spky dev" stack at
+# http://localhost:8000, namespace/database "main"). Override explicitly
+# with flags or env vars:
+spky jobs list --url http://localhost:8000 --namespace main --database main
+SURREAL_URL=https://db.example.com SURREAL_NS=main spky jobs list
+
+# --cloud: your deployed production database, resolved from "spky login"
+# plus the slug in sp00ky.yml (same lookup as "spky project credentials").
+spky jobs list --cloud
+spky jobs --cloud            # dashboard against production`;
+
 ## Job Table Schema
 
 The job table stores outbox records and tracks their execution status. Here's the required schema:
@@ -266,6 +302,38 @@ This pattern is reactive - when the job runner updates the job status in the dat
 Here's a complete example of implementing a "spookify" feature that generates AI content:
 
 <CodeBlock code={fullExampleCode} lang="typescript" />
+
+## Inspecting Jobs from the CLI
+
+The `spky jobs` command reads the same outbox job tables straight from SurrealDB — the tables declared in `sp00ky.yml` (any `backend` app with an `outbox` method), falling back to `job`. It works against your **local dev** database by default, or your deployed **production** database with `--cloud`, so you can watch and manage the queue from a terminal without building any UI.
+
+Run it without a subcommand to open a live, interactive dashboard (status counts, recent jobs, filter cycling):
+
+<CodeBlock code={jobsTuiCode} lang="bash" />
+
+### Listing Jobs
+
+`spky jobs list` (alias `ls`) prints a static, scriptable table — handy in CI or piped through `jq` with `--json`:
+
+<CodeBlock code={jobsListCode} lang="bash" />
+
+### Inspecting, Killing & Retrying
+
+<CodeBlock code={jobsManageCode} lang="bash" />
+
+<Note>
+  `kill` and `retry` mutate jobs through the `fn::job::kill` / `fn::job::retry` SurrealQL functions rather than a plain `UPDATE` (job pickup is gated inside the SSP). Those functions are installed by the schema deploy, so kill/retry require a deployed backend.
+</Note>
+
+### Dev vs. Production
+
+By default every `spky jobs` command targets the local dev database from the `spky dev` stack (`http://localhost:8000`, namespace/database `main`). Pass `--cloud` to target the project's deployed database instead: it resolves the endpoint and root credentials from your `spky login` session and the `slug:` in `sp00ky.yml` (the same lookup as `spky project credentials`), so you don't pass `--url`/`--password`. You can also point at any database explicitly with `--url`/`--namespace`/`--database`/`--username`/`--password` or the matching `SURREAL_URL`/`SURREAL_NS`/`SURREAL_DB`/`SURREAL_USER`/`SURREAL_PASS` environment variables.
+
+<CodeBlock code={jobsEnvCode} lang="bash" />
+
+<Note>
+  `--cloud` is the same flag the other database-connecting commands accept (`spky flag`, `spky migrate`, `spky query`) — run them locally during development and add `--cloud` to point at production.
+</Note>
 
 ## Job Runner
 
