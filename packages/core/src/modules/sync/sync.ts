@@ -1,5 +1,5 @@
 import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
-import type { RecordVersionArray, RecordVersionDiff } from '../../types';
+import type { RecordVersionArray, RecordVersionDiff, SyncHealth, SyncHealthStatus } from '../../types';
 import { createSyncEventSystem, SyncEventTypes, SyncQueueEventTypes } from './events/index';
 import type { Logger } from '../../services/logger/index';
 import type { DownEvent, UpEvent} from './queue/index';
@@ -20,7 +20,7 @@ import { SyncScheduler } from './scheduler';
 import type { SchemaStructure } from '@spooky-sync/query-builder';
 import type { CacheModule } from '../cache/index';
 import type { DataModule } from '../data/index';
-import { encodeRecordId, extractIdPart, extractTablePart, surql } from '../../utils/index';
+import { classifySyncError, encodeRecordId, extractIdPart, extractTablePart, surql } from '../../utils/index';
 import { ANON_USER_ID, DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
 
 /**
@@ -40,6 +40,12 @@ export interface Sp00kySyncOptions {
    * Defaults to `false`.
    */
   anonymousLiveQueries?: boolean;
+  /**
+   * Consecutive failed sync rounds before sync health flips to `degraded`.
+   * `0` disables degraded reporting. See {@link Sp00kyConfig.syncHealth}.
+   * Defaults to `3`.
+   */
+  degradeAfterConsecutiveFailures?: number;
 }
 
 /**
@@ -154,6 +160,87 @@ export class Sp00kySync<S extends SchemaStructure> {
     };
   }
 
+  // ---- Sync health -------------------------------------------------------
+  // `0` disables degraded reporting (config `syncHealth: false`). Resolved
+  // from config in Sp00kyClient and passed through the constructor options.
+  private readonly degradeAfterFailures: number;
+  private consecutiveSyncFailures = 0;
+  private syncHealthStatus: SyncHealthStatus = 'healthy';
+  private lastSyncErrorKind: 'network' | 'application' | undefined;
+  private lastSyncErrorMessage: string | undefined;
+
+  /** Current sync-health snapshot. */
+  get syncHealth(): SyncHealth {
+    return {
+      status: this.syncHealthStatus,
+      consecutiveFailures: this.consecutiveSyncFailures,
+      kind: this.syncHealthStatus === 'degraded' ? this.lastSyncErrorKind : undefined,
+      error: this.syncHealthStatus === 'degraded' ? this.lastSyncErrorMessage : undefined,
+    };
+  }
+
+  /**
+   * Observe sync health. The callback fires immediately with the current
+   * status and again on every healthy↔degraded transition. Returns an
+   * unsubscribe. Mirrors {@link subscribeToPendingMutations}.
+   */
+  subscribeToSyncHealth(cb: (health: SyncHealth) => void): () => void {
+    cb(this.syncHealth);
+    const id = this.events.subscribe(SyncEventTypes.SyncHealthChanged, (event) =>
+      cb(event.payload)
+    );
+    return () => this.events.unsubscribe(id);
+  }
+
+  private emitSyncHealth(): void {
+    this.events.emit(SyncEventTypes.SyncHealthChanged, this.syncHealth);
+  }
+
+  /**
+   * Fed by the scheduler once per drained sync round. Individual failures are
+   * absorbed by the queue's retry; only a run of `degradeAfterFailures`
+   * consecutive failures flips the status to `degraded`, and the next clean
+   * round flips it back. No-op when reporting is disabled (`degradeAfterFailures`
+   * is 0).
+   */
+  private recordSyncOutcome(ok: boolean, error?: unknown): void {
+    if (this.degradeAfterFailures <= 0) return;
+    if (ok) {
+      if (this.consecutiveSyncFailures === 0) return;
+      this.consecutiveSyncFailures = 0;
+      if (this.syncHealthStatus !== 'healthy') {
+        this.syncHealthStatus = 'healthy';
+        this.lastSyncErrorKind = undefined;
+        this.lastSyncErrorMessage = undefined;
+        this.logger.info(
+          { Category: 'sp00ky-client::Sp00kySync::syncHealth' },
+          'Sync recovered; health back to healthy'
+        );
+        this.emitSyncHealth();
+      }
+      return;
+    }
+    this.consecutiveSyncFailures++;
+    this.lastSyncErrorKind = classifySyncError(error);
+    this.lastSyncErrorMessage = error instanceof Error ? error.message : String(error);
+    if (
+      this.syncHealthStatus !== 'degraded' &&
+      this.consecutiveSyncFailures >= this.degradeAfterFailures
+    ) {
+      this.syncHealthStatus = 'degraded';
+      this.logger.warn(
+        {
+          consecutiveFailures: this.consecutiveSyncFailures,
+          kind: this.lastSyncErrorKind,
+          error,
+          Category: 'sp00ky-client::Sp00kySync::syncHealth',
+        },
+        'Sync degraded after sustained failures'
+      );
+      this.emitSyncHealth();
+    }
+  }
+
   constructor(
     private local: LocalDatabaseService,
     private remote: RemoteDatabaseService,
@@ -173,10 +260,12 @@ export class Sp00kySync<S extends SchemaStructure> {
       this.processUpEvent.bind(this),
       this.processDownEvent.bind(this),
       this.logger,
-      this.handleRollback.bind(this)
+      this.handleRollback.bind(this),
+      this.recordSyncOutcome.bind(this)
     );
     this.refSyncIntervalMs = resolveListRefPollInterval(options?.refSyncIntervalMs);
     this.anonLiveEnabled = options?.anonymousLiveQueries ?? false;
+    this.degradeAfterFailures = Math.max(0, options?.degradeAfterConsecutiveFailures ?? 3);
   }
 
   /**

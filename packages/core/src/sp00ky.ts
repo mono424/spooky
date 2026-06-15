@@ -6,7 +6,8 @@ import type {
   Sp00kyQueryResultPromise,
   PersistenceClient,
   UpdateOptions,
-  RunOptions} from './types';
+  RunOptions,
+  SyncHealth} from './types';
 import {
   LocalDatabaseService,
   LocalMigrator,
@@ -128,6 +129,19 @@ export class Sp00kyClient<S extends SchemaStructure> {
     return this.sync.subscribeToPendingMutations(cb);
   }
 
+  /** Current sync-health snapshot. See {@link Sp00kyConfig.syncHealth}. */
+  get syncHealth(): SyncHealth {
+    return this.sync.syncHealth;
+  }
+
+  /**
+   * Observe sync health. Fires immediately with the current status and again
+   * on every healthy↔degraded transition. Returns an unsubscribe.
+   */
+  subscribeToSyncHealth(cb: (health: SyncHealth) => void): () => void {
+    return this.sync.subscribeToSyncHealth(cb);
+  }
+
   constructor(private config: Sp00kyConfig<S>) {
     const logger = createLogger(config.logLevel ?? 'info', config.otelTransmit);
     this.logger = logger.child({ service: 'Sp00kyClient' });
@@ -206,6 +220,12 @@ export class Sp00kyClient<S extends SchemaStructure> {
       {
         refSyncIntervalMs: this.config.refSyncIntervalMs,
         anonymousLiveQueries: this.config.enableAnonymousLiveQueries,
+        // `syncHealth: false` (or `{ degradeAfterConsecutiveFailures: 0 }`)
+        // disables degraded reporting; otherwise default to 3.
+        degradeAfterConsecutiveFailures:
+          this.config.syncHealth === false
+            ? 0
+            : this.config.syncHealth?.degradeAfterConsecutiveFailures ?? 3,
       }
     );
 

@@ -153,6 +153,44 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * one-shot but never sync live.
    */
   enableAnonymousLiveQueries?: boolean;
+  /**
+   * Surface sustained sync failures as a "degraded" health status that the app
+   * can observe via `subscribeToSyncHealth` (or the client-solid
+   * `useSyncStatus` hook) to render a "can't reach the server" banner.
+   *
+   * Individual failures — a transient remote 500 on query registration, a
+   * dropped WebSocket, etc. — are always swallowed and retried; they never
+   * throw at the app. This only controls when a *run* of consecutive failures
+   * is reported. Status flips back to `healthy` on the next successful sync
+   * round. Defaults to `{ degradeAfterConsecutiveFailures: 3 }`; pass `false`
+   * (or `degradeAfterConsecutiveFailures: 0`) to never report degraded.
+   */
+  syncHealth?: SyncHealthConfig | false;
+}
+
+/** Tunables for sync-health reporting. See {@link Sp00kyConfig.syncHealth}. */
+export interface SyncHealthConfig {
+  /**
+   * Number of consecutive failed sync rounds (up or down) before the status
+   * flips from `healthy` to `degraded`. A single transient failure is absorbed
+   * by the retry; only a sustained run trips the banner. Defaults to `3`. `0`
+   * disables degraded reporting entirely.
+   */
+  degradeAfterConsecutiveFailures?: number;
+}
+
+export type SyncHealthStatus = 'healthy' | 'degraded';
+
+/** Snapshot of sync health delivered to `subscribeToSyncHealth` subscribers. */
+export interface SyncHealth {
+  /** `'degraded'` once consecutive failures cross the configured threshold. */
+  status: SyncHealthStatus;
+  /** Consecutive failed sync rounds at the moment of this report. */
+  consecutiveFailures: number;
+  /** Classification of the most recent failure (only set while `degraded`). */
+  kind?: 'network' | 'application';
+  /** Message of the most recent failure (only set while `degraded`). */
+  error?: string;
 }
 
 export type QueryHash = string;

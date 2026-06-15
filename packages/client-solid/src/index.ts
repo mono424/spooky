@@ -6,6 +6,7 @@ import {
   type BucketHandle,
   type UpdateOptions,
   type RunOptions,
+  type SyncHealth,
 } from '@spooky-sync/core';
 
 import type {
@@ -38,6 +39,8 @@ import { RecordId, Uuid, type Surreal } from 'surrealdb';
 export { RecordId, Uuid };
 export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/models';
 export { useQuery } from './lib/use-query';
+export { useSyncStatus, type UseSyncStatus } from './lib/use-sync-status';
+export type { SyncHealth, SyncHealthStatus, SyncHealthConfig } from '@spooky-sync/core';
 export { useCrdtField } from './lib/use-crdt-field';
 export { useFeatureFlag, type UseFeatureFlag } from './lib/use-feature-flag';
 export { useFileUpload, type FileUploadResult } from './lib/use-file-upload';
@@ -282,6 +285,22 @@ export class SyncedDb<S extends SchemaStructure> {
   subscribeToPendingMutations(cb: (count: number) => void): () => void {
     if (!this.sp00ky) throw new Error('SyncedDb not initialized');
     return this.sp00ky.subscribeToPendingMutations(cb);
+  }
+
+  /** Current sync-health snapshot. See {@link useSyncStatus}. */
+  get syncHealth(): SyncHealth {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.syncHealth;
+  }
+
+  /**
+   * Observe sync health. Fires immediately with the current status and again
+   * on every healthy↔degraded transition. Prefer the `useSyncStatus` hook in
+   * components; this is the imperative escape hatch.
+   */
+  subscribeToSyncHealth(cb: (health: SyncHealth) => void): () => void {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.subscribeToSyncHealth(cb);
   }
 
   bucket<B extends BucketNames<S>>(name: B): BucketHandle {

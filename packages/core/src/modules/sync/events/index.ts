@@ -1,6 +1,6 @@
 import type { EventDefinition, EventSystem } from '../../../events/index';
 import { createEventSystem } from '../../../events/index';
-import type { RecordVersionArray } from '../../../types';
+import type { RecordVersionArray, SyncHealth } from '../../../types';
 
 export const SyncQueueEventTypes = {
   MutationEnqueued: 'MUTATION_ENQUEUED',
@@ -37,6 +37,7 @@ export const SyncEventTypes = {
   QueryUpdated: 'SYNC_QUERY_UPDATED',
   RemoteDataIngested: 'SYNC_REMOTE_DATA_INGESTED',
   MutationRolledBack: 'SYNC_MUTATION_ROLLED_BACK',
+  SyncHealthChanged: 'SYNC_HEALTH_CHANGED',
 } as const;
 
 export type SyncEventTypeMap = {
@@ -65,6 +66,10 @@ export type SyncEventTypeMap = {
       error: string;
     }
   >;
+  [SyncEventTypes.SyncHealthChanged]: EventDefinition<
+    typeof SyncEventTypes.SyncHealthChanged,
+    SyncHealth
+  >;
 };
 
 export type SyncEventSystem = EventSystem<SyncEventTypeMap>;
@@ -74,5 +79,6 @@ export function createSyncEventSystem(): SyncEventSystem {
     SyncEventTypes.QueryUpdated,
     SyncEventTypes.RemoteDataIngested,
     SyncEventTypes.MutationRolledBack,
+    SyncEventTypes.SyncHealthChanged,
   ]);
 }
