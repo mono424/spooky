@@ -160,26 +160,30 @@ export class SyncEngine {
     );
 
     // Confirm which of the "removed" ids still exist remotely by selecting the
-    // records directly: `SELECT id FROM $ids` (the records to fetch ARE the
-    // FROM target).
+    // records directly from the id array (the records ARE the FROM target).
     //
-    // We must NOT use `WHERE id IN $ids` here: on SurrealDB v3.1.x, record-id
-    // matching with `IN` is broken — `SELECT id FROM <table> WHERE id IN
-    // [<recordid>]` returns NO rows even for an existing record (plain-field
-    // `IN` works; record-id `IN` does not). That made this check report EVERY
-    // removed id as gone and DELETE live local records (e.g. a freshly-created
-    // collection vanished mid-session). `SELECT id FROM $ids` matches correctly.
-    // (The old comment claimed `FROM $ids` returned Internal/0 on v3.0; it works
-    // on v3.1, and even if it ever errored the catch below skips deletion —
-    // strictly safer than the silent empty-result the `IN` form produced.)
+    // The exact query form matters on SurrealDB v3.x:
+    //   - `WHERE id IN $ids` is broken: record-id `IN` matches nothing, so every
+    //     removed id looked gone and live local records got deleted (a fresh
+    //     collection vanished mid-session). Do NOT use `IN`.
+    //   - `SELECT id FROM $ids` — a FIELD projection over a record-id ARRAY —
+    //     errors "Specify a database to use" on the deployed engine. The catch
+    //     below then swallowed it and skipped EVERY deletion, so nothing could be
+    //     deleted anywhere (games, comments, …). Do NOT project a field over the
+    //     array. (`SELECT * FROM $ids` works but pulls full records — wasteful.)
+    //   - `SELECT VALUE id FROM $ids` works: a flat array of ids with a NONE entry
+    //     for each id that no longer exists. We filter the NONE entries out; the
+    //     survivors are the ids still present upstream.
     let existingRemoteIds: Set<string>;
     try {
-      const [existing] = await this.remote.query<[{ id: RecordId }[]]>(
-        'SELECT id FROM $ids',
+      const [existing] = await this.remote.query<[(RecordId | null | undefined)[]]>(
+        'SELECT VALUE id FROM $ids',
         { ids: removed }
       );
       existingRemoteIds = new Set(
-        (existing ?? []).map((row) => encodeRecordId(row.id))
+        (existing ?? [])
+          .filter((id): id is RecordId => id != null)
+          .map((id) => encodeRecordId(id))
       );
     } catch (err) {
       // Verification failed. Skip deletion entirely — the next sync
