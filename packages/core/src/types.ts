@@ -143,6 +143,16 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * Defaults to `true`; set `false` to keep the old wait-for-registration path.
    */
   instantHydrate?: boolean;
+  /**
+   * Enable realtime sync while signed out. When `true`, the client starts its
+   * `_00_list_ref` poll (and a LIVE subscription) against the shared
+   * `_00_list_ref_anon` table even with no authenticated user, so a logged-out
+   * page gets live `useQuery` updates over world-readable tables. Requires the
+   * server to be deployed with `anonymousLiveQueries: true` in `sp00ky.yml`
+   * (this flag must match it). Defaults to `false`: anonymous clients can read
+   * one-shot but never sync live.
+   */
+  enableAnonymousLiveQueries?: boolean;
 }
 
 export type QueryHash = string;

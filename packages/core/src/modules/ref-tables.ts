@@ -13,6 +13,14 @@
 export type RefMode = 'single' | 'dedicated';
 
 /**
+ * Sentinel user id for unauthenticated clients when anonymous live queries are
+ * enabled. Mirrors `ssp_protocol::ANON_AUTH_ID`. It carries no `user:` prefix
+ * so it can never collide with a real user id (those arrive as `user:<id>`);
+ * both sides resolve it to the shared `_00_list_ref_anon` table.
+ */
+export const ANON_USER_ID = 'anon';
+
+/**
  * Default ref-storage mode for this client build. Mirrors the SSP's
  * default (`RefMode::Dedicated`) so cross-session sync works out of the
  * box.
@@ -51,6 +59,10 @@ export function sanitizeUserId(userId: unknown): string | null {
  * single mode.
  */
 export function listRefTableFor(mode: RefMode, userId: unknown): string {
+  // Anonymous clients (flag-enabled) share one dedicated table in both modes —
+  // checked before the mode split so it never lands on the per-user or the
+  // auth-gated global table. Matches `ssp_protocol::list_ref_table_for`.
+  if (userId === ANON_USER_ID) return '_00_list_ref_anon';
   if (mode === 'single') return '_00_list_ref';
   const uid = sanitizeUserId(userId);
   return uid ? `_00_list_ref_user_${uid}` : '_00_list_ref';

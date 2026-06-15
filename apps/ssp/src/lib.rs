@@ -84,6 +84,10 @@ pub struct AppState {
     /// `_00_query` / `_00_list_ref` storage layout. See
     /// `ssp_protocol::RefMode` and `crate::tables`.
     pub ref_mode: ssp_protocol::RefMode,
+    /// When `true`, anonymous (empty `auth_id`) query registrations are routed
+    /// to the world-readable `_00_list_ref_anon` table so logged-out clients
+    /// can sync live. See `Config::anonymous_live_queries`.
+    pub anonymous_live_queries: bool,
     /// Version of the upstream SurrealDB server, queried once at startup
     /// (`"unknown"` if the query failed). Surfaced via `/info` so the DevTools
     /// can report the SurrealDB backend version.
@@ -129,6 +133,12 @@ pub struct Config {
     /// version that delivers cross-session LIVE notifications correctly
     /// through permission rules.
     pub ref_mode: ssp_protocol::RefMode,
+    /// Enable realtime sync for unauthenticated (anonymous) clients. When
+    /// `true`, anonymous query registrations (empty `auth_id`) are routed to a
+    /// dedicated `_00_list_ref_anon` table that anyone can SELECT, so a
+    /// logged-out client's `_00_list_ref` poll can read its window. Defaults to
+    /// `false`. Env: `SPKY_SSP_ANON_LIVE_QUERIES` (`1`/`true` to enable).
+    pub anonymous_live_queries: bool,
 }
 
 pub fn load_config() -> Config {
@@ -160,6 +170,12 @@ pub fn load_config() -> Config {
             .as_deref()
             .and_then(ssp_protocol::RefMode::parse_str)
             .unwrap_or_default(),
+        anonymous_live_queries: std::env::var("SPKY_SSP_ANON_LIVE_QUERIES")
+            .map(|v| {
+                let v = v.trim().to_ascii_lowercase();
+                v == "1" || v == "true"
+            })
+            .unwrap_or(false),
     }
 }
 
@@ -549,6 +565,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         crdt_cache,
         view_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         ref_mode: config.ref_mode,
+        anonymous_live_queries: config.anonymous_live_queries,
         surrealdb_version,
     };
 
@@ -2012,6 +2029,25 @@ async fn ingest_handler(
                 });
             }
         }
+        // Same orphan-proof cleanup for the shared anonymous table: the owner
+        // field above routes to the deleter's per-user table, never the anon
+        // one, so anon windows would keep a stale edge if the circuit cache was
+        // incomplete. Independent of `owner` (anon views are over public data).
+        if state.anonymous_live_queries && parse_record_id(&payload.id).is_some() {
+            let stmt = format!("DELETE _00_list_ref_anon WHERE out = {}", payload.id);
+            let state_for_cleanup = state.clone();
+            let id_for_log = payload.id.clone();
+            tokio::spawn(async move {
+                if let Err(e) = state_for_cleanup.db.query(&stmt).await {
+                    error!(
+                        target: "ssp::ingest",
+                        id = %id_for_log,
+                        error = %e,
+                        "anon list_ref delete cleanup failed"
+                    );
+                }
+            });
+        }
     }
 
     // Record duration
@@ -2132,13 +2168,24 @@ async fn register_view_handler(
     span.record("view_id", &data.plan.id);
 
     // Auth identity for per-user table routing. Extracted up front so
-    // every downstream record-id computation uses the same value.
-    let auth_id = data
-        .metadata
-        .get("authId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    // every downstream record-id computation uses the same value. When
+    // `anonymousLiveQueries` is on, an empty `auth_id` (logged-out caller) is
+    // remapped to the `anon` sentinel so this registration's `_00_query` row,
+    // its list_ref edges, and the table it routes to all land on the shared,
+    // world-readable `_00_list_ref_anon`. When off, the empty id keeps the
+    // legacy behaviour (auth-gated global table the client can't read).
+    let auth_id = {
+        let raw = data
+            .metadata
+            .get("authId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if raw.is_empty() && state.anonymous_live_queries {
+            ssp_protocol::ANON_AUTH_ID.to_string()
+        } else {
+            raw.to_string()
+        }
+    };
 
     // Lazy-define the per-user `_00_query_user_<id>` and
     // `_00_list_ref_user_<id>` tables (idempotent). No-op in

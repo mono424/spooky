@@ -21,7 +21,7 @@ import type { SchemaStructure } from '@spooky-sync/query-builder';
 import type { CacheModule } from '../cache/index';
 import type { DataModule } from '../data/index';
 import { encodeRecordId, extractIdPart, extractTablePart, surql } from '../../utils/index';
-import { DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
+import { ANON_USER_ID, DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
 
 /**
  * Tunables for `Sp00kySync` construction.
@@ -34,6 +34,12 @@ export interface Sp00kySyncOptions {
    * {@link resolveListRefPollInterval}.
    */
   refSyncIntervalMs?: number;
+  /**
+   * Enable realtime sync for unauthenticated clients against the shared
+   * `_00_list_ref_anon` table. See {@link Sp00kyConfig.enableAnonymousLiveQueries}.
+   * Defaults to `false`.
+   */
+  anonymousLiveQueries?: boolean;
 }
 
 /**
@@ -64,6 +70,11 @@ export class Sp00kySync<S extends SchemaStructure> {
   private currentUserId: string | null = null;
 
   private refMode: RefMode = DEFAULT_REF_MODE;
+
+  // When true, an unauthenticated client still runs the `_00_list_ref` poll
+  // and LIVE subscription, routed to the shared `_00_list_ref_anon` table, so
+  // a logged-out page gets realtime `useQuery` updates. Off by default.
+  private readonly anonLiveEnabled: boolean;
 
   // Bookkeeping for the LIVE subscription on `_00_list_ref[_user_*]`.
   // SurrealDB binds the permission context at LIVE-registration time and
@@ -165,6 +176,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       this.handleRollback.bind(this)
     );
     this.refSyncIntervalMs = resolveListRefPollInterval(options?.refSyncIntervalMs);
+    this.anonLiveEnabled = options?.anonymousLiveQueries ?? false;
   }
 
   /**
@@ -183,6 +195,23 @@ export class Sp00kySync<S extends SchemaStructure> {
     // from the auth subscription. In dedicated mode the table name
     // depends on the authenticated user, and an unauthenticated
     // subscription wouldn't match any of the per-user tables anyway.
+    //
+    // Exception: when anonymous live queries are enabled, start realtime now
+    // against the shared `_00_list_ref_anon` table so a logged-out client
+    // syncs immediately. `setCurrentUserId` re-points LIVE to the per-user
+    // table on sign-in. Guard on `currentUserId` because the auth callback can
+    // fire (and authenticate) before `init()` runs — don't clobber that back
+    // to the anon table. `setCurrentUserId(null)` is a no-op on first load
+    // (it's already null), so this is the only place anon realtime starts.
+    if (this.anonLiveEnabled && !this.currentUserId) {
+      this.startListRefPoll();
+      this.restartRefLiveQuery().catch((err) => {
+        this.logger.debug(
+          { err, Category: 'sp00ky-client::Sp00kySync::init' },
+          'Anonymous ref LIVE start failed; relying on periodic poll fallback'
+        );
+      });
+    }
   }
 
   /**
@@ -202,6 +231,20 @@ export class Sp00kySync<S extends SchemaStructure> {
     if (this.currentUserId === userId) return;
     this.currentUserId = userId;
     if (!userId) {
+      if (this.anonLiveEnabled) {
+        // Signed out but anonymous realtime is on: keep the poll running and
+        // re-point LIVE from the (now stale) per-user table to the shared
+        // `_00_list_ref_anon`. `startListRefPoll` is idempotent; the poll
+        // re-resolves `listRefTable()` each tick so it follows automatically.
+        this.startListRefPoll();
+        await this.restartRefLiveQuery().catch((err) => {
+          this.logger.debug(
+            { err, Category: 'sp00ky-client::Sp00kySync::setCurrentUserId' },
+            'Anonymous ref LIVE restart failed; relying on periodic poll fallback'
+          );
+        });
+        return;
+      }
       await this.killRefLiveQuery();
       this.stopListRefPoll();
       return;
@@ -391,7 +434,12 @@ export class Sp00kySync<S extends SchemaStructure> {
    * two points and we need the correct table name immediately.
    */
   public listRefTable(): string {
-    return listRefTableFor(this.refMode, this.dataModule.getCurrentUserId());
+    const userId = this.dataModule.getCurrentUserId();
+    // Unauthenticated with the flag on → the shared `_00_list_ref_anon` table.
+    if (userId == null && this.anonLiveEnabled) {
+      return listRefTableFor(this.refMode, ANON_USER_ID);
+    }
+    return listRefTableFor(this.refMode, userId);
   }
 
   private async killRefLiveQuery(): Promise<void> {
@@ -443,8 +491,9 @@ export class Sp00kySync<S extends SchemaStructure> {
       // re-enqueued `register` events only re-fetch initial state, they don't
       // re-subscribe. Without this, LIVE never recovers after a reconnect and
       // the poll silently becomes the sole sync path (and never backs off).
-      // Only when authenticated: a signed-out reconnect has no per-user table.
-      if (this.currentUserId) {
+      // Authenticated → per-user table; signed-out with anon live enabled →
+      // the shared `_00_list_ref_anon`. Otherwise there's no table to re-bind.
+      if (this.currentUserId || this.anonLiveEnabled) {
         this.restartRefLiveQuery().catch((err) => {
           this.logger.debug(
             { err, Category: 'sp00ky-client::Sp00kySync::onReconnect' },

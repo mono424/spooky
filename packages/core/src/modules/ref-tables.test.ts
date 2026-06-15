@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { RecordId } from 'surrealdb';
-import { listRefTableFor, sanitizeUserId } from './ref-tables';
+import { ANON_USER_ID, listRefTableFor, sanitizeUserId } from './ref-tables';
 
 describe('listRefTableFor', () => {
   it('returns global table in single mode regardless of user', () => {
@@ -31,6 +31,16 @@ describe('listRefTableFor', () => {
       '_00_list_ref'
     );
     expect(listRefTableFor('dedicated', 'user:abc.dot')).toBe('_00_list_ref');
+  });
+
+  it('routes the anon sentinel to the shared anon table in both modes', () => {
+    expect(listRefTableFor('dedicated', ANON_USER_ID)).toBe('_00_list_ref_anon');
+    expect(listRefTableFor('single', ANON_USER_ID)).toBe('_00_list_ref_anon');
+    // A real user whose id sanitizes to "anon" still carries the user: prefix,
+    // so it never collides with the bare sentinel.
+    expect(listRefTableFor('dedicated', 'user:anon')).toBe(
+      '_00_list_ref_user_anon'
+    );
   });
 });
 

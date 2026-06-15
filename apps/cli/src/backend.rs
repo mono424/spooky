@@ -273,6 +273,14 @@ pub struct Sp00kyConfig {
     /// non-inserting subscriber.
     #[serde(default, rename = "refMode", skip_serializing_if = "Option::is_none")]
     pub ref_mode: Option<RefMode>,
+    /// Enable realtime sync for unauthenticated (anonymous) clients. When
+    /// `true`, the SSP materializes anonymous query registrations into a
+    /// dedicated `_00_list_ref_anon` table (readable by anyone) and the
+    /// client starts its `_00_list_ref` poll while signed out, so a logged-out
+    /// visitor gets live updates over world-readable tables. Defaults to
+    /// `false`: anonymous clients can read one-shot but never sync live.
+    #[serde(default, rename = "anonymousLiveQueries", skip_serializing_if = "Option::is_none")]
+    pub anonymous_live_queries: Option<bool>,
 }
 
 // `RefMode` lives in `ssp-protocol` so the CLI, the SSP server, and any
@@ -284,6 +292,12 @@ impl Sp00kyConfig {
     /// Resolved ref mode, falling back to the default when unset in YAML.
     pub fn resolved_ref_mode(&self) -> RefMode {
         self.ref_mode.unwrap_or_default()
+    }
+
+    /// Whether anonymous (unauthenticated) live queries are enabled.
+    /// Defaults to `false` when unset in YAML.
+    pub fn resolved_anonymous_live_queries(&self) -> bool {
+        self.anonymous_live_queries.unwrap_or(false)
     }
 }
 

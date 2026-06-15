@@ -46,6 +46,14 @@ impl RefMode {
     }
 }
 
+/// Sentinel `auth_id` used for unauthenticated clients when anonymous live
+/// queries are enabled (`anonymousLiveQueries: true`). It carries no `user:`
+/// prefix, so it can never collide with a real user id: every authenticated
+/// caller arrives as `"user:<id>"`. Both the SSP (when it sees an empty
+/// `auth_id`) and the client (while signed out) substitute this value so they
+/// agree on the `_00_list_ref_anon` table name.
+pub const ANON_AUTH_ID: &str = "anon";
+
 /// Sanitize a user record id (e.g. `"user:abc123"`) into the segment
 /// that goes into a dedicated table name (e.g. `"abc123"`). Returns
 /// `None` if the id is empty, missing the `user:` prefix, or contains
@@ -73,6 +81,13 @@ pub fn sanitize_user_id(auth_id: &str) -> Option<String> {
 /// only `_00_list_ref` splits per user because that's where the
 /// SurrealDB LIVE permission gap lives.
 pub fn list_ref_table_for(mode: RefMode, auth_id: &str) -> String {
+    // Anonymous clients (flag-enabled) share one dedicated, world-readable
+    // table in both modes — checked before the mode match so it never lands on
+    // the per-user or the auth-gated global table. The bare `"anon"` sentinel
+    // never collides with a real user (those arrive as `"user:<id>"`).
+    if auth_id == ANON_AUTH_ID {
+        return "_00_list_ref_anon".to_string();
+    }
     match mode {
         RefMode::Single => "_00_list_ref".to_string(),
         RefMode::Dedicated => match sanitize_user_id(auth_id) {
@@ -147,4 +162,36 @@ pub struct SspHeartbeat {
     pub cpu_usage: Option<f64>,
     pub memory_usage: Option<f64>,
     pub version: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anon_routes_to_dedicated_anon_table_in_both_modes() {
+        assert_eq!(list_ref_table_for(RefMode::Dedicated, ANON_AUTH_ID), "_00_list_ref_anon");
+        assert_eq!(list_ref_table_for(RefMode::Single, ANON_AUTH_ID), "_00_list_ref_anon");
+    }
+
+    #[test]
+    fn authenticated_user_is_unaffected_by_anon_sentinel() {
+        assert_eq!(
+            list_ref_table_for(RefMode::Dedicated, "user:abc"),
+            "_00_list_ref_user_abc"
+        );
+        assert_eq!(list_ref_table_for(RefMode::Single, "user:abc"), "_00_list_ref");
+        // A user whose id sanitizes to "anon" still carries the `user:` prefix,
+        // so it never matches the bare sentinel.
+        assert_eq!(
+            list_ref_table_for(RefMode::Dedicated, "user:anon"),
+            "_00_list_ref_user_anon"
+        );
+    }
+
+    #[test]
+    fn empty_auth_id_keeps_legacy_global_fallback() {
+        assert_eq!(list_ref_table_for(RefMode::Dedicated, ""), "_00_list_ref");
+        assert_eq!(list_ref_table_for(RefMode::Single, ""), "_00_list_ref");
+    }
 }

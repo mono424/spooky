@@ -203,7 +203,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.dataModule,
       this.config.schema,
       this.logger,
-      { refSyncIntervalMs: this.config.refSyncIntervalMs }
+      {
+        refSyncIntervalMs: this.config.refSyncIntervalMs,
+        anonymousLiveQueries: this.config.enableAnonymousLiveQueries,
+      }
     );
 
     // Initialize feature flags. Reuses the down-queue to register SSP plans

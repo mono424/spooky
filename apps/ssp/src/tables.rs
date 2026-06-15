@@ -15,7 +15,7 @@
 //! never disagree about which name to use.
 
 use anyhow::{Context, Result};
-use ssp_protocol::{list_ref_table_for, sanitize_user_id, RefMode};
+use ssp_protocol::{list_ref_table_for, sanitize_user_id, RefMode, ANON_AUTH_ID};
 use std::collections::HashSet;
 use surrealdb::{Connection, Surreal};
 use tracing::warn;
@@ -23,6 +23,43 @@ use tracing::warn;
 /// Returns the `_00_list_ref` table name for the given mode + user.
 pub fn list_ref_table(mode: RefMode, auth_id: &str) -> String {
     list_ref_table_for(mode, auth_id)
+}
+
+/// Define the shared `_00_list_ref_anon` table used for unauthenticated
+/// clients when `anonymousLiveQueries` is enabled. Unlike the per-user
+/// tables it is `SELECT WHERE true` (world-readable): a logged-out session
+/// has `$auth = NONE`, so it can't be gated on `$auth.id`. This is safe
+/// because the edges only reference records the client could already read
+/// one-shot (the public tables are `select WHERE true`); the rows expose
+/// nothing beyond a query-hash → record-id mapping over public data. Writes
+/// stay SSP-only (root bypasses the rule). Independent of `RefMode` and never
+/// auto-dropped (the cleanup paths only target `_00_list_ref_user_*`).
+pub async fn ensure_anon_table<C: Connection>(db: &Surreal<C>) -> Result<()> {
+    let list_ref_tbl = "_00_list_ref_anon";
+    let ddl = format!(
+        r#"
+DEFINE TABLE OVERWRITE {list_ref_tbl} SCHEMALESS
+    PERMISSIONS FOR select WHERE true,
+                FOR create, update WHERE false,
+                FOR delete WHERE false;
+DEFINE FIELD OVERWRITE in ON TABLE {list_ref_tbl} TYPE record;
+DEFINE FIELD OVERWRITE out ON TABLE {list_ref_tbl} TYPE record;
+DEFINE FIELD OVERWRITE clientId ON TABLE {list_ref_tbl} TYPE string;
+DEFINE FIELD OVERWRITE auth_id ON TABLE {list_ref_tbl} TYPE string DEFAULT '';
+DEFINE FIELD OVERWRITE version ON TABLE {list_ref_tbl} TYPE int;
+DEFINE FIELD OVERWRITE updatedAt ON TABLE {list_ref_tbl} TYPE datetime VALUE time::now() READONLY;
+DEFINE FIELD OVERWRITE parent ON TABLE {list_ref_tbl} TYPE option<record<{list_ref_tbl}>>;
+DEFINE FIELD OVERWRITE parent_rel ON TABLE {list_ref_tbl} TYPE option<string>;
+"#,
+    );
+
+    db.query(ddl)
+        .await
+        .context("Failed to ensure anonymous list_ref table")?
+        .check()
+        .context("ensure_anon_table: at least one DDL statement failed")?;
+
+    Ok(())
 }
 
 /// Issue idempotent `DEFINE TABLE OVERWRITE` + field DDL for the
@@ -47,6 +84,11 @@ pub async fn ensure_user_tables<C: Connection>(
     mode: RefMode,
     auth_id: &str,
 ) -> Result<()> {
+    // Anonymous clients share the dedicated `_00_list_ref_anon` table in both
+    // ref modes (the handler only ever passes the sentinel when the flag is on).
+    if auth_id == ANON_AUTH_ID {
+        return ensure_anon_table(db).await;
+    }
     if mode == RefMode::Single {
         return Ok(());
     }
