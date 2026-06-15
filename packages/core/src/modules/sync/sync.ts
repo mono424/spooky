@@ -169,6 +169,16 @@ export class Sp00kySync<S extends SchemaStructure> {
   private lastSyncErrorKind: 'network' | 'application' | undefined;
   private lastSyncErrorMessage: string | undefined;
 
+  // Self-heal: while degraded, re-drive sync on an exponential backoff so the
+  // app recovers on its own — even when the socket never actually dropped (in
+  // that case no `connected` event fires, so this re-registration is the ONLY
+  // thing that re-probes the server). Started on the degrade transition,
+  // cleared on recovery. Capped cadence so a long outage doesn't busy-loop.
+  private selfHealTimer: ReturnType<typeof setTimeout> | null = null;
+  private selfHealAttempts = 0;
+  private static readonly SELF_HEAL_BASE_MS = 2_000;
+  private static readonly SELF_HEAL_MAX_MS = 30_000;
+
   /** Current sync-health snapshot. */
   get syncHealth(): SyncHealth {
     return {
@@ -212,6 +222,7 @@ export class Sp00kySync<S extends SchemaStructure> {
         this.syncHealthStatus = 'healthy';
         this.lastSyncErrorKind = undefined;
         this.lastSyncErrorMessage = undefined;
+        this.stopSelfHeal();
         this.logger.info(
           { Category: 'sp00ky-client::Sp00kySync::syncHealth' },
           'Sync recovered; health back to healthy'
@@ -238,7 +249,74 @@ export class Sp00kySync<S extends SchemaStructure> {
         'Sync degraded after sustained failures'
       );
       this.emitSyncHealth();
+      this.startSelfHeal();
     }
+  }
+
+  /**
+   * Begin self-heal retries (no-op if already running). Started on the
+   * healthy→degraded transition; {@link recordSyncOutcome} stops it on recovery.
+   */
+  private startSelfHeal(): void {
+    if (this.selfHealTimer !== null) return;
+    this.selfHealAttempts = 0;
+    this.scheduleSelfHeal();
+  }
+
+  private scheduleSelfHeal(): void {
+    const delay = Math.min(
+      Sp00kySync.SELF_HEAL_MAX_MS,
+      Sp00kySync.SELF_HEAL_BASE_MS * 2 ** this.selfHealAttempts
+    );
+    this.selfHealTimer = setTimeout(async () => {
+      this.selfHealTimer = null;
+      if (this.syncHealthStatus !== 'degraded') return;
+      this.selfHealAttempts++;
+      this.logger.debug(
+        { attempt: this.selfHealAttempts, delayMs: delay, Category: 'sp00ky-client::Sp00kySync::selfHeal' },
+        'Self-heal: re-driving sync while degraded'
+      );
+      try {
+        // Retry whatever is still queued first; the failing op (register or
+        // mutation) was re-queued by the queue, so this re-probes the server
+        // and reports the outcome through the scheduler → recordSyncOutcome.
+        if (this.upQueue.size > 0) {
+          await this.scheduler.syncUp();
+        } else if (this.downQueue.size > 0) {
+          await this.scheduler.syncDown();
+        } else {
+          // Nothing queued (e.g. the failing op was rolled back + dropped):
+          // re-register active queries — mirroring the reconnect handler — so
+          // there's a concrete op whose success flips health. If there are no
+          // active queries either, probe connectivity directly.
+          const hashes = this.dataModule.getActiveQueryHashes();
+          if (hashes.length > 0) {
+            for (const hash of hashes) {
+              this.scheduler.enqueueDownEvent({ type: 'register', payload: { hash } });
+            }
+            await this.scheduler.syncDown();
+          } else {
+            await this.remote.query('RETURN true');
+            this.recordSyncOutcome(true);
+          }
+        }
+      } catch (err) {
+        // Only the direct connectivity probe can throw here (syncUp/syncDown
+        // swallow + self-report); treat a probe failure as another failed round.
+        this.recordSyncOutcome(false, err);
+      }
+      // Keep retrying until recovery. recordSyncOutcome(true) calls stopSelfHeal
+      // (clearing any pending timer), so only continue while still degraded.
+      if (this.syncHealthStatus === 'degraded') this.scheduleSelfHeal();
+    }, delay);
+  }
+
+  private stopSelfHeal(): void {
+    if (this.selfHealTimer !== null) {
+      clearTimeout(this.selfHealTimer);
+      this.selfHealTimer = null;
+    }
+    this.selfHealAttempts = 0;
   }
 
   constructor(
