@@ -42,6 +42,12 @@ export class DevToolsService implements StreamUpdateReceiver {
   // Backend stack info (versions + per-entity status), read via the
   // `fn::spooky::info()` SurrealQL function; empty/'unavailable' until resolved.
   private backendInfo: BackendInfo = emptyBackendInfo();
+  // Dormant until a devtools consumer (extension panel or MCP) handshakes via
+  // `SP00KY_DEVTOOLS_CONNECT`. While false, `notifyDevTools()`/`addEvent()` do no
+  // work, so prod pays zero serialization/postMessage cost for an unwatched panel.
+  // `window.__00__.getState()` stays live regardless, so the panel's first paint
+  // (the on-demand GET_STATE pull) still works before the push channel turns on.
+  private enabled = false;
 
   constructor(
     private databaseService: LocalDatabaseService,
@@ -52,6 +58,22 @@ export class DevToolsService implements StreamUpdateReceiver {
     private dataManager?: DataModule<SchemaStructure>
   ) {
     this.exposeToWindow();
+
+    // Stay dormant until a devtools consumer announces itself. The extension's
+    // page-script posts this once it detects `window.__00__`; the panel can also
+    // disconnect to return us to dormant. Until then we skip all serialization.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('message', (e) => {
+        if (e.source !== window) return;
+        const type = (e.data as { type?: string } | undefined)?.type;
+        if (type === 'SP00KY_DEVTOOLS_CONNECT') {
+          this.enabled = true;
+          this.notifyDevTools();
+        } else if (type === 'SP00KY_DEVTOOLS_DISCONNECT') {
+          this.enabled = false;
+        }
+      });
+    }
 
     // Subscribe to auth events
     this.authService.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, () => {
@@ -197,6 +219,8 @@ export class DevToolsService implements StreamUpdateReceiver {
   }
 
   private addEvent(eventType: string, payload: any) {
+    // No consumer attached → skip recording (and the recursive serialize it does).
+    if (!this.enabled) return;
     this.eventsHistory.push({
       id: this.eventIdCounter++,
       timestamp: Date.now(),
@@ -232,6 +256,8 @@ export class DevToolsService implements StreamUpdateReceiver {
   }
 
   private notifyDevTools() {
+    // No consumer attached → no getState() serialization, no postMessage broadcast.
+    if (!this.enabled) return;
     if (typeof window !== 'undefined') {
       window.postMessage(
         {

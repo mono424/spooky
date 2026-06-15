@@ -24,6 +24,15 @@
         '*'
       );
 
+      // Wake the client's devtools bridge. It stays dormant (no per-event
+      // serialization or state broadcasts) until it receives this handshake, so
+      // prod pays nothing when no panel is attached. Reaching this point means a
+      // consumer IS present, so opt in to the live SP00KY_STATE_CHANGED push channel.
+      window.postMessage(
+        { type: 'SP00KY_DEVTOOLS_CONNECT', source: 'sp00ky-devtools-page' },
+        '*'
+      );
+
       return true;
     }
     return false;
