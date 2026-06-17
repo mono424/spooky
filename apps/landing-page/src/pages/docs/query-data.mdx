@@ -64,6 +64,90 @@ function UserList() {
   );
 }`;
 
+export const codeLoadMore = `import { useQuery } from '@spooky-sync/client-solid';
+import { createSignal, For } from 'solid-js';
+import { db } from './db';
+
+function Feed() {
+  const [limit, setLimit] = createSignal(20);
+
+  // Reading limit() inside the query factory grows the live window:
+  // useQuery re-registers whenever the resulting query changes.
+  const posts = useQuery(db, () =>
+    db.query('post')
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'asc')        // unique tiebreaker -> stable total order
+      .limit(limit())
+      .build()
+  );
+
+  return (
+    <>
+      <For each={posts.data() || []}>{(p) => <PostRow post={p} />}</For>
+      <button onClick={() => setLimit((n) => n + 20)}>Load more</button>
+    </>
+  );
+}`;
+
+export const codeWindowed = `import { useQuery } from '@spooky-sync/client-solid';
+import { createSignal, createMemo, createEffect, For, onCleanup } from 'solid-js';
+import { createStore } from 'solid-js/store';
+import { db } from './db';
+
+const PAGE = 50;
+
+// One live window: LIMIT PAGE START page*PAGE. It reports its rows to the parent
+// and drops them on unmount. deregisterOnCleanup cancels the synced view when
+// this window scrolls off-screen (scrolling back re-registers it).
+function Window(props) {
+  const result = useQuery(
+    db,
+    () =>
+      db.query('post')
+        .orderBy('created_at', 'desc')
+        .orderBy('id', 'asc')        // unique tiebreaker -> total order
+        .limit(PAGE)
+        .offset(props.page * PAGE)
+        .build(),
+    { deregisterOnCleanup: true }
+  );
+  // Pass a FRESH array so a same-length change (a delete shifts the next row in)
+  // still updates the parent store.
+  createEffect(() => props.onRows(props.page, (result.data() || []).map((r) => r)));
+  onCleanup(() => props.onRows(props.page, undefined));
+  return null;
+}
+
+function InfiniteList() {
+  const [pages, setPages] = createSignal(1);          // grow as the user scrolls
+  const [windows, setWindows] = createStore({});      // page -> rows | undefined
+
+  // Contiguous rows from page 0; stop at the first gap or short (final) page.
+  const rows = createMemo(() => {
+    const out = [];
+    for (let p = 0; p < pages(); p++) {
+      const r = windows[p];
+      if (r === undefined) break;     // window still loading
+      out.push(...r);
+      if (r.length < PAGE) break;     // short page = end of the list
+    }
+    return out;
+  });
+
+  const loadMore = () => setPages((p) => p + 1);
+
+  return (
+    <>
+      <For each={Array.from({ length: pages() }, (_, p) => p)}>
+        {(p) => <Window page={p} onRows={(page, r) => setWindows(page, r)} />}
+      </For>
+      <For each={rows()}>{(post) => <PostRow post={post} />}</For>
+      {/* Call loadMore() from an IntersectionObserver sentinel or scroll handler */}
+      <button onClick={loadMore}>Load more</button>
+    </>
+  );
+}`;
+
 A **reactive query** in Sp00ky is a query you declare once and forget about. As soon as the underlying data changes — whether the change happens in the same component, another tab, another device, or a backend job — the query result is updated and your UI re-renders automatically. You never write a refetch, a subscription teardown, or an invalidation rule.
 
 ## How it works in theory
@@ -128,6 +212,28 @@ For reactive applications, Sp00ky provides hooks that automatically update your 
 />
 
 Under the hood, `useQuery` calls `subscribe(queryHash, callback, { immediate: true })`. The `immediate: true` flag fires the callback synchronously with whatever is already in the local store so the first render has data; subsequent invocations come from Stream Processor deltas. UPDATE events are debounced by `streamDebounceTime` (default 50ms, configurable — see [Configuration](/docs/configuration)); CREATE and DELETE fire immediately. Subscriptions are torn down automatically on component unmount.
+
+## Pagination & infinite scroll
+
+Pagination is just `.limit()` and `.offset()` on the query. The important part: every page is a **live** query, so once a page is on screen it keeps itself current — an insert, edit, or delete on the server reconciles the affected page automatically, with no refetch and no manual invalidation.
+
+<Note>
+  Always give your `ORDER BY` a **unique tiebreaker** — a trailing `.orderBy('id', 'asc')` is enough. Without a *total* order, rows that share a sort value can reorder between renders or appear in two pages at once as the window shifts.
+</Note>
+
+### Load more (growing window)
+
+The simplest approach: drive `.limit()` from a signal and grow it. Because the query factory reads the signal, `useQuery` re-registers the larger window when you call "load more". Best for small-to-medium lists where keeping every loaded row live is fine.
+
+<CodeBlock code={codeLoadMore} lang="tsx" />
+
+### Windowed infinite scroll
+
+For large lists, render one live query **per page window** (`LIMIT PAGE START page*PAGE`) and mount more windows as the user scrolls. Pass `{ deregisterOnCleanup: true }` so a window that scrolls off-screen tears down its synced view — this keeps the number of live queries (and memory) bounded no matter how far the user scrolls.
+
+<CodeBlock code={codeWindowed} lang="tsx" />
+
+Each window stays individually live. Offset windows are materialized server-side from the SSP's window id-set rather than by re-applying `START n` against your local store, so a delete in an earlier page correctly shifts later rows **up across window boundaries** — you don't get stale gaps or duplicated rows (see [Architecture](/docs/architecture#bootstrap-pagination)). For long lists, pair this with a virtualizer (e.g. `@tanstack/solid-virtual`) keyed by record `id` so only the visible rows render.
 
 ---
 
