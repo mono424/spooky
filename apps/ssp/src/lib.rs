@@ -956,6 +956,127 @@ async fn shutdown_signal(
 
 // --- Self-Bootstrap ---
 
+/// Build one page of the bootstrap table scan, using KEYSET pagination on the
+/// record `id` (`WHERE id > <last>`) rather than an `OFFSET`/`START`.
+///
+/// Bootstrap pages the whole table over many round-trips, and the source DB is
+/// live: clients keep creating/deleting records while the SSP boots (and again
+/// on every re-bootstrap). Offset pagination is unsafe under those concurrent
+/// writes — a delete before the current offset shifts every later row up by one,
+/// so `START n` skips a row on the next page. (The original query had no
+/// `ORDER BY` at all; adding one does NOT help here — `ORDER BY id LIMIT n
+/// START m` is just as lossy under a concurrent delete, confirmed empirically.)
+/// A skipped record never enters the circuit store, so it is invisible to the
+/// DBSP views: deleting it later emits no `removals` delta and the windowed view
+/// never updates — the client's live list goes stale until a manual reload. This
+/// only bites tables big enough to page (default 200) under concurrent load,
+/// which is why small/quiescent collections never show it.
+///
+/// Keyset pagination is immune: each page resumes from the last id seen, so a
+/// delete behind the cursor can't shift rows ahead of it out of view. `id` is
+/// the unique, indexed primary key, so `WHERE id > $last ORDER BY id` is a cheap
+/// index range scan with a stable total order.
+fn bootstrap_page_query(table: &str, page_size: usize, after_id: Option<&str>) -> String {
+    match after_id {
+        None => format!("SELECT * FROM {table} ORDER BY id LIMIT {page_size}"),
+        Some(id) => format!("SELECT * FROM {table} WHERE id > {id} ORDER BY id LIMIT {page_size}"),
+    }
+}
+
+#[cfg(test)]
+mod bootstrap_pagination_tests {
+    use super::bootstrap_page_query;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn page_query_uses_ordered_keyset_not_offset() {
+        // Regression guard: the bootstrap scan must NOT use OFFSET/START (lossy
+        // under concurrent writes) and must resume by id keyset, ordered by id.
+        let first = bootstrap_page_query("game", 200, None);
+        assert_eq!(first, "SELECT * FROM game ORDER BY id LIMIT 200");
+
+        let next = bootstrap_page_query("game", 200, Some("game:abc"));
+        assert_eq!(
+            next,
+            "SELECT * FROM game WHERE id > game:abc ORDER BY id LIMIT 200"
+        );
+
+        // Neither page may fall back to offset pagination.
+        assert!(!first.contains("START") && !next.contains("START"));
+        assert!(first.contains("ORDER BY id") && next.contains("ORDER BY id"));
+    }
+
+    // Walk a paginated scan over a table of `total` rows (ids 0..total) while a
+    // concurrent delete removes the first `deleted` ids right after the first
+    // page — the exact race the SSP hits paging a live table during (re)bootstrap.
+    // `keyset` switches between resuming by `id > last` (the fix) and a fixed
+    // `START`/offset (the bug). Returns how many of the SURVIVING rows were seen.
+    fn paginate_with_concurrent_delete(
+        total: usize,
+        page: usize,
+        deleted: usize,
+        keyset: bool,
+    ) -> (usize, usize) {
+        // The live table, ordered by id. A delete just removes ids from this set.
+        let mut table: BTreeSet<usize> = (0..total).collect();
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        let mut start = 0usize;
+        let mut last: Option<usize> = None;
+        let mut first_page = true;
+        loop {
+            // What an `ORDER BY id` scan returns for this page right now.
+            let ordered: Vec<usize> = table.iter().copied().collect();
+            let pagerows: Vec<usize> = if keyset {
+                ordered
+                    .into_iter()
+                    .filter(|&id| last.map_or(true, |l| id > l))
+                    .take(page)
+                    .collect()
+            } else {
+                ordered.into_iter().skip(start).take(page).collect()
+            };
+            let n = pagerows.len();
+            if n == 0 {
+                break;
+            }
+            for id in &pagerows {
+                seen.insert(*id);
+            }
+            last = pagerows.last().copied();
+            if first_page {
+                // Concurrent delete lands between page 1 and page 2.
+                for id in 0..deleted {
+                    table.remove(&id);
+                }
+                first_page = false;
+            }
+            if n < page {
+                break;
+            }
+            start += page;
+        }
+        let survivors = total - deleted;
+        let seen_survivors = seen.iter().filter(|&&id| id >= deleted).count();
+        (survivors, seen_survivors)
+    }
+
+    #[test]
+    fn keyset_survives_concurrent_delete_offset_loses_rows() {
+        // Offset pagination drops surviving rows when a delete shifts the scan...
+        let (survivors, seen) = paginate_with_concurrent_delete(500, 100, 30, false);
+        assert!(
+            seen < survivors,
+            "offset pagination should drop survivors under a concurrent delete (saw {seen}/{survivors})"
+        );
+        // ...keyset pagination sees every surviving row — this is the fix.
+        let (survivors, seen) = paginate_with_concurrent_delete(500, 100, 30, true);
+        assert_eq!(
+            seen, survivors,
+            "keyset pagination must load every surviving row ({seen}/{survivors})"
+        );
+    }
+}
+
 /// Bootstrap the circuit by loading all table data and view definitions.
 /// Works with either a direct SurrealDB connection or the scheduler's HTTP proxy.
 /// Bootstrap with separate sources for metadata (INFO FOR DB) and data
@@ -1034,13 +1155,11 @@ async fn self_bootstrap_with_metadata(
 
     for table in &tables {
         let mut record_count: usize = 0;
-        let mut start: usize = 0;
+        // Keyset cursor: the highest `id` loaded so far. `None` = first page.
+        let mut after_id: Option<String> = None;
         loop {
             let result = source
-                .query(&format!(
-                    "SELECT * FROM {} LIMIT {} START {}",
-                    table, page_size, start
-                ))
+                .query(&bootstrap_page_query(table, page_size, after_id.as_deref()))
                 .await
                 .with_context(|| format!("Failed to page-query table {}", table))?;
 
@@ -1052,6 +1171,14 @@ async fn self_bootstrap_with_metadata(
             if n == 0 {
                 break;
             }
+
+            // Advance the cursor to the last row's id BEFORE consuming `rows`
+            // (the page is ORDER BY id, so the last row carries the max id).
+            let next_after = rows
+                .last()
+                .and_then(|row| row.get("id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
 
             let records: Vec<Record> = rows
                 .into_iter()
@@ -1070,7 +1197,11 @@ async fn self_bootstrap_with_metadata(
             if n < page_size {
                 break;
             }
-            start += page_size;
+            // No usable id to resume from → stop rather than loop forever.
+            match next_after {
+                Some(id) => after_id = Some(id),
+                None => break,
+            }
         }
         info!(table = %table, records = record_count, "Loaded table data");
     }

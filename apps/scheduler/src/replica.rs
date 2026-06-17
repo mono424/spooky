@@ -52,6 +52,23 @@ fn json_kind(v: &Value) -> &'static str {
     }
 }
 
+/// Build one page of a bootstrap table scan using KEYSET pagination on the
+/// record `id` (`WHERE id > <last>`), never `OFFSET`/`START`.
+///
+/// The remote DB is live while we page it, so offset pagination is unsafe: a
+/// concurrent delete behind the offset shifts every later row up one, so the
+/// next `START n` skips a row. A skipped record never lands in the replica (nor
+/// in any SSP that bootstraps from it), so a later delete of that record emits
+/// no removal delta and clients' live queries go stale until reload. Keyset
+/// resumes from the last id seen, immune to shifts behind the cursor. Mirrors
+/// `bootstrap_page_query` in apps/ssp/src/lib.rs.
+fn keyset_page_query(table: &str, page_size: usize, after_id: Option<&str>) -> String {
+    match after_id {
+        None => format!("SELECT * FROM {table} ORDER BY id LIMIT {page_size}"),
+        Some(id) => format!("SELECT * FROM {table} WHERE id > {id} ORDER BY id LIMIT {page_size}"),
+    }
+}
+
 /// Build a full SurrealDB thing ID, handling both `"table:id"` and bare `"id"` formats.
 /// SurrealDB event triggers send IDs that already include the table prefix (e.g. `"user:abc"`),
 /// so we must avoid doubling it into `"user:user:abc"`.
@@ -412,22 +429,21 @@ impl Replica {
                 );
             }
             let mut records: Vec<Value> = Vec::new();
-            let mut start: usize = 0;
+            // Keyset cursor: the highest `id` paged so far (`None` = first page).
+            // Offset (`START n`) pagination silently drops rows when a concurrent
+            // write shifts the table between page requests — and the remote DB is
+            // LIVE during bootstrap — leaving the replica (and every SSP that
+            // bootstraps from it) with an incomplete table. An incomplete circuit
+            // can't emit a removal for a record it never loaded, so deletes of the
+            // dropped rows never reach clients live. Resume by `id > $last`
+            // instead: a delete behind the cursor can't shift rows ahead of it out
+            // of view. Mirrors `bootstrap_page_query` in apps/ssp.
+            let mut after_id: Option<String> = None;
             let table_missing;
             loop {
-                trace!(
-                    table = %table_name,
-                    start,
-                    page_size,
-                    "remote query: SELECT * FROM {} LIMIT {} START {}",
-                    table_name, page_size, start,
-                );
-                let resp = remote_db
-                    .query(format!(
-                        "SELECT * FROM {} LIMIT {} START {}",
-                        table_name, page_size, start,
-                    ))
-                    .await;
+                let query = keyset_page_query(table_name, page_size, after_id.as_deref());
+                trace!(table = %table_name, after_id = ?after_id, page_size, "remote page query: {}", query);
+                let resp = remote_db.query(query).await;
                 let page: Vec<Value> = match resp {
                     Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
                         Ok(sdk_val) => match sdk_val.into_json_value() {
@@ -444,8 +460,8 @@ impl Replica {
                             break;
                         }
                         Err(e) => return Err(anyhow::anyhow!(
-                            "take(0) failed for table '{}' page (start={}): {}",
-                            table_name, start, e,
+                            "take(0) failed for table '{}' page (after_id={:?}): {}",
+                            table_name, after_id, e,
                         )),
                     },
                     Err(e) if is_missing_error(&e) => {
@@ -455,17 +471,28 @@ impl Replica {
                     }
                     Err(e) => return Err(anyhow::Error::from(e)
                         .context(format!(
-                            "SELECT page from {} (start={}, limit={}) failed",
-                            table_name, start, page_size,
+                            "SELECT page from {} (after_id={:?}, limit={}) failed",
+                            table_name, after_id, page_size,
                         ))),
                 };
                 let n = page.len();
+                // Advance the cursor to this page's last id (page is ORDER BY id,
+                // so the last row carries the max id) BEFORE consuming `page`.
+                let next_after = page
+                    .last()
+                    .and_then(|row| row.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 records.extend(page);
                 if n < page_size {
                     table_missing = false;
                     break;
                 }
-                start += page_size;
+                // No usable id to resume from → stop rather than loop forever.
+                match next_after {
+                    Some(id) => after_id = Some(id),
+                    None => break,
+                }
             }
             // `table_missing` is captured for parity with the old single-shot
             // path. We don't use it further; the rest of the loop simply
@@ -890,6 +917,24 @@ impl Replica {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyset_page_query_uses_ordered_cursor_not_offset() {
+        // Regression guard: replica bootstrap must page by id keyset, never by
+        // OFFSET/START (lossy under the concurrent writes a live DB sees while
+        // it's being paged). Mirrors the SSP bootstrap fix.
+        let first = keyset_page_query("game", 200, None);
+        assert_eq!(first, "SELECT * FROM game ORDER BY id LIMIT 200");
+
+        let next = keyset_page_query("game", 200, Some("game:abc"));
+        assert_eq!(
+            next,
+            "SELECT * FROM game WHERE id > game:abc ORDER BY id LIMIT 200"
+        );
+
+        assert!(!first.contains("START") && !next.contains("START"));
+        assert!(first.contains("ORDER BY id") && next.contains("ORDER BY id"));
+    }
 
     async fn insert_thread(db: &Surreal<surrealdb::engine::local::Db>, title: &str) -> Result<()> {
         db.query(format!("CREATE thread SET title = '{}'", title))
