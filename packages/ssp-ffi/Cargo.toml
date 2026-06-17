@@ -6,7 +6,10 @@ description = "C ABI (Dart FFI) bindings for ssp"
 license = "MIT"
 
 [lib]
-crate-type = ["cdylib"]
+# cdylib: loaded via dlopen on Android/Linux/macOS/Windows (libssp_ffi.{so,dylib}/ssp_ffi.dll).
+# staticlib: iOS forbids loose dylibs, so there we link libssp_ffi.a into the host
+# binary and resolve symbols via DynamicLibrary.process() (see build-native.sh ios).
+crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
