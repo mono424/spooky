@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use ssp::circuit::{Circuit, Record, ViewDelta, Change, ChangeSet, Operation, SubqueryOp};
+use ssp::circuit::{Circuit, Record, ViewDelta, Change, ChangeSet, Operation};
 use ssp::circuit::view::OutputFormat;
 use surrealdb::engine::remote::ws::{Client, Ws};
 use surrealdb::opt::auth::Root;
@@ -26,6 +26,7 @@ use tracing::{Span, debug, error, info, instrument, warn};
 
 // Expose modules for use in main.rs and tests
 pub mod crdt;
+pub mod edge_updates;
 pub mod metrics;
 pub mod open_telemetry;
 pub mod tables;
@@ -92,6 +93,12 @@ pub struct AppState {
     /// (`"unknown"` if the query failed). Surfaced via `/info` so the DevTools
     /// can report the SurrealDB backend version.
     pub surrealdb_version: String,
+    /// Sender into the edge-update coalescing flusher. View edge writes
+    /// (`_00_list_ref`) from ingests and registrations are pushed here and
+    /// batched into one transaction per `Config::query_update_throttle_ms`
+    /// window by the `edge_updates::run_edge_update_service` task instead of one
+    /// transaction per update.
+    pub edge_update_tx: mpsc::UnboundedSender<Vec<ViewDelta>>,
 }
 
 // --- Request/Response DTOs ---
@@ -139,6 +146,15 @@ pub struct Config {
     /// logged-out client's `_00_list_ref` poll can read its window. Defaults to
     /// `false`. Env: `SPKY_SSP_ANON_LIVE_QUERIES` (`1`/`true` to enable).
     pub anonymous_live_queries: bool,
+    /// Coalescing window (ms) for query edge-update writes to `_00_list_ref`.
+    /// View edge writes (from ingests and registrations) are buffered and
+    /// flushed in ONE batched transaction every this-many ms, so a burst of
+    /// query updates (a bulk import, a page registering several queries, a sync
+    /// backfill) lands as a few batched LIVE deliveries instead of one
+    /// transaction per record — the per-record pacing that streamed a fresh
+    /// client's window sync over ~10s. Env: `SPKY_SSP_QUERY_UPDATE_THROTTLE_MS`,
+    /// default 100. `0` disables batching (each update flushes immediately).
+    pub query_update_throttle_ms: u64,
 }
 
 pub fn load_config() -> Config {
@@ -176,6 +192,10 @@ pub fn load_config() -> Config {
                 v == "1" || v == "true"
             })
             .unwrap_or(false),
+        query_update_throttle_ms: std::env::var("SPKY_SSP_QUERY_UPDATE_THROTTLE_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100),
     }
 }
 
@@ -551,6 +571,24 @@ pub async fn run_server() -> anyhow::Result<()> {
         crdt::CrdtAllowList::from_env(),
     ));
 
+    // Coalescing flusher for query edge-updates: edge writes to `_00_list_ref`
+    // (from ingests and registrations) are batched into one transaction per
+    // `query_update_throttle_ms` window so a burst of view updates lands as a
+    // few batched LIVE deliveries instead of one transaction per record (which
+    // paced a fresh client's window sync over ~10s). See `Config`.
+    let (edge_update_tx, edge_update_rx) = mpsc::unbounded_channel::<Vec<ViewDelta>>();
+    tokio::spawn(edge_updates::run_edge_update_service(
+        edge_update_rx,
+        edge_updates::SurrealEdgeSink {
+            db: db.clone(),
+            processor: processor_arc.clone(),
+            metrics: metrics.clone(),
+            mode: config.ref_mode,
+        },
+        std::time::Duration::from_millis(config.query_update_throttle_ms),
+        edge_updates::MAX_EDGE_BATCH,
+    ));
+
     let state = AppState {
         db: db.clone(),
         processor: processor_arc.clone(),
@@ -567,6 +605,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         ref_mode: config.ref_mode,
         anonymous_live_queries: config.anonymous_live_queries,
         surrealdb_version,
+        edge_update_tx,
     };
 
     let app = create_app(state);
@@ -1969,24 +2008,33 @@ async fn ingest_handler(
                     );
                 }
             }
-            let delta_refs: Vec<&ViewDelta> = deltas_for_task.iter().collect();
-            let circuit = state_for_task.processor.read().await;
-            update_all_edges(
-                &state_for_task.db,
-                &delta_refs,
-                &state_for_task.metrics,
-                &circuit,
-                state_for_task.ref_mode,
-            )
-            .await;
-            drop(circuit);
+            // Compute the view-metrics inputs BEFORE handing the deltas off (by
+            // value) to the coalescing flusher, which batches the actual
+            // `_00_list_ref` edge writes into one transaction per
+            // `query_update_throttle_ms` window instead of one per ingest.
+            let record_counts: Vec<usize> =
+                deltas_for_task.iter().map(|d| d.records.len()).collect();
+            let query_ids: Vec<_> =
+                deltas_for_task.iter().map(|d| d.query_id.clone()).collect();
+            // If the flusher is gone (shutdown) the send fails — fall back to a
+            // direct write so edges are never silently dropped.
+            if let Err(send_err) = state_for_task.edge_update_tx.send(deltas_for_task) {
+                let deltas = send_err.0;
+                let delta_refs: Vec<&ViewDelta> = deltas.iter().collect();
+                let circuit = state_for_task.processor.read().await;
+                update_all_edges(
+                    &state_for_task.db,
+                    &delta_refs,
+                    &state_for_task.metrics,
+                    &circuit,
+                    state_for_task.ref_mode,
+                )
+                .await;
+            }
             persist_view_metrics(
                 &state_for_task,
-                deltas_for_task.iter().map(|d| d.records.len()).collect::<Vec<_>>(),
-                deltas_for_task
-                    .iter()
-                    .map(|d| d.query_id.clone())
-                    .collect::<Vec<_>>(),
+                record_counts,
+                query_ids,
                 materialization_time_ms,
             )
             .await;
@@ -2332,11 +2380,23 @@ async fn register_view_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
     }
 
-    // Create initial edges
-    if let Some(ref delta) = update {
+    // Create initial edges. Hand them to the coalescing flusher so a page that
+    // registers several queries at once lands their `_00_list_ref` edges as one
+    // batched transaction (≤ query_update_throttle_ms later) rather than one
+    // transaction per query. Falls back to a direct write if the flusher is gone.
+    if let Some(delta) = update {
         debug!(incantation_id);
-        let circuit = state.processor.read().await;
-        update_incantation_edges(&state.db, delta, &state.metrics, &circuit, state.ref_mode).await;
+        if let Err(send_err) = state.edge_update_tx.send(vec![delta]) {
+            let circuit = state.processor.read().await;
+            update_incantation_edges(
+                &state.db,
+                &send_err.0[0],
+                &state.metrics,
+                &circuit,
+                state.ref_mode,
+            )
+            .await;
+        }
     }
 
     StatusCode::OK.into_response()
@@ -2777,7 +2837,7 @@ pub async fn ttl_cleanup_sweep(
 // --- Helper Functions ---
 
 /// Parse a record ID string into SurrealDB RecordId
-fn parse_record_id(id: &str) -> Option<RecordId> {
+pub(crate) fn parse_record_id(id: &str) -> Option<RecordId> {
     RecordId::parse_simple(id).ok()
 }
 
@@ -2786,7 +2846,7 @@ fn parse_record_id(id: &str) -> Option<RecordId> {
 /// registration table is global in both ref modes because the client
 /// needs to compute the record id without knowing the user at
 /// id-creation time; only `_00_list_ref` splits per user.
-fn format_incantation_id(id: &str) -> String {
+pub(crate) fn format_incantation_id(id: &str) -> String {
     let raw = id.rsplit(':').next().unwrap_or(id);
     format!("_00_query:{}", raw)
 }
@@ -2810,203 +2870,64 @@ pub async fn update_all_edges<C: Connection>(
     }
 
     let span = Span::current();
-    let mut all_statements: Vec<String> = Vec::new();
-    let mut bindings: Vec<(String, RecordId)> = Vec::new();
 
-    let mut created_count: u64 = 0;
-    let mut updated_count: u64 = 0;
-    let mut deleted_count: u64 = 0;
-
-    for (idx, delta) in deltas.iter().enumerate() {
-        if delta.additions.is_empty() && delta.updates.is_empty() && delta.removals.is_empty() {
-            continue;
-        }
-
-        // Route writes to the originating user's per-user `_00_query` /
-        // `_00_list_ref` pair in `RefMode::Dedicated`. The delta carries
-        // its owning user from `View.auth_id` (set in `add_query_with_auth`)
-        // so we don't need an extra DB lookup per delta.
-        let incantation_id = format_incantation_id(&delta.query_id);
-        let list_ref_tbl = tables::list_ref_table(mode, &delta.auth_id);
-
-        let Some(from_id) = parse_record_id(&incantation_id) else {
-            error!(
-                incantation_id = %incantation_id,
-                "Invalid incantation ID format - skipping view"
-            );
-            continue;
-        };
-
-        let binding_name = format!("from{}", idx);
-        bindings.push((binding_name.clone(), from_id));
-
-        // Process additions (Created)
-        for id in &delta.additions {
-            if parse_record_id(id).is_none() {
-                error!(
-                    target: "ssp::edges",
-                    record_id = %id,
-                    view_id = %delta.query_id,
-                    "Invalid record ID format - skipping edge create"
-                );
-                continue;
-            }
-
-            let version = circuit.store.get_record_version_by_key(id).unwrap_or(1);
-            created_count += 1;
-            all_statements.push(format!(
-                "RELATE ${binding}->{list_ref}->{out} SET version = {version}, clientId = (SELECT VALUE clientId FROM ${binding} LIMIT 1)[0], auth_id = (SELECT VALUE auth_id FROM ${binding} LIMIT 1)[0]",
-                binding = binding_name,
-                list_ref = list_ref_tbl,
-                out = id,
-                version = version,
-            ));
-        }
-
-        // Process updates (Updated)
-        for id in &delta.updates {
-            if parse_record_id(id).is_none() {
-                error!(
-                    target: "ssp::edges",
-                    record_id = %id,
-                    view_id = %delta.query_id,
-                    "Invalid record ID format - skipping edge update"
-                );
-                continue;
-            }
-
-            let version = circuit.store.get_record_version_by_key(id).unwrap_or(1);
-            updated_count += 1;
-            all_statements.push(format!(
-                "UPDATE {list_ref} SET version = {version} WHERE in = ${binding} AND out = {out}",
-                list_ref = list_ref_tbl,
-                version = version,
-                binding = binding_name,
-                out = id,
-            ));
-        }
-
-        // Process removals (Deleted)
-        for id in &delta.removals {
-            if parse_record_id(id).is_none() {
-                error!(
-                    target: "ssp::edges",
-                    record_id = %id,
-                    view_id = %delta.query_id,
-                    "Invalid record ID format - skipping edge delete"
-                );
-                continue;
-            }
-
-            deleted_count += 1;
-            all_statements.push(format!(
-                "DELETE ${binding}->{list_ref} WHERE out = {out}",
-                binding = binding_name,
-                list_ref = list_ref_tbl,
-                out = id,
-            ));
-        }
-
-        // Process subquery items (child records linked to parents via parent/parent_rel)
-        // These are processed AFTER main records so parent list_ref entries exist in the same tx.
-        for item in &delta.subquery_items {
-            if parse_record_id(&item.id).is_none() {
-                error!(
-                    target: "ssp::edges",
-                    record_id = %item.id,
-                    view_id = %delta.query_id,
-                    "Invalid subquery record ID format - skipping"
-                );
-                continue;
-            }
-
-            match item.op {
-                SubqueryOp::Add => {
-                    let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
-                    created_count += 1;
-                    all_statements.push(format!(
-                        "RELATE ${binding}->{list_ref}->{id} SET \
-                         version = {version}, \
-                         clientId = (SELECT VALUE clientId FROM ${binding} LIMIT 1)[0], \
-                         auth_id = (SELECT VALUE auth_id FROM ${binding} LIMIT 1)[0], \
-                         parent = (SELECT VALUE id FROM {list_ref} WHERE in = ${binding} AND out = {parent} LIMIT 1)[0], \
-                         parent_rel = '{alias}'",
-                        binding = binding_name,
-                        list_ref = list_ref_tbl,
-                        id = item.id,
-                        version = version,
-                        parent = item.parent_key,
-                        alias = item.alias,
-                    ));
-                }
-                SubqueryOp::Update => {
-                    let version = circuit.store.get_record_version_by_key(&item.id).unwrap_or(1);
-                    updated_count += 1;
-                    all_statements.push(format!(
-                        "UPDATE {list_ref} SET version = {version} WHERE in = ${binding} AND out = {id}",
-                        list_ref = list_ref_tbl,
-                        binding = binding_name, id = item.id, version = version
-                    ));
-                }
-                SubqueryOp::Remove => {
-                    deleted_count += 1;
-                    all_statements.push(format!(
-                        "DELETE ${binding}->{list_ref} WHERE out = {id}",
-                        binding = binding_name, list_ref = list_ref_tbl, id = item.id
-                    ));
-                }
-            }
+    // Build the aggregated edge statements for the whole batch (primary window
+    // edges + subquery child edges), reading record versions from the circuit
+    // store. The statement SQL lives in `edge_updates::build_edge_batch`, which
+    // is unit-tested; this function only adds metrics + the DB round-trip.
+    struct StoreVersions<'a>(&'a Circuit);
+    impl crate::edge_updates::RecordVersions for StoreVersions<'_> {
+        fn version_of(&self, key: &str) -> i64 {
+            self.0.store.get_record_version_by_key(key).unwrap_or(1)
         }
     }
-
-    if all_statements.is_empty() {
+    let batch = crate::edge_updates::build_edge_batch(deltas, mode, &StoreVersions(circuit));
+    if batch.is_empty() {
         return;
     }
 
-    span.record("total_operations", all_statements.len());
+    span.record("total_operations", batch.statements.len());
 
-    // Record metrics
     metrics.edge_operations.add(
-        created_count,
+        batch.created,
         &[opentelemetry::KeyValue::new("operation", "create")],
     );
     metrics.edge_operations.add(
-        updated_count,
+        batch.updated,
         &[opentelemetry::KeyValue::new("operation", "update")],
     );
     metrics.edge_operations.add(
-        deleted_count,
+        batch.deleted,
         &[opentelemetry::KeyValue::new("operation", "delete")],
     );
 
     debug!(
-        created = created_count,
-        updated = updated_count,
-        deleted = deleted_count,
+        created = batch.created,
+        updated = batch.updated,
+        deleted = batch.deleted,
         views = deltas.len(),
         "Processing edge operations"
     );
 
-    // Wrap all statements in a single transaction
-    let full_query = format!(
-        "BEGIN TRANSACTION;\n{};\nCOMMIT TRANSACTION;",
-        all_statements.join(";\n")
-    );
+    // Aggregate every statement into ONE SurrealDB transaction.
+    let Some(full_query) = crate::edge_updates::wrap_in_transaction(&batch.statements) else {
+        return;
+    };
 
-    // Build query with bindings
     let mut query = db.query(&full_query);
+    let op_count = batch.statements.len();
 
     #[cfg(debug_assertions)]
     {
         let mut debug_query = full_query.clone();
-        for (name, id) in &bindings {
+        for (name, id) in &batch.bindings {
             let id_str = format!("{:?}", id);
             debug_query = debug_query.replace(&format!("${}", name), &id_str);
         }
         debug!(target: "ssp::edges::sql", "{}", debug_query);
     }
 
-    for (name, id) in bindings {
+    for (name, id) in batch.bindings {
         query = query.bind((name, id));
     }
 
@@ -3015,7 +2936,7 @@ pub async fn update_all_edges<C: Connection>(
         Ok(_) => {
             debug!(
                 target: "ssp::edges",
-                operations = all_statements.len(),
+                operations = op_count,
                 "Edge update transaction completed successfully"
             );
         }
@@ -3023,7 +2944,7 @@ pub async fn update_all_edges<C: Connection>(
             error!(
                 target: "ssp::edges",
                 error = %e,
-                operations = all_statements.len(),
+                operations = op_count,
                 "Edge update transaction failed - data may be out of sync"
             );
         }

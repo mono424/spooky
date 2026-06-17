@@ -108,6 +108,14 @@ impl TestHarness {
             view_metrics: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
             ref_mode: ssp_protocol::RefMode::Single,
             surrealdb_version: String::new(),
+            anonymous_live_queries: false,
+            edge_update_tx: {
+                // No coalescing flusher is spawned in tests; dropping the receiver
+                // makes edge-update sends fail, so the handlers fall back to a
+                // synchronous direct edge write — deterministic for assertions.
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                tx
+            },
         };
         create_app(state)
     }

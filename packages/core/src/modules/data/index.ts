@@ -116,7 +116,12 @@ export class DataModule<S extends SchemaStructure> {
     private local: LocalDatabaseService,
     private schema: S,
     logger: Logger,
-    private streamDebounceTime: number = 100
+    // Client-side SSP aggregation throttle: coalesces the in-browser
+    // StreamProcessor's per-record stream updates per query before notifying
+    // readers, so a burst of synced records repaints the UI once per window
+    // rather than row-by-row. 50ms keeps it responsive while still batching the
+    // initial-sync stream. Override via `SyncedDbConfig.streamDebounceTime`.
+    private streamDebounceTime: number = 50
   ) {
     this.logger = logger.child({ service: 'DataModule' });
   }
