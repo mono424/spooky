@@ -103,7 +103,7 @@ export const code2 = `interface SyncedDbConfig<Schema> {
   /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel) */
   otelTransmit?: PinoTransmit;
 
-  /** Debounce window for outgoing DBSP stream updates (default: 100ms) */
+  /** Debounce window for outgoing DBSP stream updates (default: 50ms) */
   streamDebounceTime?: number;
 
   /** Debounce window for CRDT field UPSERTs to upstream (default: 500ms) */
@@ -238,9 +238,12 @@ Determines where metadata like query states are persisted:
 
 #### `streamDebounceTime`
 
-Window (ms) used to coalesce DBSP stream updates before they fan
-out to `useQuery` subscribers. Lower values feel snappier; higher
-values reduce re-render thrash on bursty writes. Defaults to `100`.
+Window (ms) the client-side Stream Processor uses to coalesce DBSP
+stream updates **per query** before they fan out to `useQuery`
+subscribers — so a burst of synced records (e.g. the initial library
+sync) repaints affected views once per window instead of row-by-row.
+Lower values feel snappier; higher values reduce re-render thrash on
+bursty writes. Defaults to `50`.
 
 #### `crdtDebounceMs`
 

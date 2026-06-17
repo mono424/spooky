@@ -154,6 +154,7 @@ All `SPKY_*` vars below are read directly from the process environment.
 | `HEARTBEAT_INTERVAL_MS` | Heartbeat interval in ms | `5000` |
 | `TTL_CLEANUP_INTERVAL_SECS` | View TTL cleanup interval | `60` |
 | `SPKY_SSP_REF_MODE` | `_00_list_ref` storage layout: `dedicated` (per-user tables; works around the SurrealDB v3 LIVE permission gap) or `single` (legacy shared table). Mirrors `refMode` in `sp00ky.yml`. | `dedicated` |
+| `SPKY_SSP_QUERY_UPDATE_THROTTLE_MS` | Window (ms) over which the SSP coalesces query edge-update writes to `_00_list_ref` into one batched transaction, so a burst of view updates lands as a few batched `LIVE` deliveries instead of one transaction per record. `0` disables batching (flush each update immediately). See [Architecture](/docs/architecture#edge-update-batching). | `100` |
 | `SPKY_JOB_CONFIG` | JSON-encoded `{ "job_tables": { … } }` describing backends the SSP can dispatch to. | *(unset)* |
 | `SPKY_CRDT_CACHE_SIZE` | In-memory CRDT cache capacity | `10000` |
 | `SPKY_CRDT_FIELDS` | JSON override for `@crdt` field detection, e.g. `{"thread":["content"]}` | *(auto)* |

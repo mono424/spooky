@@ -256,6 +256,28 @@ deferred task waits for the row's `_00_version` to become readable
 on its own connection (a clean proxy for "parent transaction is
 committed") before bumping the per-user edge.
 
+### Edge-Update Batching
+
+The SSP does not write one transaction per record. View deltas — from
+both per-ingest steps and the initial snapshot computed at query
+registration — are pushed to a coalescing service that buffers them over
+a short window and writes **all** of their `_00_list_ref` edges (primary
+window edges **and** subquery child edges) in a **single** SurrealDB
+`BEGIN…COMMIT` transaction. Without this, a burst of updates (a bulk
+import, a sync backfill, or a fresh client registering several queries at
+once) produced one transaction per record, so SurrealDB fired a `LIVE`
+notification per record and a connecting client streamed its whole window
+over seconds of serialized round-trips. Batching collapses that into a
+few `LIVE` deliveries.
+
+The window is set by `SPKY_SSP_QUERY_UPDATE_THROTTLE_MS` (default `100`;
+`0` disables batching and flushes each update immediately). The buffer
+also flushes early once it crosses an internal size cap, and flushes any
+remainder on shutdown. On the client, the in-browser Stream Processor has
+the analogous `streamDebounceTime` (default `50`ms — see
+[Configuration](/docs/configuration)), which coalesces the resulting
+per-query stream updates before they reach `useQuery`.
+
 ### Per-User `_00_list_ref` Tables
 
 Each registered view stores a per-user materialized edge in

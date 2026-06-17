@@ -127,7 +127,7 @@ For reactive applications, Sp00ky provides hooks that automatically update your 
   lang="typescript"
 />
 
-Under the hood, `useQuery` calls `subscribe(queryHash, callback, { immediate: true })`. The `immediate: true` flag fires the callback synchronously with whatever is already in the local store so the first render has data; subsequent invocations come from Stream Processor deltas. UPDATE events are debounced by `streamDebounceTime` (default 100ms, configurable — see [Configuration](/docs/configuration)); CREATE and DELETE fire immediately. Subscriptions are torn down automatically on component unmount.
+Under the hood, `useQuery` calls `subscribe(queryHash, callback, { immediate: true })`. The `immediate: true` flag fires the callback synchronously with whatever is already in the local store so the first render has data; subsequent invocations come from Stream Processor deltas. UPDATE events are debounced by `streamDebounceTime` (default 50ms, configurable — see [Configuration](/docs/configuration)); CREATE and DELETE fire immediately. Subscriptions are torn down automatically on component unmount.
 
 ---
 
