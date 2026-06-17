@@ -131,7 +131,7 @@ function UserList() {
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">    &#x3C;/ul></span></span>
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">  );</span></span>
 <span class="line"><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">}</span></span></code></pre> </div> </div> </div> 
-<p>Under the hood, <code>useQuery</code> calls <code>subscribe(queryHash, callback, { immediate: true })</code>. The <code>immediate: true</code> flag fires the callback synchronously with whatever is already in the local store so the first render has data; subsequent invocations come from Stream Processor deltas. UPDATE events are debounced by <code>streamDebounceTime</code> (default 100ms, configurable — see <a href="/docs/configuration">Configuration</a>); CREATE and DELETE fire immediately. Subscriptions are torn down automatically on component unmount.</p>
+<p>Under the hood, <code>useQuery</code> calls <code>subscribe(queryHash, callback, { immediate: true })</code>. The <code>immediate: true</code> flag fires the callback synchronously with whatever is already in the local store so the first render has data; subsequent invocations come from Stream Processor deltas. UPDATE events are debounced by <code>streamDebounceTime</code> (default 50ms, configurable — see <a href="/docs/configuration">Configuration</a>); CREATE and DELETE fire immediately. Subscriptions are torn down automatically on component unmount.</p>
 <hr/>
 <h2 id="behind-the-scenes-the-spooky-scheduler">Behind the scenes: the Spooky Scheduler</h2>
 <p>The Scheduler is a <strong>Rust</strong> service (<code>apps/scheduler/</code>) that acts as the central coordinator for the reactive pipeline. It owns three things:</p>

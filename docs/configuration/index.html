@@ -245,7 +245,7 @@ apps:
   /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel) */
   otelTransmit?: PinoTransmit;
 
-  /** Debounce window for outgoing DBSP stream updates (default: 100ms) */
+  /** Debounce window for outgoing DBSP stream updates (default: 50ms) */
   streamDebounceTime?: number;
 
   /** Debounce window for CRDT field UPSERTs to upstream (default: 500ms) */
@@ -291,7 +291,7 @@ apps:
 <span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">  /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel) */</span></span>
 <span class="line"><span style="--shiki-light:#E36209;--shiki-dark:#FFAB70">  otelTransmit</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">?:</span><span style="--shiki-light:#6F42C1;--shiki-dark:#B392F0"> PinoTransmit</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">;</span></span>
 <span class="line"></span>
-<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">  /** Debounce window for outgoing DBSP stream updates (default: 100ms) */</span></span>
+<span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">  /** Debounce window for outgoing DBSP stream updates (default: 50ms) */</span></span>
 <span class="line"><span style="--shiki-light:#E36209;--shiki-dark:#FFAB70">  streamDebounceTime</span><span style="--shiki-light:#D73A49;--shiki-dark:#F97583">?:</span><span style="--shiki-light:#005CC5;--shiki-dark:#79B8FF"> number</span><span style="--shiki-light:#24292E;--shiki-dark:#E1E4E8">;</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#6A737D">  /** Debounce window for CRDT field UPSERTs to upstream (default: 500ms) */</span></span>
@@ -370,9 +370,12 @@ export const db = new SyncedDb<typeof schema>(dbConfig);"> <svg class="copy-icon
 <li>Custom implementation of <code>PersistenceClient</code> interface</li>
 </ul>
 <h4 id="streamdebouncetime"><code>streamDebounceTime</code></h4>
-<p>Window (ms) used to coalesce DBSP stream updates before they fan
-out to <code>useQuery</code> subscribers. Lower values feel snappier; higher
-values reduce re-render thrash on bursty writes. Defaults to <code>100</code>.</p>
+<p>Window (ms) the client-side Stream Processor uses to coalesce DBSP
+stream updates <strong>per query</strong> before they fan out to <code>useQuery</code>
+subscribers — so a burst of synced records (e.g. the initial library
+sync) repaints affected views once per window instead of row-by-row.
+Lower values feel snappier; higher values reduce re-render thrash on
+bursty writes. Defaults to <code>50</code>.</p>
 <h4 id="crdtdebouncems"><code>crdtDebounceMs</code></h4>
 <p>Window (ms) used to coalesce CRDT field UPSERTs to upstream. Local
 writes are applied to the LoroDoc immediately on every keystroke
