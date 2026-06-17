@@ -278,6 +278,26 @@ the analogous `streamDebounceTime` (default `50`ms — see
 [Configuration](/docs/configuration)), which coalesces the resulting
 per-query stream updates before they reach `useQuery`.
 
+### Bootstrap Pagination
+
+Both the scheduler's snapshot replica and the SSP load large tables in
+bounded pages rather than one giant `SELECT` (which overflows the
+WebSocket frame ceiling on multi-GB databases). Paging uses **keyset
+pagination** — `… ORDER BY id LIMIT n`, then resuming from the last id
+seen with `WHERE id > <last> ORDER BY id LIMIT n` — never an
+`OFFSET`/`START`. The source database is live while it is paged (and the
+SSP re-bootstraps from the scheduler's replica on every restart), so an
+offset scan would be unsafe: a concurrent delete behind the offset shifts
+every later row up one, and the next page silently **skips** a row. A
+skipped record never enters the circuit, so it is invisible to the
+materialized views — a later delete of it emits no removal delta and the
+client's live query goes stale until a manual reload. Keyset pagination
+resumes from a value rather than a row count, so deletes behind the cursor
+can't shift rows out of view (even deleting the cursor row itself is safe,
+because the next page is `id > <value>`, not a reference to a live row).
+Page size is tunable via `SPKY_SSP_BOOTSTRAP_PAGE_SIZE` (SSP) and
+`SPKY_BOOTSTRAP_PAGE_SIZE` (scheduler).
+
 ### Per-User `_00_list_ref` Tables
 
 Each registered view stores a per-user materialized edge in
