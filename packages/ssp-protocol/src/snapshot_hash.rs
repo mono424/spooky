@@ -160,6 +160,74 @@ pub struct TableHashMismatch {
     pub b: String,
 }
 
+// ---------------------------------------------------------------------------
+// XOR set-hash (catch-up verification)
+//
+// `hash_table` above sorts all records and digests them together — correct, but
+// it must rescan the whole table to recompute. The catch-up path instead needs
+// a hash that can be maintained INCREMENTALLY as records are ingested one event
+// at a time, on both the SSP circuit and the scheduler's projection, so the two
+// can be compared at the exact sequence cut the SSP caught up to.
+//
+// The XOR of per-record digests is exactly that: commutative+associative (so
+// order-independent, no sort) and self-inverse (so a record can be removed by
+// XOR-ing its digest again). On an update, `xor_out(old); xor_in(new)`. Records
+// feed through the SAME `strip_reserved_keys` + `canonical_json` path as
+// `hash_table`, so a record hashes identically here and there — `_00_*`
+// (including `_00_rv`) never affects the digest. Output is prefixed `x3:` to
+// keep it visibly distinct from the `b3:` sorted hash in diagnostics.
+// ---------------------------------------------------------------------------
+
+/// Reserved-prefix-stripped per-record digest (raw blake3-256 bytes) — the unit
+/// of the XOR set-hash. Same canonicalization as [`hash_table`], so equal record
+/// content yields an identical digest on the SSP circuit and the scheduler.
+pub fn record_digest(raw_id: &str, value: &Value) -> [u8; 32] {
+    let stripped = strip_reserved_keys(value.clone());
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(raw_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(&canonical_json(&stripped));
+    *hasher.finalize().as_bytes()
+}
+
+/// XOR a record's digest into an accumulator (add the record to the set).
+pub fn xor_in(acc: &mut [u8; 32], raw_id: &str, value: &Value) {
+    let d = record_digest(raw_id, value);
+    for (a, b) in acc.iter_mut().zip(d.iter()) {
+        *a ^= *b;
+    }
+}
+
+/// Remove a record from the accumulator. XOR is self-inverse, so this is the
+/// same operation as [`xor_in`]; named separately for call-site clarity.
+pub fn xor_out(acc: &mut [u8; 32], raw_id: &str, value: &Value) {
+    xor_in(acc, raw_id, value);
+}
+
+/// The accumulator for an empty table (all zeros).
+pub fn xor_empty() -> [u8; 32] {
+    [0u8; 32]
+}
+
+/// Format an XOR accumulator as `x3:<hex>`.
+pub fn xor_acc_to_hex(acc: &[u8; 32]) -> String {
+    let hex: String = acc.iter().map(|b| format!("{:02x}", b)).collect();
+    format!("x3:{}", hex)
+}
+
+/// On-demand XOR set-hash of a table's records — equivalent to folding
+/// [`xor_in`] over every record. Used to seed an accumulator from existing rows.
+pub fn xor_table_hash<I>(records: I) -> String
+where
+    I: IntoIterator<Item = (String, Value)>,
+{
+    let mut acc = xor_empty();
+    for (id, value) in records {
+        xor_in(&mut acc, &id, &value);
+    }
+    xor_acc_to_hex(&acc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +331,75 @@ mod tests {
         let diffs = diff_table_hashes(&a, &b);
         let names: Vec<&str> = diffs.iter().map(|d| d.table.as_str()).collect();
         assert_eq!(names, vec!["t2", "t3"]);
+    }
+
+    // --- XOR set-hash ---
+
+    #[test]
+    fn xor_is_order_independent() {
+        let a = vec![
+            ("u1".to_string(), json!({"v": 1})),
+            ("u2".to_string(), json!({"v": 2})),
+            ("u3".to_string(), json!({"v": 3})),
+        ];
+        let b = vec![
+            ("u3".to_string(), json!({"v": 3})),
+            ("u1".to_string(), json!({"v": 1})),
+            ("u2".to_string(), json!({"v": 2})),
+        ];
+        assert_eq!(xor_table_hash(a), xor_table_hash(b));
+    }
+
+    #[test]
+    fn xor_create_update_delete_round_trips_to_empty() {
+        // Lifecycle of one record applied incrementally must return to the
+        // empty-table accumulator: create v1, update v1->v2, delete v2.
+        let mut acc = xor_empty();
+        xor_in(&mut acc, "r1", &json!({"v": 1})); // create
+        xor_out(&mut acc, "r1", &json!({"v": 1})); // update: remove old
+        xor_in(&mut acc, "r1", &json!({"v": 2})); //         add new
+        xor_out(&mut acc, "r1", &json!({"v": 2})); // delete
+        assert_eq!(acc, xor_empty());
+    }
+
+    #[test]
+    fn xor_incremental_matches_on_demand() {
+        // Building the accumulator event-by-event (with an intermediate update)
+        // must equal hashing the final row set in one pass.
+        let mut acc = xor_empty();
+        xor_in(&mut acc, "a", &json!({"v": 1}));
+        xor_in(&mut acc, "b", &json!({"v": 2}));
+        xor_out(&mut acc, "a", &json!({"v": 1})); // a updated 1 -> 9
+        xor_in(&mut acc, "a", &json!({"v": 9}));
+        let incremental = xor_acc_to_hex(&acc);
+
+        let final_set = vec![
+            ("a".to_string(), json!({"v": 9})),
+            ("b".to_string(), json!({"v": 2})),
+        ];
+        assert_eq!(incremental, xor_table_hash(final_set));
+    }
+
+    #[test]
+    fn xor_ignores_reserved_metadata_keys() {
+        // Same parity guarantee as the sorted hash: the SSP circuit keeps
+        // `_00_rv`; the SCHEMAFULL replica row never has it. Digests must match.
+        let circuit = vec![(
+            "CM_x".to_string(),
+            json!({"id": "comment:CM_x", "content": "hi", "_00_rv": 7}),
+        )];
+        let replica = vec![(
+            "CM_x".to_string(),
+            json!({"id": "comment:CM_x", "content": "hi"}),
+        )];
+        assert_eq!(xor_table_hash(circuit), xor_table_hash(replica));
+    }
+
+    #[test]
+    fn xor_empty_is_stable_and_detects_change() {
+        assert_eq!(xor_table_hash(std::iter::empty()), xor_acc_to_hex(&xor_empty()));
+        let a = vec![("u1".to_string(), json!({"v": 1}))];
+        let b = vec![("u1".to_string(), json!({"v": 2}))];
+        assert_ne!(xor_table_hash(a), xor_table_hash(b));
     }
 }

@@ -247,15 +247,19 @@ impl Replica {
         Ok(out)
     }
 
-    async fn hash_one_table(&self, table: &str) -> Result<String> {
+    /// Read all rows of `table` from the replica as `(raw_id, value)` pairs, the
+    /// id stripped of its `table:` prefix to match the SSP circuit's raw keys.
+    /// Read-only; used both by `hash_one_table` and to seed the scheduler's
+    /// catch-up projection when verifying a rejoining SSP.
+    pub async fn snapshot_rows(&self, table: &str) -> Result<Vec<(String, Value)>> {
         let mut response = self
             .db
             .query(format!("SELECT * FROM {}", table))
             .await
-            .with_context(|| format!("hash: SELECT * FROM {} failed", table))?;
+            .with_context(|| format!("snapshot_rows: SELECT * FROM {} failed", table))?;
         let sdk_val: surrealdb::types::Value = response
             .take(0)
-            .with_context(|| format!("hash: take(0) failed for '{}'", table))?;
+            .with_context(|| format!("snapshot_rows: take(0) failed for '{}'", table))?;
         let rows: Vec<Value> = match sdk_val.into_json_value() {
             Value::Array(arr) => arr,
             _ => Vec::new(),
@@ -271,7 +275,11 @@ impl Replica {
             })
             .collect();
 
-        Ok(snapshot_hash::hash_table(pairs))
+        Ok(pairs)
+    }
+
+    async fn hash_one_table(&self, table: &str) -> Result<String> {
+        Ok(snapshot_hash::hash_table(self.snapshot_rows(table).await?))
     }
 
     /// Read combined snapshot state (seq + hashes + tables) from metadata.

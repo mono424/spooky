@@ -905,6 +905,33 @@ impl Circuit {
             .collect()
     }
 
+    /// Per-table incremental XOR set-hashes (the `catchup_xor` accumulators),
+    /// formatted `x3:`. Compared against the scheduler's reconstructed hash at
+    /// the catch-up cut to verify a rejoining SSP — see the scheduler's
+    /// `verify_catchup_at_m`. Same table set as `compute_table_hashes`.
+    pub fn compute_catchup_hashes(&self) -> BTreeMap<String, String> {
+        self.store
+            .collections
+            .iter()
+            .map(|(name, coll)| {
+                (
+                    name.clone(),
+                    ssp_protocol::snapshot_hash::xor_acc_to_hex(&coll.catchup_xor),
+                )
+            })
+            .collect()
+    }
+
+    /// Re-seed every collection's catch-up XOR accumulator from its rows. Call
+    /// once after bootstrap (which bulk-loads via [`Circuit::load`], bypassing
+    /// the per-row `apply_mutation` maintenance); steady-state ingest keeps it
+    /// current thereafter.
+    pub fn reseed_catchup_hashes(&mut self) {
+        for coll in self.store.collections.values_mut() {
+            coll.reseed_catchup_xor();
+        }
+    }
+
     /// Dependency map: table → [query_ids] for debugging.
     pub fn dependency_map_dump(&self) -> &HashMap<String, Vec<String>> {
         &self.dependency_map

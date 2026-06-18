@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     extract::State,
     http::StatusCode,
@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use crate::config::SchedulerConfig;
-use crate::messages::{BufferedEvent, SspHeartbeat};
+use crate::messages::{BufferedEvent, RecordOp, RecordUpdate, SspHeartbeat};
 use crate::replica::Replica;
 use crate::router::SspPool;
 use crate::transport::{HttpTransport, SspInfo};
@@ -320,6 +320,11 @@ async fn poll_and_replay_ssp(
             .collect()
     };
 
+    // Accumulate every event we replay to this SSP, in seq order, so the
+    // catch-up check (Phase 4b) can reconstruct the SSP's content at cut M.
+    let mut replayed: Vec<RecordUpdate> =
+        events_to_replay.iter().map(|e| e.update.clone()).collect();
+
     if !events_to_replay.is_empty() {
         info!(
             "Replaying {} events to SSP '{}' (seq > {})",
@@ -362,6 +367,8 @@ async fn poll_and_replay_ssp(
             break;
         }
 
+        replayed.extend(buffered.iter().cloned());
+
         info!(
             "Replaying {} per-SSP buffered events to SSP '{}'",
             buffered.len(),
@@ -385,8 +392,34 @@ async fn poll_and_replay_ssp(
         }
     }
 
-    // Phase 5: Mark SSP as Ready (atomic with final buffer drain)
-    {
+    // Phase 4b: Verify the SSP's caught-up state at the cut M BEFORE routing any
+    // live traffic to it. The SSP is still `Replaying`, so ingest keeps buffering
+    // for it (it can't be selected as a broadcast target) — it stays pinned at M
+    // while we reconstruct and compare. This replaces the old post-replay check,
+    // which compared the SSP's live (seq M) hashes against the frozen snapshot
+    // (seq N) and so falsely flagged any table written during catch-up.
+    let verified = match verify_catchup_at_m(&ssp_id, &ssp_url, &transport, &replica, &replayed).await {
+        Ok(true) => true,
+        Ok(false) => {
+            // Real divergence: flag for forced re-bootstrap and do NOT mark
+            // ready. The SSP (already heartbeating) gets a 409 on its next
+            // heartbeat and exits for a clean re-registration.
+            ssp_pool.write().await.mark_for_resync(&ssp_id);
+            warn!(ssp_id = %ssp_id, "Catch-up verification failed — withholding from broadcast; SSP will re-bootstrap");
+            false
+        }
+        Err(e) => {
+            // Transient failure (e.g. /info unreachable). Favor availability —
+            // the SSP already passed its own @N bootstrap self-check.
+            warn!(ssp_id = %ssp_id, error = %e, "Catch-up verification skipped (transient); proceeding to ready");
+            true
+        }
+    };
+
+    // Phase 5: Mark SSP as Ready (atomic with final buffer drain) — only once
+    // verification has passed, so live traffic is never routed to an unverified
+    // or diverged SSP.
+    if verified {
         let mut pool = ssp_pool.write().await;
         let remaining = pool.mark_ready(&ssp_id);
 
@@ -424,15 +457,6 @@ async fn poll_and_replay_ssp(
         }
     }
 
-    // Phase 5b: Post-replay integrity check. The SSP has reported itself
-    // ready and the replay queue is drained, so its circuit hashes must
-    // now agree with the scheduler's frozen snapshot for tables that were
-    // *not* touched after the snapshot. Mismatch ⇒ flag for forced
-    // re-bootstrap; the SSP exits on the next 409 and re-registers clean.
-    if let Err(e) = post_replay_integrity_check(&ssp_id, &ssp_url, &transport, &replica, &ssp_pool).await {
-        warn!(ssp_id = %ssp_id, error = %e, "Post-replay integrity check skipped");
-    }
-
     // Phase 6: Unfreeze snapshot if no other SSPs are bootstrapping/replaying
     {
         let has_active = {
@@ -453,17 +477,59 @@ async fn poll_and_replay_ssp(
     Ok(())
 }
 
-/// Fetch the SSP's `/info` `circuit_hashes`, compare against the scheduler's
-/// current `snapshot_hashes`, and on any mismatch flag the SSP for forced
-/// re-bootstrap. Skips comparison for tables the scheduler doesn't have a
-/// hash for (e.g. tables created entirely after the snapshot).
-async fn post_replay_integrity_check(
+/// Verify a caught-up SSP at the catch-up cut M, comparing hashes taken at the
+/// SAME sequence point on both sides (the bug this replaces compared the SSP's
+/// live state@M against the scheduler's frozen snapshot@N).
+///
+/// Only tables *touched* by the replayed events `(N, M]` need checking —
+/// untouched tables were already verified at N by the SSP's bootstrap
+/// self-check and did not change. For each touched base table the scheduler
+/// reconstructs content@M in memory — rows@N from the frozen replica, then the
+/// replayed events applied by REPLACE/remove (matching the SSP circuit's
+/// `rows.insert`, never the replica's own MERGE) — and XOR-hashes it the same
+/// way the SSP maintains its `catchup_hashes`. No replica mutation, so
+/// concurrent bootstraps are unaffected.
+///
+/// Returns `Ok(true)` on agreement (or nothing to check), `Ok(false)` on a real
+/// divergence (caller flags re-bootstrap), `Err` on a transient failure (caller
+/// proceeds — the SSP already passed its own @N self-check).
+async fn verify_catchup_at_m(
     ssp_id: &str,
     ssp_url: &str,
     transport: &Arc<HttpTransport>,
     replica: &Arc<RwLock<Replica>>,
-    ssp_pool: &Arc<RwLock<SspPool>>,
-) -> Result<()> {
+    replayed: &[RecordUpdate],
+) -> Result<bool> {
+    use serde_json::Value;
+    use std::collections::BTreeMap;
+
+    // Group replayed events per touched base table, preserving seq order. Skip
+    // `_00_*` system tables (scheduler/view bookkeeping, not replicated content).
+    let mut per_table: BTreeMap<String, Vec<&RecordUpdate>> = BTreeMap::new();
+    for ev in replayed {
+        if ev.table.starts_with("_00_") {
+            continue;
+        }
+        per_table.entry(ev.table.clone()).or_default().push(ev);
+    }
+    if per_table.is_empty() {
+        // Nothing changed in (N, M]; the @N self-check already covered it.
+        return Ok(true);
+    }
+
+    // Reconstruct reference@M per touched table (rows@N + replayed events).
+    let mut reference: BTreeMap<String, String> = BTreeMap::new();
+    for (table, events) in &per_table {
+        let seed = {
+            let rep = replica.read().await;
+            rep.snapshot_rows(table)
+                .await
+                .with_context(|| format!("snapshot_rows for '{}'", table))?
+        };
+        reference.insert(table.clone(), project_table_hash(table, seed, events));
+    }
+
+    // Fetch the SSP's catch-up hashes (it's still `Replaying`, pinned at M).
     let info_resp = transport
         .get_from_ssp(ssp_url, "/info")
         .await
@@ -471,15 +537,14 @@ async fn post_replay_integrity_check(
     if !info_resp.status().is_success() {
         anyhow::bail!("SSP /info returned HTTP {}", info_resp.status());
     }
-    let info_json: serde_json::Value = info_resp
+    let info_json: Value = info_resp
         .json()
         .await
         .map_err(|e| anyhow::anyhow!("Parse /info JSON failed: {}", e))?;
-
-    let ssp_hashes: std::collections::BTreeMap<String, String> = info_json
+    let ssp_hashes: BTreeMap<String, String> = info_json
         .as_array()
         .and_then(|arr| arr.first())
-        .and_then(|entry| entry.get("circuit_hashes"))
+        .and_then(|entry| entry.get("catchup_hashes"))
         .and_then(|v| v.as_object())
         .map(|m| {
             m.iter()
@@ -489,49 +554,139 @@ async fn post_replay_integrity_check(
         .unwrap_or_default();
 
     if ssp_hashes.is_empty() {
-        // Older SSP build without circuit_hashes — log and skip.
-        warn!(ssp_id = %ssp_id, "SSP /info has no circuit_hashes (old build?), skipping integrity check");
-        return Ok(());
+        // Older SSP build without `catchup_hashes` (deploy SSP before scheduler).
+        warn!(ssp_id = %ssp_id, "SSP /info has no catchup_hashes (old build?), skipping catch-up check");
+        return Ok(true);
     }
 
-    let scheduler_hashes = {
-        let r = replica.read().await;
-        r.snapshot_hashes().clone()
-    };
-
-    // Only compare tables present on both sides — tables created after the
-    // snapshot may exist on the SSP via replay but not in the scheduler's
-    // snapshot_hashes yet, and vice versa. The drain loop will catch up
-    // those hashes on its next cycle.
-    let mut diffs = Vec::new();
-    for (table, sched_hash) in &scheduler_hashes {
-        if let Some(ssp_hash) = ssp_hashes.get(table) {
-            if sched_hash != ssp_hash {
-                diffs.push((table.clone(), sched_hash.clone(), ssp_hash.clone()));
-            }
+    let empty = ssp_protocol::snapshot_hash::xor_acc_to_hex(&ssp_protocol::snapshot_hash::xor_empty());
+    let mut mismatches = Vec::new();
+    for (table, ref_hash) in &reference {
+        let ssp_hash = ssp_hashes.get(table).cloned().unwrap_or_else(|| empty.clone());
+        if *ref_hash != ssp_hash {
+            mismatches.push((table.clone(), ref_hash.clone(), ssp_hash));
         }
     }
 
-    if diffs.is_empty() {
-        info!(ssp_id = %ssp_id, tables = scheduler_hashes.len(), "Post-replay integrity check passed");
-        return Ok(());
+    if mismatches.is_empty() {
+        info!(ssp_id = %ssp_id, tables = reference.len(), "Catch-up verification passed");
+        return Ok(true);
     }
-
-    for (table, sched, ssp_h) in &diffs {
+    for (table, sched, ssp_h) in &mismatches {
         error!(
             ssp_id = %ssp_id,
             table = %table,
             scheduler = %sched,
             ssp = %ssp_h,
-            "Post-replay hash mismatch"
+            "Catch-up hash mismatch"
         );
     }
     error!(
         ssp_id = %ssp_id,
-        diffs = diffs.len(),
-        "SSP circuit disagrees with scheduler snapshot — flagging for forced re-bootstrap"
+        mismatches = mismatches.len(),
+        "SSP catch-up state disagrees with scheduler projection — flagging for re-bootstrap"
     );
-    let mut pool = ssp_pool.write().await;
-    pool.mark_for_resync(ssp_id);
-    Ok(())
+    Ok(false)
+}
+
+/// Reconstruct a touched table's content at the catch-up cut from its rows@N
+/// (`seed`) plus the replayed `events`, then XOR-hash it. Events are applied by
+/// REPLACE on Create/Update (matching the SSP circuit's `rows.insert`) and
+/// remove on Delete — never merged, even though the replica's own `apply`
+/// merges. This REPLACE-not-MERGE semantics is the one detail that must match
+/// the SSP exactly; it's a pure function so it can be pinned by tests.
+fn project_table_hash(
+    table: &str,
+    seed: Vec<(String, serde_json::Value)>,
+    events: &[&RecordUpdate],
+) -> String {
+    use std::collections::HashMap;
+    let mut rows: HashMap<String, serde_json::Value> = seed.into_iter().collect();
+    for ev in events {
+        let raw = ev
+            .record_id
+            .strip_prefix(&format!("{}:", table))
+            .unwrap_or(&ev.record_id)
+            .to_string();
+        match ev.operation {
+            RecordOp::Create | RecordOp::Update => {
+                if let Some(data) = &ev.data {
+                    rows.insert(raw, data.clone());
+                }
+            }
+            RecordOp::Delete => {
+                rows.remove(&raw);
+            }
+        }
+    }
+    ssp_protocol::snapshot_hash::xor_table_hash(rows.into_iter())
+}
+
+#[cfg(test)]
+mod catchup_tests {
+    use super::*;
+    use serde_json::{json, Value};
+    use ssp_protocol::snapshot_hash::{xor_acc_to_hex, xor_empty, xor_table_hash};
+
+    fn upd(table: &str, op: RecordOp, id: &str, data: Option<Value>) -> RecordUpdate {
+        RecordUpdate {
+            table: table.to_string(),
+            operation: op,
+            record_id: id.to_string(),
+            data,
+            version: 0,
+        }
+    }
+
+    #[test]
+    fn projection_replaces_does_not_merge() {
+        // Seed has {a, b}; a partial-looking update payload {a:9} must REPLACE
+        // the whole row (matching the SSP), leaving {a:9} — NOT merge to {a:9,b:2}.
+        let seed = vec![("r1".to_string(), json!({"a": 1, "b": 2}))];
+        let ev = upd("presence", RecordOp::Update, "presence:r1", Some(json!({"a": 9})));
+        let got = project_table_hash("presence", seed, &[&ev]);
+
+        assert_eq!(got, xor_table_hash(vec![("r1".to_string(), json!({"a": 9}))]));
+        assert_ne!(
+            got,
+            xor_table_hash(vec![("r1".to_string(), json!({"a": 9, "b": 2}))]),
+            "must not behave like a MERGE"
+        );
+    }
+
+    #[test]
+    fn projection_multi_update_last_write_wins() {
+        let evs = vec![
+            upd("t", RecordOp::Create, "t:r1", Some(json!({"v": 1}))),
+            upd("t", RecordOp::Update, "t:r1", Some(json!({"v": 2}))),
+        ];
+        let refs: Vec<&RecordUpdate> = evs.iter().collect();
+        let got = project_table_hash("t", vec![], &refs);
+        assert_eq!(got, xor_table_hash(vec![("r1".to_string(), json!({"v": 2}))]));
+    }
+
+    #[test]
+    fn projection_delete_removes_row() {
+        let seed = vec![("r1".to_string(), json!({"v": 1}))];
+        let ev = upd("t", RecordOp::Delete, "t:r1", None);
+        let got = project_table_hash("t", seed, &[&ev]);
+        assert_eq!(got, xor_acc_to_hex(&xor_empty()));
+    }
+
+    #[test]
+    fn projection_matches_ssp_incremental_for_hot_table() {
+        // The whole point: a row written during catch-up. SSP seeds @N then
+        // applies the same events incrementally; the scheduler projection must
+        // land on the identical hash so the table is NOT falsely flagged.
+        let seed = vec![("dev1".to_string(), json!({"fen": "start", "_00_rv": 3}))];
+        let ev = upd(
+            "presence",
+            RecordOp::Update,
+            "presence:dev1",
+            Some(json!({"fen": "e4", "_00_rv": 4})),
+        );
+        let got = project_table_hash("presence", seed, &[&ev]);
+        // `_00_rv` is stripped, so only the user content matters.
+        assert_eq!(got, xor_table_hash(vec![("dev1".to_string(), json!({"fen": "e4"}))]));
+    }
 }

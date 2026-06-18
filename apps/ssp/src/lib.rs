@@ -731,6 +731,15 @@ pub async fn run_server() -> anyhow::Result<()> {
                 attempt += 1;
                 match self_bootstrap_with_metadata(&metadata_source, &data_source, &processor).await {
                     Ok(()) => {
+                        // Seed the catch-up XOR accumulators from the freshly
+                        // bulk-loaded rows (`Circuit::load` bypasses the per-row
+                        // `apply_mutation` maintenance). Must run before the SSP
+                        // goes Ready, i.e. before any replay events are ingested,
+                        // so the accumulator starts from the snapshot content.
+                        {
+                            let mut guard = processor.write().await;
+                            guard.reseed_catchup_hashes();
+                        }
                         // Integrity check: only when the scheduler handed us
                         // expected hashes (cluster mode). Mismatch ⇒ wipe
                         // the circuit and retry once. Second failure exits
@@ -2740,6 +2749,15 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
         .map(|(t, h)| (t, Value::String(h)))
         .collect();
 
+    // Per-table incremental XOR set-hashes (`x3:`), maintained per ingest.
+    // The scheduler reconstructs these at the catch-up cut M to verify a
+    // rejoining SSP before routing live traffic to it (see `verify_catchup_at_m`).
+    let catchup_hashes: serde_json::Map<String, Value> = circuit
+        .compute_catchup_hashes()
+        .into_iter()
+        .map(|(t, h)| (t, Value::String(h)))
+        .collect();
+
     let ref_mode_str = match state.ref_mode {
         ssp_protocol::RefMode::Single => "single",
         ssp_protocol::RefMode::Dedicated => "dedicated",
@@ -2758,6 +2776,7 @@ async fn info_handler(State(state): State<AppState>) -> Json<Value> {
             "last_heartbeat_seconds_ago": null,
             "circuit_tables": circuit_tables,
             "circuit_hashes": circuit_hashes,
+            "catchup_hashes": catchup_hashes,
             "ref_mode": ref_mode_str,
             "env": env_vars,
         }

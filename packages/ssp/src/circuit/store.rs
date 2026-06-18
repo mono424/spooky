@@ -11,6 +11,13 @@ pub struct Collection {
     pub zset: ZSet,
     /// Actual record data, keyed by raw record ID (without table prefix).
     pub rows: HashMap<String, Sp00kyValue>,
+    /// Incremental XOR set-hash of `rows`, maintained in lockstep with every
+    /// mutation (see `apply_mutation`) so it can never drift from the actual
+    /// rows. The scheduler reconstructs the same hash at the catch-up cut to
+    /// verify a rejoining SSP. Not serialized — re-seeded after a bulk load via
+    /// [`reseed_catchup_xor`].
+    #[serde(skip)]
+    pub catchup_xor: [u8; 32],
 }
 
 impl Collection {
@@ -19,7 +26,19 @@ impl Collection {
             name,
             zset: HashMap::new(),
             rows: HashMap::new(),
+            catchup_xor: ssp_protocol::snapshot_hash::xor_empty(),
         }
+    }
+
+    /// Recompute the incremental XOR accumulator from the current rows. Call
+    /// after a bulk load (`Circuit::load`) or a deserialize, where the per-row
+    /// `apply_mutation` maintenance didn't run.
+    pub fn reseed_catchup_xor(&mut self) {
+        let mut acc = ssp_protocol::snapshot_hash::xor_empty();
+        for (id, val) in &self.rows {
+            ssp_protocol::snapshot_hash::xor_in(&mut acc, id, &serde_json::Value::from(val.clone()));
+        }
+        self.catchup_xor = acc;
     }
 
     /// Apply a mutation to this collection. Returns (zset_key, weight).
@@ -31,11 +50,34 @@ impl Collection {
     ) -> (String, Weight) {
         let weight = op.weight();
         let normalized = raw_id(id);
+        // Maintain the incremental XOR set-hash atomically with the row change:
+        // XOR out the prior value (if any), XOR in the new value. Done here, the
+        // single row-mutation chokepoint, so the accumulator cannot miss an op.
+        let prior = self.rows.get(normalized).cloned();
         match op {
             Operation::Create | Operation::Update => {
+                if let Some(ref p) = prior {
+                    ssp_protocol::snapshot_hash::xor_out(
+                        &mut self.catchup_xor,
+                        normalized,
+                        &serde_json::Value::from(p.clone()),
+                    );
+                }
+                ssp_protocol::snapshot_hash::xor_in(
+                    &mut self.catchup_xor,
+                    normalized,
+                    &serde_json::Value::from(data.clone()),
+                );
                 self.rows.insert(normalized.to_string(), data);
             }
             Operation::Delete => {
+                if let Some(ref p) = prior {
+                    ssp_protocol::snapshot_hash::xor_out(
+                        &mut self.catchup_xor,
+                        normalized,
+                        &serde_json::Value::from(p.clone()),
+                    );
+                }
                 self.rows.remove(normalized);
             }
         }
