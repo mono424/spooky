@@ -29,6 +29,27 @@ export const code2 = `![Sp00ky Status](https://api.sp00ky.cloud/v1/badge/your-pr
 
 export const code1 = `<img src="https://api.sp00ky.cloud/v1/badge/your-project-slug" alt="Sp00ky Status" />`;
 
+export const codeUptimeUrl = `https://api.sp00ky.cloud/v1/uptime/your-project-slug`;
+
+export const codeUptimeJsonUrl = `https://api.sp00ky.cloud/v1/uptime/your-project-slug.json`;
+
+export const codeUptimeJson = `{
+  "slug": "your-project-slug",
+  "uptime_pct": 99.97,
+  "has_data": true,
+  "window_days": 30,
+  "endpoints": [
+    {
+      "name": "web",
+      "uptime_pct": 99.98,
+      "days": [
+        { "date": "2026-05-20", "total": 1440, "up": 1440, "has_data": true, "pct": 100 },
+        { "date": "2026-05-21", "total": 1440, "up": 1437, "has_data": true, "pct": 99.79 }
+      ]
+    }
+  ]
+}`;
+
 export const codeLogLevel = `# Bump every container to trace level
 logLevel: trace
 
@@ -102,4 +123,44 @@ The badge is never cached — it always reflects the current state. You can also
 
 <Note title="Staging">
 For staging deployments, use the staging API URL: <code>https://api-stg.sp00ky.cloud/v1/badge/your-project-slug</code>
+</Note>
+
+## Uptime Status Page
+
+Every running deployment is health-checked automatically — there is nothing to enable. The results are published as a public, unauthenticated status page, reached by your project slug:
+
+<CodeBlock
+  code={codeUptimeUrl}
+  lang="text"
+/>
+
+The page shows a 30-day uptime heatmap — one bar per UTC day — for each monitored endpoint, plus the overall percentage across them. An unknown slug, or a project with no checks yet, renders a graceful "No uptime data yet" rather than an error.
+
+### How checks work
+
+Sp00ky probes each running deployment's public endpoints (such as your `web` frontend and `backend`) once per minute, with a 30-second timeout:
+
+| Result | Counts as | Conditions |
+| :--- | :--- | :--- |
+| **up** | success | HTTP `2xx` or `3xx` |
+| **down** | failure | `4xx`, `5xx`, timeout, connection refused, or TLS/DNS error |
+
+A day's percentage is `up / total` checks for that UTC day; days with no checks render as gaps rather than 0%. Responses are cached for 60 seconds.
+
+### JSON
+
+Append `.json` to get the same data as a machine-readable payload — useful for a custom dashboard or an external monitor:
+
+<CodeBlock
+  code={codeUptimeJsonUrl}
+  lang="text"
+/>
+
+<CodeBlock
+  code={codeUptimeJson}
+  lang="json"
+/>
+
+<Note title="Staging">
+For staging deployments, use the staging API URL: <code>https://api-stg.sp00ky.cloud/v1/uptime/your-project-slug</code>
 </Note>
