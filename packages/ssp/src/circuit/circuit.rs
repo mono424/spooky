@@ -299,6 +299,14 @@ impl Circuit {
             let coll = self.store.ensure_collection(&record.table);
             let key = make_key(&record.table, &record.id);
             let normalized = crate::types::raw_id(&record.id);
+            // Maintain the catch-up XOR accumulator for this fresh insert. `load`
+            // is initial bulk data (fresh collections), so there is no prior
+            // value to XOR out — same chokepoint guarantee as `apply_mutation`.
+            ssp_protocol::snapshot_hash::xor_in(
+                &mut coll.catchup_xor,
+                normalized,
+                &serde_json::Value::from(record.data.clone()),
+            );
             coll.rows.insert(normalized.to_string(), record.data);
             coll.zset.insert(key, 1);
         }

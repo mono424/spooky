@@ -632,6 +632,77 @@ mod ingest_tests {
     }
 }
 
+mod catchup_hash_tests {
+    use super::*;
+    use ssp_protocol::snapshot_hash::{xor_acc_to_hex, xor_empty};
+
+    /// Extract `catchup_hashes[table]` from a parsed `/info` body.
+    fn catchup_hash(info: &Value, table: &str) -> Option<String> {
+        info.as_array()?
+            .first()?
+            .get("catchup_hashes")?
+            .get(table)?
+            .as_str()
+            .map(|s| s.to_string())
+    }
+
+    /// `/info` exposes a per-table catch-up XOR hash maintained through the real
+    /// `/ingest` -> circuit `apply_mutation` path, order-independent.
+    #[tokio::test]
+    async fn catchup_hash_is_order_independent() {
+        let a = TestHarness::new();
+        post_authed(a.app(), "/ingest", &ingest_payload_with_record("user", "CREATE", "user:1", json!({"id": "user:1", "name": "x"}))).await;
+        post_authed(a.app(), "/ingest", &ingest_payload_with_record("user", "CREATE", "user:2", json!({"id": "user:2", "name": "y"}))).await;
+        let (_, info_a) = get_authed(a.app(), "/info").await;
+
+        let b = TestHarness::new();
+        post_authed(b.app(), "/ingest", &ingest_payload_with_record("user", "CREATE", "user:2", json!({"id": "user:2", "name": "y"}))).await;
+        post_authed(b.app(), "/ingest", &ingest_payload_with_record("user", "CREATE", "user:1", json!({"id": "user:1", "name": "x"}))).await;
+        let (_, info_b) = get_authed(b.app(), "/info").await;
+
+        let ha = catchup_hash(&info_a, "user").expect("catchup_hashes.user present");
+        let hb = catchup_hash(&info_b, "user").expect("catchup_hashes.user present");
+        assert_eq!(ha, hb, "hash must not depend on ingest order");
+        assert_ne!(ha, xor_acc_to_hex(&xor_empty()), "non-empty table must not hash to empty");
+    }
+
+    /// Reaching a final row state via create+update must equal creating it
+    /// directly — the SSP-catches-up vs scheduler-reconstructs equivalence in
+    /// miniature, through the real handler (sanitization applies to both sides).
+    #[tokio::test]
+    async fn catchup_hash_update_equals_fresh_create_of_final() {
+        let updated = TestHarness::new();
+        post_authed(updated.app(), "/ingest", &ingest_payload_with_record("user", "CREATE", "user:1", json!({"id": "user:1", "name": "old"}))).await;
+        post_authed(updated.app(), "/ingest", &ingest_payload_with_record("user", "UPDATE", "user:1", json!({"id": "user:1", "name": "new"}))).await;
+        let (_, info_u) = get_authed(updated.app(), "/info").await;
+
+        let fresh = TestHarness::new();
+        post_authed(fresh.app(), "/ingest", &ingest_payload_with_record("user", "CREATE", "user:1", json!({"id": "user:1", "name": "new"}))).await;
+        let (_, info_f) = get_authed(fresh.app(), "/info").await;
+
+        assert_eq!(
+            catchup_hash(&info_u, "user"),
+            catchup_hash(&info_f, "user"),
+            "create+update to final must hash like a fresh create of the final value"
+        );
+    }
+
+    /// Create then delete returns the table to the empty-set hash — `xor_out`
+    /// works through the real handler (uses the prior stored value).
+    #[tokio::test]
+    async fn catchup_hash_create_then_delete_round_trips_to_empty() {
+        let h = TestHarness::new();
+        post_authed(h.app(), "/ingest", &ingest_payload_with_record("user", "CREATE", "user:1", json!({"id": "user:1", "name": "x"}))).await;
+        post_authed(h.app(), "/ingest", &ingest_payload("user", "DELETE", "user:1")).await;
+        let (_, info) = get_authed(h.app(), "/info").await;
+        assert_eq!(
+            catchup_hash(&info, "user").expect("user collection still present"),
+            xor_acc_to_hex(&xor_empty()),
+            "create then delete must return the table hash to empty"
+        );
+    }
+}
+
 mod view_lifecycle_tests {
     use super::*;
 
