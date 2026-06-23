@@ -50,6 +50,7 @@ In your `.surql` source, comment annotations attached to `DEFINE FIELD` / `DEFIN
 
 - `-- @crdt text` (above a `DEFINE FIELD`) — marks a field as a Loro CRDT text field. Consumers must use `useCrdtField` to read/write it; plain `useQuery` will see stale or unmerged content.
 - `-- @parent` (suffix on `DEFINE FIELD ... TYPE record<...>`) — marks the column as the parent side of a relationship; written automatically from the auth context, never by client code.
+- `-- @nosync` (above a `DEFINE TABLE`) — marks a table as server-only: it is omitted from generated types and relations (and any `record<...>` link pointing at it is dropped), no sync events are emitted for it, and the scheduler/SSP exclude it from snapshots and bootstrap. The table still lives in the main DB and is still backed up. The CLI bakes a `COMMENT 'sp00ky:nosync'` marker onto the server-side `DEFINE TABLE` so the runtime services detect it via `INFO FOR DB`. Distinct from `PERMISSIONS FOR select WHERE false`, which only locks reads — a permission-locked table is still synced.
 
 Example:
 ```sql
@@ -59,6 +60,9 @@ DEFINE TABLE thread SCHEMAFULL ...;
 DEFINE FIELD content ON TABLE thread TYPE string ASSERT $value != NONE;
 
 DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
+
+-- @nosync
+DEFINE TABLE audit_log SCHEMALESS;
 ```
 
 ## Common gotchas

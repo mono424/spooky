@@ -74,6 +74,11 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
     // server emit the same shape for these fields.
     let mut content = rewrite_crdt_cursor_fields(&raw_content);
 
+    // Bake the `@nosync` marker into the DEFINE TABLE of any table marked
+    // `-- @nosync`, so the runtime services can detect it via `INFO FOR DB`.
+    // Done on the user portion only (before meta tables are appended).
+    content = add_nosync_markers(&content, &raw_content);
+
     // Process sp00ky config/backends
     let mut backend_processor = BackendProcessor::new();
     if let Some(config_path) = &config.config_path {
@@ -247,6 +252,95 @@ pub fn rewrite_crdt_cursor_fields(content: &str) -> String {
     out_lines.join("\n")
 }
 
+/// Append `COMMENT 'sp00ky:nosync'` to the `DEFINE TABLE` statement of every
+/// table marked `-- @nosync` in `source`. The marker is read back from
+/// `INFO FOR DB` by the scheduler and SSP to exclude the table from sync.
+/// If a table already carries a `COMMENT`, the marker token is merged into the
+/// existing comment text rather than emitting a second (invalid) COMMENT clause.
+pub fn add_nosync_markers(content: &str, source: &str) -> String {
+    let nosync: std::collections::HashSet<String> =
+        annotations::extract_table_annotations(source)
+            .into_iter()
+            .filter(|(_, anns)| anns.iter().any(|a| a.name == "nosync"))
+            .map(|(t, _)| t)
+            .collect();
+    if nosync.is_empty() {
+        return content.to_string();
+    }
+
+    let define_table_re = Regex::new(
+        r"(?i)^\s*DEFINE\s+TABLE\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)",
+    )
+    .expect("static regex");
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let is_nosync_table = define_table_re
+            .captures(line)
+            .map(|c| nosync.contains(&c[1]))
+            .unwrap_or(false);
+
+        if is_nosync_table {
+            // Accumulate the (possibly multi-line) statement up to its `;`.
+            let mut stmt: Vec<String> = Vec::new();
+            let mut found_semi = false;
+            while i < lines.len() {
+                stmt.push(lines[i].to_string());
+                if lines[i].contains(';') {
+                    found_semi = true;
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.push(inject_nosync_comment(&stmt.join("\n")));
+            let _ = found_semi;
+            continue;
+        }
+
+        out.push(line.to_string());
+        i += 1;
+    }
+    out.join("\n")
+}
+
+/// Insert/merge the `sp00ky:nosync` marker into a single `DEFINE TABLE`
+/// statement string.
+fn inject_nosync_comment(stmt: &str) -> String {
+    let comment_re = Regex::new(r#"(?is)COMMENT\s+(['"])(.*?)['"]"#).expect("static regex");
+    if let Some(caps) = comment_re.captures(stmt) {
+        let whole = caps.get(0).unwrap();
+        let quote = &caps[1];
+        let existing = &caps[2];
+        if existing.contains(ssp_protocol::NOSYNC_TABLE_COMMENT) {
+            return stmt.to_string();
+        }
+        let merged = format!(
+            "COMMENT {q}{existing} {marker}{q}",
+            q = quote,
+            existing = existing,
+            marker = ssp_protocol::NOSYNC_TABLE_COMMENT
+        );
+        let mut s = String::with_capacity(stmt.len() + merged.len());
+        s.push_str(&stmt[..whole.start()]);
+        s.push_str(&merged);
+        s.push_str(&stmt[whole.end()..]);
+        return s;
+    }
+
+    // No existing COMMENT — insert before the terminating ';'.
+    let marker = format!("COMMENT '{}'", ssp_protocol::NOSYNC_TABLE_COMMENT);
+    if let Some(pos) = stmt.rfind(';') {
+        let (head, tail) = stmt.split_at(pos);
+        format!("{} {}{}", head.trim_end(), marker, tail)
+    } else {
+        format!("{} {}", stmt.trim_end(), marker)
+    }
+}
+
 /// Prefix bare field references with `record_id.` and re-anchor `$parent`
 /// at `record_id`. Used by `build_crdt_update_rule` to turn a parent
 /// table's UPDATE expression into one that runs on a `_00_crdt` /
@@ -323,6 +417,42 @@ mod tests {
         // Keeps `$parent.` so subquery scoping still resolves it against
         // the outer (meta) row rather than the subquery's own record.
         assert_eq!(got, "out = $parent.record_id");
+    }
+
+    #[test]
+    fn nosync_marker_added_to_marked_table_only() {
+        let src = "-- @nosync\nDEFINE TABLE secrets SCHEMALESS PERMISSIONS FOR select WHERE false;\nDEFINE TABLE public SCHEMALESS;\n";
+        let out = add_nosync_markers(src, src);
+        let secrets = out.lines().find(|l| l.contains("TABLE secrets")).unwrap();
+        assert!(secrets.contains("COMMENT 'sp00ky:nosync'"), "got: {secrets}");
+        assert!(secrets.trim_end().ends_with(';'), "marker before semicolon: {secrets}");
+        let public = out.lines().find(|l| l.contains("TABLE public")).unwrap();
+        assert!(!public.contains("sp00ky:nosync"));
+    }
+
+    #[test]
+    fn nosync_marker_merges_existing_comment() {
+        let src = "-- @nosync\nDEFINE TABLE secrets SCHEMALESS COMMENT 'sensitive';\n";
+        let out = add_nosync_markers(src, src);
+        // Single COMMENT clause containing both texts.
+        assert_eq!(out.matches("COMMENT").count(), 1, "exactly one COMMENT: {out}");
+        assert!(out.contains("sensitive"));
+        assert!(out.contains("sp00ky:nosync"));
+    }
+
+    #[test]
+    fn nosync_marker_idempotent() {
+        let src = "-- @nosync\nDEFINE TABLE secrets SCHEMALESS;\n";
+        let once = add_nosync_markers(src, src);
+        let twice = add_nosync_markers(&once, src);
+        assert_eq!(once, twice);
+        assert_eq!(once.matches("sp00ky:nosync").count(), 1);
+    }
+
+    #[test]
+    fn no_markers_when_nothing_marked() {
+        let src = "DEFINE TABLE a SCHEMALESS;\nDEFINE TABLE b SCHEMALESS;\n";
+        assert_eq!(add_nosync_markers(src, src), src.to_string());
     }
 
     #[test]

@@ -657,6 +657,22 @@ impl CodeGenerator {
 
         if let Some(defs) = schema.get("definitions") {
             if let serde_json::Value::Object(defs_obj) = defs {
+                // The set of real, generated tables. A field that references a
+                // table NOT in this set (e.g. a `record<...>` pointing at a
+                // @nosync table, which is omitted from the schema) must not
+                // produce a relationship.
+                let known_tables: std::collections::HashSet<&str> = defs_obj
+                    .keys()
+                    .filter(|n| {
+                        n.as_str() != "Relationships"
+                            && n.as_str() != "RelationTables"
+                            && n.as_str() != "Access"
+                            && n.as_str() != "Buckets"
+                            && !n.starts_with("_00_")
+                    })
+                    .map(|n| n.as_str())
+                    .collect();
+
                 for (table_name, table_def) in defs_obj {
                     if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Buckets" || table_name.starts_with("_00_") {
                         continue;
@@ -690,7 +706,9 @@ impl CodeGenerator {
                                                     } else {
                                                         related_table.clone()
                                                     };
-                                                    table_rels.push((field_name.clone(), actual_target, "many".to_string()));
+                                                    if known_tables.contains(actual_target.as_str()) {
+                                                        table_rels.push((field_name.clone(), actual_target, "many".to_string()));
+                                                    }
                                                 }
                                             }
                                         }
@@ -700,7 +718,9 @@ impl CodeGenerator {
                                         if let Some(desc_str) = desc.as_str() {
                                             if desc_str.starts_with("Record ID of table: ") {
                                                 let related_table = desc_str.replace("Record ID of table: ", "");
-                                                table_rels.push((field_name.clone(), related_table, "one".to_string()));
+                                                if known_tables.contains(related_table.as_str()) {
+                                                    table_rels.push((field_name.clone(), related_table, "one".to_string()));
+                                                }
                                             }
                                         }
                                     }

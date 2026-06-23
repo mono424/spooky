@@ -345,11 +345,27 @@ impl Replica {
         // If the upstream has no `tables` block, ingest nothing. (Previously a
         // hardcoded `[thread, job, user]` fallback lived here — actively wrong
         // for any project not happening to use those exact names.)
+        //
+        // Tables marked `-- @nosync` carry a `COMMENT 'sp00ky:nosync'` marker in
+        // their `DEFINE TABLE` string (baked in by the CLI). They are excluded
+        // from the snapshot entirely — never cloned, never added to
+        // `known_tables`, never hashed. They remain in the main DB (still
+        // backed up); they just don't participate in sync.
         let tables: Vec<String> = match info.get("tables") {
             Some(Value::Object(tables_map)) => tables_map
-                .keys()
-                .filter(|name| !name.starts_with("_00_"))
-                .cloned()
+                .iter()
+                .filter(|(name, _)| !name.starts_with("_00_"))
+                .filter(|(name, def)| {
+                    let nosync = def
+                        .as_str()
+                        .map(ssp_protocol::define_str_is_nosync)
+                        .unwrap_or(false);
+                    if nosync {
+                        info!(table = %name, "Excluding @nosync table from snapshot");
+                    }
+                    !nosync
+                })
+                .map(|(name, _)| name.clone())
                 .collect(),
             _ => Vec::new(),
         };

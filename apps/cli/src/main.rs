@@ -1099,9 +1099,39 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
     let mut modified_lines: Vec<String> = Vec::new(); // Store owned strings
     let mut i = 0;
 
+    // Tables marked `-- @nosync` are server-only: drop them (and every DEFINE
+    // that targets them) from the client schema entirely.
+    let nosync: std::collections::HashSet<&str> = parser
+        .tables
+        .iter()
+        .filter(|(_, t)| t.no_sync)
+        .map(|(n, _)| n.as_str())
+        .collect();
+
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim();
+
+        // Drop any DEFINE TABLE/FIELD/INDEX/EVENT targeting a @nosync table.
+        if !nosync.is_empty() {
+            if let Some(target) = define_target_table(trimmed) {
+                if nosync.contains(target.as_str()) {
+                    println!("  → Removing @nosync table target '{}' from client schema", target);
+                    while i < lines.len() {
+                        if let Some(idx) = lines[i].find(';') {
+                            let after_semicolon = &lines[i][idx + 1..];
+                            if !after_semicolon.trim().is_empty() {
+                                result.push(after_semicolon.to_string());
+                            }
+                            i += 1;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+        }
 
         // Check if this line starts a DEFINE FIELD
         if trimmed.starts_with("DEFINE FIELD") {
@@ -1233,6 +1263,47 @@ fn extract_table_and_field_name(line: &str) -> Option<(String, String)> {
         Some((table, field))
     } else {
         None
+    }
+}
+
+/// Return the table a DEFINE statement targets, for the forms whose membership
+/// in a table is what matters when stripping a `@nosync` table from the client
+/// schema: `DEFINE TABLE <name>`, and `DEFINE FIELD|INDEX|EVENT ... ON [TABLE] <name>`.
+/// Returns None for any other statement (or a non-DEFINE line).
+fn define_target_table(line: &str) -> Option<String> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("DEFINE") {
+        return None;
+    }
+    let kind = parts[1].to_ascii_uppercase();
+    match kind.as_str() {
+        "TABLE" => {
+            // Skip optional OVERWRITE / IF NOT EXISTS qualifiers.
+            let mut idx = 2;
+            while idx < parts.len() {
+                let up = parts[idx].to_ascii_uppercase();
+                if up == "OVERWRITE" || up == "IF" || up == "NOT" || up == "EXISTS" {
+                    idx += 1;
+                } else {
+                    break;
+                }
+            }
+            parts.get(idx).map(|s| s.trim_end_matches(';').to_string())
+        }
+        "FIELD" | "INDEX" | "EVENT" => {
+            // ... ON [TABLE] <name>
+            for i in 0..parts.len() {
+                if parts[i].eq_ignore_ascii_case("ON") {
+                    let mut j = i + 1;
+                    if j < parts.len() && parts[j].eq_ignore_ascii_case("TABLE") {
+                        j += 1;
+                    }
+                    return parts.get(j).map(|s| s.trim_end_matches(';').to_string());
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -1829,7 +1900,12 @@ fn run_codegen(
     // permission only matters once the row is already accessible — and in that
     // case the sync runtime needs to read/write the version unconditionally.
     println!("  + Injecting _00_rv field for local cache schema");
-    for table_name in parser.tables.keys() {
+    for (table_name, table_schema) in &parser.tables {
+        // @nosync tables are not in the client schema, so don't add the
+        // local-cache version field for them.
+        if table_schema.no_sync {
+            continue;
+        }
         filtered_schema_content.push_str(&format!(
             "\nDEFINE FIELD _00_rv ON TABLE {} TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;",
             table_name

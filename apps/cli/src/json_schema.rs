@@ -29,20 +29,44 @@ impl JsonSchemaGenerator {
         let mut properties = BTreeMap::new();
         let mut required_tables = Vec::new();
 
+        // Tables marked `-- @nosync` are excluded from the generated schema
+        // entirely: no definition, no relationships, no relation-table entry,
+        // and any relationship pointing AT them is dropped.
+        let nosync: std::collections::HashSet<&str> = parser
+            .tables
+            .iter()
+            .filter(|(_, t)| t.no_sync)
+            .map(|(n, _)| n.as_str())
+            .collect();
+
         // Build relationships map (from field references)
         let mut relationships: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         for (table_name, table_schema) in &parser.tables {
-            if !table_schema.relationships.is_empty() {
-                let relationship_objects: Vec<Value> = table_schema
-                    .relationships
-                    .iter()
-                    .map(|rel| {
-                        json!({
-                            "field": rel.field_name,
-                            "table": rel.related_table
-                        })
+            if table_schema.no_sync {
+                continue;
+            }
+            let relationship_objects: Vec<Value> = table_schema
+                .relationships
+                .iter()
+                .filter(|rel| {
+                    if nosync.contains(rel.related_table.as_str()) {
+                        eprintln!(
+                            "  ⚠ Dropping relationship {}.{} → {} (target table is @nosync)",
+                            table_name, rel.field_name, rel.related_table
+                        );
+                        false
+                    } else {
+                        true
+                    }
+                })
+                .map(|rel| {
+                    json!({
+                        "field": rel.field_name,
+                        "table": rel.related_table
                     })
-                    .collect();
+                })
+                .collect();
+            if !relationship_objects.is_empty() {
                 relationships.insert(table_name.clone(), relationship_objects);
             }
         }
@@ -50,11 +74,19 @@ impl JsonSchemaGenerator {
         // Build reverse relationships
         // For each relationship A.field -> B, create a reverse relationship B.reverse_field -> A[]
         for (from_table, table_schema) in &parser.tables {
+            if table_schema.no_sync {
+                continue;
+            }
             for rel in &table_schema.relationships {
                 let to_table = &rel.related_table;
 
                 // Skip if the target table doesn't exist (shouldn't happen, but be safe)
                 if !parser.tables.contains_key(to_table) {
+                    continue;
+                }
+
+                // Skip reverse links into a @nosync table.
+                if nosync.contains(to_table.as_str()) {
                     continue;
                 }
 
@@ -87,6 +119,9 @@ impl JsonSchemaGenerator {
         // Build relation tables map (from TYPE RELATION definitions)
         let mut relation_tables: Vec<Value> = Vec::new();
         for (table_name, table_schema) in &parser.tables {
+            if table_schema.no_sync {
+                continue;
+            }
             if table_schema.is_relation {
                 relation_tables.push(json!({
                     "name": table_name,
@@ -259,6 +294,10 @@ impl JsonSchemaGenerator {
         }
 
         for (table_name, table_schema) in &parser.tables {
+            // Tables marked @nosync are omitted from generated types entirely.
+            if table_schema.no_sync {
+                continue;
+            }
             // Get reverse relationships for this table
             let reverse_rels = relationships.get(table_name).and_then(|rels| {
                 let reverse: Vec<&Value> = rels
@@ -551,6 +590,50 @@ impl JsonSchemaGenerator {
                     format!("{}s", table_name)
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nosync_table_omitted_from_definitions_and_relations() {
+        let schema = r#"
+DEFINE TABLE public SCHEMALESS;
+DEFINE FIELD owner ON TABLE public TYPE record<secrets>;
+
+-- @nosync
+DEFINE TABLE secrets SCHEMALESS;
+DEFINE FIELD token ON TABLE secrets TYPE string;
+"#;
+        let mut parser = SchemaParser::new();
+        parser.parse_file(schema).unwrap();
+
+        let js = JsonSchemaGenerator::new().generate(&parser);
+
+        // @nosync table has no definition and no property.
+        assert!(js.definitions.contains_key("public"));
+        assert!(!js.definitions.contains_key("secrets"), "nosync table must be omitted");
+        assert!(!js
+            .properties
+            .as_ref()
+            .unwrap()
+            .contains_key("secrets"));
+
+        // No relationship (forward or reverse) references the nosync table.
+        if let Some(rels) = js.definitions.get("Relationships") {
+            let s = serde_json::to_string(rels).unwrap();
+            assert!(
+                !s.contains("secrets"),
+                "relationship pointing at nosync table must be dropped: {s}"
+            );
+        }
+        // The nosync table is not listed as a relation table either.
+        if let Some(rt) = js.definitions.get("RelationTables") {
+            let s = serde_json::to_string(rt).unwrap();
+            assert!(!s.contains("secrets"));
         }
     }
 }

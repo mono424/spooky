@@ -42,6 +42,11 @@ pub fn generate_sp00ky_events(
                 continue;
             }
 
+            // @nosync tables never sync: emit no events for them.
+            if table.no_sync {
+                continue;
+            }
+
             // --------------------------------------------------
             // A. Client Mutation Event
             // --------------------------------------------------
@@ -90,6 +95,12 @@ pub fn generate_sp00ky_events(
         // Skip relation tables that are explicitly marked as such (if we had that metadata easily available)
         // In the parser, we store is_relation.
         if table.is_relation {
+            continue;
+        }
+
+        // @nosync tables never sync: emit no events for them, so SurrealDB
+        // posts no ingest to the scheduler/SSP.
+        if table.no_sync {
             continue;
         }
 
@@ -361,5 +372,41 @@ mod tests {
             !out.contains("_00_user_feature_mutation"),
             "client schema must not emit _00_user_feature ingest events"
         );
+    }
+
+    #[test]
+    fn nosync_table_emits_no_events() {
+        use crate::parser::SchemaParser;
+        let schema = r#"
+DEFINE TABLE public SCHEMALESS;
+DEFINE FIELD name ON TABLE public TYPE string;
+
+-- @nosync
+DEFINE TABLE secrets SCHEMALESS;
+DEFINE FIELD token ON TABLE secrets TYPE string;
+"#;
+        let mut parser = SchemaParser::new();
+        parser.parse_file(schema).unwrap();
+        assert!(parser.tables["secrets"].no_sync, "secrets must be marked no_sync");
+
+        for is_client in [false, true] {
+            let out = generate_sp00ky_events(
+                &parser.tables,
+                schema,
+                is_client,
+                &DeployMode::Singlenode,
+                None,
+                None,
+            );
+            assert!(out.contains("ON TABLE public"), "public table must get events");
+            assert!(
+                !out.contains("ON TABLE secrets"),
+                "@nosync table must not get events (is_client={is_client})"
+            );
+            assert!(
+                !out.contains("table: 'secrets'"),
+                "@nosync table must not appear in any ingest payload"
+            );
+        }
     }
 }

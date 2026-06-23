@@ -1113,10 +1113,24 @@ async fn self_bootstrap_with_metadata(
     // INFO FOR DB returns `tables: { name: "DEFINE TABLE ... PERMISSIONS ...;" }`.
     // Keep both the table list (for data-loading) and the raw DEFINE strings
     // (for permission extraction below).
+    // Tables marked `-- @nosync` carry a `COMMENT 'sp00ky:nosync'` marker in
+    // their `DEFINE TABLE` string. Skip them entirely: no permission is
+    // registered and no data is loaded into the circuit, so the table never
+    // participates in sync. It stays in the upstream DB (still backed up).
     let table_defs: Vec<(String, String)> = match info_json.get("tables") {
         Some(Value::Object(tables_map)) => tables_map
             .iter()
             .filter(|(name, _)| !name.starts_with("_00_"))
+            .filter(|(name, def)| {
+                let nosync = def
+                    .as_str()
+                    .map(ssp_protocol::define_str_is_nosync)
+                    .unwrap_or(false);
+                if nosync {
+                    info!(table = %name, "Excluding @nosync table from bootstrap");
+                }
+                !nosync
+            })
             .map(|(name, def)| {
                 (name.clone(), def.as_str().unwrap_or("").to_string())
             })

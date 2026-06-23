@@ -25,6 +25,11 @@ pub struct TableSchema {
     /// is the raw expression formatted via Display, with no `WHERE ` prefix.
     /// Used to derive meta-table permissions that mirror the parent's rules.
     pub table_permissions: BTreeMap<String, String>,
+    /// True when the table is marked `-- @nosync`: it is excluded from
+    /// generated types, relations, and sync events, and the runtime services
+    /// skip it during snapshot/bootstrap. The table still exists in the main
+    /// DB (and is backed up). Set in `parse_file` from `extract_table_annotations`.
+    pub no_sync: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +119,17 @@ impl SchemaParser {
             .context("Failed to parse SurrealDB schema file")?;
 
         self.process_statements(query.0)?;
+
+        // Apply table-level annotations (e.g. `-- @nosync`). Parsed from the raw
+        // content because surrealdb-core strips comments during parsing.
+        for (table_name, anns) in crate::annotations::extract_table_annotations(content) {
+            if crate::annotations::has_annotation(&anns, "nosync") {
+                if let Some(table) = self.tables.get_mut(&table_name) {
+                    table.no_sync = true;
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -337,6 +353,7 @@ impl SchemaParser {
                         relation_from,
                         relation_to,
                         table_permissions,
+                        no_sync: false,
                     },
                 );
             }

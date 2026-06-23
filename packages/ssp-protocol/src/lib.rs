@@ -54,6 +54,21 @@ impl RefMode {
 /// agree on the `_00_list_ref_anon` table name.
 pub const ANON_AUTH_ID: &str = "anon";
 
+/// Marker baked into the `COMMENT` of a `DEFINE TABLE` when the schema marks a
+/// table `-- @nosync`. The CLI appends `COMMENT 'sp00ky:nosync'` to the server
+/// schema; the scheduler and SSP detect it in the `DEFINE TABLE` string
+/// returned by `INFO FOR DB` and exclude the table from snapshots and from the
+/// in-memory circuit. The table stays a normal table in the main DB, so it is
+/// still backed up. Shared here so the CLI (writer) and both runtime services
+/// (readers) agree on a single token.
+pub const NOSYNC_TABLE_COMMENT: &str = "sp00ky:nosync";
+
+/// True when a `DEFINE TABLE ...` string (as returned by `INFO FOR DB`) carries
+/// the `@nosync` marker and must be excluded from sync.
+pub fn define_str_is_nosync(define_table: &str) -> bool {
+    define_table.contains(NOSYNC_TABLE_COMMENT)
+}
+
 /// Sanitize a user record id (e.g. `"user:abc123"`) into the segment
 /// that goes into a dedicated table name (e.g. `"abc123"`). Returns
 /// `None` if the id is empty, missing the `user:` prefix, or contains
