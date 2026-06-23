@@ -87,6 +87,9 @@ cd example/app-solid && pnpm install && pnpm dev
 
 Full documentation is available at **[mono424.github.io/sp00ky](https://mono424.github.io/sp00ky/)**.
 
+- [Secrets in migrations](docs/migration-secrets.md) — inject vault secrets into
+  schema via `{{KEY}}` placeholders, and `spky env set --file`.
+
 ## Contributing
 
 Contributions are welcome! This is a monorepo — see the individual package directories under `packages/` for details.

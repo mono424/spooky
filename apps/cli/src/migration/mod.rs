@@ -25,6 +25,10 @@ pub struct MigrationContext {
     // Post-migration steps (optional, set by caller based on context)
     pub internal_schema: Option<InternalSchemaConfig>,
     pub remote_functions: Option<RemoteFunctionsConfig>,
+    // Vault secrets for `{{KEY}}` substitution in user migrations at apply time.
+    // None (or empty) = apply migrations verbatim (historical behavior). Only the
+    // legacy engine consumes these; see migrate::apply_with_secrets.
+    pub secrets: Option<Vec<(String, String)>>,
 }
 
 /// Factory: select the inner engine based on config, then wrap with Sp00kyEngine decorator.
@@ -33,7 +37,14 @@ pub struct MigrationContext {
 /// When both `internal_schema` and `remote_functions` are `None`, the decorator
 /// delegates straight through with no overhead.
 pub fn create_engine(ctx: MigrationContext) -> Result<Box<dyn MigrationEngine>> {
+    let has_secrets = ctx.secrets.as_ref().is_some_and(|s| !s.is_empty());
     let inner: Box<dyn MigrationEngine> = if let Some(ref binary) = ctx.surrealkit_binary {
+        if has_secrets {
+            eprintln!(
+                "WARNING: {{{{KEY}}}} placeholder substitution is not supported by the \
+                 surrealkit engine; vault secrets will NOT be injected into migrations."
+            );
+        }
         Box::new(surrealkit::SurrealKitEngine::new(
             binary.clone(),
             ctx.environment,
@@ -52,6 +63,7 @@ pub fn create_engine(ctx: MigrationContext) -> Result<Box<dyn MigrationEngine>> 
             ctx.username.clone(),
             ctx.password.clone(),
             ctx.migrations_dir.clone(),
+            ctx.secrets.clone(),
         ))
     };
 

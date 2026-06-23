@@ -1003,6 +1003,10 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
         surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
         internal_schema: None,
         remote_functions: None,
+        // Dev vault secrets for {{KEY}} substitution in user migrations (e.g. the
+        // EdDSA signing key for the `account` access). Empty / not logged in ->
+        // migrations apply verbatim (see LegacyEngine::apply).
+        secrets: Some(crate::cloud::load_vault_envs_for_dev()),
     };
 
     let engine = migration::create_engine(ctx)?;

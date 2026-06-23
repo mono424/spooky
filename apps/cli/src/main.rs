@@ -571,10 +571,20 @@ enum ProjectCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum EnvCommands {
-    /// Set an environment variable (prompts for the value)
+    /// Set an environment variable (prompts for the value, or reads it from a file)
     Set {
         /// Variable name (e.g. DATABASE_URL)
         name: Option<String>,
+        /// Read the value from a file instead of the interactive prompt. Useful
+        /// for multi-line values like PEM keys. The variable name is required.
+        #[arg(long, value_name = "PATH")]
+        file: Option<String>,
+        /// With --file: set the Development value only (default: both).
+        #[arg(long)]
+        dev: bool,
+        /// With --file: set the Production value only (default: both).
+        #[arg(long)]
+        prod: bool,
     },
     /// List all environment variable names
     #[command(visible_alias = "ls")]
@@ -1454,6 +1464,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                     secret: secret.clone(),
                 }),
                 remote_functions: None,
+                secrets: None,
             };
 
             let engine = migration::create_engine(ctx)?;
@@ -1525,6 +1536,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                     secret: secret.clone(),
                 }),
                 remote_functions: None,
+                secrets: None,
             };
 
             let engine = migration::create_engine(ctx)?;
@@ -1575,6 +1587,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: None,
                 remote_functions: None,
+                secrets: None,
             };
 
             let engine = migration::create_engine(ctx)?;
@@ -1627,6 +1640,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                 surrealkit_binary: sp00ky_config.resolved_surrealkit_binary(),
                 internal_schema: None,
                 remote_functions: None,
+                secrets: None,
             };
 
             let engine = migration::create_engine(ctx)?;
@@ -2672,6 +2686,7 @@ mod migration_tests {
             surrealkit_binary,
             internal_schema: None,
             remote_functions: None,
+            secrets: None,
         }
     }
 

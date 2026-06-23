@@ -881,7 +881,7 @@ fn poll_scale_completion(client: &mut CloudClient, pid: &str, target_ssp: u32) -
 /// passphrase-reset flows.
 pub fn env_group(action: EnvCommands) -> Result<()> {
     match action {
-        EnvCommands::Set { name } => env_set(name),
+        EnvCommands::Set { name, file, dev, prod } => env_set(name, file, dev, prod),
         EnvCommands::List => env_list(),
         EnvCommands::Rm { name } => env_delete(name),
         EnvCommands::Pull { prod } => env_load(prod),
@@ -1969,6 +1969,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                                     surrealkit_binary: config.resolved_surrealkit_binary(),
                                     internal_schema: None,
                                     remote_functions: None,
+                                    secrets: None,
                                 };
                                 match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
                                     Ok(_) => println!("  ▸ Migrations complete."),
@@ -3624,6 +3625,7 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         surrealkit_binary: config.resolved_surrealkit_binary(),
                         internal_schema: None,
                         remote_functions: None,
+                        secrets: None,
                     };
                     match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
                         Ok(_) => println!("  Migrations complete."),
@@ -3776,6 +3778,7 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         surrealkit_binary: config.resolved_surrealkit_binary(),
                         internal_schema: None,
                         remote_functions: None,
+                        secrets: None,
                     };
                     match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
                         Ok(_) => println!("  Migrations complete."),
@@ -5223,7 +5226,12 @@ fn env_init() -> Result<()> {
     Ok(())
 }
 
-fn env_set(name_arg: Option<String>) -> Result<()> {
+fn env_set(
+    name_arg: Option<String>,
+    file: Option<String>,
+    dev_only: bool,
+    prod_only: bool,
+) -> Result<()> {
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
 
@@ -5235,6 +5243,9 @@ fn env_set(name_arg: Option<String>) -> Result<()> {
     let name = match name_arg {
         Some(n) => n.to_uppercase(),
         None => {
+            if file.is_some() {
+                bail!("Provide the variable name with --file, e.g. `spky cloud env set JWT_PRIVATE_KEY --file key.pem`.");
+            }
             inquire::Text::new("Variable name:")
                 .with_help_message("e.g. DATABASE_URL, STRIPE_KEY")
                 .prompt()
@@ -5245,6 +5256,39 @@ fn env_set(name_arg: Option<String>) -> Result<()> {
 
     if name.is_empty() {
         bail!("Variable name cannot be empty.");
+    }
+
+    // --file: read the value from a file (multi-line safe, no prompt). Target
+    // environment is chosen by --dev / --prod (default: both with the same value).
+    if let Some(path) = file {
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("Could not read value file: {}", path))?;
+        let val = raw.trim_end_matches(['\n', '\r']).to_string();
+        if val.is_empty() {
+            bail!("Value file {} is empty.", path);
+        }
+        let (dev_value, prod_value, both) = match (dev_only, prod_only) {
+            (true, false) => (Some(val), None, false),
+            (false, true) => (None, Some(val), false),
+            _ => (Some(val), None, true), // both flags, or neither → both, same value
+        };
+        let mut body = serde_json::json!({ "both": both });
+        if let Some(ref v) = dev_value {
+            body["dev_value"] = serde_json::Value::String(v.clone());
+        }
+        if let Some(ref v) = prod_value {
+            body["prod_value"] = serde_json::Value::String(v.clone());
+        }
+        client.put(&format!("/v1/projects/{}/envs/{}", pid, name), &body)?;
+        let scope = if both {
+            "development + production"
+        } else if dev_only {
+            "development"
+        } else {
+            "production"
+        };
+        println!("Set {} ({}) for project '{}' from {}.", name, scope, slug, path);
+        return Ok(());
     }
 
     // Ask which environments

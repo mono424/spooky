@@ -262,6 +262,31 @@ pub fn create(
 
 /// Apply all pending migrations in order.
 pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
+    apply_impl(client, migrations_dir, None)
+}
+
+/// Like [`apply`], but substitutes `{{VAULT_KEY}}` placeholders in each migration
+/// with the provided secrets (e.g. from the vault) before executing, and errors
+/// on any unresolved placeholder.
+///
+/// This is the REAL apply path (used by the LegacyEngine), so project secrets —
+/// e.g. an EdDSA signing key for `DEFINE ACCESS ... WITH JWT` — can live in the
+/// vault instead of being committed to the schema. The ephemeral schema-diff
+/// replay keeps using [`apply`] (placeholders left literal), so the "old" and
+/// "new" schemas still match and the placeholder never reads as drift.
+pub fn apply_with_secrets(
+    client: &dyn MigrationDB,
+    migrations_dir: &Path,
+    secrets: &[(String, String)],
+) -> Result<()> {
+    apply_impl(client, migrations_dir, Some(secrets))
+}
+
+fn apply_impl(
+    client: &dyn MigrationDB,
+    migrations_dir: &Path,
+    secrets: Option<&[(String, String)]>,
+) -> Result<()> {
     client.ensure_ns_db().context("Failed to ensure namespace/database exist")?;
     client.ping().context("Cannot connect to SurrealDB")?;
     client.ensure_migration_table()?;
@@ -298,10 +323,20 @@ pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
             );
         }
 
-        let sql = fs::read_to_string(&migration.path)
+        let raw = fs::read_to_string(&migration.path)
             .context(format!("Failed to read {:?}", migration.path))?;
 
+        // Checksum the on-disk file (pre-substitution) so the recorded checksum
+        // matches the committed migration regardless of secret values.
         let hash = checksum(&migration.path)?;
+
+        let sql = match secrets {
+            Some(s) => substitute_secrets(&raw, s).context(format!(
+                "Failed to substitute secrets in migration {}_{}",
+                migration.version, migration.name
+            ))?,
+            None => raw,
+        };
 
         println!(
             "  Applying {}_{} ...",
@@ -326,6 +361,68 @@ pub fn apply(client: &dyn MigrationDB, migrations_dir: &Path) -> Result<()> {
 
     println!("\n{GREEN}{BOLD}All migrations applied successfully.{RESET}");
     Ok(())
+}
+
+/// Replace `{{KEY}}` placeholders (UPPER_SNAKE keys, optional inner spaces) in
+/// migration SQL with the matching secret value. After substitution, ANY
+/// remaining `{{NAME}}` placeholder is an error — so a missing secret fails the
+/// apply loudly instead of writing a broken value (e.g. a literal `{{...}}` as a
+/// JWT signing key).
+///
+/// Only `{{UPPER_SNAKE}}` tokens are treated as placeholders, so ordinary text /
+/// comments that happen to contain braces are left untouched.
+pub fn substitute_secrets(sql: &str, secrets: &[(String, String)]) -> Result<String> {
+    let mut out = sql.to_string();
+    for (key, value) in secrets {
+        if !is_placeholder_key(key) {
+            continue;
+        }
+        out = out.replace(&format!("{{{{{key}}}}}"), value);
+        out = out.replace(&format!("{{{{ {key} }}}}"), value);
+    }
+
+    let unresolved = find_unresolved_placeholders(&out);
+    if !unresolved.is_empty() {
+        bail!(
+            "unresolved schema placeholder(s): {} — provide them as vault secrets \
+             (sp00ky.yml env.vault) so they are injected at apply time",
+            unresolved.join(", ")
+        );
+    }
+    Ok(out)
+}
+
+/// A placeholder key is UPPER_SNAKE: starts with a letter/underscore, then
+/// uppercase letters, digits, or underscores.
+fn is_placeholder_key(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_uppercase() || c == '_' => {}
+        _ => return false,
+    }
+    s.chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Scan for any remaining `{{UPPER_SNAKE}}` placeholder tokens (UTF-8 safe: uses
+/// byte-offset `find` only on the ASCII `{{`/`}}` delimiters).
+fn find_unresolved_placeholders(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        match after.find("}}") {
+            Some(end) => {
+                let inner = after[..end].trim();
+                if is_placeholder_key(inner) {
+                    out.push(inner.to_string());
+                }
+                rest = &after[end + 2..];
+            }
+            None => break,
+        }
+    }
+    out
 }
 
 /// Fix schema drift and/or update stored checksums for modified migration files.
@@ -627,6 +724,39 @@ mod tests {
     use crate::surreal_client::{AppliedMigration, MigrationDB, SurrealResponse};
     use std::cell::RefCell;
     use tempfile::TempDir;
+
+    // ── Secret substitution ─────────────────────────────────────────────
+
+    #[test]
+    fn substitute_replaces_placeholders_with_and_without_spaces() {
+        let secrets = vec![("JWT_PUBLIC_KEY".to_string(), "PUBPEM".to_string())];
+        let out = substitute_secrets(
+            "KEY '{{JWT_PUBLIC_KEY}}' ISSUER '{{ JWT_PUBLIC_KEY }}'",
+            &secrets,
+        )
+        .unwrap();
+        assert_eq!(out, "KEY 'PUBPEM' ISSUER 'PUBPEM'");
+    }
+
+    #[test]
+    fn substitute_errors_on_unresolved_placeholder() {
+        let err = substitute_secrets("KEY '{{JWT_PRIVATE_KEY}}'", &[]).unwrap_err();
+        assert!(err.to_string().contains("JWT_PRIVATE_KEY"), "got: {err}");
+    }
+
+    #[test]
+    fn substitute_noop_without_placeholders() {
+        let src = "DEFINE TABLE user SCHEMAFULL;";
+        assert_eq!(substitute_secrets(src, &[]).unwrap(), src);
+    }
+
+    #[test]
+    fn substitute_ignores_non_placeholder_braces_and_keeps_utf8() {
+        // lowercase / non-UPPER_SNAKE braces are not placeholders; box-drawing
+        // chars in comments must survive byte-safe scanning.
+        let src = "-- ─── note {{lower}} {{ not-a-key }} ───\nRETURN 1;";
+        assert_eq!(substitute_secrets(src, &[]).unwrap(), src);
+    }
 
     // ── Mock DB ─────────────────────────────────────────────────────────
 

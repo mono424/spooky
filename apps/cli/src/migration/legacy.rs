@@ -17,6 +17,8 @@ pub struct LegacyEngine {
     username: String,
     password: String,
     migrations_dir: PathBuf,
+    /// Vault secrets for `{{KEY}}` substitution. None/empty = apply verbatim.
+    secrets: Option<Vec<(String, String)>>,
 }
 
 impl LegacyEngine {
@@ -27,6 +29,7 @@ impl LegacyEngine {
         username: String,
         password: String,
         migrations_dir: PathBuf,
+        secrets: Option<Vec<(String, String)>>,
     ) -> Self {
         Self {
             url,
@@ -35,6 +38,7 @@ impl LegacyEngine {
             username,
             password,
             migrations_dir,
+            secrets,
         }
     }
 
@@ -52,7 +56,12 @@ impl LegacyEngine {
 impl MigrationEngine for LegacyEngine {
     fn apply(&self) -> Result<()> {
         let client = self.make_client();
-        migrate::apply(&client, &self.migrations_dir)
+        match self.secrets.as_ref().filter(|s| !s.is_empty()) {
+            Some(secrets) => {
+                migrate::apply_with_secrets(&client, &self.migrations_dir, secrets)
+            }
+            None => migrate::apply(&client, &self.migrations_dir),
+        }
     }
 
     fn status(&self) -> Result<Vec<MigrationInfo>> {
