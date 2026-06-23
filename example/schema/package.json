@@ -1,6 +1,6 @@
 {
   "name": "@example/schema",
-  "version": "0.0.1-canary.90",
+  "version": "0.0.1-canary.91",
   "description": "Database schema and types for SurrealDB",
   "keywords": [
     "database",
