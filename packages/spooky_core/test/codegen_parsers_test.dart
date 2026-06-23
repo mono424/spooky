@@ -26,6 +26,34 @@ void main() {
       expect(a.signinParams, ['username', 'password']);
     });
 
+    test('excludes @nosync tables (and their fields) from the client schema',
+        () {
+      const surql = '''
+        DEFINE TABLE user SCHEMAFULL;
+        DEFINE FIELD email ON user TYPE string;
+
+        -- @nosync
+        DEFINE TABLE signup_code SCHEMAFULL PERMISSIONS NONE;
+        DEFINE FIELD code ON signup_code TYPE string;
+        DEFINE FIELD used_at ON signup_code TYPE option<datetime>;
+
+        DEFINE TABLE game SCHEMAFULL;
+      ''';
+      final tables = parseSchema(surql).map((t) => t.name).toList();
+      expect(tables, ['user', 'game']);
+      expect(tables, isNot(contains('signup_code')));
+    });
+
+    test('excludes a table carrying the materialized sp00ky:nosync COMMENT', () {
+      const surql = '''
+        DEFINE TABLE user SCHEMAFULL;
+        DEFINE TABLE signup_code TYPE NORMAL SCHEMAFULL COMMENT 'sp00ky:nosync' PERMISSIONS NONE;
+        DEFINE FIELD code ON signup_code TYPE string;
+      ''';
+      final tables = parseSchema(surql).map((t) => t.name).toList();
+      expect(tables, ['user']);
+    });
+
     test('parseProject returns tables + accesses together', () {
       const surql = '''
         DEFINE ACCESS account ON DATABASE TYPE RECORD

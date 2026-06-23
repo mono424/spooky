@@ -34,6 +34,12 @@ final _defineTable = RegExp(
     r'^DEFINE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+|OVERWRITE\s+)?([A-Za-z_][A-Za-z0-9_]*)',
     caseSensitive: false);
 
+// `@nosync` table marker. Source schemas carry it as a `-- @nosync` comment
+// line preceding the DEFINE TABLE; once the CLI materializes it, the server
+// DEFINE TABLE carries a `COMMENT 'sp00ky:nosync'` clause instead.
+final _nosyncComment = RegExp(r'--\s*@nosync\b', caseSensitive: false);
+const _nosyncTableComment = 'sp00ky:nosync';
+
 final _defineField = RegExp(
     r'^DEFINE\s+FIELD\s+(?:IF\s+NOT\s+EXISTS\s+|OVERWRITE\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+ON\s+(?:TABLE\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+TYPE\s+(.*)$',
     caseSensitive: false);
@@ -150,6 +156,10 @@ String? _balancedSpan(String s, int from) {
 List<TableDef> parseSchema(String surql) {
   final tables = <String, TableDef>{};
   final order = <String>[];
+  // Tables marked `@nosync` are server-only and excluded from the generated
+  // client schema (mirrors the TS CLI, which strips them too). Their fields are
+  // skipped so a trailing DEFINE FIELD can't resurrect the table.
+  final nosync = <String>{};
 
   TableDef tableFor(String name) {
     final existing = tables[name];
@@ -166,7 +176,12 @@ List<TableDef> parseSchema(String surql) {
 
     final tableMatch = _defineTable.firstMatch(stmt);
     if (tableMatch != null) {
-      tableFor(tableMatch.group(1)!);
+      final name = tableMatch.group(1)!;
+      if (_isNosyncTable(raw, stmt)) {
+        nosync.add(name);
+        continue;
+      }
+      tableFor(name);
       continue;
     }
 
@@ -174,12 +189,28 @@ List<TableDef> parseSchema(String surql) {
     if (fieldMatch != null) {
       final fieldName = fieldMatch.group(1)!;
       final tableName = fieldMatch.group(2)!;
+      if (nosync.contains(tableName)) continue;
       final typeExpr = _extractType(fieldMatch.group(3)!);
       tableFor(tableName).fields.add(_buildField(fieldName, typeExpr));
     }
   }
 
   return [for (final name in order) tables[name]!];
+}
+
+/// Whether the DEFINE TABLE described by [raw] (unstripped chunk) / [stmt]
+/// (comment-stripped statement) is marked `@nosync`. Detects both the source
+/// `-- @nosync` comment preceding the DEFINE TABLE and the materialized
+/// `COMMENT 'sp00ky:nosync'` clause on the server form.
+bool _isNosyncTable(String raw, String stmt) {
+  if (stmt.contains(_nosyncTableComment)) return true;
+  for (final line in raw.split('\n')) {
+    if (_nosyncComment.hasMatch(line)) return true;
+    // Stop at the DEFINE TABLE line — later lines belong to fields, not this
+    // table's preceding annotation.
+    if (_defineTable.hasMatch(line.trimLeft())) break;
+  }
+  return false;
 }
 
 String _stripComments(String s) =>
