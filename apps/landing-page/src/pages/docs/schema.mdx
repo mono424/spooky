@@ -71,6 +71,19 @@ export const code1 = `export type User = {
     profile?: RecordId<"profile">;
 };`;
 
+export const codeNosync = `-- @nosync
+DEFINE TABLE audit_log SCHEMALESS;
+DEFINE FIELD action ON TABLE audit_log TYPE string;
+DEFINE FIELD at ON TABLE audit_log TYPE datetime VALUE time::now();`;
+
+export const codeAnnotations = `-- @crdt text                       -- collaborative text field (Loro CRDT)
+DEFINE FIELD content ON TABLE thread TYPE string;
+
+DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
+
+-- @nosync
+DEFINE TABLE audit_log SCHEMALESS;`;
+
 In Sp00ky, you define your data model using **sql** schema files. This approach serves as the single source of truth for your application, from which TypeScript interfaces are automatically generated.
 
 ## Defining Your Schema
@@ -116,6 +129,43 @@ For complex relationships, like Users following other Users (graph), or Posts ha
   code={code3}
 lang="sql"
 />
+
+## Schema Annotations
+
+Sp00ky recognizes special comment **descriptors** in your `.surql` files. They look like ordinary SurrealQL comments (`-- @name`), so SurrealDB ignores them, but the Sp00ky CLI reads them to change how a table or field is generated and synced.
+
+| Descriptor | Placement | Effect |
+| --- | --- | --- |
+| `-- @nosync` | above a `DEFINE TABLE` | Server-only table. Excluded from sync entirely (see below). |
+| `-- @crdt text` | above a `DEFINE FIELD` | Marks a collaborative text field backed by a Loro CRDT. Read/write it with `useCrdtField`. See [CRDT](/docs/crdt). |
+| `-- @cursor` | above a `DEFINE FIELD` (with `@crdt`) | Stores per-session cursors alongside the CRDT snapshot. See [CRDT](/docs/crdt). |
+| `-- @parent` | suffix on a `DEFINE FIELD ... TYPE record<...>` | Marks the parent side of a relationship; written automatically from the auth context, never by client code. |
+
+<CodeBlock
+  code={codeAnnotations}
+  lang="sql"
+/>
+
+### Excluding a table from sync (`@nosync`)
+
+Put `-- @nosync` on the line above a `DEFINE TABLE` to make it **server-only**. This is useful for audit logs, server-side bookkeeping, or any table that should live in your database but never reach clients.
+
+A `@nosync` table is:
+
+- **Omitted from generated types** (TypeScript / Dart / JSON Schema).
+- **Omitted from relations** — it is not listed as a relation table, and any `record<...>` field on another table that points at it is dropped from the generated relationships.
+- **Never synced** — no sync events are emitted for it, so no updates flow to the scheduler or SSP.
+- **Excluded from the scheduler snapshot** and from SSP bootstrap.
+- **Still stored in the main database, and still included in backups.**
+
+<CodeBlock
+  code={codeNosync}
+  lang="sql"
+/>
+
+<Warning title="Not the same as locking permissions">
+  `@nosync` is distinct from `PERMISSIONS FOR select WHERE false`. A permission-locked table is still synced (it shows up in generated types and the snapshot, it just can't be read); `@nosync` removes the table from sync altogether. Reach for `@nosync` when a table should never leave the server.
+</Warning>
 
 ## Generated Types
 
