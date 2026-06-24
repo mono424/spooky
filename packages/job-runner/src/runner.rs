@@ -283,6 +283,29 @@ pub async fn update_status_helper<C: Connection>(
     Ok(())
 }
 
+/// Persist the owning SSP node id (`ssp_id`) onto a job row so cluster recovery
+/// can tell which SSP accepted a job (and re-dispatch only if that SSP dies).
+/// Deliberately does **not** touch `updated_at`: the recovery staleness clock
+/// must keep measuring from the row's last real status change, not from this
+/// ownership stamp (which happens right after create). Written server-side
+/// (root) only.
+pub async fn set_assignee_helper<C: Connection>(
+    db: &Surreal<C>,
+    job_id: &str,
+    assignee: &str,
+) -> Result<()> {
+    let record_id = RecordId::parse_simple(job_id)
+        .context(format!("Invalid job ID: {}", job_id))?;
+
+    db.query("UPDATE $id SET assignee = $assignee RETURN NONE")
+        .bind(("id", record_id))
+        .bind(("assignee", assignee.to_string()))
+        .await
+        .context("Failed to set job assignee")?;
+
+    Ok(())
+}
+
 /// Append an error object to a job's `errors` array. Shared by the runner and the
 /// SSP's `/job/kill`/`/job/retry` handlers so every writer uses identical SQL.
 pub async fn append_error_helper<C: Connection>(

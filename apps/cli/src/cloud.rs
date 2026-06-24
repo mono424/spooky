@@ -1544,6 +1544,11 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
     let mut external_backends: Vec<serde_json::Value> = Vec::new();
 
     for (name, app_config) in config.backends() {
+        // devOnly apps are local-only (started by `spky dev`); never deployed.
+        if !app_config.deploys() {
+            println!("  Skipping devOnly backend '{}' (local dev only)", name);
+            continue;
+        }
         // External backends are self-hosted — skip cloud deployment
         if app_config.resolved_hosting() == HostingMode::External {
             println!("  Skipping external backend '{}' (self-hosted at {})", name,
@@ -1710,6 +1715,114 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, &working_dir, app_config));
 
         println!("  Backend '{}' ready for deployment.", name);
+    }
+
+    // Docker apps (type: docker) — run a prebuilt image. devOnly ones are local
+    // only; the rest deploy by pulling the image and reusing the same flat-rootfs
+    // export/upload/manifest path as backends (the pipeline operates on a local
+    // image tag, so a pulled image just skips the build step).
+    for (name, app_config) in config.docker_apps() {
+        if !app_config.deploys() {
+            println!("  Skipping devOnly docker app '{}' (local dev only)", name);
+            continue;
+        }
+        let image_ref = app_config.image.clone()
+            .context(format!("Docker app '{}' is missing 'image'", name))?;
+        let port = app_config.deploy_port();
+
+        println!("  Pulling image for docker app '{}' ({})...", name, image_ref);
+        let pull_status = std::process::Command::new("docker")
+            .args(["pull", "--platform", "linux/amd64", &image_ref])
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .context(format!("Failed to docker pull for docker app '{}'", name))?;
+        if !pull_status.success() {
+            bail!("docker pull failed for docker app '{}'", name);
+        }
+        let image_tag = image_ref.clone();
+
+        // Env: image Config.Env → SPKY_* base → user config (wins).
+        let spky_vars = build_spky_cloud_vars(&config);
+        let user_env = resolve_env_for_deploy(&app_config.env, config_dir, &mut client, &pid);
+        let image_env = get_docker_env(&image_tag);
+        let mut env_map = std::collections::BTreeMap::new();
+        for entry in image_env.iter().chain(spky_vars.iter()).chain(user_env.iter()) {
+            if let Some((k, v)) = entry.split_once('=') {
+                env_map.insert(k.to_string(), v.to_string());
+            }
+        }
+        let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let working_dir = get_docker_workdir(&image_tag);
+        let image_id = get_docker_image_id(&image_tag);
+
+        // Export flat rootfs and upload (mirrors the backend path).
+        let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-{}.tar.gz", slug, name));
+        println!("  Exporting image for docker app '{}'...", name);
+        let container_name = format!("sp00ky-export-{}-{}", slug, name);
+        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        let create_out = std::process::Command::new("docker")
+            .args(["create", "--name", &container_name, &image_tag])
+            .output()
+            .context(format!("Failed to create container for docker app '{}'", name))?;
+        if !create_out.status.success() {
+            bail!("Failed to create container for docker app '{}' export", name);
+        }
+        let export_status = std::process::Command::new("sh")
+            .args(["-c", &format!("docker export {} | gzip > {}", container_name, tmp_tar.to_string_lossy())])
+            .status()
+            .context("Failed to export docker-app container")?;
+        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        if !export_status.success() {
+            bail!("Failed to export image for docker app '{}'", name);
+        }
+
+        let image_data = fs::read(&tmp_tar)
+            .context(format!("Failed to read image tar for docker app '{}'", name))?;
+        let total = image_data.len();
+        println!("  Uploading image for docker app '{}' ({:.1}MB)...", name, total as f64 / 1_048_576.0);
+        let upload_url = format!(
+            "{}/v1/projects/{}/images/{}",
+            upload_base_url(&client.base_url), pid, name
+        );
+        let progress = ProgressReader::new(&image_data, total, &format!("  Uploading '{}'", name));
+        match ureq::put(&upload_url)
+            .set("Authorization", &format!("Bearer {}", client.token))
+            .set("Content-Type", "application/octet-stream")
+            .set("Content-Length", &total.to_string())
+            .set("X-Image-Hash", image_id.as_deref().unwrap_or(""))
+            .send(progress)
+        {
+            Ok(_) => { println!(); }
+            Err(ureq::Error::Status(code, resp)) => {
+                println!();
+                bail!("Image upload failed for '{}' (HTTP {}): {}", name, code, resp.into_string().unwrap_or_default());
+            }
+            Err(ureq::Error::Transport(t)) => {
+                println!();
+                bail!("Image upload failed for '{}': {}", name, t);
+            }
+        }
+        let _ = fs::remove_file(&tmp_tar);
+
+        // Manifest: image cmd, or the configured args as the container command.
+        let cmd = if app_config.args.is_empty() {
+            get_docker_cmd(&image_tag)
+        } else {
+            Some(app_config.args.join(" "))
+        };
+        let deploy = app_config.deploy.clone().unwrap_or(backend::AppDeployConfig {
+            dockerfile: None,
+            context: None,
+            port: Some(port),
+            resources: None,
+            expose: false,
+            healthcheck: None,
+            timeout: None,
+            timeout_overridable: None,
+        });
+        backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, &deploy, &merged_env, &cmd, &working_dir, app_config));
+        println!("  Docker app '{}' ready for deployment.", name);
     }
 
     // Build SurrealDB manifest

@@ -72,6 +72,13 @@ Build and run a Dockerfile:
 
 <CodeBlock code={dockerCode} lang="yaml" />
 
+<Note>
+  This `dev.type: docker` **builds a Dockerfile** for an app's dev server. To run
+  a **prebuilt image** (e.g. a local LiveKit SFU or other infra) without writing a
+  Dockerfile, use a top-level [`type: docker` app](/docs/configuration#apps) with
+  `image`/`ports`/`args` and `scope: devOnly` instead.
+</Note>
+
 ## uv Type (Python)
 
 Run a Python script via [uv](https://docs.astral.sh/uv/):

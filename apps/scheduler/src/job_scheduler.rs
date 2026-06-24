@@ -8,11 +8,15 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use surrealdb::engine::remote::ws::{Client, Ws};
+use surrealdb::types::RecordId;
+use surrealdb::Surreal;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
+use crate::config::DbConfig;
 use crate::router::SspPool;
 use crate::transport::{HttpTransport, SspInfo};
 
@@ -301,66 +305,206 @@ async fn handle_job_result(
     Ok(StatusCode::OK)
 }
 
-/// Start background job failover monitor
-pub async fn start_job_failover_monitor(
+// --- Cluster job recovery sweep ---
+//
+// Job pickup is CREATE-only and the in-memory delay timer lives on the assigned
+// SSP, so a job created/delayed on an SSP that then dies is never run. In
+// singlenode the SSP's own sweep handles this; in cluster mode that sweep is
+// disabled (a lone SSP doesn't know ownership), so the scheduler — a singleton
+// that holds the SSP pool and can reach the upstream DB — owns recovery here.
+
+/// How often the cluster recovery sweep runs.
+const JOB_RECOVERY_INTERVAL_SECS: u64 = 30;
+/// Only re-dispatch `pending` rows older than this, so the sweep never races the
+/// live CREATE-pickup path on freshly created jobs.
+const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
+/// A `processing` row untouched for longer than this is treated as orphaned and
+/// reset to pending. Kept well above any realistic job timeout.
+const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
+
+/// Outbox job-table names from `SPKY_JOB_CONFIG` (a JSON object keyed by table
+/// name). Empty when unset/invalid — the sweep then has nothing to do.
+fn job_tables_from_env() -> Vec<String> {
+    match std::env::var("SPKY_JOB_CONFIG") {
+        Ok(raw) => match serde_json::from_str::<HashMap<String, Value>>(&raw) {
+            Ok(map) => map.into_keys().collect(),
+            Err(e) => {
+                warn!(error = %e, "SPKY_JOB_CONFIG is not a JSON object; cluster job recovery disabled");
+                Vec::new()
+            }
+        },
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Connect a fresh SurrealDB client to the upstream, mirroring `Scheduler::start`.
+async fn connect_remote(db: &DbConfig) -> Result<Surreal<Client>> {
+    let ws_addr = db
+        .url
+        .strip_prefix("ws://")
+        .or_else(|| db.url.strip_prefix("wss://"))
+        .unwrap_or(&db.url);
+    let conn = Surreal::new::<Ws>(ws_addr).await?;
+    conn.signin(surrealdb::opt::auth::Root {
+        username: db.username.clone(),
+        password: db.password.clone(),
+    })
+    .await?;
+    conn.use_ns(&db.namespace).await?;
+    conn.use_db(&db.database).await?;
+    Ok(conn)
+}
+
+/// A job is recoverable only if its `assignee` has left the pool (or was never
+/// stamped). A job owned by a current pool member is being handled there.
+fn is_orphaned(row: &Value, live: &HashSet<String>) -> bool {
+    match row.get("assignee").and_then(|v| v.as_str()) {
+        Some(a) => !live.contains(a),
+        None => true,
+    }
+}
+
+/// Start the cluster job recovery sweep (scheduler-driven, cluster mode only).
+pub async fn start_job_recovery_sweep(
     ssp_pool: Arc<RwLock<SspPool>>,
-    job_tracker: Arc<JobTracker>,
-    _transport: Arc<HttpTransport>,
+    transport: Arc<HttpTransport>,
+    db_config: Arc<DbConfig>,
 ) {
+    let job_tables = job_tables_from_env();
+    if job_tables.is_empty() {
+        info!("Cluster job recovery sweep idle (no job tables in SPKY_JOB_CONFIG)");
+        return;
+    }
+
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        
+        // Connect lazily, rebuilding the handle on the next tick if a pass fails.
+        let mut db: Option<Surreal<Client>> = None;
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+            JOB_RECOVERY_INTERVAL_SECS,
+        ));
         loop {
             interval.tick().await;
-            
-            // Check for stale SSPs
-            let stale_ssps = {
-                let pool = ssp_pool.read().await;
-                pool.get_stale_ssps(30000) // 30s timeout
-            };
-            
-            if stale_ssps.is_empty() {
-                continue;
-            }
-            
-            warn!("Found {} stale SSPs, handling job failover", stale_ssps.len());
-            
-            // For each stale SSP, reassign its jobs
-            for ssp_id in stale_ssps {
-                let jobs = job_tracker.get_ssp_jobs(&ssp_id).await;
-                
-                if jobs.is_empty() {
-                    continue;
-                }
-                
-                info!("Reassigning {} jobs from stale SSP {}", jobs.len(), ssp_id);
-                
-                // Select new SSP for each job
-                for job_id in jobs {
-                    let new_ssp = {
-                        let mut pool = ssp_pool.write().await;
-                        pool.select_for_query()
-                    };
-                    
-                    if let Some(new_ssp_id) = new_ssp {
-                        // Update assignment
-                        job_tracker.assign(job_id.clone(), new_ssp_id.clone()).await;
-                        
-                        // TODO: Resend job to new SSP
-                        // This requires storing job payloads in tracker
-                        info!("Reassigned job {} from {} to {}", job_id, ssp_id, new_ssp_id);
-                    } else {
-                        error!("No SSP available to reassign job {}", job_id);
-                        // Mark as failed
-                        job_tracker.update_status(&job_id, JobStatus::Failed).await;
+
+            if db.is_none() {
+                match connect_remote(&db_config).await {
+                    Ok(conn) => db = Some(conn),
+                    Err(e) => {
+                        warn!(error = %e, "Cluster job recovery: DB connect failed; retrying next tick");
+                        continue;
                     }
                 }
-                
-                // Remove stale SSP from pool
-                let mut pool = ssp_pool.write().await;
-                pool.remove(&ssp_id);
-                info!("Removed stale SSP {}", ssp_id);
+            }
+            let conn = db.as_ref().unwrap();
+
+            for table in &job_tables {
+                if let Err(e) = recover_table_once(conn, &ssp_pool, &transport, table).await {
+                    warn!(table = %table, error = %e, "Cluster job recovery pass failed; will reconnect");
+                    db = None; // force a reconnect on the next tick
+                    break;
+                }
             }
         }
     });
+    info!(
+        interval_secs = JOB_RECOVERY_INTERVAL_SECS,
+        "Cluster job recovery sweep started"
+    );
+}
+
+/// One recovery pass for a single job table. Errors bubble up so the caller can
+/// drop and rebuild the DB handle.
+async fn recover_table_once(
+    db: &Surreal<Client>,
+    ssp_pool: &Arc<RwLock<SspPool>>,
+    transport: &Arc<HttpTransport>,
+    table: &str,
+) -> Result<()> {
+    // Snapshot live pool membership (ready or not): a job owned by a current
+    // member is handled there; only re-dispatch jobs whose owner left the pool.
+    let live: HashSet<String> = {
+        let pool = ssp_pool.read().await;
+        pool.all().into_iter().map(|s| s.id.clone()).collect()
+    };
+
+    // 1. Pending rows past their delay window and older than the grace period.
+    //    The `created_at + <delay> <= now` gate keeps a job still inside its
+    //    delay window from being recovered early (`delay` is in milliseconds).
+    let pending_q = format!(
+        "SELECT type::string(id) AS id, assignee FROM {table} \
+         WHERE status = 'pending' AND updated_at < time::now() - {grace}s \
+         AND created_at + <duration>(string::concat(<string>delay, 'ms')) <= time::now()",
+        grace = JOB_RECOVERY_PENDING_GRACE_SECS,
+    );
+    let mut resp = db.query(&pending_q).await?;
+    let pending: Vec<Value> = resp.take(0)?;
+    for row in &pending {
+        let Some(id) = row.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if is_orphaned(row, &live) {
+            dispatch_recover(ssp_pool, transport, id).await;
+        }
+    }
+
+    // 2. Processing rows orphaned far longer than any job runs. Reset to pending
+    //    first (the SSP `/job/recover` only acts on pending rows), then dispatch.
+    let stale_q = format!(
+        "SELECT type::string(id) AS id, assignee FROM {table} \
+         WHERE status = 'processing' AND updated_at < time::now() - {stale}s",
+        stale = JOB_RECOVERY_STALE_PROCESSING_SECS,
+    );
+    let mut resp = db.query(&stale_q).await?;
+    let processing: Vec<Value> = resp.take(0)?;
+    for row in &processing {
+        let Some(id) = row.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if !is_orphaned(row, &live) {
+            continue;
+        }
+        let record_id = match RecordId::parse_simple(id) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(job_id = %id, error = %e, "Cluster job recovery: bad job id; skipping");
+                continue;
+            }
+        };
+        // Guarded so we never clobber a row that has since changed.
+        db.query(
+            "UPDATE $id SET status = 'pending', updated_at = time::now() \
+             WHERE status = 'processing' RETURN NONE",
+        )
+        .bind(("id", record_id))
+        .await?;
+        dispatch_recover(ssp_pool, transport, id).await;
+    }
+
+    Ok(())
+}
+
+/// Pick a ready SSP round-robin and POST `/job/recover` for one job id.
+async fn dispatch_recover(
+    ssp_pool: &Arc<RwLock<SspPool>>,
+    transport: &Arc<HttpTransport>,
+    id: &str,
+) {
+    let target = {
+        let mut pool = ssp_pool.write().await;
+        match pool.select_for_query() {
+            Some(sid) => pool.get(&sid).map(|s| (sid.clone(), s.url.clone())),
+            None => None,
+        }
+    };
+    let Some((ssp_id, ssp_url)) = target else {
+        warn!(job_id = %id, "Cluster job recovery: no ready SSP to recover job");
+        return;
+    };
+
+    let req = JobActionRequest { id: id.to_string() };
+    match transport.post_to_ssp(&ssp_url, "/job/recover", &req).await {
+        Ok(_) => info!(job_id = %id, ssp_id = %ssp_id, "Cluster job recovery: re-dispatched job"),
+        Err(e) => {
+            warn!(job_id = %id, ssp_id = %ssp_id, error = %e, "Cluster job recovery: /job/recover failed")
+        }
+    }
 }

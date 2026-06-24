@@ -386,6 +386,11 @@ export interface RunOptions {
   retry_strategy?: 'linear' | 'exponential';
   /** Timeout in seconds for the backend HTTP call. Only used if the backend allows timeout override. */
   timeout?: number;
+  /**
+   * Minimum delay in milliseconds before the job is eligible to run. While
+   * delayed the job stays pending (enqueued) and can still be killed.
+   */
+  delay?: number;
 }
 
 /**

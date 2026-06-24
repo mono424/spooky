@@ -2306,14 +2306,25 @@ fn handle_generate(config_path: &Path) -> Result<()> {
             ct.output
         );
 
+        let input_path = base_dir.join(&resolved.schema);
+        let append_paths: Vec<PathBuf> = Vec::new();
+        let output_path = base_dir.join(&ct.output);
+
+        // Dart uses spooky_core's richer generator (typed client / Patch classes /
+        // spookySchema + surqlSchema), NOT the CLI's quicktype output. It's a Dart
+        // tool that resolves `spooky_core` from the enclosing Dart package, so it
+        // runs from the package dir — auto-derived from `output` (nearest ancestor
+        // with a pubspec.yaml), or the optional `workdir` override.
+        if ct.format == backend::ClientFormat::Dart {
+            let workdir = ct.workdir.as_deref().map(|w| base_dir.join(w));
+            run_spooky_gen_dart(&input_path, &output_path, workdir.as_deref())?;
+            continue;
+        }
+
         let output_format = match ct.format {
             backend::ClientFormat::Typescript => OutputFormat::Typescript,
             backend::ClientFormat::Dart => OutputFormat::Dart,
         };
-
-        let input_path = base_dir.join(&resolved.schema);
-        let append_paths: Vec<PathBuf> = Vec::new();
-        let output_path = base_dir.join(&ct.output);
 
         run_codegen(
             &input_path,
@@ -2332,6 +2343,73 @@ fn handle_generate(config_path: &Path) -> Result<()> {
     }
 
     println!("\nAll clientTypes generated successfully.");
+    Ok(())
+}
+
+/// Walk up from `start`'s directory to the nearest ancestor containing a
+/// `pubspec.yaml` (the enclosing Dart package). `exists()` resolves any embedded
+/// `..` against the filesystem, so a relative-joined path works fine.
+fn nearest_dart_package(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.parent();
+    while let Some(d) = dir {
+        if d.join("pubspec.yaml").exists() {
+            return Some(d.to_path_buf());
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// Generate Dart types with spooky_core's `spooky_gen` (the rich typed client),
+/// run via `dart run spooky_core:spooky_gen <schema> -o <output>`. `spooky_gen`
+/// resolves `spooky_core` from the enclosing Dart package, so it must run from a
+/// package dir — derived from `output`'s nearest ancestor with a `pubspec.yaml`,
+/// or the explicit `workdir` override. Paths are absolute so they resolve
+/// regardless of the command's working directory.
+fn run_spooky_gen_dart(input: &Path, output: &Path, workdir: Option<&Path>) -> Result<()> {
+    let cwd = std::env::current_dir().context("Failed to get current directory")?;
+    let abs = |p: &Path| if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+    let input_abs = abs(input);
+    let output_abs = abs(output);
+
+    if let Some(parent) = output_abs.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+
+    // Resolve the Dart package dir to run from: explicit override, else walk up
+    // from the output file to the nearest pubspec.yaml.
+    let workdir_abs = match workdir {
+        Some(w) => abs(w),
+        None => nearest_dart_package(&output_abs).with_context(|| format!(
+            "Could not find a pubspec.yaml above '{}' for the Dart generator; \
+             set `workdir` on this clientTypes entry to a Dart package that depends on spooky_core",
+            output.display()
+        ))?,
+    };
+
+    let status = std::process::Command::new("dart")
+        .args([
+            "run",
+            "spooky_core:spooky_gen",
+            &input_abs.to_string_lossy(),
+            "-o",
+            &output_abs.to_string_lossy(),
+        ])
+        .current_dir(&workdir_abs)
+        .status()
+        .context(
+            "Failed to run `dart run spooky_core:spooky_gen` — is the Dart SDK installed \
+             and is `workdir` a Dart package that depends on spooky_core?",
+        )?;
+    if !status.success() {
+        anyhow::bail!("spooky_gen failed for {}", output.display());
+    }
+
+    // Best-effort format (matches the flutter_app Makefile); ignore failures.
+    let _ = std::process::Command::new("dart")
+        .args(["format", &output_abs.to_string_lossy()])
+        .current_dir(&workdir_abs)
+        .status();
     Ok(())
 }
 

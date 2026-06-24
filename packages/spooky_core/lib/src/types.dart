@@ -190,12 +190,17 @@ class RunOptions {
     this.maxRetries,
     this.retryStrategy,
     this.timeout,
+    this.delay,
   });
 
   final String? assignedTo;
   final int? maxRetries;
   final String? retryStrategy;
   final int? timeout;
+
+  /// Minimum delay in milliseconds before the job is eligible to run. While
+  /// delayed the job stays pending (enqueued) and can still be killed.
+  final int? delay;
 }
 
 /// Debounce key strategy for updates (TS `DebounceOptions.key`).

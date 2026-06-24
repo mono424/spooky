@@ -384,6 +384,7 @@ class DataModule {
       'retry_strategy': options?.retryStrategy ?? 'linear',
     };
     if (options?.timeout != null) record['timeout'] = options!.timeout;
+    if (options?.delay != null) record['delay'] = options!.delay;
     if (options?.assignedTo != null)
       record['assigned_to'] = options!.assignedTo;
 

@@ -106,12 +106,14 @@ export const schema = {
          * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
          */
         assigned_to: { type: 'string' as const, recordId: true, optional: false },
+        assignee: { type: 'string' as const, optional: true },
         /**
          * `created_at?` — string
          *
          * ISO-8601 datetime string.
          */
         created_at: { type: 'string' as const, dateTime: true, optional: true },
+        delay: { type: 'number' as const, optional: false },
         errors: { type: 'string' as const, optional: false },
         max_retries: { type: 'number' as const, optional: false },
         path: { type: 'string' as const, optional: false },
@@ -526,12 +528,21 @@ PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 3;
 
+-- Minimum time (milliseconds) the job stays pending before it is eligible to run.
+DEFINE FIELD delay ON TABLE job TYPE option<int> DEFAULT ALWAYS 0
+PERMISSIONS FOR select, create, update WHERE true;
+
 DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT ALWAYS "linear"
 ASSERT $value IN ["linear", "exponential"]
 PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT ALWAYS "pending"
 ASSERT $value IN ["pending", "processing", "success", "failed"]
+PERMISSIONS FOR select, create, update WHERE true;
+
+-- Owning SSP node id (ssp_id) once a job is accepted; used by cluster recovery
+-- to detect orphaned jobs. Written server-side (root) only, never by clients.
+DEFINE FIELD assignee ON TABLE job TYPE option<string>
 PERMISSIONS FOR select, create, update WHERE true;
 
 DEFINE FIELD errors ON TABLE job TYPE option<array<object>> DEFAULT ALWAYS []

@@ -113,10 +113,10 @@ async fn main() -> Result<()> {
         std::sync::Arc::clone(&query_tracker),
     ).await;
     
-    scheduler::job_scheduler::start_job_failover_monitor(
+    scheduler::job_scheduler::start_job_recovery_sweep(
         std::sync::Arc::clone(&job_state.ssp_pool),
-        std::sync::Arc::clone(&job_tracker),
         std::sync::Arc::clone(&transport),
+        std::sync::Arc::new(scheduler.config().db.clone()),
     ).await;
 
     // Spawn the single-consumer backup worker

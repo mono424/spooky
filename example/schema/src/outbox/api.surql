@@ -28,6 +28,12 @@ PERMISSIONS
 
 DEFINE FIELD max_retries ON TABLE job TYPE int DEFAULT ALWAYS 3;
 
+-- Minimum time (milliseconds) the job stays pending before it is eligible to run.
+DEFINE FIELD delay ON TABLE job TYPE int DEFAULT ALWAYS 0
+PERMISSIONS
+  FOR create, select WHERE true
+  FOR update WHERE false;
+
 DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
 ASSERT $value IN ["linear", "exponential"]
 PERMISSIONS
@@ -39,6 +45,13 @@ ASSERT $value IN ["pending", "processing", "success", "failed"]
 PERMISSIONS
   FOR create, select WHERE true
   FOR update WHERE false;
+
+-- Owning SSP node id (ssp_id) once a job is accepted; used by cluster recovery
+-- to detect orphaned jobs. Written server-side (root) only, never by clients.
+DEFINE FIELD assignee ON TABLE job TYPE option<string>
+PERMISSIONS
+  FOR select WHERE true
+  FOR create, update WHERE false;
 
 DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS []
 PERMISSIONS

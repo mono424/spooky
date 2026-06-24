@@ -871,6 +871,10 @@ export class DataModule<S extends SchemaStructure> {
       record.timeout = options.timeout;
     }
 
+    if (options?.delay != null) {
+      record.delay = options.delay;
+    }
+
     if (options?.assignedTo) {
       record.assigned_to = options.assignedTo;
     }

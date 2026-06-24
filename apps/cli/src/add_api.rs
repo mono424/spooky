@@ -258,6 +258,7 @@ pub fn add_api(
     // 2. Update sp00ky.yml
     let new_app = AppConfig {
         app_type: AppType::Backend,
+        scope: Default::default(),
         hosting: None,
         spec: Some(spec_path_str.clone()),
         base_url: Some(base_url_val.clone()),
@@ -267,6 +268,9 @@ pub fn add_api(
             schema: schema_output_str.clone(),
             table: Some(table_name.clone()),
         }),
+        image: None,
+        ports: Vec::new(),
+        args: Vec::new(),
         dev: None,
         deploy: None,
         env: None,

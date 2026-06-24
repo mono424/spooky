@@ -13,6 +13,63 @@ use std::path::{Path, PathBuf};
 pub enum AppType {
     Backend,
     Frontend,
+    /// Runs a prebuilt docker image (the `image`/`ports`/`args` fields), e.g. a
+    /// local LiveKit SFU. No spec/method; honors `scope`.
+    Docker,
+}
+
+/// A published port for a `type: docker` app. Accepts a bare port number/string
+/// (`7880` / `"7880"` → published as `7880:7880`), a `host:container` map
+/// (`"3000:8080"`), or any of those with a protocol suffix (`"7882/udp"` →
+/// `7882:7882/udp`).
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum PortSpec {
+    Num(u32),
+    Str(String),
+}
+
+impl PortSpec {
+    /// The `-p` value to pass to `docker run`. A spec without a `:` is expanded
+    /// to `host:container` using the same port on both sides (protocol suffix
+    /// preserved): `7882/udp` → `7882:7882/udp`.
+    pub fn publish(&self) -> String {
+        let s = match self {
+            PortSpec::Num(n) => n.to_string(),
+            PortSpec::Str(s) => s.clone(),
+        };
+        if s.contains(':') {
+            return s;
+        }
+        match s.split_once('/') {
+            Some((port, proto)) => format!("{port}:{port}/{proto}"),
+            None => format!("{s}:{s}"),
+        }
+    }
+
+    /// The host port, for the dev port pre-check. None if it can't be parsed.
+    pub fn host_port(&self) -> Option<u16> {
+        let publish = self.publish();
+        let host = publish.split(':').next().unwrap_or("");
+        host.split('/').next().unwrap_or("").parse().ok()
+    }
+}
+
+/// Where an app runs. `all` (default) runs in `spky dev` AND deploys to cloud;
+/// `devOnly` is a local-only process started by `spky dev` and never deployed
+/// (and skips backend spec/method/deploy validation); `cloudOnly` deploys but is
+/// skipped by `spky dev`.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AppScope {
+    #[default]
+    All,
+    DevOnly,
+    CloudOnly,
+}
+
+fn is_default_scope(s: &AppScope) -> bool {
+    *s == AppScope::All
 }
 
 /// Deployment mode.
@@ -212,6 +269,12 @@ impl ResolvedSchema {
 pub struct ClientTypeConfig {
     pub format: ClientFormat,
     pub output: String,
+    /// For `format: dart`: directory (relative to sp00ky.yml) to run the Dart
+    /// generator from — must be a Dart package that depends on `spooky_core`
+    /// (that's where `dart run spooky_core:spooky_gen` resolves). Ignored for
+    /// TypeScript. Defaults to the sp00ky.yml directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -520,6 +583,13 @@ impl Sp00kyConfig {
     pub fn frontend(&self) -> Option<(&str, &AppConfig)> {
         self.apps.iter()
             .find(|(_, app)| app.app_type == AppType::Frontend)
+            .map(|(name, app)| (name.as_str(), app))
+    }
+
+    /// Iterate over docker apps (prebuilt-image apps) only.
+    pub fn docker_apps(&self) -> impl Iterator<Item = (&str, &AppConfig)> {
+        self.apps.iter()
+            .filter(|(_, app)| app.app_type == AppType::Docker)
             .map(|(name, app)| (name.as_str(), app))
     }
 
@@ -1031,6 +1101,10 @@ pub struct AppConfig {
     #[serde(rename = "type")]
     pub app_type: AppType,
 
+    /// Where this app runs: "all" (default), "devOnly", or "cloudOnly".
+    #[serde(default, skip_serializing_if = "is_default_scope")]
+    pub scope: AppScope,
+
     // ── Backend-specific fields ─────────────────────────────────────────
     /// "cloud" (default) or "external" — whether this backend is deployed to
     /// Sp00ky Cloud or self-hosted at `baseUrl`.
@@ -1047,6 +1121,17 @@ pub struct AppConfig {
     /// Trigger method (required for backends).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<BackendMethod>,
+
+    // ── Docker-app fields (type: docker) ────────────────────────────────
+    /// Prebuilt image to run (required for `type: docker`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Published ports, e.g. `[7880, "7882/udp", "3000:8080"]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<PortSpec>,
+    /// Args appended after the image (the container command), e.g. `["--dev"]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 
     // ── Shared fields ───────────────────────────────────────────────────
     /// Dev server configuration (npm, docker, uv, or raw command).
@@ -1069,13 +1154,42 @@ impl AppConfig {
     pub fn deploy_port(&self) -> u16 {
         self.deploy.as_ref()
             .and_then(|d| d.port)
+            // For a docker app, fall back to the first published port's host side.
+            .or_else(|| {
+                if self.app_type == AppType::Docker {
+                    self.ports.first().and_then(|p| p.host_port())
+                } else {
+                    None
+                }
+            })
             .unwrap_or(match self.app_type {
                 AppType::Backend => 8080,
                 AppType::Frontend => 3000,
+                AppType::Docker => 8080,
             })
     }
 
+    /// True if `spky dev` should start this app (scope all or devOnly).
+    pub fn runs_in_dev(&self) -> bool {
+        self.scope != AppScope::CloudOnly
+    }
+
+    /// True if this app is deployed to the cloud (scope all or cloudOnly).
+    pub fn deploys(&self) -> bool {
+        self.scope != AppScope::DevOnly
+    }
+
     pub fn validate(&self, name: &str) -> Result<()> {
+        // A docker app always needs an image (regardless of scope).
+        if self.app_type == AppType::Docker && self.image.is_none() {
+            bail!("Docker app '{}' is missing required field 'image'", name);
+        }
+        // devOnly apps are local-only processes — they carry no spec/method/deploy,
+        // so skip the backend deploy-shape requirements below. They still validate
+        // `deploy` resources if a deploy block happens to be present (checked at end).
+        if self.scope == AppScope::DevOnly {
+            return self.validate_deploy_resources(name);
+        }
         match self.app_type {
             AppType::Backend => {
                 if self.spec.is_none() {
@@ -1095,7 +1209,13 @@ impl AppConfig {
                     }
                 }
             }
+            // image presence already checked above; nothing else required.
+            AppType::Docker => {}
         }
+        self.validate_deploy_resources(name)
+    }
+
+    fn validate_deploy_resources(&self, name: &str) -> Result<()> {
         if let Some(ref deploy) = self.deploy {
             if let Some(ref resources) = deploy.resources {
                 resources.validate()

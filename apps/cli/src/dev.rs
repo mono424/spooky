@@ -74,10 +74,26 @@ fn collect_dev_ports(
     };
 
     if let Some((name, fe)) = config.frontend() {
-        collect_app("app", name, &fe.dev);
+        if fe.runs_in_dev() {
+            collect_app("app", name, &fe.dev);
+        }
     }
     for (name, app) in config.backends() {
+        if !app.runs_in_dev() {
+            continue; // cloudOnly: not started in dev, don't reserve its port
+        }
         collect_app("app", name, &app.dev);
+    }
+    // Docker apps publish their ports directly (no BackendDevConfig).
+    for (name, app) in config.docker_apps() {
+        if !app.runs_in_dev() {
+            continue;
+        }
+        for p in &app.ports {
+            if let Some(host) = p.host_port() {
+                out.push((host, format!("app:{}", name)));
+            }
+        }
     }
 
     out
@@ -721,6 +737,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
     let app_dev = spawn_frontend_dev(config, &project_dir, resolved_surreal, mode);
     let backend_devs = spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode);
+    let docker_devs = spawn_docker_app_devs(config, &project_dir, resolved_surreal, mode);
 
     // Wait for Ctrl+C
     while !stop.load(Ordering::SeqCst) {
@@ -728,6 +745,7 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     }
 
     // Stop backend dev commands, log tailers, and app dev server
+    drop(docker_devs);
     drop(backend_devs);
     drop(app_dev);
     drop(surreal_log);
@@ -851,12 +869,14 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
     let app_dev = spawn_frontend_dev(config, &project_dir, resolved_surreal, mode);
     let backend_devs = spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode);
+    let docker_devs = spawn_docker_app_devs(config, &project_dir, resolved_surreal, mode);
 
     let status = Command::new("docker")
         .args(["compose", "-f", compose_file, "up", "--build", "--remove-orphans"])
         .status()
         .context("Failed to run docker compose up")?;
 
+    drop(docker_devs);
     drop(backend_devs);
     drop(app_dev);
 
@@ -1199,6 +1219,9 @@ impl Drop for LogTailGuard {
 fn build_job_config_json(config: &Sp00kyConfig) -> String {
     let mut entries = Vec::new();
     for (name, app) in config.backends() {
+        if !app.runs_in_dev() {
+            continue; // cloudOnly backend isn't running in dev; don't route jobs to it
+        }
         let method = match &app.method {
             Some(m) => m,
             None => continue,
@@ -1283,7 +1306,7 @@ fn spawn_pnpm_dev_app(script: &str, envs: Vec<(String, String)>) -> LogTailGuard
 
 /// Start the frontend app dev server from the apps config.
 fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> LogTailGuard {
-    if let Some((name, frontend)) = config.frontend() {
+    if let Some((name, frontend)) = config.frontend().filter(|(_, fe)| fe.runs_in_dev()) {
         warn_frontend_vault_no_whitelist(name, &frontend.env);
         let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
         let user_envs = resolve_env_for_dev(&frontend.env, project_dir);
@@ -1390,6 +1413,9 @@ fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolve
     let mut guards = Vec::new();
     let mut color_idx = 0;
     for (name, app) in config.backends() {
+        if !app.runs_in_dev() {
+            continue; // cloudOnly: deployed but not started by `spky dev`
+        }
         let dev_config = match &app.dev {
             Some(cfg) => cfg,
             None => continue,
@@ -1429,6 +1455,64 @@ fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolve
                 ));
             }
         }
+    }
+    guards
+}
+
+/// Start each `type: docker` app (scope all or devOnly) by running its prebuilt
+/// image in the foreground: `docker run --rm --name sp00ky-dev-<key> --network
+/// <net> [-p <publish>]… [-e K=V]… <image> <args…>`. The returned LogTailGuard
+/// kills `docker run` on Ctrl-C and `--rm` removes the container — same teardown
+/// as the raw-command backend path.
+fn spawn_docker_app_devs(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<LogTailGuard> {
+    let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
+    let mut guards = Vec::new();
+    let mut color_idx = 0;
+    for (name, app) in config.docker_apps() {
+        if !app.runs_in_dev() {
+            continue; // cloudOnly: deployed but not started by `spky dev`
+        }
+        let image = match &app.image {
+            Some(i) => i,
+            None => continue, // validation already requires it; defensive
+        };
+        let color = BACKEND_COLORS[color_idx % BACKEND_COLORS.len()];
+        color_idx += 1;
+        let prefix = format!("{}[app.{}.docker]{}", color, name, ANSI_RESET);
+        let container = format!("sp00ky-dev-{}", name);
+
+        // Clear any stale container from a previous (hard-killed) run.
+        let _ = docker(&["rm", "-f", &container]);
+
+        let user_envs = resolve_env_for_dev(&app.env, project_dir);
+        let envs = merge_spky_with_user_env(&spky_vars, user_envs);
+
+        // Build the `docker run` argv (owned strings; passed as -e so they reach
+        // the container, not the docker process).
+        let mut args: Vec<String> = vec![
+            "run".into(), "--rm".into(),
+            "--name".into(), container.clone(),
+            "--network".into(), NETWORK_NAME.into(),
+            "--network-alias".into(), name.to_string(),
+        ];
+        for p in &app.ports {
+            args.push("-p".into());
+            args.push(p.publish());
+        }
+        for (k, v) in &envs {
+            args.push("-e".into());
+            args.push(format!("{}={}", k, v));
+        }
+        args.push(image.clone());
+        for a in &app.args {
+            args.push(a.clone());
+        }
+
+        println!("{} Starting: docker run {} {}", prefix, image, app.args.join(" "));
+        guards.push(spawn_prefixed(
+            Command::new("docker").args(&args),
+            &prefix,
+        ));
     }
     guards
 }

@@ -44,11 +44,23 @@ DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
     FOR create, select WHERE true
     FOR update WHERE false;
 
+-- Optional: minimum delay (milliseconds) the job stays pending before it runs
+DEFINE FIELD delay ON TABLE job TYPE int DEFAULT ALWAYS 0
+  PERMISSIONS
+    FOR create, select WHERE true
+    FOR update WHERE false;
+
 -- Optional: per-job timeout override (seconds)
 DEFINE FIELD timeout ON TABLE job TYPE option<int>
   PERMISSIONS
     FOR create, select WHERE true
     FOR update WHERE false;
+
+-- Optional: owning SSP node id, set by the system for cluster recovery
+DEFINE FIELD assignee ON TABLE job TYPE option<string>
+  PERMISSIONS
+    FOR select WHERE true
+    FOR create, update WHERE false;
 
 -- Job status lifecycle
 DEFINE FIELD status ON TABLE job TYPE string DEFAULT ALWAYS "pending"
@@ -89,7 +101,8 @@ export const signatureCode = `db.run(
     assignedTo?: string,           // Link to parent record
     max_retries?: number,          // Override default max retries
     retry_strategy?: 'linear' | 'exponential',  // Override retry strategy
-    timeout?: number               // Override backend timeout (seconds)
+    timeout?: number,              // Override backend timeout (seconds)
+    delay?: number                 // Stay pending at least N milliseconds before running
   }
 )`;
 
@@ -178,6 +191,64 @@ export const assignedToCode = `await db.run('api', '/process-order',
   { assignedTo: order.id }  // Link job to order
 );`;
 
+export const delayCode = `// Run no sooner than 5 minutes from now
+await db.run('api', '/send-reminder',
+  { id: reminder.id },
+  { delay: 5 * 60 * 1000 }  // 5 minutes, in milliseconds
+);
+
+// Delay composes with the other options
+await db.run('api', '/generate-digest', data, {
+  delay: 30_000,            // wait 30s before the first attempt
+  max_retries: 3,
+  retry_strategy: 'exponential'
+});`;
+
+export const delayCancelCode = `// Enqueue a delayed job...
+await db.run('api', '/send-reminder', { id: reminder.id }, { delay: 60_000 });
+
+// ...then cancel it before the delay elapses (CLI, or fn::job::kill).
+// The job is marked "failed" and never calls the backend.
+// spky jobs kill job:abc123`;
+
+export const emailSendCode = `import { db } from './db';
+
+// User clicked "Send". Queue the email to go out in 30 seconds, linked to the
+// email record so we can find the job again during the undo window.
+async function sendEmail(email) {
+  await db.run('api', '/send-email',
+    { to: email.to, subject: email.subject, body: email.body },
+    { assignedTo: email.id, delay: 30_000 }  // 30s "undo send" window
+  );
+}`;
+
+export const emailRetractCode = `// During the 30s window the job is still \`pending\`, so it can be killed. Find
+// it via the email it is linked to (db.run returns void, so we query for it):
+const pendingSend = db.query('job')
+  .where({ assigned_to: 'email:abc123', path: '/send-email', status: 'pending' })
+  .orderBy('created_at', 'desc')
+  .limit(1)
+  .one()
+  .build();
+
+const job = useQuery(db, () => pendingSend);
+const jobId = () => job()?.id;  // e.g. "job:xyz789"
+
+// Retract it — a killed pending job is marked \`failed\` and the email is never
+// sent. Kill is an operator action, so run it via the CLI:
+//   spky jobs kill job:xyz789`;
+
+export const emailSoftCancelCode = `// In-app "Undo" without operator access: let the user flag the email retracted
+// during the window (they own the record, so a normal update works), and have
+// the /send-email route skip sending when the job finally runs.
+
+// Client — flip the flag while the job is still delayed:
+await db.update('email', 'email:abc123', { retracted: true });
+
+// Backend /send-email handler (pseudocode) — bail out if retracted:
+if (email.retracted) return { skipped: true };
+await mailer.send(email);`;
+
 export const failedJobCode = `const job = thread()?.jobs?.[0];
 
 if (job?.status === 'failed') {
@@ -261,8 +332,10 @@ The job table stores outbox records and tracks their execution status. Here's th
 - **`retries`**: Number of retry attempts so far
 - **`max_retries`**: Maximum number of retry attempts before marking as failed
 - **`retry_strategy`**: Retry timing strategy (`linear` or `exponential`)
+- **`delay`**: Optional minimum delay in milliseconds before the job is eligible to run (default `0`). While delayed the job stays `pending` and can still be killed.
 - **`timeout`**: Optional per-job timeout override in seconds (only used if backend has `timeoutOverridable: true`)
 - **`errors`**: Array of error objects from failed execution attempts
+- **`assignee`**: System-managed. The owning SSP node id, set automatically in cluster mode so a job is recovered if its SSP goes down. You never set this.
 
 ## Calling Backend Functions
 
@@ -284,10 +357,45 @@ Use the `db.run()` method to create a job and call your backend function:
   - **`max_retries`**: Override the default maximum retry attempts (default: 3)
   - **`retry_strategy`**: Override the retry strategy (default: `'linear'`)
   - **`timeout`**: Override the backend HTTP request timeout in seconds. Only takes effect if the backend has `timeoutOverridable: true` in `sp00ky.yml`.
+  - **`delay`**: Minimum milliseconds the job stays `pending` before it is eligible to run (default `0`).
 
 <Warning>
   The `db.run()` method validates the payload against your OpenAPI schema. Missing required parameters will throw an error.
 </Warning>
+
+## Delaying Jobs
+
+Set `delay` (milliseconds) to keep a job `pending` for at least that long before it runs. Use it for reminders, debounced follow-ups, or spacing out work:
+
+<CodeBlock code={delayCode} lang="typescript" />
+
+The delay is a **minimum**, not an exact schedule: the job becomes eligible once the delay elapses and then runs as soon as the runner picks it up. `delay` requires the `delay` field on your job table (see the schema above).
+
+A delayed job is just a `pending` job, so it stays fully visible and cancellable during its wait. Killing it before the delay elapses marks it `failed` and the backend is never called:
+
+<CodeBlock code={delayCancelCode} lang="typescript" />
+
+<Note>
+  In cluster mode, delayed jobs survive an SSP restart: the scheduler re-dispatches a delayed job (using the `assignee` field) if its owning SSP goes down before the delay elapses.
+</Note>
+
+### Example: Undo Send
+
+A delay window is the classic "undo send". Queue the email to leave in 30 seconds, linked to the email record so you can find the job again:
+
+<CodeBlock code={emailSendCode} lang="typescript" />
+
+While the delay has not elapsed the job is still `pending`, so it can be killed. Killing it marks the job `failed` and the backend (the actual send) is never called:
+
+<CodeBlock code={emailRetractCode} lang="typescript" />
+
+<Warning>
+  `fn::job::kill` / `spky jobs kill` are operator actions (system access) — record-access end users can't call them, so they can't stop each other's jobs. For a user-facing "Undo" button, either route the kill through a trusted backend/admin action, or use the soft-cancel pattern below.
+</Warning>
+
+For a purely client-side undo, gate the send on a flag the user can flip during the window — no operator access required:
+
+<CodeBlock code={emailSoftCancelCode} lang="typescript" />
 
 ## Querying Job Status
 
@@ -340,11 +448,12 @@ By default every `spky jobs` command targets the local dev database from the `sp
 The job runner is a separate service that processes outbox jobs. You can use the example job runner from the Sp00ky repository or implement your own.
 
 The job runner:
-1. Polls the job table for records with `status = 'pending'`
-2. Updates status to `'processing'`
-3. Makes the HTTP request to your backend
-4. Updates status to `'success'` or `'failed'`
-5. Implements retry logic based on `retry_strategy`
+1. Picks up job records with `status = 'pending'`
+2. Honors the `delay` field, keeping a job `pending` until its delay has elapsed
+3. Updates status to `'processing'`
+4. Makes the HTTP request to your backend
+5. Updates status to `'success'` or `'failed'`
+6. Implements retry logic based on `retry_strategy`
 
 <Note>
   See the `packages/job-runner` directory in the Sp00ky repository for a reference implementation in Rust.
