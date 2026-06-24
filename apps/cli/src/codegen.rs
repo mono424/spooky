@@ -371,6 +371,12 @@ impl CodeGenerator {
                                 if has_cursor {
                                     flags.push("cursor: true".to_string());
                                 }
+                                // `array<T>`: `col_type` is already the element
+                                // type (via map_json_schema_type_to_value_type),
+                                // so flag it so the runtime value is `T[]`.
+                                if self.array_element_type(col_def).is_some() {
+                                    flags.push("array: true".to_string());
+                                }
 
                                 // For `bytes` fields the runtime value is a
                                 // Uint8Array, not a string. The JSON-schema
@@ -604,7 +610,12 @@ impl CodeGenerator {
         lines
     }
 
-    fn map_json_schema_type_to_value_type(&self, field_def: &serde_json::Value) -> &str {
+    fn map_json_schema_type_to_value_type(&self, field_def: &serde_json::Value) -> &'static str {
+        // `array<T>` columns: the array itself isn't a scalar ValueType, so map to
+        // the ELEMENT type here and let `array_element_type` flag it as an array.
+        if let Some(elem) = self.array_element_type(field_def) {
+            return elem;
+        }
         if let Some(field_type) = field_def.get("type") {
             match field_type {
                 serde_json::Value::String(type_str) => match type_str.as_str() {
@@ -634,6 +645,29 @@ impl CodeGenerator {
         } else {
             "string"
         }
+    }
+
+    /// If `field_def` describes an `array<T>` column (`type: "array"`, or a
+    /// nullable `["array", "null"]` union), return the element ValueType (mapped
+    /// from the JSON-schema `items`). Returns `None` for non-array columns.
+    fn array_element_type(&self, field_def: &serde_json::Value) -> Option<&'static str> {
+        let is_array = match field_def.get("type") {
+            Some(serde_json::Value::String(s)) => s == "array",
+            Some(serde_json::Value::Array(types)) => {
+                types.iter().any(|t| t.as_str() == Some("array"))
+            }
+            _ => false,
+        };
+        if !is_array {
+            return None;
+        }
+        // Map the element schema; default to `string` when `items` is absent.
+        Some(
+            field_def
+                .get("items")
+                .map(|items| self.map_json_schema_type_to_value_type(items))
+                .unwrap_or("string"),
+        )
     }
 
     fn is_field_optional(&self, table_def: &serde_json::Value, field_name: &str) -> bool {

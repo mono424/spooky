@@ -31,13 +31,11 @@ use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Table
 use ratatui::{Frame, Terminal};
 
 use crate::backend::{self, AppType, DEFAULT_CONFIG_PATH};
-use crate::dev;
 use crate::surreal_client::{MigrationDB, SurrealClient};
 use crate::{ConnectionArgs, JobsCommands};
 
 /// The clap default for `--url`. When `conn.url` still equals this, the user did
 /// not override it, so we resolve the endpoint from the project config instead.
-const DEFAULT_SURREAL_URL: &str = "http://localhost:8000";
 
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
@@ -79,49 +77,15 @@ pub fn run(
 
 fn client_from(conn: &ConnectionArgs, config: &Option<PathBuf>) -> Result<SurrealClient> {
     // `--cloud` resolves the deployment's SurrealDB URL + root password from
-    // Sp00ky Cloud automatically; nothing else needs to be passed.
-    if let Some(c) = conn.cloud_connection(config)? {
-        return Ok(SurrealClient::new(
-            &c.url,
-            &c.namespace,
-            &c.database,
-            &c.username,
-            &c.password,
-        ));
-    }
-
-    let config_file = config
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-    let sp00ky_config = backend::load_config(&config_file);
-    let resolved = sp00ky_config.resolved_surrealdb();
-
-    // Resolve the SurrealDB endpoint from the project config (the dev stack maps
-    // SurrealDB to localhost:8666, and external hosting carries its own endpoint),
-    // using the same helper `spky dev` uses. A non-default `--url`/`SURREAL_URL`
-    // always wins; we detect "unset" by comparing against the clap default.
-    let url = if conn.url == DEFAULT_SURREAL_URL {
-        dev::surreal_connection_url(&resolved, dev::SURREAL_PORT)
-    } else {
-        conn.url.clone()
-    };
-    let namespace = if conn.namespace == "main" {
-        resolved.namespace
-    } else {
-        conn.namespace.clone()
-    };
-    let database = if conn.database == "main" {
-        resolved.database
-    } else {
-        conn.database.clone()
-    };
-
+    // Sp00ky Cloud; otherwise the local URL/ns/db come from sp00ky.yml (the dev
+    // stack maps SurrealDB to localhost:8666).
+    let c = conn.resolve(config)?;
     Ok(SurrealClient::new(
-        &url,
-        &namespace,
-        &database,
-        &conn.username,
-        &conn.password,
+        &c.url,
+        &c.namespace,
+        &c.database,
+        &c.username,
+        &c.password,
     ))
 }
 

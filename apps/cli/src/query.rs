@@ -15,7 +15,6 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-use crate::backend::{self, DEFAULT_CONFIG_PATH};
 use crate::surreal_client::{SurrealClient, SurrealResponse};
 use crate::{ConnectionArgs, ResolvedConnection};
 
@@ -55,32 +54,7 @@ pub fn run(
 /// `spky project credentials`); otherwise it falls back to local resolution
 /// from `sp00ky.yml`, honoring explicit `--namespace`/`--database` overrides.
 fn resolve(conn: ConnectionArgs, config: Option<PathBuf>) -> Result<ResolvedConnection> {
-    if let Some(c) = conn.cloud_connection(&config)? {
-        return Ok(c);
-    }
-
-    let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-    let sp00ky_config = backend::load_config(&config_file);
-    let resolved_surreal = sp00ky_config.resolved_surrealdb();
-
-    let namespace = if conn.namespace == "main" {
-        resolved_surreal.namespace
-    } else {
-        conn.namespace
-    };
-    let database = if conn.database == "main" {
-        resolved_surreal.database
-    } else {
-        conn.database
-    };
-
-    Ok(ResolvedConnection {
-        url: conn.url,
-        namespace,
-        database,
-        username: conn.username,
-        password: conn.password,
-    })
+    conn.resolve(&config)
 }
 
 // =============================================================

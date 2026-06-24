@@ -1033,9 +1033,10 @@ enum MigrateCommands {
 
 #[derive(ClapArgs, Debug)]
 struct ConnectionArgs {
-    /// SurrealDB URL
-    #[arg(long, env = "SURREAL_URL", default_value = "http://localhost:8000")]
-    url: String,
+    /// SurrealDB URL. When omitted, resolved from sp00ky.yml: the locally-hosted
+    /// dev endpoint (e.g. http://localhost:8666) or an external endpoint.
+    #[arg(long, env = "SURREAL_URL")]
+    url: Option<String>,
     /// SurrealDB namespace
     #[arg(long, env = "SURREAL_NS", default_value = "main")]
     namespace: String,
@@ -1099,6 +1100,43 @@ impl ConnectionArgs {
             username: "root".to_string(),
             password: cloud.password,
         }))
+    }
+
+    /// Fully resolve the SurrealDB connection. `--cloud` takes precedence;
+    /// otherwise builds a local connection from sp00ky.yml. The URL comes from
+    /// `--url`/`SURREAL_URL` when given, else the locally-hosted dev endpoint
+    /// derived from the config (e.g. http://localhost:8666) or its external
+    /// endpoint. namespace/database fall back to the config's resolved values
+    /// unless overridden; username/password default to root/root.
+    pub(crate) fn resolve(&self, config: &Option<PathBuf>) -> Result<ResolvedConnection> {
+        if let Some(c) = self.cloud_connection(config)? {
+            return Ok(c);
+        }
+        let config_file = config
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+        let resolved = backend::load_config(&config_file).resolved_surrealdb();
+        let url = self
+            .url
+            .clone()
+            .unwrap_or_else(|| dev::surreal_connection_url(&resolved, dev::SURREAL_PORT));
+        let namespace = if self.namespace == "main" {
+            resolved.namespace
+        } else {
+            self.namespace.clone()
+        };
+        let database = if self.database == "main" {
+            resolved.database
+        } else {
+            self.database.clone()
+        };
+        Ok(ResolvedConnection {
+            url,
+            namespace,
+            database,
+            username: self.username.clone(),
+            password: self.password.clone(),
+        })
     }
 }
 
@@ -1412,29 +1450,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved = sp00ky_config.resolved_schema();
             let resolved_migrations = migrations_dir.unwrap_or(resolved.migrations);
 
-            let conn_resolved = match conn.cloud_connection(&Some(config_file.clone()))? {
-                Some(c) => c,
-                None => {
-                    let resolved_surreal = sp00ky_config.resolved_surrealdb();
-                    let namespace = if conn.namespace == "main" {
-                        resolved_surreal.namespace
-                    } else {
-                        conn.namespace
-                    };
-                    let database = if conn.database == "main" {
-                        resolved_surreal.database
-                    } else {
-                        conn.database
-                    };
-                    ResolvedConnection {
-                        url: conn.url,
-                        namespace,
-                        database,
-                        username: conn.username,
-                        password: conn.password,
-                    }
-                }
-            };
+            let conn_resolved = conn.resolve(&Some(config_file.clone()))?;
 
             let deploy_mode = match mode.as_str() {
                 "cluster" => DeployMode::Cluster,
@@ -1553,29 +1569,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved_migrations =
                 migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
-            let conn_resolved = match conn.cloud_connection(&None)? {
-                Some(c) => c,
-                None => {
-                    let resolved_surreal = sp00ky_config.resolved_surrealdb();
-                    let namespace = if conn.namespace == "main" {
-                        resolved_surreal.namespace
-                    } else {
-                        conn.namespace
-                    };
-                    let database = if conn.database == "main" {
-                        resolved_surreal.database
-                    } else {
-                        conn.database
-                    };
-                    ResolvedConnection {
-                        url: conn.url,
-                        namespace,
-                        database,
-                        username: conn.username,
-                        password: conn.password,
-                    }
-                }
-            };
+            let conn_resolved = conn.resolve(&None)?;
 
             let ctx = migration::MigrationContext {
                 environment: migration::MigrationEnvironment::Production,
@@ -1606,29 +1600,7 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             let resolved_migrations =
                 migrations_dir.unwrap_or(sp00ky_config.resolved_schema().migrations);
 
-            let conn_resolved = match conn.cloud_connection(&None)? {
-                Some(c) => c,
-                None => {
-                    let resolved_surreal = sp00ky_config.resolved_surrealdb();
-                    let namespace = if conn.namespace == "main" {
-                        resolved_surreal.namespace
-                    } else {
-                        conn.namespace
-                    };
-                    let database = if conn.database == "main" {
-                        resolved_surreal.database
-                    } else {
-                        conn.database
-                    };
-                    ResolvedConnection {
-                        url: conn.url,
-                        namespace,
-                        database,
-                        username: conn.username,
-                        password: conn.password,
-                    }
-                }
-            };
+            let conn_resolved = conn.resolve(&None)?;
 
             let ctx = migration::MigrationContext {
                 environment: migration::MigrationEnvironment::Production,

@@ -133,10 +133,15 @@ DEFINE FIELD OVERWRITE key ON TABLE _00_feature_flag TYPE string;
 DEFINE FIELD OVERWRITE description ON TABLE _00_feature_flag TYPE option<string>;
 DEFINE FIELD OVERWRITE variants ON TABLE _00_feature_flag TYPE array<string> DEFAULT ['off', 'on'];
 DEFINE FIELD OVERWRITE default_variant ON TABLE _00_feature_flag TYPE string DEFAULT 'off';
-DEFINE FIELD OVERWRITE payloads ON TABLE _00_feature_flag TYPE option<object>;
--- Each rule: { variant, priority, allowlist: array<record>, rollout_percent: int 0..100,
---             conditions: array<{ attr: string, op: string, value: any }> }
+-- FLEXIBLE: arbitrary per-variant payload keys (set by the CLI / evaluator).
+DEFINE FIELD OVERWRITE payloads ON TABLE _00_feature_flag TYPE option<object> FLEXIBLE;
+-- Each rule (written by `spky flag`): allowlist =
+--   { kind: 'allowlist', variant, users: array<record>, priority }
+-- rollout = { kind: 'rollout', variant, percent: int 0..100, priority }.
+-- The element is FLEXIBLE so these arbitrary keys are accepted on a SCHEMAFULL
+-- table; without it SurrealDB rejects `rules[*].kind` as an unknown field.
 DEFINE FIELD OVERWRITE rules ON TABLE _00_feature_flag TYPE array<object> DEFAULT [];
+DEFINE FIELD OVERWRITE rules[*] ON TABLE _00_feature_flag TYPE object FLEXIBLE;
 DEFINE FIELD OVERWRITE enabled ON TABLE _00_feature_flag TYPE bool DEFAULT true;
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_feature_flag TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_feature_flag TYPE datetime VALUE time::now();
@@ -156,7 +161,7 @@ DEFINE TABLE OVERWRITE _00_user_feature SCHEMAFULL
 DEFINE FIELD OVERWRITE user ON TABLE _00_user_feature TYPE record;
 DEFINE FIELD OVERWRITE key ON TABLE _00_user_feature TYPE string;
 DEFINE FIELD OVERWRITE variant ON TABLE _00_user_feature TYPE string;
-DEFINE FIELD OVERWRITE payload ON TABLE _00_user_feature TYPE option<object>;
+DEFINE FIELD OVERWRITE payload ON TABLE _00_user_feature TYPE option<object> FLEXIBLE;
 DEFINE FIELD OVERWRITE evaluated_at ON TABLE _00_user_feature TYPE datetime VALUE time::now();
 DEFINE INDEX OVERWRITE idx_user_feature_user_key ON TABLE _00_user_feature COLUMNS user, key UNIQUE;
 

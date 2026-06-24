@@ -20,6 +20,11 @@ export interface ColumnSchema {
   readonly cursor?: boolean;
   /** True for `TYPE bytes` columns. Runtime values are `Uint8Array`. */
   readonly bytes?: boolean;
+  /**
+   * True for `TYPE array<...>` columns. `type` then names the ELEMENT type, so
+   * the runtime value is `ElementType[]` (e.g. `array<string>` → `string[]`).
+   */
+  readonly array?: boolean;
 }
 
 /**
@@ -75,13 +80,21 @@ export type TypeNameToTypeMap = {
 };
 
 /**
+ * The element/base TS type of a column, wrapping in an array for `array: true`
+ * columns (where `type` names the element type).
+ */
+export type ColumnBaseTSType<T extends ColumnSchema> = T extends { array: true }
+  ? TypeNameToTypeMap[T['type']][]
+  : TypeNameToTypeMap[T['type']];
+
+/**
  * Convert a column type to its TypeScript type
  */
 export type ColumnToTSType<T extends ColumnSchema> = T extends {
   optional: true;
 }
-  ? TypeNameToTypeMap[T['type']] | null
-  : TypeNameToTypeMap[T['type']];
+  ? ColumnBaseTSType<T> | null
+  : ColumnBaseTSType<T>;
 
 /**
  * Helper to extract relationship field names for a table

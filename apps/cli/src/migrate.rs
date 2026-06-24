@@ -186,9 +186,15 @@ pub fn create(
         println!("Extracting current schema...");
         let existing_migrations = scan_migrations(migrations_dir)?;
         let (old_schema, new_schema) = if let Some((url, ns, db, user, pass)) = conn {
-            // Live DB: extract old from live, normalize new through ephemeral
+            // Live DB: extract old from live, normalize new through ephemeral.
+            // Restore the live side's redacted signing key to the source
+            // placeholder so it matches the (also-restored) new side instead of
+            // diffing as `[REDACTED]` vs `{{...}}`.
             let client = SurrealClient::new(url, ns, db, user, pass);
-            let old = schema_extract::extract_schema_from_db(&client)?;
+            let old = schema_extract::restore_redacted_keys(
+                &schema_extract::extract_schema_from_db(&client)?,
+                &new_schema_sql,
+            );
             let new = schema_extract::normalize_schema_via_ephemeral_db(&new_schema_sql)?;
             (old, new)
         } else if existing_migrations.is_empty() {

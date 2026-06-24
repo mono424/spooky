@@ -758,10 +758,35 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
     println!("\n{} Shutting down...", PREFIX);
 
-    // Remove containers (ignore errors — they might not exist)
-    let _ = docker(&["rm", "-f", SCHEDULER_CONTAINER]);
-    let _ = docker(&["rm", "-f", SSP_CONTAINER]);
-    let _ = docker(&["rm", "-f", SURREAL_CONTAINER]);
+    // Remove every container we started this run. They all share the
+    // `sp00ky-dev-` prefix: infra (`sp00ky-dev-{surrealdb,ssp,scheduler}`) and
+    // app/frontend/backend docker apps (`sp00ky-dev-<name>` /
+    // `sp00ky-dev-app-<name>`). The app LogTailGuard only SIGKILLs the
+    // `docker run` client, which neither stops the container nor triggers
+    // `--rm`, so without this sweep their published ports stay bound after
+    // Ctrl+C. Fall back to the known infra names if enumeration fails.
+    let removed = match Command::new("docker")
+        .args(["ps", "-aq", "--filter", "name=^sp00ky-dev-"])
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let ids: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .map(|s| s.to_string())
+                .collect();
+            for id in &ids {
+                let _ = docker(&["rm", "-f", id]);
+            }
+            !ids.is_empty()
+        }
+        _ => false,
+    };
+    if !removed {
+        // Enumeration failed (or matched nothing) — remove infra by name.
+        let _ = docker(&["rm", "-f", SCHEDULER_CONTAINER]);
+        let _ = docker(&["rm", "-f", SSP_CONTAINER]);
+        let _ = docker(&["rm", "-f", SURREAL_CONTAINER]);
+    }
 
     // Remove network
     let _ = docker(&["network", "rm", NETWORK_NAME]);
@@ -1462,8 +1487,9 @@ fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolve
 /// Start each `type: docker` app (scope all or devOnly) by running its prebuilt
 /// image in the foreground: `docker run --rm --name sp00ky-dev-<key> --network
 /// <net> [-p <publish>]… [-e K=V]… <image> <args…>`. The returned LogTailGuard
-/// kills `docker run` on Ctrl-C and `--rm` removes the container — same teardown
-/// as the raw-command backend path.
+/// SIGKILLs the `docker run` client on Ctrl-C, but that neither stops the
+/// container nor triggers `--rm`; teardown of these containers happens in
+/// `cleanup_direct`, which sweeps every `sp00ky-dev-*` container.
 fn spawn_docker_app_devs(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<LogTailGuard> {
     use std::collections::BTreeMap;
     let spky_vars = build_spky_dev_vars(resolved_surreal, mode);

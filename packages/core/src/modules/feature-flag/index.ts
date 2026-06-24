@@ -5,8 +5,19 @@ import type { AuthService } from '../auth/index';
 import type { Logger } from '../../services/logger/index';
 import type { QueryTimeToLive } from '../../types';
 
-const FEATURE_QUERY =
-  'SELECT key, variant, payload FROM _00_user_feature WHERE key = $key';
+// One shared LIVE query over ALL of the signed-in user's assignments — the
+// `_00_user_feature` select permission scopes it to `user = $auth.id`, so no
+// per-key `WHERE key = $key` param is needed. A single registration means every
+// flag the user is (or becomes) assigned is observed at once: new assignments
+// stream in live, and a handle for an unassigned key simply resolves to its
+// fallback. Avoids one-registration-per-flag and the param-filtered live query.
+const FEATURE_QUERY = 'SELECT key, variant, payload FROM _00_user_feature';
+
+interface FeatureRow {
+  key?: string;
+  variant?: string;
+  payload?: unknown;
+}
 
 export interface FeatureFlagSnapshot {
   variant: string | undefined;
@@ -87,16 +98,22 @@ export interface FeatureFlagModuleDeps<S extends SchemaStructure> {
   logger: Logger;
 }
 
-interface ActiveHandle {
-  handle: FeatureFlagHandle;
-  ttl: QueryTimeToLive;
-}
-
 export class FeatureFlagModule<S extends SchemaStructure> {
   private logger: Logger;
-  private active = new Set<ActiveHandle>();
+  private handles = new Set<FeatureFlagHandle>();
   private authUnsubscribe: (() => void) | null = null;
   private lastUserId: string | null = null;
+
+  // The single shared live query over the user's assignments.
+  private querySubscription: (() => void) | null = null;
+  private starting = false;
+  // Longest TTL any caller asked for (the query is shared across all flags).
+  private ttl: QueryTimeToLive = '10m';
+  // Latest assignment per key, plus whether the query has resolved at least
+  // once (so a handle created before the first result knows to wait vs. fall
+  // back). `snapshots` only holds ASSIGNED keys; an absent key → fallback.
+  private snapshots = new Map<string, FeatureFlagSnapshot>();
+  private loaded = false;
 
   constructor(private deps: FeatureFlagModuleDeps<S>) {
     this.logger = deps.logger.child({ service: 'FeatureFlagModule' });
@@ -107,60 +124,86 @@ export class FeatureFlagModule<S extends SchemaStructure> {
     this.authUnsubscribe = this.deps.auth.subscribe((userId) => {
       if (userId === this.lastUserId) return;
       this.lastUserId = userId;
-      void this.refreshAll();
+      void this.refresh();
     });
   }
 
   feature(key: string, options: FeatureFlagOptions = {}): FeatureFlagHandle {
     const handle = new FeatureFlagHandle(key, options.fallback);
-    const entry: ActiveHandle = { handle, ttl: options.ttl ?? '10m' };
-    this.active.add(entry);
-    handle.onClose(() => this.active.delete(entry));
-    void this.register(entry);
+    this.handles.add(handle);
+    handle.onClose(() => this.handles.delete(handle));
+    if (options.ttl) this.ttl = options.ttl;
+    // If the shared query already resolved, seed this handle immediately so a
+    // late `feature()` call doesn't flash the fallback for an assigned key.
+    if (this.loaded) {
+      handle.set(this.snapshots.get(key) ?? { variant: undefined, payload: undefined });
+    }
+    void this.ensureStarted();
     return handle;
   }
 
   async closeAll(): Promise<void> {
     this.authUnsubscribe?.();
     this.authUnsubscribe = null;
-    for (const entry of [...this.active]) entry.handle.close();
+    this.teardownQuery();
+    for (const handle of [...this.handles]) handle.close();
   }
 
-  private async refreshAll(): Promise<void> {
-    for (const entry of this.active) {
-      entry.handle.detach();
-      entry.handle.set({ variant: undefined, payload: undefined });
-      await this.register(entry);
+  /** Auth changed: drop the old user's query/snapshots and re-observe. */
+  private async refresh(): Promise<void> {
+    this.teardownQuery();
+    this.loaded = false;
+    this.snapshots.clear();
+    // Clear handles immediately so a sign-out hides flag-gated UI without lag.
+    for (const handle of this.handles) {
+      handle.set({ variant: undefined, payload: undefined });
     }
+    await this.ensureStarted();
   }
 
-  private async register(entry: ActiveHandle): Promise<void> {
-    const { handle, ttl } = entry;
+  private teardownQuery(): void {
+    this.querySubscription?.();
+    this.querySubscription = null;
+  }
+
+  /** Start the single shared live query (idempotent; no-op with no handles). */
+  private async ensureStarted(): Promise<void> {
+    if (this.querySubscription || this.starting || this.handles.size === 0) return;
+    this.starting = true;
     try {
       const hash = await this.deps.dataModule.query(
         '_00_user_feature' as any,
         FEATURE_QUERY,
-        { key: handle.key },
-        ttl,
+        {},
+        this.ttl,
       );
-
       this.deps.sync.enqueueDownEvent({ type: 'register', payload: { hash } });
-
-      const unsub = this.deps.dataModule.subscribe(
+      this.querySubscription = this.deps.dataModule.subscribe(
         hash,
-        (records) => {
-          const row = records[0] as { variant?: string; payload?: unknown } | undefined;
-          handle.set({ variant: row?.variant, payload: row?.payload });
-        },
+        (records) => this.applyRecords(records as FeatureRow[]),
         { immediate: true },
       );
-
-      handle.attach(unsub);
     } catch (err) {
       this.logger.warn(
-        { err, key: handle.key, Category: 'sp00ky-client::FeatureFlagModule::register' },
+        { err, Category: 'sp00ky-client::FeatureFlagModule::register' },
         'Failed to register feature flag query',
       );
+    } finally {
+      this.starting = false;
+    }
+  }
+
+  /** Live query result → per-key snapshots → push to every active handle. */
+  private applyRecords(records: FeatureRow[]): void {
+    this.snapshots.clear();
+    for (const row of records ?? []) {
+      if (row && typeof row.key === 'string') {
+        this.snapshots.set(row.key, { variant: row.variant, payload: row.payload });
+      }
+    }
+    this.loaded = true;
+    for (const handle of this.handles) {
+      handle.set(this.snapshots.get(handle.key) ?? { variant: undefined, payload: undefined });
     }
   }
 }

@@ -17,7 +17,6 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
-use crate::backend::{self, DEFAULT_CONFIG_PATH};
 use crate::surreal_client::{MigrationDB, SurrealClient, SurrealResponse};
 use crate::{ConnectionArgs, FlagCommands};
 
@@ -76,38 +75,14 @@ pub fn run(action: FlagCommands) -> Result<()> {
 
 fn client_from(conn: ConnectionArgs, config: Option<PathBuf>) -> Result<SurrealClient> {
     // `--cloud` resolves the deployment's SurrealDB URL + root password from
-    // Sp00ky Cloud automatically; nothing else needs to be passed.
-    if let Some(c) = conn.cloud_connection(&config)? {
-        return Ok(SurrealClient::new(
-            &c.url,
-            &c.namespace,
-            &c.database,
-            &c.username,
-            &c.password,
-        ));
-    }
-
-    let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-    let sp00ky_config = backend::load_config(&config_file);
-    let resolved_surreal = sp00ky_config.resolved_surrealdb();
-
-    let namespace = if conn.namespace == "main" {
-        resolved_surreal.namespace
-    } else {
-        conn.namespace
-    };
-    let database = if conn.database == "main" {
-        resolved_surreal.database
-    } else {
-        conn.database
-    };
-
+    // Sp00ky Cloud; otherwise the local URL/ns/db come from sp00ky.yml.
+    let c = conn.resolve(&config)?;
     Ok(SurrealClient::new(
-        &conn.url,
-        &namespace,
-        &database,
-        &conn.username,
-        &conn.password,
+        &c.url,
+        &c.namespace,
+        &c.database,
+        &c.username,
+        &c.password,
     ))
 }
 
@@ -653,13 +628,13 @@ fn materialize(client: &SurrealClient, key: &str) -> Result<()> {
             .map(|p| serde_json::to_string(&p).unwrap_or_else(|_| "NONE".to_string()))
             .unwrap_or_else(|| "NONE".to_string());
         statements.push(format!(
-            "UPSERT _00_user_feature WHERE user = {} AND key = '{}' SET user = {}, key = '{}', variant = '{}', payload = {};",
-            user_id,
-            esc(key),
+            "UPSERT _00_user_feature SET user = {}, key = '{}', variant = '{}', payload = {} WHERE user = {} AND key = '{}';",
             user_id,
             esc(key),
             esc(&variant),
-            payload_sql
+            payload_sql,
+            user_id,
+            esc(key),
         ));
     }
 
