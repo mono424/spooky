@@ -134,6 +134,17 @@
       "type": "string",
       "description": "Override the Sp00ky Cloud API endpoint (e.g. for staging).",
       "examples": ["https://api-staging.sp00ky.cloud"]
+    },
+    "refMode": {
+      "type": "string",
+      "description": "Storage layout for the SSP's internal `_00_list_ref` table. 'dedicated' (default) gives each authenticated user their own `_00_list_ref_user_<id>` table; 'single' keeps the legacy shared `_00_list_ref`. Dedicated works around a SurrealDB v3 LIVE-permission gap on permission-gated tables.",
+      "enum": ["single", "dedicated"],
+      "default": "dedicated"
+    },
+    "anonymousLiveQueries": {
+      "type": "boolean",
+      "description": "Enable realtime sync for unauthenticated (anonymous) clients. When true, the SSP materializes anonymous query registrations into a world-readable `_00_list_ref_anon` table so logged-out visitors get live updates. Defaults to false (anonymous clients can read one-shot but never sync live).",
+      "default": false
     }
   },
   "additionalProperties": false,
@@ -230,8 +241,29 @@
       "properties": {
         "type": {
           "type": "string",
-          "description": "App type: backend or frontend.",
-          "enum": ["backend", "frontend"]
+          "description": "App type: backend, frontend, or docker (runs a prebuilt image).",
+          "enum": ["backend", "frontend", "docker"]
+        },
+        "scope": {
+          "type": "string",
+          "description": "Where this app runs. 'all' (default): started by `spky dev` AND deployed to cloud. 'devOnly': local-only process started by `spky dev`, never deployed (no spec/method/deploy required). 'cloudOnly': deployed but skipped by `spky dev`.",
+          "enum": ["all", "devOnly", "cloudOnly"],
+          "default": "all"
+        },
+        "image": {
+          "type": "string",
+          "description": "Prebuilt docker image to run (required for type: docker), e.g. 'livekit/livekit-server:latest'.",
+          "examples": ["livekit/livekit-server:latest"]
+        },
+        "ports": {
+          "type": "array",
+          "description": "Published ports for a type: docker app. Each entry is a bare port (7880 → 7880:7880), a host:container map ('3000:8080'), optionally with a protocol ('7882/udp').",
+          "items": { "type": ["string", "integer"] }
+        },
+        "args": {
+          "type": "array",
+          "description": "Args appended after the image (the container command) for a type: docker app, e.g. ['--dev', '--bind', '0.0.0.0'].",
+          "items": { "type": "string" }
         },
         "hosting": {
           "type": "string",
@@ -507,12 +539,16 @@
       "properties": {
         "format": {
           "type": "string",
-          "description": "Output format for generated types.",
+          "description": "Output format. 'typescript' uses the built-in generator; 'dart' runs spooky_core's rich generator (`dart run spooky_core:spooky_gen`) from `workdir`.",
           "enum": ["typescript", "dart"]
         },
         "output": {
           "type": "string",
-          "description": "Output file path for the generated types."
+          "description": "Output file path for the generated types (relative to sp00ky.yml)."
+        },
+        "workdir": {
+          "type": "string",
+          "description": "For format: dart — optional override for the directory (relative to sp00ky.yml) to run the Dart generator from. Must be a Dart package that depends on spooky_core. By default it's auto-derived from `output`'s nearest ancestor pubspec.yaml. Ignored for TypeScript."
         }
       },
       "additionalProperties": false
