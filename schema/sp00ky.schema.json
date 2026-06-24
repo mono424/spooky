@@ -262,8 +262,26 @@
         },
         "args": {
           "type": "array",
-          "description": "Args appended after the image (the container command) for a type: docker app, e.g. ['--dev', '--bind', '0.0.0.0'].",
+          "description": "Args appended after the image (the container command) for a type: docker app, e.g. ['--dev', '--bind', '0.0.0.0'] or ['go', 'run', '.'].",
           "items": { "type": "string" }
+        },
+        "volumes": {
+          "type": "array",
+          "description": "Bind/volume mounts for a type: docker app (docker run -v), e.g. ['/var/run/docker.sock:/var/run/docker.sock', '${PROJECT_DIR}/../..:/src', 'cache:/go']. ${PROJECT_DIR} (the absolute dir of sp00ky.yml) is expanded in the host portion (and in env values).",
+          "items": { "type": "string" }
+        },
+        "workdir": {
+          "type": "string",
+          "description": "Working directory inside the container (docker run -w) for a type: docker app."
+        },
+        "dependsOn": {
+          "type": "array",
+          "description": "Names of other type: docker apps that must be ready before this one starts. `spky dev` starts apps in dependency order; an unknown name, a self-dependency, or a cycle is rejected at config load.",
+          "items": { "type": "string" }
+        },
+        "healthcheck": {
+          "type": "string",
+          "description": "Readiness probe for a type: docker app: an HTTP path (e.g. '/health') polled on the app's first published host port until it returns 200. A dependsOn waits for this; without it a dependency is ready once its container is running."
         },
         "hosting": {
           "type": "string",
