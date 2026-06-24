@@ -69,6 +69,7 @@ pub fn run(
         Some(JobsCommands::Get { id, json }) => get(&client, &tables, id, json),
         Some(JobsCommands::Kill { id }) => kill(&client, &id),
         Some(JobsCommands::Retry { id }) => retry(&client, &id),
+        Some(JobsCommands::Clear) => clear(&client, &tables),
     }
 }
 
@@ -697,6 +698,43 @@ fn kill(client: &SurrealClient, id: &str) -> Result<()> {
 fn retry(client: &SurrealClient, id: &str) -> Result<()> {
     let result = call_job_fn(client, "retry", id)?;
     print_action_result("Retrying", id, &result);
+    Ok(())
+}
+
+// =============================================================
+// `spky jobs clear`
+// =============================================================
+
+/// Delete every terminal job (status `success` or `failed`) from all discovered
+/// job tables. Terminal jobs are finished history — unlike kill/retry there's no
+/// in-flight pickup to coordinate with the SSP, so a plain `DELETE` is correct.
+fn clear(client: &SurrealClient, tables: &BTreeMap<String, String>) -> Result<()> {
+    let mut total = 0usize;
+    for table in tables.keys() {
+        // `table` is a config-derived identifier (same direct interpolation the
+        // SELECTs use); `RETURN BEFORE` yields the deleted rows so we can count.
+        let query = format!(
+            "DELETE {table} WHERE status = 'success' OR status = 'failed' RETURN BEFORE;"
+        );
+        let responses = client
+            .execute(&query)
+            .with_context(|| format!("Failed to clear jobs in '{}'", table))?;
+        let n = responses
+            .into_iter()
+            .next()
+            .and_then(|r| r.result)
+            .map(|r| result_rows(Some(&r)).len())
+            .unwrap_or(0);
+        if n > 0 {
+            println!("  {GREEN}✓{RESET} {table} : removed {n} job(s)");
+        }
+        total += n;
+    }
+    if total == 0 {
+        println!("No failed or successful jobs to clear.");
+    } else {
+        println!("\nCleared {GREEN}{total}{RESET} terminal job(s).");
+    }
     Ok(())
 }
 

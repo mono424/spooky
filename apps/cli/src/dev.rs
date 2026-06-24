@@ -1465,17 +1465,29 @@ fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolve
 /// kills `docker run` on Ctrl-C and `--rm` removes the container — same teardown
 /// as the raw-command backend path.
 fn spawn_docker_app_devs(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<LogTailGuard> {
+    use std::collections::BTreeMap;
     let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
     let mut guards = Vec::new();
     let mut color_idx = 0;
-    for (name, app) in config.docker_apps() {
-        if !app.runs_in_dev() {
-            continue; // cloudOnly: deployed but not started by `spky dev`
-        }
+
+    // Dev-runnable docker apps, started in `dependsOn` order (validated acyclic).
+    let apps: BTreeMap<&str, &backend::AppConfig> =
+        config.docker_apps().filter(|(_, a)| a.runs_in_dev()).collect();
+
+    for name in topo_order_docker(&apps) {
+        let app = apps[name];
         let image = match &app.image {
             Some(i) => i,
             None => continue, // validation already requires it; defensive
         };
+
+        // Gate on each dependency being ready before we start this app.
+        for dep in &app.depends_on {
+            if let Some(dep_app) = apps.get(dep.as_str()) {
+                wait_for_ready(dep, dep_app);
+            }
+        }
+
         let color = BACKEND_COLORS[color_idx % BACKEND_COLORS.len()];
         color_idx += 1;
         let prefix = format!("{}[app.{}.docker]{}", color, name, ANSI_RESET);
@@ -1499,9 +1511,17 @@ fn spawn_docker_app_devs(config: &Sp00kyConfig, project_dir: &Path, resolved_sur
             args.push("-p".into());
             args.push(p.publish());
         }
+        for vol in &app.volumes {
+            args.push("-v".into());
+            args.push(expand_project_dir(vol, project_dir));
+        }
+        if let Some(wd) = &app.workdir {
+            args.push("-w".into());
+            args.push(wd.clone()); // container path — no expansion
+        }
         for (k, v) in &envs {
             args.push("-e".into());
-            args.push(format!("{}={}", k, v));
+            args.push(format!("{}={}", k, expand_project_dir(v, project_dir)));
         }
         args.push(image.clone());
         for a in &app.args {
@@ -1515,6 +1535,85 @@ fn spawn_docker_app_devs(config: &Sp00kyConfig, project_dir: &Path, resolved_sur
         ));
     }
     guards
+}
+
+/// Expand `${PROJECT_DIR}` (abs dir of sp00ky.yml) in a docker volume/env value.
+fn expand_project_dir(s: &str, project_dir: &Path) -> String {
+    s.replace("${PROJECT_DIR}", &project_dir.display().to_string())
+}
+
+/// Order dev docker apps so every app comes after its `dependsOn` deps (Kahn).
+/// The graph is validated acyclic at config load, so all nodes are emitted.
+fn topo_order_docker<'a>(
+    apps: &std::collections::BTreeMap<&'a str, &'a backend::AppConfig>,
+) -> Vec<&'a str> {
+    use std::collections::{BTreeMap, VecDeque};
+    let mut indegree: BTreeMap<&str, usize> = apps.keys().map(|n| (*n, 0usize)).collect();
+    let mut edges: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (name, app) in apps {
+        for dep in &app.depends_on {
+            if apps.contains_key(dep.as_str()) {
+                edges.entry(dep.as_str()).or_default().push(name);
+                *indegree.get_mut(*name).unwrap() += 1;
+            }
+        }
+    }
+    let mut q: VecDeque<&str> =
+        indegree.iter().filter(|(_, d)| **d == 0).map(|(n, _)| *n).collect();
+    let mut order = Vec::new();
+    while let Some(n) = q.pop_front() {
+        order.push(n);
+        for &m in edges.get(n).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let d = indegree.get_mut(m).unwrap();
+            *d -= 1;
+            if *d == 0 {
+                q.push_back(m);
+            }
+        }
+    }
+    // Defensive (shouldn't happen — validated acyclic): append any stragglers.
+    for n in apps.keys() {
+        if !order.contains(n) {
+            order.push(*n);
+        }
+    }
+    order
+}
+
+/// Block until a dependency app is ready, or a ~60s timeout (then proceed —
+/// dependents self-heal on reconnect). Ready = healthcheck HTTP 200 (probed on
+/// the app's first published host port) if set, else the container is running.
+fn wait_for_ready(name: &str, app: &backend::AppConfig) {
+    let container = format!("sp00ky-dev-{}", name);
+    for _ in 0..60 {
+        let ready = if let Some(path) = &app.healthcheck {
+            match app.ports.first().and_then(|p| p.host_port()) {
+                Some(port) => {
+                    let url = format!("http://localhost:{}{}", port, path);
+                    Command::new("curl")
+                        .args(["-fsS", "-m", "2", "-o", "/dev/null", &url])
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false)
+                }
+                None => true, // healthcheck declared but no port to probe — don't block
+            }
+        } else {
+            Command::new("docker")
+                .args(["inspect", "-f", "{{.State.Running}}", &container])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+                .unwrap_or(false)
+        };
+        if ready {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    eprintln!(
+        "  \x1b[33mwarning\x1b[0m: dependency '{}' not ready after timeout; starting dependents anyway",
+        name
+    );
 }
 
 fn resolve_workdir(project_dir: &Path, workdir: Option<&str>) -> std::path::PathBuf {

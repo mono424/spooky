@@ -607,12 +607,55 @@ impl Sp00kyConfig {
         }
     }
 
+    /// Validate the `dependsOn` graph among `type: docker` apps: every referenced
+    /// app must exist and be a docker app, no self-dependency, and no cycle.
+    fn validate_docker_depends_on(&self) -> Result<()> {
+        use std::collections::{BTreeMap, BTreeSet, VecDeque};
+        let docker: BTreeSet<&str> = self.docker_apps().map(|(n, _)| n).collect();
+        // in-degree = number of deps each node waits on; edges = dep → dependents.
+        let mut indegree: BTreeMap<&str, usize> = docker.iter().map(|n| (*n, 0usize)).collect();
+        let mut edges: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (name, app) in self.docker_apps() {
+            for dep in &app.depends_on {
+                if dep.as_str() == name {
+                    bail!("docker app '{}' cannot dependsOn itself", name);
+                }
+                if !docker.contains(dep.as_str()) {
+                    bail!("docker app '{}' dependsOn unknown docker app '{}'", name, dep);
+                }
+                edges.entry(dep.as_str()).or_default().push(name);
+                *indegree.get_mut(name).unwrap() += 1;
+            }
+        }
+        // Kahn: peel zero-indegree nodes; anything left is part of a cycle.
+        let mut q: VecDeque<&str> =
+            indegree.iter().filter(|(_, d)| **d == 0).map(|(n, _)| *n).collect();
+        let mut processed = 0usize;
+        while let Some(n) = q.pop_front() {
+            processed += 1;
+            for &m in edges.get(n).map(|v| v.as_slice()).unwrap_or(&[]) {
+                let d = indegree.get_mut(m).unwrap();
+                *d -= 1;
+                if *d == 0 {
+                    q.push_back(m);
+                }
+            }
+        }
+        if processed != docker.len() {
+            let in_cycle: Vec<&str> =
+                indegree.iter().filter(|(_, d)| **d > 0).map(|(n, _)| *n).collect();
+            bail!("dependsOn cycle among docker apps: {}", in_cycle.join(", "));
+        }
+        Ok(())
+    }
+
     /// Validate hosting configuration for SurrealDB and all apps.
     pub fn validate(&self) -> Result<()> {
         self.resolved_surrealdb().validate()?;
         for (name, app) in &self.apps {
             app.validate(name)?;
         }
+        self.validate_docker_depends_on()?;
         // logLevel: walk every directive string and confirm it parses.
         if let Some(cfg) = &self.log_level {
             match cfg {
@@ -1132,6 +1175,22 @@ pub struct AppConfig {
     /// Args appended after the image (the container command), e.g. `["--dev"]`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// Bind/volume mounts for `type: docker` apps, e.g.
+    /// `["/var/run/docker.sock:/var/run/docker.sock", "${PROJECT_DIR}/../..:/src", "wp_gomod:/go"]`.
+    /// `${PROJECT_DIR}` (abs dir of sp00ky.yml) is expanded in the host portion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<String>,
+    /// Working directory inside the container (`docker run -w`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
+    /// Other docker apps that must be ready before this one starts (dev ordering).
+    #[serde(default, rename = "dependsOn", skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    /// Optional readiness probe: an HTTP path polled on the app's first published
+    /// host port (e.g. `/health`) until 200. Lets a dependency signal readiness so
+    /// `dependsOn` waits for actual up, not just "container started".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub healthcheck: Option<String>,
 
     // ── Shared fields ───────────────────────────────────────────────────
     /// Dev server configuration (npm, docker, uv, or raw command).

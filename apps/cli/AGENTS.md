@@ -65,6 +65,55 @@ DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
 DEFINE TABLE audit_log SCHEMALESS;
 ```
 
+## Docker dev apps (`type: docker`)
+
+Besides `backend`/`frontend` apps, `sp00ky.yml` can declare `type: docker` apps —
+containers `spky dev` runs alongside SurrealDB/SSP/scheduler on the
+`sp00ky-dev-net` network (each reachable from the others by its app **name**, via
+a `--network-alias`). Use `scope: devOnly` for local-only sidecars: never
+deployed, and they skip the backend spec/method/deploy validation.
+
+Fields:
+
+- `image` (required) — image to run, e.g. `bluenviron/mediamtx:latest` or `golang:1.22`.
+- `ports` — published to the host: `[1935, "8189/udp", "3000:8080"]` (a bare value maps the same port host:container; `/udp` suffix preserved).
+- `args` — appended after the image (the container command), e.g. `["go", "run", "."]`.
+- `env` — same forms as other apps (inline map / dotenv path / vault). User values **override** the auto-injected `SPKY_*` vars. `${PROJECT_DIR}` (the absolute dir of `sp00ky.yml`) is expanded in values.
+- `volumes` — bind/volume mounts (`-v`), e.g. `["/var/run/docker.sock:/var/run/docker.sock", "${PROJECT_DIR}/../..:/src", "gomod:/go"]`. `${PROJECT_DIR}` is expanded in the host portion (Docker normalizes `..`).
+- `workdir` — working directory inside the container (`-w`).
+- `dependsOn` — names of other docker apps that must be **ready** before this one starts; `spky dev` starts apps in dependency order. Validated at config load — an unknown name, a self-dependency, or a **cycle** is a hard error (`spky lint` reports it).
+- `healthcheck` — an HTTP path (e.g. `/health`) polled on the app's first published host port until it returns 200. Lets a dependency signal real readiness so `dependsOn` waits for "up", not just "container started". Without it, a dependency counts as ready once its container is running.
+
+Containers run as `sp00ky-dev-<name>` with `--rm` and are killed on Ctrl-C.
+`dependsOn`/`healthcheck` are `spky dev` concerns; the cloud deploy path ignores
+them (and `cloudOnly` docker apps are skipped by `spky dev`).
+
+Example — a relay built from source via `go run`, and a publisher that waits for it:
+```yaml
+apps:
+  relay:
+    type: docker
+    scope: devOnly
+    image: golang:1.22
+    workdir: /src/apps/relay
+    args: ["go", "run", "."]
+    ports: [3670]
+    healthcheck: /health
+    volumes:
+      - "${PROJECT_DIR}/../..:/src"
+      - "gomod:/go"
+  publisher:
+    type: docker
+    scope: devOnly
+    image: golang:1.22
+    workdir: /src/apps/publisher
+    args: ["go", "run", "."]
+    dependsOn: [relay]          # started only after relay's /health returns 200
+    volumes:
+      - "${PROJECT_DIR}/../..:/src"
+      - "gomod:/go"
+```
+
 ## Common gotchas
 
 - **`schema.gen.ts` must be regenerated after every `.surql` change.** `spky generate`. CI typically asserts no drift.

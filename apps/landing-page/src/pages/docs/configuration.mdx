@@ -204,9 +204,13 @@ A `docker` app runs a prebuilt image directly (no Dockerfile build) — useful f
 
 - `image` (required) — the image to run, e.g. `livekit/livekit-server:latest`.
 - `ports` — published ports. A bare port (`7880`) maps host→container 1:1 (`7880:7880`); use `"host:container"` to remap and a `/proto` suffix for UDP (`"7882/udp"`).
-- `args` — appended after the image as the container command (e.g. `["--dev"]`).
+- `args` — appended after the image as the container command (e.g. `["--dev"]`, or `["go", "run", "."]` to run a service from source).
+- `volumes` — bind/volume mounts (`docker run -v`), e.g. `["/var/run/docker.sock:/var/run/docker.sock", "${PROJECT_DIR}/../..:/src", "gomod:/go"]`. `${PROJECT_DIR}` (the absolute directory of `sp00ky.yml`) is expanded in the host portion.
+- `workdir` — working directory inside the container (`docker run -w`).
+- `dependsOn` — names of other `docker` apps that must be **ready** before this one starts. `spky dev` launches apps in dependency order; an unknown name, a self-dependency, or a cycle is rejected at config load (caught by `spky lint`/`spky doctor`).
+- `healthcheck` — an HTTP path (e.g. `/health`) polled on the app's first published host port until it returns 200. A `dependsOn` waits for this — i.e. for the service to be genuinely up, not just for the container to have started. Without it, a dependency is "ready" as soon as its container is running.
 
-Under `spky dev` it runs as the container `sp00ky-dev-<name>` on the dev network with `--rm` teardown. With `scope` left as `all`/`cloudOnly`, deploys pull the image and ship it through the same image pipeline as a backend; pair it with `scope: devOnly` for a purely local service. `env` (below) is passed through as container environment variables.
+Under `spky dev` it runs as the container `sp00ky-dev-<name>` on the dev network (reachable from sibling apps by its **name**) with `--rm` teardown. `${PROJECT_DIR}` is also expanded in `env` values, and user `env` overrides the auto-injected `SPKY_*` vars. With `scope` left as `all`/`cloudOnly`, deploys pull the image and ship it through the same image pipeline as a backend; pair it with `scope: devOnly` for a purely local service (`dependsOn`/`healthcheck` are `spky dev`-only). `env` (below) is passed through as container environment variables.
 
 For per-app environment variables (`env: { dev, cloud, vault }`), see [Environment Variables](/docs/environment-variables).
 

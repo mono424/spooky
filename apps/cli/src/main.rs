@@ -496,6 +496,8 @@ enum JobsCommands {
         /// Job id, e.g. `job:abc123`
         id: String,
     },
+    /// Delete every terminal job (status success or failed) from all job tables
+    Clear,
 }
 
 #[derive(ClapArgs, Debug)]

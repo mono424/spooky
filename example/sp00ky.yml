@@ -84,3 +84,29 @@ apps:
         vault:
           - 'ANTHROPIC_API_KEY'
           - 'API_AUTH_TOKEN'
+  # `type: docker` app — a container `spky dev` runs alongside SurrealDB/SSP on
+  # the `sp00ky-dev-net` network (reachable by its app name). `scope: devOnly`
+  # = local-only sidecar, never deployed. Fields: image (required), ports, args
+  # (container command), env, volumes (`-v`; `${PROJECT_DIR}` = abs dir of this
+  # file), workdir (`-w`), dependsOn (start order — validated for unknown names
+  # & cycles), healthcheck (HTTP path polled on the first published host port so
+  # dependents wait for real readiness).
+  mailpit:
+    type: docker
+    scope: devOnly
+    image: axllent/mailpit:latest
+    ports: [1025, 8025]
+    healthcheck: /readyz
+  # A worker (run from source) that only starts once mailpit is ready.
+  worker:
+    type: docker
+    scope: devOnly
+    image: golang:1.22
+    workdir: /src/worker
+    args: ['go', 'run', '.']
+    dependsOn: [mailpit]
+    volumes:
+      - '${PROJECT_DIR}:/src'
+      - 'gomod:/go'
+    env:
+      SMTP_ADDR: 'mailpit:1025'

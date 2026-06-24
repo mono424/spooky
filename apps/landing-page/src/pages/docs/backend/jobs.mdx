@@ -304,7 +304,10 @@ spky jobs get job:abc123
 spky jobs kill job:abc123
 
 # Re-run a terminal (failed or success) job
-spky jobs retry job:abc123`;
+spky jobs retry job:abc123
+
+# Delete every terminal job (status success or failed) from all job tables
+spky jobs clear`;
 
 export const jobsEnvCode = `# Default: the local dev database (the "spky dev" stack at
 # http://localhost:8000, namespace/database "main"). Override explicitly
@@ -425,13 +428,15 @@ Run it without a subcommand to open a live, interactive dashboard (status counts
 
 <CodeBlock code={jobsListCode} lang="bash" />
 
-### Inspecting, Killing & Retrying
+### Inspecting, Killing, Retrying & Clearing
 
 <CodeBlock code={jobsManageCode} lang="bash" />
 
 <Note>
   `kill` and `retry` mutate jobs through the `fn::job::kill` / `fn::job::retry` SurrealQL functions rather than a plain `UPDATE` (job pickup is gated inside the SSP). Those functions are installed by the schema deploy, so kill/retry require a deployed backend.
 </Note>
+
+`spky jobs clear` deletes every terminal job (status `success` or `failed`) from all job tables — handy for trimming finished history. Terminal jobs aren't in-flight, so this is a plain `DELETE` (no SSP coordination); pending/processing jobs are left untouched.
 
 ### Dev vs. Production
 
