@@ -51,9 +51,11 @@ pub fn run(action: FlagCommands) -> Result<()> {
             variant,
             for_user,
             rollout,
+            sql,
+            yes,
             conn,
             config,
-        } => set_rule(key, variant, for_user, rollout, conn, config),
+        } => set_rule(key, variant, for_user, rollout, sql, yes, conn, config),
         FlagCommands::Unset {
             key,
             for_user,
@@ -320,16 +322,21 @@ fn set_enabled(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn set_rule(
     key: String,
     variant: String,
     for_user: Option<String>,
     rollout: Option<u32>,
+    sql: Option<String>,
+    yes: bool,
     conn: ConnectionArgs,
     config: Option<PathBuf>,
 ) -> Result<()> {
-    if for_user.is_some() == rollout.is_some() {
-        bail!("Pass exactly one of --for-user or --rollout");
+    let provided =
+        for_user.is_some() as u8 + rollout.is_some() as u8 + sql.is_some() as u8;
+    if provided != 1 {
+        bail!("Pass exactly one of --for-user / --rollout / --sql");
     }
 
     let client = client_from(conn, config)?;
@@ -375,11 +382,119 @@ fn set_rule(
             "{}Set rollout{} for variant '{}' on flag '{}' to {}%.",
             GREEN, RESET, variant, key, pct
         );
+    } else if let Some(query) = sql {
+        // Expand the SELECT into an explicit list of user ids and fold them into
+        // the allowlist rule. Storing the resolved ids (rather than the query)
+        // keeps the existing tri-plex evaluator unchanged and survives the
+        // re-materialization that enable/disable/other rules trigger — a one-shot
+        // write to `_00_user_feature` would be clobbered on the next sweep.
+        let ids = select_user_ids(&client, &query)?;
+        if ids.is_empty() {
+            println!(
+                "{}No users matched the query; nothing to assign.{}",
+                YELLOW, RESET
+            );
+            return Ok(());
+        }
+        preview_ids(&ids, &variant, &key);
+        if !yes && !confirm_apply(ids.len())? {
+            println!("{}Aborted; no changes written.{}", YELLOW, RESET);
+            return Ok(());
+        }
+        for id in &ids {
+            upsert_allowlist(&mut rules, &variant, id);
+        }
+        println!(
+            "{}Allowlisted{} {} user(s) for variant '{}' on flag '{}'.",
+            GREEN,
+            RESET,
+            ids.len(),
+            variant,
+            key
+        );
     }
 
     write_rules(&client, &key, &rules)?;
     materialize(&client, &key)?;
     Ok(())
+}
+
+/// Run a user-supplied SELECT and collect the `user:` record ids it yields.
+/// Accepts both `SELECT id FROM user ...` (objects with an `id`) and
+/// `SELECT VALUE id FROM user ...` (bare strings). Read-only: rejects anything
+/// that is not a SELECT so a stray write can't run during the "preview" step.
+fn select_user_ids(client: &SurrealClient, query: &str) -> Result<Vec<String>> {
+    let trimmed = query.trim();
+    if !trimmed.to_uppercase().starts_with("SELECT") {
+        bail!("--sql must be a SELECT query that returns user ids");
+    }
+    let resp = client
+        .execute(trimmed)
+        .context("Failed to run the assignment query")?;
+    let (ids, skipped) = extract_user_ids(rows(resp));
+    if skipped > 0 {
+        println!(
+            "{}Skipped {} row(s) that were not `user:` records.{}",
+            YELLOW, skipped, RESET
+        );
+    }
+    Ok(ids)
+}
+
+/// Pull `user:` ids out of query rows, deduping while preserving order. Returns
+/// the ids plus the count of rows that resolved to a non-`user:` id (skipped).
+fn extract_user_ids(rows: Vec<Value>) -> (Vec<String>, usize) {
+    let mut ids = Vec::new();
+    let mut skipped = 0usize;
+    for row in rows {
+        let id = match row {
+            Value::String(s) => Some(s),
+            Value::Object(map) => map.get("id").and_then(Value::as_str).map(String::from),
+            _ => None,
+        };
+        match id {
+            Some(s) if s.starts_with("user:") => ids.push(s),
+            Some(_) => skipped += 1,
+            None => {}
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(id.clone()));
+    (ids, skipped)
+}
+
+/// Print the matched ids (first 10) and the total count before applying.
+fn preview_ids(ids: &[String], variant: &str, key: &str) {
+    const MAX: usize = 10;
+    println!(
+        "{}Matched {} user(s){} for variant '{}' on flag '{}':",
+        BOLD,
+        ids.len(),
+        RESET,
+        variant,
+        key
+    );
+    for id in ids.iter().take(MAX) {
+        println!("  {}{}{}", DIM, id, RESET);
+    }
+    if ids.len() > MAX {
+        println!("  {}... and {} more{}", DIM, ids.len() - MAX, RESET);
+    }
+}
+
+/// Confirm a bulk apply. In non-interactive runs there is no prompt to answer,
+/// so require `--yes` rather than silently applying to everyone.
+fn confirm_apply(n: usize) -> Result<bool> {
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        bail!(
+            "Refusing to assign {} user(s) without confirmation; pass --yes to apply in a non-interactive run.",
+            n
+        );
+    }
+    Ok(inquire::Confirm::new(&format!("Apply to all {} user(s)?", n))
+        .with_default(false)
+        .prompt()
+        .unwrap_or(false))
 }
 
 fn unset_rule(
@@ -785,5 +900,41 @@ mod tests {
         upsert_allowlist(&mut rules, "listed", "user:abc");
         let flag = json!({ "key": "k", "enabled": true, "default_variant": "off", "rules": rules });
         assert_eq!(evaluate_one(&flag, "user:abc").0, "listed");
+    }
+
+    // ---- extract_user_ids ------------------------------------------------
+
+    #[test]
+    fn extract_user_ids_handles_value_and_object_rows() {
+        // `SELECT VALUE id` -> strings; `SELECT id` -> { id }.
+        let rows = vec![
+            json!("user:a"),
+            json!({ "id": "user:b", "age": 30 }),
+        ];
+        let (ids, skipped) = extract_user_ids(rows);
+        assert_eq!(ids, vec!["user:a", "user:b"]);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn extract_user_ids_dedupes_preserving_order() {
+        let rows = vec![json!("user:a"), json!("user:b"), json!("user:a")];
+        let (ids, _) = extract_user_ids(rows);
+        assert_eq!(ids, vec!["user:a", "user:b"]);
+    }
+
+    #[test]
+    fn extract_user_ids_skips_non_user_records() {
+        // Ids from another table (or no id at all) are counted as skipped, never
+        // allowlisted — assignments key on `user`.
+        let rows = vec![
+            json!("user:a"),
+            json!({ "id": "post:1" }),
+            json!({ "name": "no-id" }),
+            json!(42),
+        ];
+        let (ids, skipped) = extract_user_ids(rows);
+        assert_eq!(ids, vec!["user:a"]);
+        assert_eq!(skipped, 1, "only the post:1 id counts as a skipped record");
     }
 }

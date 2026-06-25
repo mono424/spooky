@@ -4,6 +4,7 @@ import 'modules/auth/auth_service.dart';
 import 'modules/bucket.dart';
 import 'modules/cache/cache_module.dart';
 import 'modules/data/data_module.dart';
+import 'modules/feature_flag/feature_flag.dart';
 import 'modules/query_builder.dart';
 import 'modules/sync/queue/queue_down.dart';
 import 'modules/sync/queue/queue_up.dart';
@@ -44,6 +45,7 @@ class Sp00kyClient {
   RemoteDatabaseService? _remote;
   AuthService? _auth;
   Sp00kySync? _sync;
+  FeatureFlagModule? _featureFlags;
 
   bool _initialized = false;
 
@@ -129,7 +131,10 @@ class Sp00kyClient {
         _dataModule,
         config.schema,
         _logger,
-        options: Sp00kySyncOptions(refSyncIntervalMs: config.refSyncIntervalMs),
+        options: Sp00kySyncOptions(
+          refSyncIntervalMs: config.refSyncIntervalMs,
+          anonymousLiveQueries: config.enableAnonymousLiveQueries,
+        ),
       );
       _sync = sync;
 
@@ -150,6 +155,18 @@ class Sp00kyClient {
       });
 
       await sync.init();
+
+      // Reactive feature flags: a shared live query over the user's
+      // `_00_user_feature` assignments (TS `FeatureFlagModule`). init() subscribes
+      // to auth so the query follows sign-in/out.
+      final featureFlags = FeatureFlagModule(
+        dataModule: _dataModule,
+        sync: sync,
+        auth: auth,
+        logger: _logger,
+      );
+      featureFlags.init();
+      _featureFlags = featureFlags;
     } else {
       // Local-first only: no session salt.
       await _dataModule.init('');
@@ -303,6 +320,27 @@ class Sp00kyClient {
   void deregisterQuery(String queryHash) =>
       _dataModule.deregisterQuery(queryHash);
 
+  // ==================== FEATURE FLAGS ====================
+
+  /// A reactive handle for feature flag [key] (TS `feature`). Reads the
+  /// signed-in user's `_00_user_feature` assignment over the shared live query;
+  /// an unassigned key resolves to [fallback]. Use `.variant()`, `.enabled()`,
+  /// `.payload<T>()`, or `.subscribe(cb)`; call `.close()` when done.
+  ///
+  /// Requires a remote endpoint (feature flags are server-assigned). Throws in
+  /// local-only mode.
+  FeatureFlagHandle feature(
+    String key, {
+    String? fallback,
+    QueryTimeToLive? ttl,
+  }) {
+    final ff = _featureFlags;
+    if (ff == null) {
+      throw StateError('feature() requires a remote endpoint');
+    }
+    return ff.feature(key, fallback: fallback, ttl: ttl);
+  }
+
   // ==================== MUTATIONS ====================
 
   Future<Map<String, dynamic>> create(String id, Map<String, dynamic> data) =>
@@ -348,6 +386,7 @@ class Sp00kyClient {
   // ==================== LIFECYCLE ====================
 
   Future<void> close() async {
+    _featureFlags?.closeAll();
     _dataModule.dispose();
     await _sync?.close();
     await _remote?.close();

@@ -413,7 +413,7 @@ enum FlagCommands {
         #[arg(long)]
         config: Option<PathBuf>,
     },
-    /// Add a targeting rule. Pass exactly one of --for-user / --rollout.
+    /// Add a targeting rule. Pass exactly one of --for-user / --rollout / --sql.
     Set {
         /// Flag key
         key: String,
@@ -426,6 +426,13 @@ enum FlagCommands {
         /// Percentage rollout: integer 0..=100
         #[arg(long)]
         rollout: Option<u32>,
+        /// SurrealQL SELECT yielding user ids to allowlist; previews matches and
+        /// the total count before applying (e.g. "SELECT id FROM user WHERE age > 18")
+        #[arg(long)]
+        sql: Option<String>,
+        /// Skip the preview confirmation prompt (required in non-interactive runs)
+        #[arg(long, short = 'y')]
+        yes: bool,
         #[command(flatten)]
         conn: ConnectionArgs,
         /// Path to sp00ky.yml config file

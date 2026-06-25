@@ -54,6 +54,53 @@ void main() {
       expect(tables, ['user']);
     });
 
+    test('excludes _00_ system/meta tables (and their fields) from types', () {
+      // Feature-flag meta tables sync and are read at runtime but must never
+      // appear in generated types (mirrors the CLI's `_00_` strip). The runtime
+      // circuit permission for `_00_user_feature` is seeded as a built-in
+      // instead of from the parsed schema.
+      const surql = '''
+        DEFINE TABLE thread SCHEMAFULL PERMISSIONS FOR select WHERE true;
+        DEFINE FIELD title ON thread TYPE string;
+
+        DEFINE TABLE _00_feature_flag SCHEMAFULL PERMISSIONS NONE;
+        DEFINE FIELD key ON _00_feature_flag TYPE string;
+
+        DEFINE TABLE _00_user_feature SCHEMAFULL PERMISSIONS FOR select WHERE user = \$auth.id;
+        DEFINE FIELD variant ON _00_user_feature TYPE string;
+      ''';
+      final tables = parseSchema(surql).map((t) => t.name).toList();
+      expect(tables, ['thread']);
+      expect(tables, isNot(contains('_00_user_feature')));
+      expect(tables, isNot(contains('_00_feature_flag')));
+    });
+
+    test('a DEFINE FIELD after a comment containing a semicolon is still parsed',
+        () {
+      // The parser must strip comments before splitting on `;`. A `;` inside a
+      // `-- ...` comment used to fragment the following statement, leaving the
+      // `^`-anchored DEFINE FIELD regex unmatched — silently dropping the field
+      // (this is exactly how `broadcast.owner`/`restream_providers` vanished).
+      const surql = '''
+        DEFINE TABLE broadcast SCHEMAFULL
+          PERMISSIONS
+            FOR select WHERE true
+            FOR create, update, delete WHERE \$access = "account" AND owner = \$auth.id
+        ;
+        -- owner of this broadcast (the publisher; = relay stream id)
+        DEFINE FIELD owner ON TABLE broadcast TYPE record<user>;
+        DEFINE FIELD enabled ON TABLE broadcast TYPE bool DEFAULT false;
+        -- the create stays valid; mirrors stream_presence.moves.
+        DEFINE FIELD restream_providers ON TABLE broadcast TYPE array<string> DEFAULT [];
+      ''';
+      final table = parseSchema(surql).singleWhere((t) => t.name == 'broadcast');
+      final names = table.fields.map((f) => f.name).toList();
+      expect(names, containsAll(['owner', 'enabled', 'restream_providers']));
+      final owner = table.fields.firstWhere((f) => f.name == 'owner');
+      expect(owner.isRecord, isTrue);
+      expect(owner.recordTable, 'user');
+    });
+
     test('parseProject returns tables + accesses together', () {
       const surql = '''
         DEFINE ACCESS account ON DATABASE TYPE RECORD

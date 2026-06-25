@@ -157,8 +157,11 @@ List<TableDef> parseSchema(String surql) {
   final tables = <String, TableDef>{};
   final order = <String>[];
   // Tables marked `@nosync` are server-only and excluded from the generated
-  // client schema (mirrors the TS CLI, which strips them too). Their fields are
-  // skipped so a trailing DEFINE FIELD can't resurrect the table.
+  // client schema (mirrors the TS CLI, which strips them too). `_00_`-prefixed
+  // system/meta tables (e.g. `_00_user_feature`) are excluded the same way:
+  // they are synced and read at runtime but must never appear in generated
+  // types. Their fields are skipped so a trailing DEFINE FIELD can't resurrect
+  // the table.
   final nosync = <String>{};
 
   TableDef tableFor(String name) {
@@ -170,14 +173,29 @@ List<TableDef> parseSchema(String surql) {
     return t;
   }
 
-  for (final raw in surql.split(';')) {
-    final stmt = _stripComments(raw).trim();
+  // Collect `-- @nosync` tables from the original text first: that marker is a
+  // comment line preceding the DEFINE TABLE, so it must be read before comments
+  // are stripped. (The materialized `COMMENT 'sp00ky:nosync'` form survives
+  // stripping and is handled in the main loop below.)
+  nosync.addAll(_nosyncTablesFromComments(surql));
+
+  // Strip line comments BEFORE splitting on `;`. A `;` inside a `--` comment
+  // (e.g. "owner of this broadcast (the publisher; = relay stream id)") would
+  // otherwise split mid-statement, leaving the following `DEFINE FIELD` with a
+  // junk prefix so its `^`-anchored regex never matches — silently dropping the
+  // field (this is exactly how `broadcast.owner`/`restream_providers` vanished).
+  final clean = _stripComments(surql);
+
+  for (final raw in clean.split(';')) {
+    final stmt = raw.trim();
     if (stmt.isEmpty) continue;
 
     final tableMatch = _defineTable.firstMatch(stmt);
     if (tableMatch != null) {
       final name = tableMatch.group(1)!;
-      if (_isNosyncTable(raw, stmt)) {
+      if (name.startsWith('_00_') ||
+          nosync.contains(name) ||
+          stmt.contains(_nosyncTableComment)) {
         nosync.add(name);
         continue;
       }
@@ -198,19 +216,23 @@ List<TableDef> parseSchema(String surql) {
   return [for (final name in order) tables[name]!];
 }
 
-/// Whether the DEFINE TABLE described by [raw] (unstripped chunk) / [stmt]
-/// (comment-stripped statement) is marked `@nosync`. Detects both the source
-/// `-- @nosync` comment preceding the DEFINE TABLE and the materialized
-/// `COMMENT 'sp00ky:nosync'` clause on the server form.
-bool _isNosyncTable(String raw, String stmt) {
-  if (stmt.contains(_nosyncTableComment)) return true;
-  for (final line in raw.split('\n')) {
-    if (_nosyncComment.hasMatch(line)) return true;
-    // Stop at the DEFINE TABLE line — later lines belong to fields, not this
-    // table's preceding annotation.
-    if (_defineTable.hasMatch(line.trimLeft())) break;
+/// Tables marked with a `-- @nosync` comment line immediately preceding their
+/// `DEFINE TABLE`. Scanned on the raw schema (before comment stripping).
+Set<String> _nosyncTablesFromComments(String surql) {
+  final result = <String>{};
+  var pending = false;
+  for (final line in surql.split('\n')) {
+    if (_nosyncComment.hasMatch(line)) {
+      pending = true;
+      continue;
+    }
+    final m = _defineTable.firstMatch(line.trimLeft());
+    if (m != null) {
+      if (pending) result.add(m.group(1)!);
+      pending = false;
+    }
   }
-  return false;
+  return result;
 }
 
 String _stripComments(String s) =>

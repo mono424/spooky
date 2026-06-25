@@ -616,7 +616,14 @@ class DataModule {
     QueryTimeToLive ttl,
     String tableName,
   ) {
-    _columnsFor(tableName); // validate table exists
+    // Validate the table exists in the schema so a typo'd table name fails
+    // fast. `_00_`-prefixed system/meta tables (e.g. `_00_user_feature`, the
+    // feature-flag assignments) are server-provisioned and intentionally absent
+    // from the generated client schema, but are still queryable + live-synced —
+    // skip the check for them (matching SyncEngine, which cleans them through).
+    if (!tableName.startsWith('_00_')) {
+      _columnsFor(tableName); // validate table exists
+    }
 
     final id = encodeRecordId(recordId);
     var configRecord = _local.getQueryConfig(id);

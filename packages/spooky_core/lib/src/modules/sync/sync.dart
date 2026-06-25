@@ -22,8 +22,14 @@ import 'sync_utils.dart';
 
 /// Tunables for [Sp00kySync].
 class Sp00kySyncOptions {
-  const Sp00kySyncOptions({this.refSyncIntervalMs});
+  const Sp00kySyncOptions({this.refSyncIntervalMs, this.anonymousLiveQueries});
   final int? refSyncIntervalMs;
+
+  /// Run the `_00_list_ref` poll + LIVE against the shared `_00_list_ref_anon`
+  /// table even with no authenticated user, so a signed-out client syncs live
+  /// over world-readable tables. Requires the server deployed with
+  /// `anonymousLiveQueries: true`. See [Sp00kyConfig.enableAnonymousLiveQueries].
+  final bool? anonymousLiveQueries;
 }
 
 /// Bidirectional sync engine (TS `Sp00kySync`): up-queue (local -> remote),
@@ -51,6 +57,7 @@ class Sp00kySync {
       onRollback: _handleRollback,
     );
     refSyncIntervalMs = resolveListRefPollInterval(options?.refSyncIntervalMs);
+    _anonLiveEnabled = options?.anonymousLiveQueries ?? false;
   }
 
   final LocalDatabaseService _local;
@@ -73,6 +80,7 @@ class Sp00kySync {
   bool _closed = false;
   bool _wasDisconnected = false;
   final RefMode _refMode = defaultRefMode;
+  late final bool _anonLiveEnabled;
 
   String? _currentLiveQueryId;
   StreamSubscription<LiveMessage>? _liveSub;
@@ -105,7 +113,22 @@ class Sp00kySync {
     _subscribeToReconnect();
     unawaited(_scheduler.syncUp());
     unawaited(_scheduler.syncDown());
-    // No initial LIVE subscription: wait for setCurrentUserId from auth.
+    // No initial LIVE subscription: wait for setCurrentUserId from auth — in
+    // dedicated mode the table name depends on the authenticated user, and an
+    // unauthenticated subscription wouldn't match any per-user table anyway.
+    //
+    // Exception: with anonymous live queries enabled, start realtime now
+    // against the shared `_00_list_ref_anon` table so a signed-out client syncs
+    // immediately. `setCurrentUserId` re-points LIVE to the per-user table on
+    // sign-in. Guard on the current user id because the auth callback can fire
+    // (and authenticate) before init() runs — don't clobber that back to anon.
+    if (_anonLiveEnabled && _currentUserIdMirror == null) {
+      _startListRefPoll();
+      _restartRefLiveQuery().catchError((Object err) {
+        _logger.debug(
+            'Anonymous ref LIVE start failed; relying on poll fallback: $err');
+      });
+    }
   }
 
   /// Push the authenticated user id; (re)starts the `_00_list_ref` LIVE under
@@ -116,6 +139,18 @@ class Sp00kySync {
     _currentUserIdMirror = userId;
 
     if (userId == null) {
+      if (_anonLiveEnabled) {
+        // Signed out but anonymous realtime is on: keep the poll running and
+        // re-point LIVE from the (now stale) per-user table to the shared
+        // `_00_list_ref_anon`. `_startListRefPoll` is idempotent; the poll
+        // re-resolves `listRefTable()` each tick so it follows automatically.
+        _startListRefPoll();
+        await _restartRefLiveQuery().catchError((Object err) {
+          _logger.debug(
+              'Anonymous ref LIVE restart failed; relying on poll fallback: $err');
+        });
+        return;
+      }
       await _killRefLiveQuery();
       _stopListRefPoll();
       return;
@@ -147,8 +182,15 @@ class Sp00kySync {
 
   /// Resolve the active `_00_list_ref` table name (TS `listRefTable`). Reads
   /// the user id from [DataModule] (set synchronously from the auth callback).
-  String listRefTable() =>
-      listRefTableFor(_refMode, _dataModule.getCurrentUserId());
+  /// Unauthenticated with anonymous live queries on → the shared
+  /// `_00_list_ref_anon` table.
+  String listRefTable() {
+    final userId = _dataModule.getCurrentUserId();
+    if (userId == null && _anonLiveEnabled) {
+      return listRefTableFor(_refMode, anonUserId);
+    }
+    return listRefTableFor(_refMode, userId);
+  }
 
   // ---- poll fallback --------------------------------------------------------
 
@@ -242,6 +284,17 @@ class Sp00kySync {
       _logger.info('Remote reconnected, refetching active queries');
       for (final hash in _dataModule.getActiveQueryHashes()) {
         _scheduler.enqueueDownEvent(RegisterEvent(hash));
+      }
+      // The WS reconnect leaves the server-side LIVE subscription dead — the
+      // re-enqueued register events only re-fetch initial state, they don't
+      // re-subscribe. Without this, LIVE never recovers after a reconnect and
+      // the poll silently becomes the sole sync path. Authenticated → per-user
+      // table; signed-out with anon live on → the shared `_00_list_ref_anon`.
+      if (_currentUserIdMirror != null || _anonLiveEnabled) {
+        _restartRefLiveQuery().catchError((Object err) {
+          _logger.debug(
+              'LIVE restart after reconnect failed; poll fallback active: $err');
+        });
       }
     });
   }

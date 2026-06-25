@@ -59,6 +59,7 @@ class Sp00kyConfig {
     this.streamDebounceTime = 100,
     this.crdtDebounceMs = 500,
     this.refSyncIntervalMs = 500,
+    this.enableAnonymousLiveQueries = false,
   });
 
   final DatabaseConfig database;
@@ -74,6 +75,15 @@ class Sp00kyConfig {
   final int streamDebounceTime;
   final int crdtDebounceMs;
   final int refSyncIntervalMs;
+
+  /// Enable realtime sync while signed out. When true, the client runs its
+  /// `_00_list_ref` poll + LIVE subscription against the shared
+  /// `_00_list_ref_anon` table even with no authenticated user, so a logged-out
+  /// client gets live `query().stream()` updates over world-readable tables.
+  /// Requires the server deployed with `anonymousLiveQueries: true` in
+  /// `sp00ky.yml` (this flag must match it). Defaults to false: anonymous
+  /// clients can read one-shot (`queryRemote`) but never sync live.
+  final bool enableAnonymousLiveQueries;
 }
 
 typedef QueryHash = String;

@@ -27,4 +27,6 @@ export 'src/surreal/remote_client.dart'
     show RemoteSurrealClient, WebSocketSurrealClient, LiveMessage;
 export 'src/modules/auth/auth_service.dart' show AuthService, AuthEventTypes;
 export 'src/modules/bucket.dart' show BucketHandle;
+export 'src/modules/feature_flag/feature_flag.dart'
+    show FeatureFlagModule, FeatureFlagHandle, FeatureFlagSnapshot;
 export 'src/modules/query_builder.dart' show QueryBuilder, QueryOp;

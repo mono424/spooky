@@ -60,6 +60,25 @@ class StreamProcessorService {
 
   static const _stateKey = '_00_stream_processor_state';
 
+  /// Built-in `select` permissions for server-provisioned meta tables the client
+  /// reads through the local view but that never appear in an app's `schemaSurql`
+  /// (they live in `apps/cli/src/meta_tables_remote.surql`, not the app schema),
+  /// so [seedPermissionsFromSchema] can't reach them.
+  ///
+  /// A circuit built with default-deny (see the class divergence note) would
+  /// otherwise reject the view for these tables. We seed them explicitly so the
+  /// view is permitted regardless of the circuit's default — the same reason the
+  /// FFI tests always `setPermission` before `registerView`.
+  ///
+  /// `_00_user_feature` is scoped server-side to `user = $auth.id` and only the
+  /// user's own rows ever sync down (server permission + per-user `_00_list_ref`),
+  /// so `'true'` here is the same "trust the server filtered" model as every other
+  /// synced table (e.g. `thread` seeds `'true'`). Extend this map for any future
+  /// client-readable meta table.
+  static const Map<String, String> _builtinSystemPermissions = {
+    '_00_user_feature': 'true',
+  };
+
   void addReceiver(StreamUpdateReceiver receiver) => _receivers.add(receiver);
 
   void _notifyUpdates(List<StreamUpdate> updates) {
@@ -139,9 +158,14 @@ class StreamProcessorService {
   void seedPermissionsFromSchema(String schemaSurql) {
     final processor = _processor;
     if (processor == null) return;
+    // Built-ins first so a schema-derived permission can override one if the app
+    // schema ever does define the table (forward-compat); meta tables absent from
+    // the schema keep their built-in seed.
+    _builtinSystemPermissions.forEach(processor.setPermission);
     final perms = extractTablePermissions(schemaSurql);
     perms.forEach(processor.setPermission);
-    _logger.debug('Seeded ${perms.length} table permissions');
+    _logger.debug('Seeded ${perms.length + _builtinSystemPermissions.length} '
+        'table permissions');
   }
 
   Future<void> loadState() async {

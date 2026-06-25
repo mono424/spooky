@@ -35,3 +35,7 @@ hex = "0.4"
 open = "5"
 ssp-protocol = { path = "../../packages/ssp-protocol" }
 
+[dev-dependencies]
+# Used by tests/flag_sql_e2e.rs to talk to the throwaway SurrealDB over HTTP.
+ureq = { version = "2.9", features = ["json"] }
+
