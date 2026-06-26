@@ -17,7 +17,11 @@ pub struct LegacyEngine {
     username: String,
     password: String,
     migrations_dir: PathBuf,
-    /// Vault secrets for `{{KEY}}` substitution. None/empty = apply verbatim.
+    /// Vault secrets for `{{KEY}}` substitution. `None` = verbatim apply (the
+    /// ephemeral schema-diff replay, where `{{...}}` is left literal so it doesn't
+    /// read as drift). `Some(_)` = injection was requested (prod / cloud apply):
+    /// substitute and FAIL on any unresolved placeholder, even when the vault load
+    /// came back empty — so a missing secret never silently writes a literal key.
     secrets: Option<Vec<(String, String)>>,
 }
 
@@ -56,10 +60,16 @@ impl LegacyEngine {
 impl MigrationEngine for LegacyEngine {
     fn apply(&self) -> Result<()> {
         let client = self.make_client();
-        match self.secrets.as_ref().filter(|s| !s.is_empty()) {
+        match self.secrets.as_ref() {
+            // Injection requested (prod / cloud apply): always take the checked
+            // path so unresolved `{{KEY}}` placeholders error loudly — even if the
+            // vault load returned an empty set — instead of writing a literal
+            // `{{...}}` (e.g. a broken JWT signing key).
             Some(secrets) => {
                 migrate::apply_with_secrets(&client, &self.migrations_dir, secrets)
             }
+            // No injection (ephemeral schema-diff replay): apply verbatim, leaving
+            // `{{...}}` literal so the placeholder never reads as schema drift.
             None => migrate::apply(&client, &self.migrations_dir),
         }
     }

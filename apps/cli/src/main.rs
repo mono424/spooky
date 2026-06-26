@@ -1561,7 +1561,12 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
                     secret: secret.clone(),
                 }),
                 remote_functions: None,
-                secrets: None,
+                // Inject vault secrets so `{{KEY}}` placeholders in user migrations
+                // (e.g. DEFINE ACCESS ... WITH JWT KEY '{{JWT_PUBLIC_KEY}}') resolve
+                // to real values on prod. `Some(_)` forces the checked apply path:
+                // an unresolved placeholder fails loudly rather than writing a
+                // literal `{{...}}`. (Previously `None` → verbatim → broke auth.)
+                secrets: Some(cloud::load_vault_secrets_for_prod()),
             };
 
             let engine = migration::create_engine(ctx)?;

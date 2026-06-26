@@ -16,6 +16,24 @@ use crate::{CloudBackupCommands, CloudBillingCommands, CloudDomainCommands, Clou
 /// Load vault environment variables for dev mode via the Cloud API.
 /// Returns key-value pairs. Returns empty vec (with warning) if not logged in or vault not initialized.
 pub fn load_vault_envs_for_dev() -> Vec<(String, String)> {
+    load_vault_secrets(false)
+}
+
+/// Load PRODUCTION vault secrets as `(KEY, VALUE)` pairs for `{{KEY}}` placeholder
+/// substitution in migrations at apply time (`spky migrate prod` + cloud deploy).
+/// Same resolution as dev (login creds + project slug + vault passphrase) but the
+/// production environment. Returns empty (with a warning) on any failure; the
+/// apply layer then fails loudly on any unresolved placeholder, so an empty result
+/// never silently writes a literal `{{...}}` (e.g. a broken JWT signing key).
+pub fn load_vault_secrets_for_prod() -> Vec<(String, String)> {
+    load_vault_secrets(true)
+}
+
+/// Shared vault loader: resolve login + project (sp00ky.yml slug) + vault
+/// passphrase, then load the vault variables for the given environment. Returns
+/// empty (with a warning) if not logged in, the project can't be resolved, or the
+/// vault is unavailable.
+fn load_vault_secrets(prod: bool) -> Vec<(String, String)> {
     let creds = match load_credentials() {
         Some(c) => c,
         None => {
@@ -42,9 +60,10 @@ pub fn load_vault_envs_for_dev() -> Vec<(String, String)> {
         }
     };
 
+    let environment = if prod { "production" } else { "development" };
     let resp = match client.post(
         &format!("/v1/projects/{}/envs/load", pid),
-        &serde_json::json!({ "derived_key": derived_key, "environment": "development" }),
+        &serde_json::json!({ "derived_key": derived_key, "environment": environment }),
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -2082,7 +2101,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                                     surrealkit_binary: config.resolved_surrealkit_binary(),
                                     internal_schema: None,
                                     remote_functions: None,
-                                    secrets: None,
+                                    secrets: Some(load_vault_secrets_for_prod()),
                                 };
                                 match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
                                     Ok(_) => println!("  ▸ Migrations complete."),
@@ -3738,7 +3757,7 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         surrealkit_binary: config.resolved_surrealkit_binary(),
                         internal_schema: None,
                         remote_functions: None,
-                        secrets: None,
+                        secrets: Some(load_vault_secrets_for_prod()),
                     };
                     match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
                         Ok(_) => println!("  Migrations complete."),
@@ -3891,7 +3910,7 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         surrealkit_binary: config.resolved_surrealkit_binary(),
                         internal_schema: None,
                         remote_functions: None,
-                        secrets: None,
+                        secrets: Some(load_vault_secrets_for_prod()),
                     };
                     match crate::migration::create_engine(ctx).and_then(|e| e.apply()) {
                         Ok(_) => println!("  Migrations complete."),
