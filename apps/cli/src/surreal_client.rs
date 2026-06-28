@@ -1,6 +1,27 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde::Deserialize;
+use std::time::Duration;
+
+/// Fail fast if the host accepts the socket but never completes the TCP/TLS
+/// handshake (e.g. staging mid-restart).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Default overall per-request deadline. Bounded so a SurrealDB / reverse-proxy
+/// that accepts the connection but stalls the response can never hang the client
+/// forever (the failure that stranded a deploy at `migrating` with `finalize`
+/// never called). Overridable for unusually long migrations (large backfills).
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 120;
+
+/// Overall deadline for a single SurrealDB HTTP call, overridable via
+/// `SPKY_DB_HTTP_TIMEOUT_SECS` (0 or unparseable falls back to the default).
+fn request_timeout() -> Duration {
+    let secs = std::env::var("SPKY_DB_HTTP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SurrealResponse {
@@ -82,7 +103,14 @@ fn send_raw_sql_unchecked(
     db_header: Option<&str>,
     query: &str,
 ) -> Result<Vec<SurrealResponse>> {
-    let mut req = ureq::post(url)
+    // Bound every call: a connect timeout plus an overall request deadline so a
+    // stalled response surfaces as an error instead of blocking forever.
+    let agent = ureq::builder()
+        .timeout_connect(CONNECT_TIMEOUT)
+        .build();
+    let mut req = agent
+        .post(url)
+        .timeout(request_timeout())
         .set("Accept", "application/json");
 
     if !auth_header.is_empty() {
@@ -103,7 +131,16 @@ fn send_raw_sql_unchecked(
             bail!("SurrealDB returned HTTP {}: {}", code, body);
         }
         Err(ureq::Error::Transport(t)) => {
-            bail!("Failed to connect to SurrealDB: {}", t);
+            // Timeouts land here too (io::ErrorKind::TimedOut). Spell it out so a
+            // stall reads as "unreachable/timed out" rather than a generic error,
+            // and point at the override knob.
+            bail!(
+                "Failed to reach SurrealDB at {} (connect/response timed out after {:?}; \
+                 set SPKY_DB_HTTP_TIMEOUT_SECS to raise the limit for long migrations): {}",
+                url,
+                request_timeout(),
+                t
+            );
         }
     };
 

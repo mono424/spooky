@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, RuntimeSource, Sp00kyConfig, DEFAULT_CONFIG_PATH};
 use crate::migrate;
@@ -499,12 +499,13 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     // (string or `{ dev, cloud }` map) overrides; default `info` matches the
     // pre-feature behavior so projects that don't opt in see no change.
     let dev_log = config.resolved_log_level(DeployEnv::Dev);
-    let dev_log_env = format!("RUST_LOG={}", dev_log);
 
-    // Phase 5 (cluster only): Start scheduler before SSP so SSP can register
-    // `scheduler_guard` is the lifecycle handle: in Image mode it owns the
-    // `docker logs -f` tail, in LocalBinary mode it owns the spawned host
-    // process directly. Both kill on Drop.
+    // Phase 5 (cluster only): start the scheduler before the SSP so the SSP can
+    // register. We keep the launch spec so the supervisor loop can respawn the
+    // scheduler if it crashes; `scheduler_guard` is the current lifecycle handle
+    // (in docker mode it owns the `docker logs -f` tail, in host mode the spawned
+    // process directly). Both kill on Drop.
+    let scheduler_spec: Option<SchedulerLaunchSpec>;
     let scheduler_guard: Option<LogTailGuard>;
     if *mode == DeployMode::Cluster {
         // Persist the scheduler replica + WAL to the host so `--clean` can
@@ -514,102 +515,48 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
             .join(".sp00ky/scheduler_data");
         std::fs::create_dir_all(&scheduler_data_dir).ok();
 
-        scheduler_guard = match &versions.scheduler {
-            RuntimeSource::Image(_) => {
-                let scheduler_image = versions.scheduler_image()
-                    .expect("scheduler_image is Some when RuntimeSource::Image");
-                let scheduler_port_mapping = format!("{}:9667", SCHEDULER_PORT);
-                let scheduler_db_url_env = format!("SPKY_DB_URL={}", urls.scheduler_db_url());
-                let scheduler_db_ws_env = format!("SPKY_DB_WS={}", urls.scheduler_db_ws());
-                let scheduler_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
-                let scheduler_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
-                let scheduler_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
-                let scheduler_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
-                let scheduler_data_mount = format!("{}:/data", scheduler_data_dir.display());
-
-                println!("{} Phase 5: Starting scheduler (docker)...", PREFIX);
-                docker(&[
-                    "run", "-d",
-                    "--name", SCHEDULER_CONTAINER,
-                    "--network", NETWORK_NAME,
-                    "--network-alias", "scheduler",
-                    "-p", &scheduler_port_mapping,
-                    "-v", &scheduler_data_mount,
-                    "-e", &dev_log_env,
-                    "-e", &scheduler_db_url_env,
-                    "-e", &scheduler_db_ws_env,
-                    "-e", &scheduler_ns_env,
-                    "-e", &scheduler_db_env,
-                    "-e", &scheduler_user_env,
-                    "-e", &scheduler_pass_env,
-                    "-e", "SPKY_AUTH_SECRET=mysecret",
-                    // Default 300s makes records take 5 minutes to land
-                    // in the replica/SSP — unusable in dev.
-                    "-e", "SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS=2",
-                    &scheduler_image,
-                ])?;
-
-                // Wait for /health/ready, which only flips to 200 after the scheduler
-                // finishes cloning the upstream SurrealDB into its replica. Without
-                // this gate, SSP boots in Phase 6 against an empty replica and
-                // computes wrong list_refs.
-                println!("{} Waiting for scheduler to clone replica from SurrealDB...", PREFIX);
-                wait_for_health(
-                    &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
-                    HEALTH_MAX_RETRIES,
-                    HEALTH_RETRY_INTERVAL,
-                    stop,
-                    "Scheduler",
-                )?;
-
-                Some(spawn_log_tail(SCHEDULER_CONTAINER, "scheduler"))
-            }
-            RuntimeSource::LocalBinary(path) => {
-                if !path.exists() {
-                    bail!(
-                        "Scheduler binary not found at {}.\n  Hint: run `cargo build -p scheduler` (or set version.dev.scheduler back to a Docker tag).",
-                        path.display()
-                    );
-                }
-                println!("{} Phase 5: Starting scheduler (host process: {})...", PREFIX, path.display());
-                let prefix = format!("{}[scheduler]{}", infra_color("scheduler"), ANSI_RESET);
-                let mut cmd = Command::new(path);
-                // The scheduler defaults `replica_db_path: ./data/replica`
-                // and `wal_path: ./data/event_wal.log` (config.rs:72,79),
-                // both relative to cwd. Run from `.sp00ky/scheduler_data`
-                // so the host paths land where `--clean` already wipes.
-                cmd.current_dir(&scheduler_data_dir);
-                cmd.env("RUST_LOG", &dev_log)
-                    .env("SPKY_DB_URL", urls.scheduler_db_url())
-                    .env("SPKY_DB_WS", urls.scheduler_db_ws())
-                    .env("SPKY_DB_NS", &resolved_surreal.namespace)
-                    .env("SPKY_DB_NAME", &resolved_surreal.database)
-                    .env("SPKY_DB_USER", &resolved_surreal.username)
-                    .env("SPKY_DB_PASS", &resolved_surreal.password)
-                    .env("SPKY_AUTH_SECRET", "mysecret")
-                    // Default 300s makes records take 5 minutes to land
-                    // in the replica/SSP — unusable in dev.
-                    .env("SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS", "2");
-                let guard = spawn_prefixed(&mut cmd, &prefix);
-
-                // Spawned host process already streams its own stdio, so
-                // we don't tail docker logs. Use the no-container variant
-                // of `wait_for_health` so it doesn't bail on the missing
-                // `sp00ky-dev-scheduler` container before the first probe.
-                println!("{} Waiting for scheduler to clone replica from SurrealDB...", PREFIX);
-                wait_for_health_with_container(
-                    &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
-                    HEALTH_MAX_RETRIES,
-                    HEALTH_RETRY_INTERVAL,
-                    stop,
-                    "Scheduler",
-                    false,
-                )?;
-
-                Some(guard)
-            }
+        let kind = match &versions.scheduler {
+            RuntimeSource::Image(_) => LaunchKind::Docker {
+                image: versions.scheduler_image()
+                    .expect("scheduler_image is Some when RuntimeSource::Image"),
+            },
+            RuntimeSource::LocalBinary(path) => LaunchKind::Host { binary: path.clone() },
         };
+        let spec = SchedulerLaunchSpec {
+            kind,
+            data_dir: scheduler_data_dir,
+            dev_log: dev_log.clone(),
+            db_url: urls.scheduler_db_url(),
+            db_ws: urls.scheduler_db_ws(),
+            ns: resolved_surreal.namespace.clone(),
+            db_name: resolved_surreal.database.clone(),
+            db_user: resolved_surreal.username.clone(),
+            db_pass: resolved_surreal.password.clone(),
+        };
+
+        println!("{} Phase 5: Starting scheduler...", PREFIX);
+        let guard = start_scheduler(&spec)?;
+
+        // Wait for /health/ready, which only flips to 200 after the scheduler
+        // finishes cloning the upstream SurrealDB into its replica. Without this
+        // gate, the SSP boots in Phase 6 against an empty replica and computes
+        // wrong list_refs. Container liveness is only meaningful in docker mode;
+        // a host process streams its own stdio and has no container to inspect.
+        let check_container = spec.kind_is_docker();
+        println!("{} Waiting for scheduler to clone replica from SurrealDB...", PREFIX);
+        wait_for_health_with_container(
+            &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
+            HEALTH_MAX_RETRIES,
+            HEALTH_RETRY_INTERVAL,
+            stop,
+            "Scheduler",
+            check_container,
+        )?;
+
+        scheduler_spec = Some(spec);
+        scheduler_guard = Some(guard);
     } else {
+        scheduler_spec = None;
         scheduler_guard = None;
     }
 
@@ -617,8 +564,8 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         return cleanup_direct(stop);
     }
 
-    // Phase 6: Start SSP
-    println!("{} Phase 6: Starting SSP...", PREFIX);
+    // Phase 6: Start SSP. As with the scheduler, keep the launch spec so the
+    // supervisor loop can respawn it on crash.
     let data_dir = std::env::current_dir()
         .context("Failed to get current directory")?
         .join(".sp00ky/ssp_data");
@@ -629,96 +576,32 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     // Build SPKY_JOB_CONFIG from backend apps with outbox method (mode-agnostic)
     let job_config_json = build_job_config_json(config);
 
-    let ssp_guard: LogTailGuard = match &versions.ssp {
-        RuntimeSource::Image(_) => {
-            let ssp_image = versions.ssp_image()
-                .expect("ssp_image is Some when RuntimeSource::Image");
-            let port_mapping = format!("{}:8667", SSP_PORT);
-            let data_mount_str = format!("{}:/data", data_dir.display());
-
-            let ssp_db_url_env = format!("SPKY_DB_URL={}", urls.ssp_db_url());
-            let ssp_db_ws_env = format!("SPKY_DB_WS={}", urls.ssp_db_ws());
-            let ssp_ns_env = format!("SPKY_DB_NS={}", resolved_surreal.namespace);
-            let ssp_db_env = format!("SPKY_DB_NAME={}", resolved_surreal.database);
-            let ssp_user_env = format!("SPKY_DB_USER={}", resolved_surreal.username);
-            let ssp_pass_env = format!("SPKY_DB_PASS={}", resolved_surreal.password);
-            let scheduler_url_env = format!("SPKY_SCHEDULER_URL={}", urls.ssp_scheduler_url());
-            let advertise_addr_env = format!("SPKY_SSP_ADVERTISE_ADDR={}", urls.ssp_advertise());
-            let job_config_env = format!("SPKY_JOB_CONFIG={}", job_config_json);
-            let ref_mode_env = format!("SPKY_SSP_REF_MODE={}", config.resolved_ref_mode().as_str());
-            let anon_live_env = format!(
-                "SPKY_SSP_ANON_LIVE_QUERIES={}",
-                if config.resolved_anonymous_live_queries() { "1" } else { "0" }
-            );
-
-            let mut ssp_args = vec![
-                "run", "-d",
-                "--name", SSP_CONTAINER,
-                "--network", NETWORK_NAME,
-                "--network-alias", "ssp",
-                "-p", &port_mapping,
-                "-e", &dev_log_env,
-                "-e", &ssp_db_url_env,
-                "-e", &ssp_db_ws_env,
-                "-e", &ssp_ns_env,
-                "-e", &ssp_db_env,
-                "-e", &ssp_user_env,
-                "-e", &ssp_pass_env,
-                "-e", "SPKY_AUTH_SECRET=mysecret",
-                "-e", &job_config_env,
-                "-e", &ref_mode_env,
-                "-e", &anon_live_env,
-            ];
-
-            if *mode == DeployMode::Cluster {
-                ssp_args.extend(["-e", &scheduler_url_env]);
-                ssp_args.extend(["-e", "SPKY_SSP_ID=ssp-1"]);
-                ssp_args.extend(["-e", &advertise_addr_env]);
-            }
-
-            ssp_args.extend(["-v", &data_mount_str]);
-            ssp_args.push(&ssp_image);
-
-            docker(&ssp_args)?;
-            spawn_log_tail(SSP_CONTAINER, "ssp")
-        }
-        RuntimeSource::LocalBinary(path) => {
-            if !path.exists() {
-                bail!(
-                    "SSP binary not found at {}.\n  Hint: run `cargo build -p ssp-server` (or set version.dev.ssp back to a Docker tag).",
-                    path.display()
-                );
-            }
-            println!("{} Starting SSP (host process: {})...", PREFIX, path.display());
-            let prefix = format!("{}[ssp]{}", infra_color("ssp"), ANSI_RESET);
-            let mut cmd = Command::new(path);
-            cmd.current_dir(&data_dir);
-            cmd.env("RUST_LOG", &dev_log)
-                .env("SPKY_DB_URL", urls.ssp_db_url())
-                .env("SPKY_DB_WS", urls.ssp_db_ws())
-                .env("SPKY_DB_NS", &resolved_surreal.namespace)
-                .env("SPKY_DB_NAME", &resolved_surreal.database)
-                .env("SPKY_DB_USER", &resolved_surreal.username)
-                .env("SPKY_DB_PASS", &resolved_surreal.password)
-                .env("SPKY_AUTH_SECRET", "mysecret")
-                .env("SPKY_JOB_CONFIG", &job_config_json)
-                .env("SPKY_SSP_REF_MODE", config.resolved_ref_mode().as_str())
-                .env(
-                    "SPKY_SSP_ANON_LIVE_QUERIES",
-                    if config.resolved_anonymous_live_queries() { "1" } else { "0" },
-                )
-                // The container Dockerfile binds 0.0.0.0:8667; on host we
-                // need the same port reachable from frontend dev servers
-                // and (optionally) the docker-side scheduler.
-                .env("SPKY_SSP_LISTEN_ADDR", format!("0.0.0.0:{}", SSP_PORT));
-            if *mode == DeployMode::Cluster {
-                cmd.env("SPKY_SCHEDULER_URL", urls.ssp_scheduler_url())
-                    .env("SPKY_SSP_ID", "ssp-1")
-                    .env("SPKY_SSP_ADVERTISE_ADDR", urls.ssp_advertise());
-            }
-            spawn_prefixed(&mut cmd, &prefix)
-        }
+    let ssp_kind = match &versions.ssp {
+        RuntimeSource::Image(_) => LaunchKind::Docker {
+            image: versions.ssp_image().expect("ssp_image is Some when RuntimeSource::Image"),
+        },
+        RuntimeSource::LocalBinary(path) => LaunchKind::Host { binary: path.clone() },
     };
+    let ssp_spec = SspLaunchSpec {
+        kind: ssp_kind,
+        data_dir,
+        dev_log: dev_log.clone(),
+        db_url: urls.ssp_db_url(),
+        db_ws: urls.ssp_db_ws(),
+        ns: resolved_surreal.namespace.clone(),
+        db_name: resolved_surreal.database.clone(),
+        db_user: resolved_surreal.username.clone(),
+        db_pass: resolved_surreal.password.clone(),
+        job_config: job_config_json,
+        ref_mode: config.resolved_ref_mode().as_str().to_string(),
+        anon_live: if config.resolved_anonymous_live_queries() { "1" } else { "0" }.to_string(),
+        cluster: *mode == DeployMode::Cluster,
+        scheduler_url: urls.ssp_scheduler_url(),
+        advertise: urls.ssp_advertise(),
+    };
+
+    println!("{} Phase 6: Starting SSP...", PREFIX);
+    let ssp_guard = start_ssp(&ssp_spec)?;
 
     // Ready!
     println!("\n{} Development environment ready!", PREFIX);
@@ -739,18 +622,50 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
     let backend_devs = spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode);
     let docker_devs = spawn_docker_app_devs(config, &project_dir, resolved_surreal, mode);
 
-    // Wait for Ctrl+C
+    // Supervisor loop: keep the SSP (and, in cluster mode, the scheduler) alive
+    // until Ctrl+C. Both are restart-driven by design: the SSP calls
+    // `std::process::exit(...)` on registration / bootstrap / heartbeat failures,
+    // every one commented "exit so the supervisor restarts us". In staging/prod
+    // the orchestrator is that supervisor; in dev there was none, so a single
+    // crash left the stack wedged on "No ready SSP available for query". We are
+    // that supervisor now.
+    let mut services: Vec<SupervisedService> = Vec::new();
+    if let (Some(spec), Some(guard)) = (scheduler_spec, scheduler_guard) {
+        let is_docker = spec.kind_is_docker();
+        services.push(SupervisedService::new(
+            "scheduler",
+            guard,
+            is_docker,
+            SCHEDULER_CONTAINER,
+            move || start_scheduler(&spec),
+        ));
+    }
+    {
+        let is_docker = ssp_spec.kind_is_docker();
+        services.push(SupervisedService::new(
+            "ssp",
+            ssp_guard,
+            is_docker,
+            SSP_CONTAINER,
+            move || start_ssp(&ssp_spec),
+        ));
+    }
+
     while !stop.load(Ordering::SeqCst) {
+        let now = Instant::now();
+        for svc in &mut services {
+            svc.tick(now);
+        }
         thread::sleep(Duration::from_millis(250));
     }
 
-    // Stop backend dev commands, log tailers, and app dev server
+    // Stop backend dev commands, log tailers, the app dev server, and the
+    // supervised infra processes/containers.
     drop(docker_devs);
     drop(backend_devs);
     drop(app_dev);
     drop(surreal_log);
-    drop(ssp_guard);
-    drop(scheduler_guard);
+    drop(services);
 
     cleanup_direct(stop)
 }
@@ -1000,6 +915,17 @@ fn is_container_running(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Read the last exit code of a (stopped) Docker container, so the supervisor
+/// can tell an intentional re-bootstrap exit (3/4) from a crash. `None` if the
+/// inspect fails or the value can't be parsed.
+fn container_exit_code(name: &str) -> Option<i32> {
+    Command::new("docker")
+        .args(["inspect", "-f", "{{.State.ExitCode}}", name])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i32>().ok())
+}
+
 /// Print the last N lines of a container's logs
 fn print_container_logs(name: &str, tail: u32) -> Result<()> {
     let output = Command::new("docker")
@@ -1230,12 +1156,591 @@ fn docker(args: &[&str]) -> Result<()> {
 /// Returns a guard that kills the child process on drop.
 struct LogTailGuard(Option<std::process::Child>);
 
+/// Outcome of a liveness probe: whether the service is up, and — when it is
+/// down — the process/container exit code if we could read it. The supervisor
+/// uses the code to tell an *intentional* exit (the SSP exits 3/4 to force a
+/// clean re-bootstrap) apart from a genuine crash.
+struct Liveness {
+    alive: bool,
+    exit_code: Option<i32>,
+}
+
+impl LogTailGuard {
+    /// Host-process liveness. While the wrapped child runs, `alive=true`. Once
+    /// it has exited (reaping it here), `alive=false` and `exit_code` carries
+    /// its status code if the OS reported one. No child (spawn failed) reads as
+    /// down with no code. Docker guards wrap the `docker logs -f` tail rather
+    /// than the service itself, so their liveness is tracked via the container
+    /// (`is_container_running` / `container_exit_code`), not this handle.
+    fn poll(&mut self) -> Liveness {
+        match self.0 {
+            Some(ref mut child) => match child.try_wait() {
+                Ok(None) => Liveness { alive: true, exit_code: None },
+                Ok(Some(status)) => Liveness { alive: false, exit_code: status.code() },
+                Err(_) => Liveness { alive: false, exit_code: None },
+            },
+            None => Liveness { alive: false, exit_code: None },
+        }
+    }
+}
+
 impl Drop for LogTailGuard {
     fn drop(&mut self) {
         if let Some(ref mut child) = self.0 {
             let _ = child.kill();
             let _ = child.wait();
         }
+    }
+}
+
+// ── Supervised infra services (SSP + scheduler) ───────────────────────────────
+
+/// How an infra service is launched, resolved once at boot from `version:`.
+enum LaunchKind {
+    Docker { image: String },
+    Host { binary: std::path::PathBuf },
+}
+
+/// Owned launch parameters for the scheduler, kept so the supervisor can respawn
+/// it without re-deriving everything from borrowed `run_direct_mode` locals.
+struct SchedulerLaunchSpec {
+    kind: LaunchKind,
+    data_dir: std::path::PathBuf,
+    dev_log: String,
+    db_url: String,
+    db_ws: String,
+    ns: String,
+    db_name: String,
+    db_user: String,
+    db_pass: String,
+}
+
+impl SchedulerLaunchSpec {
+    fn kind_is_docker(&self) -> bool {
+        matches!(self.kind, LaunchKind::Docker { .. })
+    }
+}
+
+/// Owned launch parameters for the SSP, mirroring `SchedulerLaunchSpec`.
+struct SspLaunchSpec {
+    kind: LaunchKind,
+    data_dir: std::path::PathBuf,
+    dev_log: String,
+    db_url: String,
+    db_ws: String,
+    ns: String,
+    db_name: String,
+    db_user: String,
+    db_pass: String,
+    job_config: String,
+    ref_mode: String,
+    anon_live: String,
+    cluster: bool,
+    scheduler_url: String,
+    advertise: String,
+}
+
+impl SspLaunchSpec {
+    fn kind_is_docker(&self) -> bool {
+        matches!(self.kind, LaunchKind::Docker { .. })
+    }
+}
+
+/// (Re)start the scheduler and return a fresh guard. No `wait_for_health`: a
+/// respawn must not block the supervisor loop, and the SSP tolerates a
+/// not-yet-ready scheduler via its own registration retry/backoff.
+fn start_scheduler(spec: &SchedulerLaunchSpec) -> Result<LogTailGuard> {
+    match &spec.kind {
+        LaunchKind::Docker { image } => {
+            // Clear any exited container still holding the name from a prior crash.
+            let _ = docker(&["rm", "-f", SCHEDULER_CONTAINER]);
+            let port_mapping = format!("{}:9667", SCHEDULER_PORT);
+            let data_mount = format!("{}:/data", spec.data_dir.display());
+            let log_env = format!("RUST_LOG={}", spec.dev_log);
+            let db_url = format!("SPKY_DB_URL={}", spec.db_url);
+            let db_ws = format!("SPKY_DB_WS={}", spec.db_ws);
+            let ns = format!("SPKY_DB_NS={}", spec.ns);
+            let db_name = format!("SPKY_DB_NAME={}", spec.db_name);
+            let db_user = format!("SPKY_DB_USER={}", spec.db_user);
+            let db_pass = format!("SPKY_DB_PASS={}", spec.db_pass);
+            docker(&[
+                "run", "-d",
+                "--name", SCHEDULER_CONTAINER,
+                "--network", NETWORK_NAME,
+                "--network-alias", "scheduler",
+                "-p", &port_mapping,
+                "-v", &data_mount,
+                "-e", &log_env,
+                "-e", &db_url,
+                "-e", &db_ws,
+                "-e", &ns,
+                "-e", &db_name,
+                "-e", &db_user,
+                "-e", &db_pass,
+                "-e", "SPKY_AUTH_SECRET=mysecret",
+                // Default 300s makes records take 5 minutes to land in the
+                // replica/SSP, unusable in dev.
+                "-e", "SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS=2",
+                image,
+            ])?;
+            Ok(spawn_log_tail(SCHEDULER_CONTAINER, "scheduler"))
+        }
+        LaunchKind::Host { binary } => {
+            if !binary.exists() {
+                bail!(
+                    "Scheduler binary not found at {}.\n  Hint: run `cargo build -p scheduler` (or set version.dev.scheduler back to a Docker tag).",
+                    binary.display()
+                );
+            }
+            println!("{} Starting scheduler (host process: {})...", PREFIX, binary.display());
+            let prefix = format!("{}[scheduler]{}", infra_color("scheduler"), ANSI_RESET);
+            let mut cmd = Command::new(binary);
+            // The scheduler defaults `replica_db_path: ./data/replica` and
+            // `wal_path: ./data/event_wal.log`, both relative to cwd. Run from
+            // `.sp00ky/scheduler_data` so the host paths land where `--clean`
+            // already wipes.
+            cmd.current_dir(&spec.data_dir);
+            cmd.env("RUST_LOG", &spec.dev_log)
+                .env("SPKY_DB_URL", &spec.db_url)
+                .env("SPKY_DB_WS", &spec.db_ws)
+                .env("SPKY_DB_NS", &spec.ns)
+                .env("SPKY_DB_NAME", &spec.db_name)
+                .env("SPKY_DB_USER", &spec.db_user)
+                .env("SPKY_DB_PASS", &spec.db_pass)
+                .env("SPKY_AUTH_SECRET", "mysecret")
+                .env("SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS", "2");
+            Ok(spawn_prefixed(&mut cmd, &prefix))
+        }
+    }
+}
+
+/// (Re)start the SSP and return a fresh guard. See `start_scheduler` for why
+/// there is no health wait here.
+fn start_ssp(spec: &SspLaunchSpec) -> Result<LogTailGuard> {
+    match &spec.kind {
+        LaunchKind::Docker { image } => {
+            let _ = docker(&["rm", "-f", SSP_CONTAINER]);
+            let port_mapping = format!("{}:8667", SSP_PORT);
+            let data_mount = format!("{}:/data", spec.data_dir.display());
+            let log_env = format!("RUST_LOG={}", spec.dev_log);
+            let db_url = format!("SPKY_DB_URL={}", spec.db_url);
+            let db_ws = format!("SPKY_DB_WS={}", spec.db_ws);
+            let ns = format!("SPKY_DB_NS={}", spec.ns);
+            let db_name = format!("SPKY_DB_NAME={}", spec.db_name);
+            let db_user = format!("SPKY_DB_USER={}", spec.db_user);
+            let db_pass = format!("SPKY_DB_PASS={}", spec.db_pass);
+            let job_config = format!("SPKY_JOB_CONFIG={}", spec.job_config);
+            let ref_mode = format!("SPKY_SSP_REF_MODE={}", spec.ref_mode);
+            let anon_live = format!("SPKY_SSP_ANON_LIVE_QUERIES={}", spec.anon_live);
+            let scheduler_url = format!("SPKY_SCHEDULER_URL={}", spec.scheduler_url);
+            let advertise = format!("SPKY_SSP_ADVERTISE_ADDR={}", spec.advertise);
+
+            let mut args: Vec<String> = vec![
+                "run".into(), "-d".into(),
+                "--name".into(), SSP_CONTAINER.into(),
+                "--network".into(), NETWORK_NAME.into(),
+                "--network-alias".into(), "ssp".into(),
+                "-p".into(), port_mapping,
+                "-e".into(), log_env,
+                "-e".into(), db_url,
+                "-e".into(), db_ws,
+                "-e".into(), ns,
+                "-e".into(), db_name,
+                "-e".into(), db_user,
+                "-e".into(), db_pass,
+                "-e".into(), "SPKY_AUTH_SECRET=mysecret".into(),
+                "-e".into(), job_config,
+                "-e".into(), ref_mode,
+                "-e".into(), anon_live,
+            ];
+            if spec.cluster {
+                args.push("-e".into());
+                args.push(scheduler_url);
+                args.push("-e".into());
+                args.push("SPKY_SSP_ID=ssp-1".into());
+                args.push("-e".into());
+                args.push(advertise);
+            }
+            args.push("-v".into());
+            args.push(data_mount);
+            args.push(image.clone());
+
+            let argv: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            docker(&argv)?;
+            Ok(spawn_log_tail(SSP_CONTAINER, "ssp"))
+        }
+        LaunchKind::Host { binary } => {
+            if !binary.exists() {
+                bail!(
+                    "SSP binary not found at {}.\n  Hint: run `cargo build -p ssp-server` (or set version.dev.ssp back to a Docker tag).",
+                    binary.display()
+                );
+            }
+            println!("{} Starting SSP (host process: {})...", PREFIX, binary.display());
+            let prefix = format!("{}[ssp]{}", infra_color("ssp"), ANSI_RESET);
+            let mut cmd = Command::new(binary);
+            cmd.current_dir(&spec.data_dir);
+            cmd.env("RUST_LOG", &spec.dev_log)
+                .env("SPKY_DB_URL", &spec.db_url)
+                .env("SPKY_DB_WS", &spec.db_ws)
+                .env("SPKY_DB_NS", &spec.ns)
+                .env("SPKY_DB_NAME", &spec.db_name)
+                .env("SPKY_DB_USER", &spec.db_user)
+                .env("SPKY_DB_PASS", &spec.db_pass)
+                .env("SPKY_AUTH_SECRET", "mysecret")
+                .env("SPKY_JOB_CONFIG", &spec.job_config)
+                .env("SPKY_SSP_REF_MODE", &spec.ref_mode)
+                .env("SPKY_SSP_ANON_LIVE_QUERIES", &spec.anon_live)
+                // The container Dockerfile binds 0.0.0.0:8667; on host we need
+                // the same port reachable from frontend dev servers and
+                // (optionally) the docker-side scheduler.
+                .env("SPKY_SSP_LISTEN_ADDR", format!("0.0.0.0:{}", SSP_PORT));
+            if spec.cluster {
+                cmd.env("SPKY_SCHEDULER_URL", &spec.scheduler_url)
+                    .env("SPKY_SSP_ID", "ssp-1")
+                    .env("SPKY_SSP_ADVERTISE_ADDR", &spec.advertise);
+            }
+            Ok(spawn_prefixed(&mut cmd, &prefix))
+        }
+    }
+}
+
+// Restart policy tuning for supervised infra services.
+const RESTART_BACKOFF_INITIAL: Duration = Duration::from_secs(1);
+const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// Continuous uptime after which a service is considered recovered: its backoff
+/// and consecutive-restart counter reset.
+const RESTART_RESET_AFTER: Duration = Duration::from_secs(60);
+/// Give up after this many restarts in a row without the service ever staying up
+/// for `RESTART_RESET_AFTER` (i.e. a genuine crash loop, not transient flapping).
+const RESTART_MAX_CONSECUTIVE: usize = 5;
+/// Exit codes the SSP uses for an *intentional* exit it expects to recover from
+/// by restarting: 3 = scheduler dropped us, 4 = integrity-check resync. These
+/// must not count toward `RESTART_MAX_CONSECUTIVE` — a correctly-resyncing SSP
+/// would otherwise be killed by its own supervisor. See `apps/ssp/src/lib.rs`.
+const INTENTIONAL_EXIT_CODES: &[i32] = &[3, 4];
+/// After this many intentional restarts in a row (without ever staying up for
+/// `RESTART_RESET_AFTER`), emit a distinct WARN so a real resync *storm* is
+/// visible — but keep restarting (never hard-stop on an intentional exit).
+const INTENTIONAL_RESTART_WARN_EVERY: usize = 5;
+
+#[derive(Debug, PartialEq, Eq)]
+enum SupervisorAction {
+    /// Healthy, or backing off / already given up: do nothing this tick.
+    None,
+    /// Crashed but inside the backoff window: wait before retrying.
+    Wait,
+    /// Crashed and ready to (re)start now.
+    Restart,
+    /// Exited *on purpose* (e.g. the SSP exits 3/4 to force a clean
+    /// re-bootstrap) and is ready to restart now. Does NOT count toward the
+    /// crash-loop cap — a healthy resync must not look like a crash.
+    RestartIntentional,
+    /// Crash-looped past the cap: stop restarting, warn once.
+    GaveUp,
+}
+
+/// Pure restart bookkeeping, split out so the timing logic is unit-testable with
+/// injected `Instant`s (no sleeps, no processes).
+struct RestartPolicy {
+    backoff: Duration,
+    last_restart: Option<Instant>,
+    last_up: Instant,
+    was_down: bool,
+    consecutive_restarts: usize,
+    /// Consecutive *intentional* restarts (exit 3/4) without a stable recovery.
+    /// Tracked only to warn on a resync storm; never trips `gave_up`.
+    intentional_restarts: usize,
+    gave_up: bool,
+}
+
+impl RestartPolicy {
+    fn new(now: Instant) -> Self {
+        Self {
+            backoff: RESTART_BACKOFF_INITIAL,
+            last_restart: None,
+            last_up: now,
+            was_down: false,
+            consecutive_restarts: 0,
+            intentional_restarts: 0,
+            gave_up: false,
+        }
+    }
+
+    /// Decide what to do given the service's liveness at `now`. `exit_code` is
+    /// the process/container exit status when `!alive` (None if unknown or
+    /// alive); an intentional re-bootstrap code restarts without crash-counting.
+    fn tick(&mut self, now: Instant, alive: bool, exit_code: Option<i32>) -> SupervisorAction {
+        if self.gave_up {
+            return SupervisorAction::None;
+        }
+
+        if alive {
+            if self.was_down {
+                // Just recovered from a restart.
+                self.was_down = false;
+                self.last_up = now;
+            }
+            // Stable long enough → forget past flapping.
+            if now.duration_since(self.last_up) > RESTART_RESET_AFTER {
+                self.backoff = RESTART_BACKOFF_INITIAL;
+                self.consecutive_restarts = 0;
+                self.intentional_restarts = 0;
+                self.last_restart = None;
+            }
+            return SupervisorAction::None;
+        }
+
+        // Not alive.
+        self.was_down = true;
+
+        // Backoff gate: wait `backoff` since the last restart before retrying,
+        // so a flapping service doesn't get hammered.
+        if let Some(lr) = self.last_restart {
+            if now.duration_since(lr) < self.backoff {
+                return SupervisorAction::Wait;
+            }
+        }
+
+        // Intentional exit (SSP forces a clean re-bootstrap): always restart,
+        // never count toward the crash cap. A small fixed backoff still applies
+        // (via `last_restart`, leaving `backoff` at its current value) so a tight
+        // resync loop can't spin the CPU, but it can never `GaveUp`.
+        if exit_code.map(|c| INTENTIONAL_EXIT_CODES.contains(&c)).unwrap_or(false) {
+            self.intentional_restarts += 1;
+            self.last_restart = Some(now);
+            return SupervisorAction::RestartIntentional;
+        }
+
+        if self.consecutive_restarts >= RESTART_MAX_CONSECUTIVE {
+            self.gave_up = true;
+            return SupervisorAction::GaveUp;
+        }
+
+        self.consecutive_restarts += 1;
+        self.last_restart = Some(now);
+        self.backoff = (self.backoff * 2).min(RESTART_BACKOFF_MAX);
+        SupervisorAction::Restart
+    }
+}
+
+/// A dev infra service the supervisor keeps alive: holds the current process
+/// handle, a liveness probe, and a respawn closure.
+struct SupervisedService {
+    label: &'static str,
+    guard: LogTailGuard,
+    is_alive: Box<dyn FnMut(&mut LogTailGuard) -> Liveness>,
+    respawn: Box<dyn FnMut() -> Result<LogTailGuard>>,
+    policy: RestartPolicy,
+}
+
+impl SupervisedService {
+    fn new(
+        label: &'static str,
+        guard: LogTailGuard,
+        is_docker: bool,
+        container: &'static str,
+        respawn: impl FnMut() -> Result<LogTailGuard> + 'static,
+    ) -> Self {
+        let is_alive: Box<dyn FnMut(&mut LogTailGuard) -> Liveness> = if is_docker {
+            // Docker: the guard tails logs; real liveness is the container.
+            Box::new(move |_guard| {
+                if is_container_running(container) {
+                    Liveness { alive: true, exit_code: None }
+                } else {
+                    Liveness { alive: false, exit_code: container_exit_code(container) }
+                }
+            })
+        } else {
+            // Host process: the guard owns the child directly.
+            Box::new(|guard: &mut LogTailGuard| guard.poll())
+        };
+        Self {
+            label,
+            guard,
+            is_alive,
+            respawn: Box::new(respawn),
+            policy: RestartPolicy::new(Instant::now()),
+        }
+    }
+
+    /// One supervision step: probe liveness and act on the policy's decision.
+    fn tick(&mut self, now: Instant) {
+        if self.policy.gave_up {
+            return;
+        }
+        let Liveness { alive, exit_code } = (self.is_alive)(&mut self.guard);
+        match self.policy.tick(now, alive, exit_code) {
+            SupervisorAction::None | SupervisorAction::Wait => {}
+            SupervisorAction::GaveUp => {
+                eprintln!(
+                    "{} \x1b[31mFATAL: {} crashed {} times in a row without recovering, not restarting it. Fix the cause and rerun `spky dev` (Ctrl+C to stop).\x1b[0m",
+                    PREFIX, self.label, RESTART_MAX_CONSECUTIVE
+                );
+            }
+            SupervisorAction::Restart => {
+                eprintln!(
+                    "{} \x1b[33m{} exited, restarting (attempt {} of {})...\x1b[0m",
+                    PREFIX, self.label, self.policy.consecutive_restarts, RESTART_MAX_CONSECUTIVE
+                );
+                self.do_respawn();
+            }
+            SupervisorAction::RestartIntentional => {
+                // A storm of intentional re-bootstraps points at an upstream
+                // cause (e.g. a real integrity divergence); surface it loudly
+                // but keep the service alive.
+                if self.policy.intentional_restarts % INTENTIONAL_RESTART_WARN_EVERY == 0 {
+                    eprintln!(
+                        "{} \x1b[31m{} has re-bootstrapped {} times without staying up (exit code {:?}). It will keep restarting; check the scheduler integrity check.\x1b[0m",
+                        PREFIX, self.label, self.policy.intentional_restarts, exit_code
+                    );
+                } else {
+                    eprintln!(
+                        "{} \x1b[33m{} re-bootstrapping (intentional exit {:?}), restarting...\x1b[0m",
+                        PREFIX, self.label, exit_code
+                    );
+                }
+                self.do_respawn();
+            }
+        }
+    }
+
+    /// Respawn the service, replacing the guard. Dropping the stale guard kills
+    /// the dead `docker logs -f` tail or reaps the exited host child.
+    fn do_respawn(&mut self) {
+        match (self.respawn)() {
+            Ok(guard) => self.guard = guard,
+            Err(e) => eprintln!(
+                "{} \x1b[31mrestart of {} failed: {:#}\x1b[0m",
+                PREFIX, self.label, e
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod supervisor_tests {
+    use super::*;
+
+    fn at(base: Instant, secs: u64) -> Instant {
+        base + Duration::from_secs(secs)
+    }
+
+    #[test]
+    fn transient_crash_restarts_then_resets_after_stable_uptime() {
+        let base = Instant::now();
+        let mut p = RestartPolicy::new(base);
+
+        // Crash at t=10 → immediate restart, backoff doubles to 2s.
+        assert_eq!(p.tick(at(base, 10), false, Some(1)), SupervisorAction::Restart);
+        assert_eq!(p.consecutive_restarts, 1);
+        assert_eq!(p.backoff, Duration::from_secs(2));
+
+        // Comes back up.
+        assert_eq!(p.tick(at(base, 11), true, None), SupervisorAction::None);
+
+        // Still up past the reset window → backoff + counter cleared.
+        assert_eq!(p.tick(at(base, 11 + 61), true, None), SupervisorAction::None);
+        assert_eq!(p.backoff, RESTART_BACKOFF_INITIAL);
+        assert_eq!(p.consecutive_restarts, 0);
+    }
+
+    #[test]
+    fn backoff_gate_blocks_rapid_retries() {
+        let base = Instant::now();
+        let mut p = RestartPolicy::new(base);
+
+        // First crash → restart immediately, backoff now 2s.
+        assert_eq!(p.tick(base, false, Some(1)), SupervisorAction::Restart);
+        assert_eq!(p.backoff, Duration::from_secs(2));
+
+        // 1s later, still down and within the 2s gate → wait.
+        assert_eq!(p.tick(at(base, 1), false, Some(1)), SupervisorAction::Wait);
+
+        // 2s later, gate elapsed → restart again, backoff now 4s.
+        assert_eq!(p.tick(at(base, 2), false, Some(1)), SupervisorAction::Restart);
+        assert_eq!(p.backoff, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn gives_up_after_max_consecutive() {
+        let base = Instant::now();
+        let mut p = RestartPolicy::new(base);
+
+        // Drive a permanently-down service, advancing time so each backoff gate
+        // elapses, and confirm it gives up after exactly the cap.
+        let mut t = 0u64;
+        let mut restarts = 0;
+        loop {
+            assert!(t < 10_000, "should give up rather than loop forever");
+            match p.tick(at(base, t), false, Some(1)) {
+                SupervisorAction::Restart => restarts += 1,
+                SupervisorAction::GaveUp => break,
+                _ => {}
+            }
+            t += 1;
+        }
+        assert_eq!(restarts, RESTART_MAX_CONSECUTIVE);
+        assert!(p.gave_up);
+
+        // Once given up, it stays given up and issues no further restarts.
+        assert_eq!(p.tick(at(base, t + 1), false, Some(1)), SupervisorAction::None);
+    }
+
+    #[test]
+    fn intentional_rebootstrap_never_gives_up() {
+        // The SSP exits 4 (integrity resync) over and over. This is a healthy
+        // re-bootstrap, NOT a crash — the supervisor must keep restarting it and
+        // never reach GaveUp, no matter how many times in a row.
+        let base = Instant::now();
+        let mut p = RestartPolicy::new(base);
+
+        let mut t = 0u64;
+        let mut restarts = 0;
+        while restarts < RESTART_MAX_CONSECUTIVE * 4 {
+            match p.tick(at(base, t), false, Some(4)) {
+                SupervisorAction::RestartIntentional => restarts += 1,
+                SupervisorAction::Restart => panic!("intentional exit must not crash-count"),
+                SupervisorAction::GaveUp => panic!("must never give up on an intentional exit"),
+                _ => {}
+            }
+            t += 1;
+        }
+        assert!(!p.gave_up);
+        assert_eq!(p.consecutive_restarts, 0, "intentional exits don't touch the crash counter");
+        assert_eq!(p.intentional_restarts, restarts);
+    }
+
+    #[test]
+    fn exit_code_3_is_also_intentional() {
+        // 3 = scheduler dropped us; same intentional treatment as 4.
+        let base = Instant::now();
+        let mut p = RestartPolicy::new(base);
+        assert_eq!(p.tick(base, false, Some(3)), SupervisorAction::RestartIntentional);
+        assert_eq!(p.consecutive_restarts, 0);
+    }
+
+    #[test]
+    fn unknown_exit_code_counts_as_crash() {
+        // A down service with no readable exit code is treated as a crash (the
+        // conservative default), so a genuine crash loop still surfaces.
+        let base = Instant::now();
+        let mut p = RestartPolicy::new(base);
+        assert_eq!(p.tick(base, false, None), SupervisorAction::Restart);
+        assert_eq!(p.consecutive_restarts, 1);
+    }
+
+    #[test]
+    fn intentional_restarts_reset_after_stable_uptime() {
+        let base = Instant::now();
+        let mut p = RestartPolicy::new(base);
+
+        assert_eq!(p.tick(at(base, 1), false, Some(4)), SupervisorAction::RestartIntentional);
+        assert_eq!(p.intentional_restarts, 1);
+        // Comes up and stays up past the reset window → counter cleared.
+        assert_eq!(p.tick(at(base, 2), true, None), SupervisorAction::None);
+        assert_eq!(p.tick(at(base, 2 + 61), true, None), SupervisorAction::None);
+        assert_eq!(p.intentional_restarts, 0);
     }
 }
 

@@ -517,8 +517,11 @@ async fn verify_catchup_at_m(
         return Ok(true);
     }
 
-    // Reconstruct reference@M per touched table (rows@N + replayed events).
-    let mut reference: BTreeMap<String, String> = BTreeMap::new();
+    // Reconstruct reference@M per touched table (rows@N + replayed events). Keep
+    // the projected rows (not just the hash) so a persistent mismatch can dump
+    // the diverging row's canonical JSON for diagnosis.
+    let mut reference_rows: BTreeMap<String, std::collections::HashMap<String, Value>> =
+        BTreeMap::new();
     for (table, events) in &per_table {
         let seed = {
             let rep = replica.read().await;
@@ -526,52 +529,87 @@ async fn verify_catchup_at_m(
                 .await
                 .with_context(|| format!("snapshot_rows for '{}'", table))?
         };
-        reference.insert(table.clone(), project_table_hash(table, seed, events));
+        reference_rows.insert(table.clone(), project_table_rows(table, seed, events));
     }
-
-    // Fetch the SSP's catch-up hashes (it's still `Replaying`, pinned at M).
-    let info_resp = transport
-        .get_from_ssp(ssp_url, "/info")
-        .await
-        .map_err(|e| anyhow::anyhow!("GET /info failed: {}", e))?;
-    if !info_resp.status().is_success() {
-        anyhow::bail!("SSP /info returned HTTP {}", info_resp.status());
-    }
-    let info_json: Value = info_resp
-        .json()
-        .await
-        .map_err(|e| anyhow::anyhow!("Parse /info JSON failed: {}", e))?;
-    let ssp_hashes: BTreeMap<String, String> = info_json
-        .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|entry| entry.get("catchup_hashes"))
-        .and_then(|v| v.as_object())
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
+    let reference: BTreeMap<String, String> = reference_rows
+        .iter()
+        .map(|(table, rows)| {
+            (
+                table.clone(),
+                ssp_protocol::snapshot_hash::xor_table_hash(rows.clone().into_iter()),
+            )
         })
-        .unwrap_or_default();
-
-    if ssp_hashes.is_empty() {
-        // Older SSP build without `catchup_hashes` (deploy SSP before scheduler).
-        warn!(ssp_id = %ssp_id, "SSP /info has no catchup_hashes (old build?), skipping catch-up check");
-        return Ok(true);
-    }
+        .collect();
 
     let empty = ssp_protocol::snapshot_hash::xor_acc_to_hex(&ssp_protocol::snapshot_hash::xor_empty());
-    let mut mismatches = Vec::new();
-    for (table, ref_hash) in &reference {
-        let ssp_hash = ssp_hashes.get(table).cloned().unwrap_or_else(|| empty.clone());
-        if *ref_hash != ssp_hash {
-            mismatches.push((table.clone(), ref_hash.clone(), ssp_hash));
+
+    // Compare against the SSP's catch-up hashes with a bounded retry. The SSP is
+    // pinned at M, but its `/ingest` handler may apply the last replayed events
+    // slightly behind the HTTP ack, so a first read can briefly lag. A genuine
+    // divergence stays mismatched across every attempt; a settle lag clears. We
+    // never relax the check itself — only give the SSP a moment to converge
+    // before forcing a (costly) full re-bootstrap.
+    let mut mismatches: Vec<(String, String, String)> = Vec::new();
+    for attempt in 1..=CATCHUP_VERIFY_ATTEMPTS {
+        // Fetch the SSP's catch-up hashes (it's still `Replaying`, pinned at M).
+        let info_resp = transport
+            .get_from_ssp(ssp_url, "/info")
+            .await
+            .map_err(|e| anyhow::anyhow!("GET /info failed: {}", e))?;
+        if !info_resp.status().is_success() {
+            anyhow::bail!("SSP /info returned HTTP {}", info_resp.status());
+        }
+        let info_json: Value = info_resp
+            .json()
+            .await
+            .map_err(|e| anyhow::anyhow!("Parse /info JSON failed: {}", e))?;
+        let ssp_hashes: BTreeMap<String, String> = info_json
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|entry| entry.get("catchup_hashes"))
+            .and_then(|v| v.as_object())
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if ssp_hashes.is_empty() {
+            // Older SSP build without `catchup_hashes` (deploy SSP before scheduler).
+            warn!(ssp_id = %ssp_id, "SSP /info has no catchup_hashes (old build?), skipping catch-up check");
+            return Ok(true);
+        }
+
+        mismatches = reference
+            .iter()
+            .filter_map(|(table, ref_hash)| {
+                let ssp_hash = ssp_hashes.get(table).cloned().unwrap_or_else(|| empty.clone());
+                if *ref_hash != ssp_hash {
+                    Some((table.clone(), ref_hash.clone(), ssp_hash))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if mismatches.is_empty() {
+            info!(ssp_id = %ssp_id, tables = reference.len(), attempt, "Catch-up verification passed");
+            return Ok(true);
+        }
+
+        if attempt < CATCHUP_VERIFY_ATTEMPTS {
+            warn!(
+                ssp_id = %ssp_id,
+                attempt,
+                mismatches = mismatches.len(),
+                "Catch-up mismatch; letting the SSP settle and re-checking"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(CATCHUP_VERIFY_RETRY_DELAY_MS)).await;
         }
     }
 
-    if mismatches.is_empty() {
-        info!(ssp_id = %ssp_id, tables = reference.len(), "Catch-up verification passed");
-        return Ok(true);
-    }
+    // Persistent mismatch after every attempt → a real divergence.
     for (table, sched, ssp_h) in &mismatches {
         error!(
             ssp_id = %ssp_id,
@@ -580,6 +618,24 @@ async fn verify_catchup_at_m(
             ssp = %ssp_h,
             "Catch-up hash mismatch"
         );
+        // Diagnostic: dump the canonical JSON of the scheduler's reconstructed
+        // rows (capped) so a representation gap (e.g. a `null` optional the SSP
+        // omits) is visible in the log without attaching a debugger.
+        if let Some(rows) = reference_rows.get(table) {
+            for (row_id, val) in rows.iter().take(CATCHUP_DIAG_MAX_ROWS) {
+                let canon = String::from_utf8_lossy(
+                    &ssp_protocol::snapshot_hash::canonical_json(val),
+                )
+                .into_owned();
+                error!(
+                    ssp_id = %ssp_id,
+                    table = %table,
+                    row_id = %row_id,
+                    reference_row = %canon,
+                    "Catch-up mismatch diagnostic (scheduler reconstructed row@M)"
+                );
+            }
+        }
     }
     error!(
         ssp_id = %ssp_id,
@@ -589,19 +645,41 @@ async fn verify_catchup_at_m(
     Ok(false)
 }
 
+/// Catch-up verification re-checks the SSP this many times before treating a
+/// mismatch as a real divergence (the SSP's apply pipeline can briefly lag the
+/// `/ingest` HTTP ack while pinned at M).
+const CATCHUP_VERIFY_ATTEMPTS: usize = 3;
+/// Delay between catch-up re-checks.
+const CATCHUP_VERIFY_RETRY_DELAY_MS: u64 = 150;
+/// Cap on per-table rows dumped in the mismatch diagnostic, to keep the log bounded.
+const CATCHUP_DIAG_MAX_ROWS: usize = 3;
+
 /// Reconstruct a touched table's content at the catch-up cut from its rows@N
 /// (`seed`) plus the replayed `events`, then XOR-hash it. Events are applied by
 /// REPLACE on Create/Update (matching the SSP circuit's `rows.insert`) and
 /// remove on Delete — never merged, even though the replica's own `apply`
 /// merges. This REPLACE-not-MERGE semantics is the one detail that must match
 /// the SSP exactly; it's a pure function so it can be pinned by tests.
+#[cfg(test)]
 fn project_table_hash(
     table: &str,
     seed: Vec<(String, serde_json::Value)>,
     events: &[&RecordUpdate],
 ) -> String {
-    use std::collections::HashMap;
-    let mut rows: HashMap<String, serde_json::Value> = seed.into_iter().collect();
+    ssp_protocol::snapshot_hash::xor_table_hash(project_table_rows(table, seed, events).into_iter())
+}
+
+/// Reconstruct a touched table's `raw_id -> row` map at the catch-up cut from
+/// its rows@N (`seed`) plus the replayed `events`, by REPLACE on Create/Update
+/// and remove on Delete — matching the SSP circuit's `rows.insert`. Split out of
+/// [`project_table_hash`] so the verifier can also surface the rows themselves
+/// (for the mismatch diagnostic), not just their hash.
+fn project_table_rows(
+    table: &str,
+    seed: Vec<(String, serde_json::Value)>,
+    events: &[&RecordUpdate],
+) -> std::collections::HashMap<String, serde_json::Value> {
+    let mut rows: std::collections::HashMap<String, serde_json::Value> = seed.into_iter().collect();
     for ev in events {
         let raw = ev
             .record_id
@@ -619,7 +697,7 @@ fn project_table_hash(
             }
         }
     }
-    ssp_protocol::snapshot_hash::xor_table_hash(rows.into_iter())
+    rows
 }
 
 #[cfg(test)]

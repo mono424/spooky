@@ -1375,6 +1375,13 @@ impl BackendProcessor {
             if app.app_type != AppType::Backend {
                 continue;
             }
+            // devOnly backends are local-only host processes (e.g. the LiveKit SFU
+            // run via `dev: "livekit-server …"`); they carry no spec/method/schema
+            // to apply, matching AppConfig::validate's devOnly early-return. Without
+            // this skip, process_backend bails "missing 'method' field".
+            if app.scope == AppScope::DevOnly {
+                continue;
+            }
             self.process_backend(name, app, base_dir)?;
         }
 
@@ -1695,5 +1702,65 @@ mod version_tests {
 
         assert_eq!(r.scheduler_image().as_deref(), Some("mono424/spooky-scheduler:canary"));
         assert!(r.scheduler_local_binary().is_none());
+    }
+}
+
+#[cfg(test)]
+mod process_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_config(yaml: &str) -> (TempDir, std::path::PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("sp00ky.yml");
+        std::fs::write(&path, yaml).unwrap();
+        (dir, path)
+    }
+
+    /// A `type: backend` + `scope: devOnly` app (the native LiveKit SFU pattern:
+    /// only a `dev:` command, no spec/method) must be SKIPPED by process(), not
+    /// rejected. Regression for "Backend 'livekit' is missing 'method' field"
+    /// that broke `spky dev`/migrate/generate once LiveKit moved off `type: docker`.
+    #[test]
+    fn devonly_backend_is_skipped_by_process() {
+        let yaml = "\
+slug: t
+surrealdb:
+  namespace: main
+  database: main
+apps:
+  livekit:
+    type: backend
+    scope: devOnly
+    dev: \"livekit-server --dev --bind 0.0.0.0\"
+";
+        let (_dir, path) = write_config(yaml);
+        let mut p = BackendProcessor::new();
+        let r = p.process(&path);
+        assert!(r.is_ok(), "devOnly backend should be skipped, got: {:?}", r.err());
+        // Nothing should have been appended for the skipped app.
+        assert!(
+            !p.schema_appends.contains("livekit"),
+            "skipped devOnly backend must not contribute schema"
+        );
+    }
+
+    /// The skip is scoped to devOnly only: a normal (deployed) backend missing
+    /// `method` must still error, so the check isn't silently dropped for everyone.
+    #[test]
+    fn non_devonly_backend_without_method_still_errors() {
+        let yaml = "\
+slug: t
+surrealdb:
+  namespace: main
+  database: main
+apps:
+  foo:
+    type: backend
+";
+        let (_dir, path) = write_config(yaml);
+        let mut p = BackendProcessor::new();
+        let r = p.process(&path);
+        assert!(r.is_err(), "non-devOnly backend without method must still error");
     }
 }

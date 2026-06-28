@@ -58,18 +58,28 @@ pub fn empty_table_hash() -> String {
     hash_table(std::iter::empty())
 }
 
-/// Drop reserved `_00_*` metadata keys from a record's top-level object.
+/// Normalize a record's top-level object so the scheduler replica and the SSP
+/// circuit hash equal content identically. Two top-level keys are dropped:
 ///
-/// `_00_` is a reserved sp00ky metadata prefix and is never user content, so
-/// removing it is safe. Only **top-level** keys are stripped — matching the
-/// scheduler replica's SCHEMAFULL `SELECT *`, which drops only undefined
-/// top-level fields while preserving nested object content inside a defined
-/// field. Non-object values pass through unchanged.
+/// 1. Reserved `_00_*` metadata keys — a reserved sp00ky prefix, never user
+///    content. The SSP circuit keeps them (the ingest event payload stamps
+///    `_00_rv`); the replica's SCHEMAFULL `SELECT *` never returns them.
+/// 2. Keys whose value is `null` — treated as absent. The replica's SCHEMAFULL
+///    `SELECT *` materializes an unset `option<...>` field as JSON `null`,
+///    whereas the SSP circuit stores rows verbatim from the ingest event
+///    payload, which OMITS unset optionals. Without this, any row with an unset
+///    optional (e.g. `broadcast.target_renderer`, `renderer_device.owner`)
+///    hashes differently on the two sides, fails the catch-up integrity check,
+///    and force-re-bootstraps the SSP forever.
+///
+/// Only **top-level** keys are stripped — matching the replica's `SELECT *`,
+/// which drops only undefined top-level fields while preserving nested object
+/// content inside a defined field. Non-object values pass through unchanged.
 fn strip_reserved_keys(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .filter(|(k, _)| !k.starts_with("_00_"))
+                .filter(|(k, v)| !k.starts_with("_00_") && !v.is_null())
                 .collect(),
         ),
         other => other,
@@ -318,6 +328,33 @@ mod tests {
     }
 
     #[test]
+    fn ignores_null_optional_fields() {
+        // The SCHEMAFULL replica `SELECT *` materializes an unset `option<...>`
+        // field as JSON null; the SSP circuit stores the event payload, which
+        // omits it. The two MUST hash identically — otherwise a row with an
+        // unset optional (e.g. `broadcast.target_renderer`) trips the catch-up
+        // check and re-bootstraps the SSP forever.
+        let replica = vec![(
+            "B_x".to_string(),
+            json!({"id": "broadcast:B_x", "title": "G", "target_renderer": null, "camera_key": null}),
+        )];
+        let circuit = vec![(
+            "B_x".to_string(),
+            json!({"id": "broadcast:B_x", "title": "G"}),
+        )];
+        assert_eq!(hash_table(replica), hash_table(circuit));
+    }
+
+    #[test]
+    fn null_strip_is_top_level_only() {
+        // A null nested *inside* a defined field is real content on both sides;
+        // changing it must still change the hash (don't over-strip).
+        let a = vec![("r1".to_string(), json!({"meta": {"x": null}}))];
+        let b = vec![("r1".to_string(), json!({"meta": {"x": 1}}))];
+        assert_ne!(hash_table(a), hash_table(b));
+    }
+
+    #[test]
     fn diff_finds_differing_tables() {
         let mut a = BTreeMap::new();
         a.insert("t1".to_string(), "b3:aaaa".to_string());
@@ -393,6 +430,20 @@ mod tests {
             json!({"id": "comment:CM_x", "content": "hi"}),
         )];
         assert_eq!(xor_table_hash(circuit), xor_table_hash(replica));
+    }
+
+    #[test]
+    fn xor_ignores_null_optional_fields() {
+        // Same null==absent parity as the sorted hash, on the incremental path.
+        let replica = vec![(
+            "B_x".to_string(),
+            json!({"id": "broadcast:B_x", "title": "G", "target_renderer": null}),
+        )];
+        let circuit = vec![(
+            "B_x".to_string(),
+            json!({"id": "broadcast:B_x", "title": "G"}),
+        )];
+        assert_eq!(xor_table_hash(replica), xor_table_hash(circuit));
     }
 
     #[test]
