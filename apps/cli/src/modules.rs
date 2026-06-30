@@ -17,11 +17,17 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
     {
         Ok(status) => {
             if !status.success() {
-                println!("Warning: 'rustup target add wasm32-wasip1' failed with status: {}", status);
+                println!(
+                    "Warning: 'rustup target add wasm32-wasip1' failed with status: {}",
+                    status
+                );
             }
         }
         Err(e) => {
-             println!("Warning: Could not run 'rustup'. Is it installed? Error: {}", e);
+            println!(
+                "Warning: Could not run 'rustup'. Is it installed? Error: {}",
+                e
+            );
         }
     }
 
@@ -43,7 +49,10 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
                     .args(&["build", "--release", "--target", "wasm32-wasip1"])
                     .current_dir(&path)
                     .status()
-                    .context(format!("Failed to run cargo build for module {}", module_name))?;
+                    .context(format!(
+                        "Failed to run cargo build for module {}",
+                        module_name
+                    ))?;
 
                 if !status.success() {
                     anyhow::bail!("Compilation failed for module {}", module_name);
@@ -71,17 +80,17 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
                     // The user's output shows `xor_module.surli`.
                     let output_filename = format!("{}.surli", module_name);
                     let dest_path = output_dir.join(&output_filename);
-                    
+
                     // Package into .surli (ZSTD compressed TAR)
                     println!("    Packaging {}...", output_filename);
-                    
+
                     // Create TAR in memory
                     let mut tar_builder = tar::Builder::new(Vec::new());
-                    
+
                     // Add mod.wasm
                     let mut wasm_file = fs::File::open(&wasm_path)?;
                     tar_builder.append_file("mod.wasm", &mut wasm_file)?;
-                    
+
                     // Add surrealism.toml if exists
                     let manifest_path = path.join("surrealism.toml");
                     if manifest_path.exists() {
@@ -90,15 +99,16 @@ pub fn compile_modules(modules_dir: &Path, output_dir: &Path) -> Result<()> {
                     } else {
                         println!("    Warning: No surrealism.toml found for {}", module_name);
                     }
-                    
+
                     let tar_data = tar_builder.into_inner()?;
-                    
+
                     // Compress with ZSTD
-                    let compressed_data = zstd::stream::encode_all(std::io::Cursor::new(tar_data), 0)?;
-                    
+                    let compressed_data =
+                        zstd::stream::encode_all(std::io::Cursor::new(tar_data), 0)?;
+
                     // Write to output
                     fs::write(&dest_path, compressed_data)?;
-                    
+
                     println!("    ✓ Packaged to {:?}", dest_path);
                 }
             }

@@ -2,13 +2,13 @@ use anyhow::{Context, Result};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     execute,
-    style::{Attribute, Color, Print, SetAttribute, SetForegroundColor, ResetColor},
+    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     terminal::{self, Clear, ClearType},
 };
 use inquire::Select;
 use inquire::Text;
 use std::fs;
-use std::io::{self, Write, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -16,8 +16,6 @@ use std::time::{Duration, SystemTime};
 
 use crate::doctor;
 use crate::package_manager::{self, PackageManager};
-
-
 
 // ---------------------------------------------------------------------------
 // Version
@@ -81,7 +79,8 @@ mod templates {
     // AI setup templates
     pub const CLAUDE_MD_FULL: &str = include_str!("templates/shared/claude-md-full.tmpl");
     pub const CLAUDE_MD_SCHEMA: &str = include_str!("templates/shared/claude-md-schema.tmpl");
-    pub const CLAUDE_SETTINGS_JSON: &str = include_str!("templates/shared/claude-settings.json.tmpl");
+    pub const CLAUDE_SETTINGS_JSON: &str =
+        include_str!("templates/shared/claude-settings.json.tmpl");
 }
 
 // ---------------------------------------------------------------------------
@@ -352,10 +351,13 @@ pub fn scaffold(root_path: &Path, opts: &ScaffoldOptions) -> Result<()> {
         };
         write_file(
             root_path.join("sp00ky.yml"),
-            &render(templates::SP00KY_YML, &[
-                ("SCHEMA_DIR", "packages/schema"),
-                ("CLIENT_TYPES_SECTION", &client_types_section),
-            ]),
+            &render(
+                templates::SP00KY_YML,
+                &[
+                    ("SCHEMA_DIR", "packages/schema"),
+                    ("CLIENT_TYPES_SECTION", &client_types_section),
+                ],
+            ),
         )?;
 
         if pm == PackageManager::Pnpm {
@@ -373,14 +375,17 @@ pub fn scaffold(root_path: &Path, opts: &ScaffoldOptions) -> Result<()> {
 
         write_file(
             root_path.join("package.json"),
-            &render(templates::ROOT_PACKAGE_JSON, &[
-                ("PROJECT_NAME", &project_name),
-                ("VERSION", VERSION),
-                ("APP_DEV_CMD", &app_dev_cmd),
-                ("APP_BUILD_CMD", &app_build_cmd),
-                ("WORKSPACES_BLOCK", &workspaces_block),
-                ("OVERRIDES_BLOCK", &overrides_block),
-            ]),
+            &render(
+                templates::ROOT_PACKAGE_JSON,
+                &[
+                    ("PROJECT_NAME", &project_name),
+                    ("VERSION", VERSION),
+                    ("APP_DEV_CMD", &app_dev_cmd),
+                    ("APP_BUILD_CMD", &app_build_cmd),
+                    ("WORKSPACES_BLOCK", &workspaces_block),
+                    ("OVERRIDES_BLOCK", &overrides_block),
+                ],
+            ),
         )?;
 
         write_app_package(root_path, &project_name, schema_template.has_auth())?;
@@ -389,7 +394,11 @@ pub fn scaffold(root_path: &Path, opts: &ScaffoldOptions) -> Result<()> {
     write_file(
         root_path.join("CLAUDE.md"),
         &render(
-            if is_schema_only { templates::CLAUDE_MD_SCHEMA } else { templates::CLAUDE_MD_FULL },
+            if is_schema_only {
+                templates::CLAUDE_MD_SCHEMA
+            } else {
+                templates::CLAUDE_MD_FULL
+            },
             &[("PROJECT_NAME", &project_name)],
         ),
     )?;
@@ -461,7 +470,11 @@ pub fn create_project() -> Result<()> {
 
     println!(
         "\n  Creating {} project \x1b[1m{}\x1b[0m with {} schema...",
-        if is_schema_only { "schema-only" } else { "full" },
+        if is_schema_only {
+            "schema-only"
+        } else {
+            "full"
+        },
         project_name,
         schema_type
     );
@@ -557,8 +570,8 @@ pub fn create_project() -> Result<()> {
                     // Use the current binary directly instead of the npm-installed one,
                     // so we always get the latest config-loading behavior.
                     if !is_schema_only {
-                        let current_exe = std::env::current_exe()
-                            .unwrap_or_else(|_| PathBuf::from("sp00ky"));
+                        let current_exe =
+                            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("sp00ky"));
 
                         println!("\n  Running sp00ky generate...");
                         match Command::new(&current_exe)
@@ -596,7 +609,9 @@ pub fn create_project() -> Result<()> {
                                     println!("  \x1b[32m\u{2713}\x1b[0m Initial migration created");
                                 }
                                 _ => {
-                                    println!("  \x1b[33m!\x1b[0m Could not create initial migration");
+                                    println!(
+                                        "  \x1b[33m!\x1b[0m Could not create initial migration"
+                                    );
                                 }
                             }
                         }
@@ -657,9 +672,7 @@ pub fn create_project() -> Result<()> {
     println!(
         "\n  \x1b[2mAI: CLAUDE.md and .claude/ configured. Install the Sp00ky DevTools\x1b[0m"
     );
-    println!(
-        "  \x1b[2mbrowser extension for live MCP debugging access.\x1b[0m"
-    );
+    println!("  \x1b[2mbrowser extension for live MCP debugging access.\x1b[0m");
 
     println!();
     Ok(())
@@ -674,9 +687,7 @@ fn workspaces_block(pm: PackageManager) -> String {
     match pm {
         // pnpm uses pnpm-workspace.yaml; nothing to inject here.
         PackageManager::Pnpm => String::new(),
-        PackageManager::Npm => {
-            ",\n  \"workspaces\": [\"apps/*\", \"packages/*\"]".to_string()
-        }
+        PackageManager::Npm => ",\n  \"workspaces\": [\"apps/*\", \"packages/*\"]".to_string(),
     }
 }
 
@@ -750,7 +761,10 @@ fn write_schema_package(
     // devDependencies for schema package
     let dev_dependencies = if is_schema_only {
         // Schema-only: CLI dep lives here
-        format!(",\n  \"devDependencies\": {{\n    \"@spooky-sync/cli\": \"{}\"\n  }}", VERSION)
+        format!(
+            ",\n  \"devDependencies\": {{\n    \"@spooky-sync/cli\": \"{}\"\n  }}",
+            VERSION
+        )
     } else {
         // Full project: CLI dep is at root
         String::new()
@@ -758,11 +772,14 @@ fn write_schema_package(
 
     write_file(
         schema_path.join("package.json"),
-        &render(templates::SCHEMA_PACKAGE_JSON, &[
-            ("PACKAGE_NAME", &pkg_name),
-            ("SCRIPTS", &scripts),
-            ("DEV_DEPENDENCIES", &dev_dependencies),
-        ]),
+        &render(
+            templates::SCHEMA_PACKAGE_JSON,
+            &[
+                ("PACKAGE_NAME", &pkg_name),
+                ("SCRIPTS", &scripts),
+                ("DEV_DEPENDENCIES", &dev_dependencies),
+            ],
+        ),
     )?;
 
     // sp00ky.yml — only for schema-only projects (full projects write it at root)
@@ -786,10 +803,13 @@ fn write_schema_package(
 
         write_file(
             schema_path.join("sp00ky.yml"),
-            &render(templates::SP00KY_YML, &[
-                ("SCHEMA_DIR", "."),
-                ("CLIENT_TYPES_SECTION", &client_types_section),
-            ]),
+            &render(
+                templates::SP00KY_YML,
+                &[
+                    ("SCHEMA_DIR", "."),
+                    ("CLIENT_TYPES_SECTION", &client_types_section),
+                ],
+            ),
         )?;
     }
 
@@ -808,31 +828,49 @@ fn write_app_package(root_path: &Path, project_name: &str, has_auth: bool) -> Re
     let app_path = root_path.join("apps/app");
     fs::create_dir_all(app_path.join("src"))?;
 
-    let vars: &[(&str, &str)] = &[
-        ("PROJECT_NAME", project_name),
-        ("VERSION", VERSION),
-    ];
+    let vars: &[(&str, &str)] = &[("PROJECT_NAME", project_name), ("VERSION", VERSION)];
 
     // Config files
-    write_file(app_path.join("package.json"), &render(templates::APP_PACKAGE_JSON, vars))?;
+    write_file(
+        app_path.join("package.json"),
+        &render(templates::APP_PACKAGE_JSON, vars),
+    )?;
     write_file(app_path.join("vite.config.ts"), templates::APP_VITE_CONFIG)?;
     write_file(app_path.join("tsconfig.json"), templates::APP_TSCONFIG)?;
-    write_file(app_path.join("tailwind.config.js"), templates::APP_TAILWIND_CONFIG)?;
-    write_file(app_path.join("postcss.config.js"), templates::APP_POSTCSS_CONFIG)?;
-    write_file(app_path.join("index.html"), &render(templates::APP_INDEX_HTML, vars))?;
+    write_file(
+        app_path.join("tailwind.config.js"),
+        templates::APP_TAILWIND_CONFIG,
+    )?;
+    write_file(
+        app_path.join("postcss.config.js"),
+        templates::APP_POSTCSS_CONFIG,
+    )?;
+    write_file(
+        app_path.join("index.html"),
+        &render(templates::APP_INDEX_HTML, vars),
+    )?;
 
     // Source files
     write_file(app_path.join("src/main.tsx"), templates::APP_MAIN_TSX)?;
     write_file(app_path.join("src/global.css"), templates::APP_GLOBAL_CSS)?;
     write_file(app_path.join("src/db.ts"), templates::APP_DB_TS)?;
-    write_file(app_path.join("src/schema.gen.ts"), templates::APP_SCHEMA_GEN)?;
+    write_file(
+        app_path.join("src/schema.gen.ts"),
+        templates::APP_SCHEMA_GEN,
+    )?;
 
     // Auth-conditional files
     if has_auth {
-        write_file(app_path.join("src/App.tsx"), &render(templates::APP_TSX, vars))?;
+        write_file(
+            app_path.join("src/App.tsx"),
+            &render(templates::APP_TSX, vars),
+        )?;
         write_file(app_path.join("src/auth.tsx"), templates::APP_AUTH_TSX)?;
     } else {
-        write_file(app_path.join("src/App.tsx"), &render(templates::APP_NOAUTH_TSX, vars))?;
+        write_file(
+            app_path.join("src/App.tsx"),
+            &render(templates::APP_NOAUTH_TSX, vars),
+        )?;
     }
 
     Ok(())
@@ -878,14 +916,17 @@ mod tests {
 
     fn render_root_pkg(pm: PackageManager, project: &str) -> String {
         let app_pkg = format!("@{}/app", project);
-        render(templates::ROOT_PACKAGE_JSON, &[
-            ("PROJECT_NAME", project),
-            ("VERSION", VERSION),
-            ("APP_DEV_CMD", &pm.run_filter(&app_pkg, "dev")),
-            ("APP_BUILD_CMD", &pm.run_filter(&app_pkg, "build")),
-            ("WORKSPACES_BLOCK", &workspaces_block(pm)),
-            ("OVERRIDES_BLOCK", &overrides_block(pm, VERSION)),
-        ])
+        render(
+            templates::ROOT_PACKAGE_JSON,
+            &[
+                ("PROJECT_NAME", project),
+                ("VERSION", VERSION),
+                ("APP_DEV_CMD", &pm.run_filter(&app_pkg, "dev")),
+                ("APP_BUILD_CMD", &pm.run_filter(&app_pkg, "build")),
+                ("WORKSPACES_BLOCK", &workspaces_block(pm)),
+                ("OVERRIDES_BLOCK", &overrides_block(pm, VERSION)),
+            ],
+        )
     }
 
     fn parse_json(label: &str, raw: &str) -> JsonValue {
@@ -929,7 +970,10 @@ mod tests {
             "pnpm.overrides should hold sp00ky package pins"
         );
         // Should not emit npm-specific shapes
-        assert!(v.get("workspaces").is_none(), "pnpm variant uses pnpm-workspace.yaml");
+        assert!(
+            v.get("workspaces").is_none(),
+            "pnpm variant uses pnpm-workspace.yaml"
+        );
         assert!(
             v.get("overrides").is_none(),
             "pnpm variant should not have a top-level overrides field"
@@ -954,43 +998,60 @@ mod tests {
         // Top-level overrides (closest npm equivalent to pnpm.overrides)
         assert!(v["overrides"]["@spooky-sync/core"].is_string());
         // Should not emit pnpm-specific shapes
-        assert!(v.get("pnpm").is_none(), "npm variant should not emit a pnpm key");
+        assert!(
+            v.get("pnpm").is_none(),
+            "npm variant should not emit a pnpm key"
+        );
         // Scripts should target npm
         let dev_app = v["scripts"]["dev:app"].as_str().unwrap();
         assert!(dev_app.starts_with("npm run -w"), "got {}", dev_app);
         // CLI is a runtime dependency so npx-scaffolded users get spky on PATH via node_modules/.bin
         assert_eq!(v["dependencies"]["@spooky-sync/cli"], VERSION);
-        assert!(v.get("devDependencies").is_none() || v["devDependencies"].get("@spooky-sync/cli").is_none(),
-            "@spooky-sync/cli must live in dependencies, not devDependencies");
+        assert!(
+            v.get("devDependencies").is_none()
+                || v["devDependencies"].get("@spooky-sync/cli").is_none(),
+            "@spooky-sync/cli must live in dependencies, not devDependencies"
+        );
     }
 
     // --- Per-config sanity: sp00ky.yml renders ---
 
     #[test]
     fn sp00ky_yml_full_project_render_parses_with_canonical_schema() {
-        let client_types = "\nclientTypes:\n  - format: typescript\n    output: apps/app/src/schema.gen.ts";
-        let raw = render(templates::SP00KY_YML, &[
-            ("SCHEMA_DIR", "packages/schema"),
-            ("CLIENT_TYPES_SECTION", client_types),
-        ]);
+        let client_types =
+            "\nclientTypes:\n  - format: typescript\n    output: apps/app/src/schema.gen.ts";
+        let raw = render(
+            templates::SP00KY_YML,
+            &[
+                ("SCHEMA_DIR", "packages/schema"),
+                ("CLIENT_TYPES_SECTION", client_types),
+            ],
+        );
         assert_no_unrendered_placeholders("sp00ky.yml (full)", &raw);
 
         let cfg = parse_sp00ky_yml(&raw);
-        assert_eq!(cfg.client_types.len(), 1, "clientTypes should contain one entry");
+        assert_eq!(
+            cfg.client_types.len(),
+            1,
+            "clientTypes should contain one entry"
+        );
         // Mode is optional in the parser but the template emits singlenode by default.
         assert!(raw.contains("mode: singlenode"));
         // Optional examples must remain commented so they don't pollute the active config.
-        assert!(raw.contains("# slug:"), "slug example should stay commented");
+        assert!(
+            raw.contains("# slug:"),
+            "slug example should stay commented"
+        );
         assert!(raw.contains("# surrealdb:"));
     }
 
     #[test]
     fn sp00ky_yml_schema_only_render_parses_with_canonical_schema() {
         // Schema-only writes the yml with SCHEMA_DIR="." and no clientTypes section
-        let raw = render(templates::SP00KY_YML, &[
-            ("SCHEMA_DIR", "."),
-            ("CLIENT_TYPES_SECTION", ""),
-        ]);
+        let raw = render(
+            templates::SP00KY_YML,
+            &[("SCHEMA_DIR", "."), ("CLIENT_TYPES_SECTION", "")],
+        );
         assert_no_unrendered_placeholders("sp00ky.yml (schema-only)", &raw);
         let _ = parse_sp00ky_yml(&raw);
     }
@@ -998,10 +1059,13 @@ mod tests {
     #[test]
     fn sp00ky_yml_skip_codegen_render_parses() {
         // codegen=Skip: scaffold passes empty CLIENT_TYPES_SECTION
-        let raw = render(templates::SP00KY_YML, &[
-            ("SCHEMA_DIR", "packages/schema"),
-            ("CLIENT_TYPES_SECTION", ""),
-        ]);
+        let raw = render(
+            templates::SP00KY_YML,
+            &[
+                ("SCHEMA_DIR", "packages/schema"),
+                ("CLIENT_TYPES_SECTION", ""),
+            ],
+        );
         let cfg = parse_sp00ky_yml(&raw);
         assert!(cfg.client_types.is_empty());
     }

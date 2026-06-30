@@ -20,11 +20,7 @@ pub struct SchemaBuilderConfig {
 /// Build ONLY the remote functions SQL (heartbeat + mode-specific functions
 /// with endpoint/secret substitution).  Used by `dev.rs` to apply functions
 /// separately with Docker-internal URLs.
-pub fn build_remote_functions_schema(
-    mode: &DeployMode,
-    endpoint: &str,
-    secret: &str,
-) -> String {
+pub fn build_remote_functions_schema(mode: &DeployMode, endpoint: &str, secret: &str) -> String {
     let mut content = String::new();
 
     // Set database-level params so events can reference them without hardcoding
@@ -114,10 +110,7 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
         } else {
             "http://localhost:8667"
         };
-        let endpoint = config
-            .endpoint
-            .as_deref()
-            .unwrap_or(default_endpoint);
+        let endpoint = config.endpoint.as_deref().unwrap_or(default_endpoint);
         let secret = config.secret.as_deref().unwrap_or("");
 
         let functions_sql = build_remote_functions_schema(&config.mode, endpoint, secret);
@@ -258,20 +251,18 @@ pub fn rewrite_crdt_cursor_fields(content: &str) -> String {
 /// If a table already carries a `COMMENT`, the marker token is merged into the
 /// existing comment text rather than emitting a second (invalid) COMMENT clause.
 pub fn add_nosync_markers(content: &str, source: &str) -> String {
-    let nosync: std::collections::HashSet<String> =
-        annotations::extract_table_annotations(source)
-            .into_iter()
-            .filter(|(_, anns)| anns.iter().any(|a| a.name == "nosync"))
-            .map(|(t, _)| t)
-            .collect();
+    let nosync: std::collections::HashSet<String> = annotations::extract_table_annotations(source)
+        .into_iter()
+        .filter(|(_, anns)| anns.iter().any(|a| a.name == "nosync"))
+        .map(|(t, _)| t)
+        .collect();
     if nosync.is_empty() {
         return content.to_string();
     }
 
-    let define_table_re = Regex::new(
-        r"(?i)^\s*DEFINE\s+TABLE\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)",
-    )
-    .expect("static regex");
+    let define_table_re =
+        Regex::new(r"(?i)^\s*DEFINE\s+TABLE\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)")
+            .expect("static regex");
 
     let lines: Vec<&str> = content.lines().collect();
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
@@ -362,7 +353,9 @@ pub fn rewrite_idioms_for_meta(expr: &str, local_fields: &BTreeSet<String>) -> S
     // `$parent.` prefix because subquery scoping resolves bare idioms
     // against the subquery row, not the outer scope.
     let parent_id_re = Regex::new(r"\$parent\.id\b").unwrap();
-    out = parent_id_re.replace_all(&out, "$$parent.record_id").to_string();
+    out = parent_id_re
+        .replace_all(&out, "$$parent.record_id")
+        .to_string();
 
     // Each table-local field name → `record_id.<field>`, but only when
     // it appears as a bare identifier (not preceded by `.` or `$`, not
@@ -424,8 +417,14 @@ mod tests {
         let src = "-- @nosync\nDEFINE TABLE secrets SCHEMALESS PERMISSIONS FOR select WHERE false;\nDEFINE TABLE public SCHEMALESS;\n";
         let out = add_nosync_markers(src, src);
         let secrets = out.lines().find(|l| l.contains("TABLE secrets")).unwrap();
-        assert!(secrets.contains("COMMENT 'sp00ky:nosync'"), "got: {secrets}");
-        assert!(secrets.trim_end().ends_with(';'), "marker before semicolon: {secrets}");
+        assert!(
+            secrets.contains("COMMENT 'sp00ky:nosync'"),
+            "got: {secrets}"
+        );
+        assert!(
+            secrets.trim_end().ends_with(';'),
+            "marker before semicolon: {secrets}"
+        );
         let public = out.lines().find(|l| l.contains("TABLE public")).unwrap();
         assert!(!public.contains("sp00ky:nosync"));
     }
@@ -435,7 +434,11 @@ mod tests {
         let src = "-- @nosync\nDEFINE TABLE secrets SCHEMALESS COMMENT 'sensitive';\n";
         let out = add_nosync_markers(src, src);
         // Single COMMENT clause containing both texts.
-        assert_eq!(out.matches("COMMENT").count(), 1, "exactly one COMMENT: {out}");
+        assert_eq!(
+            out.matches("COMMENT").count(),
+            1,
+            "exactly one COMMENT: {out}"
+        );
         assert!(out.contains("sensitive"));
         assert!(out.contains("sp00ky:nosync"));
     }

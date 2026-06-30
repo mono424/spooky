@@ -269,7 +269,9 @@ impl JsonSchemaGenerator {
         }
 
         // Add Buckets definitions (objects with constraints)
-        let bucket_objects: Vec<Value> = parser.buckets.values()
+        let bucket_objects: Vec<Value> = parser
+            .buckets
+            .values()
             .map(|bucket| {
                 let mut obj = serde_json::Map::new();
                 obj.insert("name".to_string(), Value::String(bucket.name.clone()));
@@ -277,8 +279,16 @@ impl JsonSchemaGenerator {
                     obj.insert("maxSize".to_string(), json!(max_size));
                 }
                 if !bucket.allowed_extensions.is_empty() {
-                    obj.insert("allowedExtensions".to_string(),
-                        Value::Array(bucket.allowed_extensions.iter().map(|e| Value::String(e.clone())).collect()));
+                    obj.insert(
+                        "allowedExtensions".to_string(),
+                        Value::Array(
+                            bucket
+                                .allowed_extensions
+                                .iter()
+                                .map(|e| Value::String(e.clone()))
+                                .collect(),
+                        ),
+                    );
                 }
                 if bucket.path_prefix_auth {
                     obj.insert("pathPrefixAuth".to_string(), Value::Bool(true));
@@ -287,10 +297,13 @@ impl JsonSchemaGenerator {
             })
             .collect();
         if !bucket_objects.is_empty() {
-            definitions.insert("Buckets".to_string(), json!({
-                "type": "array",
-                "const": bucket_objects
-            }));
+            definitions.insert(
+                "Buckets".to_string(),
+                json!({
+                    "type": "array",
+                    "const": bucket_objects
+                }),
+            );
         }
 
         for (table_name, table_schema) in &parser.tables {
@@ -615,12 +628,11 @@ DEFINE FIELD token ON TABLE secrets TYPE string;
 
         // @nosync table has no definition and no property.
         assert!(js.definitions.contains_key("public"));
-        assert!(!js.definitions.contains_key("secrets"), "nosync table must be omitted");
-        assert!(!js
-            .properties
-            .as_ref()
-            .unwrap()
-            .contains_key("secrets"));
+        assert!(
+            !js.definitions.contains_key("secrets"),
+            "nosync table must be omitted"
+        );
+        assert!(!js.properties.as_ref().unwrap().contains_key("secrets"));
 
         // No relationship (forward or reverse) references the nosync table.
         if let Some(rels) = js.definitions.get("Relationships") {

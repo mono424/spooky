@@ -29,12 +29,18 @@ pub fn rewrite_crdt_cursor_type(line: &str, annotations: &[FieldAnnotation]) -> 
     // Take the EARLIEST keyword in the string, not the first in this list:
     // clause orders like `TYPE bool DEFAULT false PERMISSIONS ...` must not
     // stop at PERMISSIONS and drop the intervening `DEFAULT false` clause.
-    let type_end = [" ASSERT ", " VALUE ", " PERMISSIONS ", " DEFAULT ", " READONLY "]
-        .iter()
-        .filter_map(|kw| after_type.find(kw))
-        .chain(after_type.find(';'))
-        .min()
-        .unwrap_or(after_type.len());
+    let type_end = [
+        " ASSERT ",
+        " VALUE ",
+        " PERMISSIONS ",
+        " DEFAULT ",
+        " READONLY ",
+    ]
+    .iter()
+    .filter_map(|kw| after_type.find(kw))
+    .chain(after_type.find(';'))
+    .min()
+    .unwrap_or(after_type.len());
     let rest = &after_type[type_end..];
     Some(format!("{}option<object> FLEXIBLE{}", before_type, rest))
 }
@@ -175,10 +181,8 @@ pub fn extract_field_annotations(
 /// - Trailing `; -- @name` after the statement is also supported
 pub fn extract_table_annotations(content: &str) -> BTreeMap<String, Vec<FieldAnnotation>> {
     let annotation_re = Regex::new(r"^--\s*@([a-z][a-z0-9_]*)(?:\s+(.+?))?\s*$").unwrap();
-    let define_table_re = Regex::new(
-        r"(?i)^DEFINE\s+TABLE\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)",
-    )
-    .unwrap();
+    let define_table_re =
+        Regex::new(r"(?i)^DEFINE\s+TABLE\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)").unwrap();
 
     let mut result: BTreeMap<String, Vec<FieldAnnotation>> = BTreeMap::new();
     let mut pending: Vec<FieldAnnotation> = Vec::new();
@@ -317,8 +321,14 @@ DEFINE FIELD content ON TABLE thread TYPE string;
         // tail (DEFAULT + PERMISSIONS) after the rewritten type rather than
         // stopping at PERMISSIONS and silently dropping the DEFAULT clause.
         let anns = [
-            FieldAnnotation { name: "crdt".into(), value: Some("text".into()) },
-            FieldAnnotation { name: "cursor".into(), value: None },
+            FieldAnnotation {
+                name: "crdt".into(),
+                value: Some("text".into()),
+            },
+            FieldAnnotation {
+                name: "cursor".into(),
+                value: None,
+            },
         ];
         let line = "DEFINE FIELD content ON TABLE thread TYPE string DEFAULT {} PERMISSIONS FOR update WHERE true";
         let got = rewrite_crdt_cursor_type(line, &anns).expect("should rewrite");

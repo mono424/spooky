@@ -76,7 +76,11 @@ pub fn ensure_ports_free(checks: Vec<(u16, String)>, prefix: &str) -> Result<()>
             continue;
         }
         let status = probe(port);
-        results.push(PortCheck { port, service, status });
+        results.push(PortCheck {
+            port,
+            service,
+            status,
+        });
     }
 
     let any_blocked = results
@@ -84,7 +88,11 @@ pub fn ensure_ports_free(checks: Vec<(u16, String)>, prefix: &str) -> Result<()>
         .any(|r| !matches!(r.status, PortStatus::Free));
 
     if !any_blocked {
-        println!("{} Port check: all {} required port(s) free.", prefix, results.len());
+        println!(
+            "{} Port check: all {} required port(s) free.",
+            prefix,
+            results.len()
+        );
         return Ok(());
     }
 
@@ -100,8 +108,7 @@ pub fn ensure_ports_free(checks: Vec<(u16, String)>, prefix: &str) -> Result<()>
             "\n  {}Hint:{} find the listener with `lsof -nP -iTCP:{} -sTCP:LISTEN`,",
             ANSI_DIM, ANSI_RESET, p
         );
-        eprintln!(
-            "        and stop it (often a previous `spky dev` left a container running:");
+        eprintln!("        and stop it (often a previous `spky dev` left a container running:");
         eprintln!("        `docker ps` then `docker rm -f <name>`).");
     }
 

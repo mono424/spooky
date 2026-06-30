@@ -626,16 +626,27 @@ fn get(
         return Ok(());
     }
 
-    let job = parse_job_row(&row, tb, &backend_name).ok_or_else(|| anyhow!("Unexpected job shape"))?;
+    let job =
+        parse_job_row(&row, tb, &backend_name).ok_or_else(|| anyhow!("Unexpected job shape"))?;
     let (icon, color) = status_style(&job.status);
     println!("{BOLD}{}{RESET}", job.id);
     println!("  status      : {}{} {}{RESET}", color, icon, job.status);
     println!("  backend     : {}", job.backend);
     println!("  path        : {}", job.path);
-    println!("  retries     : {}/{} ({})", job.retries, job.max_retries, job.retry_strategy);
-    println!("  created     : {} {DIM}({} ago){RESET}", job.created_at, job.age().unwrap_or_else(|| "-".into()));
+    println!(
+        "  retries     : {}/{} ({})",
+        job.retries, job.max_retries, job.retry_strategy
+    );
+    println!(
+        "  created     : {} {DIM}({} ago){RESET}",
+        job.created_at,
+        job.age().unwrap_or_else(|| "-".into())
+    );
     println!("  updated     : {}", job.updated_at);
-    println!("  payload     : {}", serde_json::to_string(&job.payload).unwrap_or_default());
+    println!(
+        "  payload     : {}",
+        serde_json::to_string(&job.payload).unwrap_or_default()
+    );
     if job.errors.is_empty() {
         println!("  errors      : {DIM}none{RESET}");
     } else {
@@ -677,9 +688,8 @@ fn clear(client: &SurrealClient, tables: &BTreeMap<String, String>) -> Result<()
     for table in tables.keys() {
         // `table` is a config-derived identifier (same direct interpolation the
         // SELECTs use); `RETURN BEFORE` yields the deleted rows so we can count.
-        let query = format!(
-            "DELETE {table} WHERE status = 'success' OR status = 'failed' RETURN BEFORE;"
-        );
+        let query =
+            format!("DELETE {table} WHERE status = 'success' OR status = 'failed' RETURN BEFORE;");
         let responses = client
             .execute(&query)
             .with_context(|| format!("Failed to clear jobs in '{}'", table))?;
@@ -927,7 +937,9 @@ fn tui_loop(
                                     id,
                                     action_message(&v).unwrap_or_else(|| "ok".into())
                                 ),
-                                Err(e) => format!("kill {} failed: {}", id, first_line(&e.to_string())),
+                                Err(e) => {
+                                    format!("kill {} failed: {}", id, first_line(&e.to_string()))
+                                }
                             };
                             app.set_status(msg);
                             app.refresh(client, tables);
@@ -941,7 +953,9 @@ fn tui_loop(
                                     id,
                                     action_message(&v).unwrap_or_else(|| "ok".into())
                                 ),
-                                Err(e) => format!("retry {} failed: {}", id, first_line(&e.to_string())),
+                                Err(e) => {
+                                    format!("retry {} failed: {}", id, first_line(&e.to_string()))
+                                }
                             };
                             app.set_status(msg);
                             app.refresh(client, tables);
@@ -1030,12 +1044,10 @@ fn render_metrics(f: &mut Frame, area: Rect, app: &TuiApp) {
     ));
 
     let filter_label = app.filter.unwrap_or("all");
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            format!(" spky jobs · filter: {} ", filter_label),
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        format!(" spky jobs · filter: {} ", filter_label),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
     let para = Paragraph::new(vec![counts_line, detail_line]).block(block);
     f.render_widget(para, area);
 }
@@ -1056,7 +1068,13 @@ fn render_table(f: &mut Frame, area: Rect, app: &mut TuiApp) {
     }
 
     let header = Row::new(vec![
-        "ID", "BACKEND", "PATH", "STATUS", "RETRY", "AGE", "LAST ERROR",
+        "ID",
+        "BACKEND",
+        "PATH",
+        "STATUS",
+        "RETRY",
+        "AGE",
+        "LAST ERROR",
     ])
     .style(Style::default().add_modifier(Modifier::BOLD))
     .bottom_margin(0);
@@ -1145,7 +1163,13 @@ fn render_detail(f: &mut Frame, app: &TuiApp) {
         kv("backend", &job.backend),
         kv("table", &job.table),
         kv("path", &job.path),
-        kv("retries", &format!("{}/{} ({})", job.retries, job.max_retries, job.retry_strategy)),
+        kv(
+            "retries",
+            &format!(
+                "{}/{} ({})",
+                job.retries, job.max_retries, job.retry_strategy
+            ),
+        ),
         kv(
             "created",
             &format!(
@@ -1157,7 +1181,10 @@ fn render_detail(f: &mut Frame, app: &TuiApp) {
         kv("updated", &job.updated_at),
         kv(
             "payload",
-            &truncate(&serde_json::to_string(&job.payload).unwrap_or_default(), 200),
+            &truncate(
+                &serde_json::to_string(&job.payload).unwrap_or_default(),
+                200,
+            ),
         ),
         Line::from(""),
         Line::from(Span::styled(
@@ -1177,13 +1204,13 @@ fn render_detail(f: &mut Frame, app: &TuiApp) {
         lines.push(Line::from(format!("  #{} [{}] {}", i + 1, code, reason)));
     }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(
-            format!(" {} ", job.id),
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-    let para = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        format!(" {} ", job.id),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     f.render_widget(para, area);
 }
 

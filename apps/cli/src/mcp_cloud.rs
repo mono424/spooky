@@ -154,10 +154,12 @@ fn resolve_scopes(scopes: Option<String>, read_only: bool, yes: bool) -> Result<
         }
         s if s.starts_with("Full access") => vec!["mcp:full".to_string()],
         _ => {
-            let picked =
-                inquire::MultiSelect::new("Select scopes:", ALL_SCOPES.iter().map(|s| s.to_string()).collect())
-                    .prompt()
-                    .context("scope selection cancelled")?;
+            let picked = inquire::MultiSelect::new(
+                "Select scopes:",
+                ALL_SCOPES.iter().map(|s| s.to_string()).collect(),
+            )
+            .prompt()
+            .context("scope selection cancelled")?;
             if picked.is_empty() {
                 bail!("No scopes selected");
             }
@@ -182,10 +184,7 @@ pub fn list_tokens() -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{:<38} {:<16} {:<20} {}",
-        "ID", "NAME", "PREFIX", "SCOPES"
-    );
+    println!("{:<38} {:<16} {:<20} {}", "ID", "NAME", "PREFIX", "SCOPES");
     for t in &data {
         let scopes = t["scopes"]
             .as_array()

@@ -465,6 +465,11 @@
           "minimum": 1,
           "maximum": 65535
         },
+        "ports": {
+          "type": "array",
+          "description": "Additional published ports (e.g. ['3670:3670', '7882:7882/udp']). Used for apps requiring multiple ports. The primary 'port' is still required for Traefik routing.",
+          "items": { "type": "string" }
+        },
         "expose": {
           "type": "boolean",
           "description": "Expose the backend publicly via {slug}-{name}.spky.cloud.",
@@ -583,6 +588,21 @@
         },
         "backup": {
           "$ref": "#/$defs/backupConfig"
+        },
+        "storage": {
+          "$ref": "#/$defs/storageConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "storageConfig": {
+      "type": "object",
+      "description": "Persistent bucket storage. When sizeGB is set, buckets use a file backend on a volume mounted at /buckets (path file:/buckets/<name>) instead of memory, and the size provisions an extra disk (dev docker mount + cloud). sizeGB is provisioning size only, not a SurrealDB-enforced quota.",
+      "properties": {
+        "sizeGB": {
+          "type": "integer",
+          "description": "GB to allocate for persistent bucket files. A positive value enables the file backend for new buckets and mounts the storage volume.",
+          "minimum": 1
         }
       },
       "additionalProperties": false

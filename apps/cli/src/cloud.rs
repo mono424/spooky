@@ -5,13 +5,16 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use argon2::{Argon2, Algorithm, Version, Params};
+use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, HostingMode};
 use crate::surreal_client::MigrationDB;
-use crate::{CloudBackupCommands, CloudBillingCommands, CloudDomainCommands, CloudKeyCommands, CloudLinkCommands, CloudTeamCommands, CloudVaultCommands, EnvCommands, EnvResetCommands};
+use crate::{
+    CloudBackupCommands, CloudBillingCommands, CloudDomainCommands, CloudKeyCommands,
+    CloudLinkCommands, CloudTeamCommands, CloudVaultCommands, EnvCommands, EnvResetCommands,
+};
 
 /// Load vault environment variables for dev mode via the Cloud API.
 /// Returns key-value pairs. Returns empty vec (with warning) if not logged in or vault not initialized.
@@ -55,7 +58,10 @@ fn load_vault_secrets(prod: bool) -> Vec<(String, String)> {
     let derived_key = match get_derived_key(&mut client) {
         Ok(dk) => dk,
         Err(e) => {
-            eprintln!("  Warning: Could not load vault passphrase: {}. Skipping vault env vars.", e);
+            eprintln!(
+                "  Warning: Could not load vault passphrase: {}. Skipping vault env vars.",
+                e
+            );
             return Vec::new();
         }
     };
@@ -91,7 +97,9 @@ fn load_vault_secrets(prod: bool) -> Vec<(String, String)> {
 /// Quietly resolve the project ID from sp00ky.yml slug, without prompts.
 fn resolve_project_id_quiet(client: &mut CloudClient) -> Option<String> {
     let config_path = std::env::current_dir().ok()?.join("sp00ky.yml");
-    if !config_path.exists() { return None; }
+    if !config_path.exists() {
+        return None;
+    }
     let config = backend::load_config(&config_path);
     let slug = config.slug?;
     let project = fetch_project(client, &slug).ok()??;
@@ -124,11 +132,16 @@ pub(crate) fn api_base_url() -> String {
 /// api-stg.sp00ky.cloud → wss://{slug}-db.stg.spky.cloud/rpc
 /// api.sp00ky.cloud → wss://{slug}-db.spky.cloud/rpc
 fn derive_db_ws_endpoint(api_url: &str, slug: &str) -> Option<String> {
-    let host = api_url.strip_prefix("https://")
+    let host = api_url
+        .strip_prefix("https://")
         .or(api_url.strip_prefix("http://"))?
-        .split('/').next()?;
+        .split('/')
+        .next()?;
 
-    if let Some(stage) = host.strip_prefix("api-").and_then(|h| h.strip_suffix(".sp00ky.cloud")) {
+    if let Some(stage) = host
+        .strip_prefix("api-")
+        .and_then(|h| h.strip_suffix(".sp00ky.cloud"))
+    {
         // Staging: api-stg.sp00ky.cloud → {slug}-db.stg.spky.cloud
         Some(format!("wss://{}-db.{}.spky.cloud/rpc", slug, stage))
     } else if host.ends_with(".sp00ky.cloud") {
@@ -147,9 +160,15 @@ fn upload_base_url(api_url: &str) -> String {
         return url;
     }
     // Try to derive: api-{stage}.sp00ky.cloud → upload-{stage}.spky.cloud
-    if let Some(host) = api_url.strip_prefix("https://").or(api_url.strip_prefix("http://")) {
+    if let Some(host) = api_url
+        .strip_prefix("https://")
+        .or(api_url.strip_prefix("http://"))
+    {
         let host = host.split('/').next().unwrap_or(host);
-        if let Some(stage) = host.strip_prefix("api-").and_then(|h| h.strip_suffix(".sp00ky.cloud")) {
+        if let Some(stage) = host
+            .strip_prefix("api-")
+            .and_then(|h| h.strip_suffix(".sp00ky.cloud"))
+        {
             return format!("https://upload.{}.spky.cloud", stage);
         }
         if host == "api.sp00ky.cloud" {
@@ -194,8 +213,7 @@ fn load_credentials() -> Option<Credentials> {
 fn save_credentials(creds: &Credentials) -> Result<()> {
     let path = credentials_path();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .context("Failed to create ~/.sp00ky directory")?;
+        fs::create_dir_all(parent).context("Failed to create ~/.sp00ky directory")?;
     }
     let json = serde_json::to_string_pretty(creds)?;
     fs::write(&path, json).context("Failed to write credentials")?;
@@ -211,9 +229,8 @@ fn clear_credentials() -> Result<()> {
 }
 
 pub(crate) fn require_credentials() -> Result<Credentials> {
-    load_credentials().ok_or_else(|| {
-        anyhow::anyhow!("Not logged in. Run `sp00ky cloud login` first.")
-    })
+    load_credentials()
+        .ok_or_else(|| anyhow::anyhow!("Not logged in. Run `sp00ky cloud login` first."))
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +270,9 @@ impl CloudClient {
             .set("Accept", "application/json")
             .send_json(body)
             .map_err(|e| anyhow::anyhow!("Token refresh failed: {}", e))?;
-        let tokens: serde_json::Value = resp.into_json().context("Failed to parse refresh response")?;
+        let tokens: serde_json::Value = resp
+            .into_json()
+            .context("Failed to parse refresh response")?;
         let access = tokens["access_token"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Missing access_token in refresh response"))?;
@@ -273,7 +292,10 @@ impl CloudClient {
         let body = resp.into_string().unwrap_or_default();
         if body.contains("<!DOCTYPE") || body.contains("<html") {
             // HTML error page (e.g. Cloudflare 502/503)
-            format!("API unavailable (HTTP {}). The server may be restarting — try again in a moment.", code)
+            format!(
+                "API unavailable (HTTP {}). The server may be restarting — try again in a moment.",
+                code
+            )
         } else if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
             let error_code = json["code"].as_str().unwrap_or("");
             let error_msg = json["error"].as_str().unwrap_or(&body);
@@ -605,9 +627,16 @@ fn ensure_project(client: &mut CloudClient) -> Result<(String, serde_json::Value
                 }
                 // Slug is configured but project doesn't exist — fall through to create
                 if !is_interactive() {
-                    bail!("Project '{}' not found. Run `sp00ky cloud create --slug {}` first.", slug, slug);
+                    bail!(
+                        "Project '{}' not found. Run `sp00ky cloud create --slug {}` first.",
+                        slug,
+                        slug
+                    );
                 }
-                println!("Project '{}' (from sp00ky.yml) not found in Sp00ky Cloud.", slug);
+                println!(
+                    "Project '{}' (from sp00ky.yml) not found in Sp00ky Cloud.",
+                    slug
+                );
                 let do_create = inquire::Confirm::new(&format!("Create project '{}'?", slug))
                     .with_default(true)
                     .prompt()
@@ -671,8 +700,7 @@ fn ensure_project(client: &mut CloudClient) -> Result<(String, serde_json::Value
 
     // Extract slug from "slug (status)" format
     let slug = selection.split(' ').next().unwrap_or("").to_string();
-    let project = fetch_project(client, &slug)?
-        .context("Selected project not found")?;
+    let project = fetch_project(client, &slug)?.context("Selected project not found")?;
     Ok((slug, project))
 }
 
@@ -721,13 +749,17 @@ fn create_project_inline(
                     || msg.contains("failed to create project");
                 if is_slug_conflict {
                     if !is_interactive() {
-                        bail!("Slug '{}' is likely already taken. Choose a different slug.", slug);
+                        bail!(
+                            "Slug '{}' is likely already taken. Choose a different slug.",
+                            slug
+                        );
                     }
-                    println!("  Slug '{}' is likely already taken. Try a different one.", slug);
+                    println!(
+                        "  Slug '{}' is likely already taken. Try a different one.",
+                        slug
+                    );
                     slug = inquire::Text::new("Project slug:")
-                        .with_help_message(
-                            "Lowercase letters, numbers, and hyphens (e.g. my-app)",
-                        )
+                        .with_help_message("Lowercase letters, numbers, and hyphens (e.g. my-app)")
                         .prompt()
                         .context("Failed to read slug")?;
                     continue;
@@ -823,8 +855,9 @@ fn wait_for_billing(client: &mut CloudClient, slug: &str) -> Result<()> {
             "billing_interval": interval,
         }),
     )?;
-    let data: serde_json::Value =
-        resp.into_json().context("Failed to parse checkout response")?;
+    let data: serde_json::Value = resp
+        .into_json()
+        .context("Failed to parse checkout response")?;
     let url = data["url"]
         .as_str()
         .context("No checkout URL in response")?;
@@ -874,7 +907,10 @@ fn poll_scale_completion(client: &mut CloudClient, pid: &str, target_ssp: u32) -
                     .count() as u32;
 
                 if running_ssp >= target_ssp {
-                    println!("  Scaling complete! {} SSP instance(s) running.", running_ssp);
+                    println!(
+                        "  Scaling complete! {} SSP instance(s) running.",
+                        running_ssp
+                    );
                     print_deployment_details(&data);
                     return Ok(());
                 }
@@ -884,9 +920,7 @@ fn poll_scale_completion(client: &mut CloudClient, pid: &str, target_ssp: u32) -
     }
 
     println!();
-    println!(
-        "  Scaling is still in progress. Run `sp00ky cloud status` to check."
-    );
+    println!("  Scaling is still in progress. Run `sp00ky cloud status` to check.");
     Ok(())
 }
 
@@ -900,7 +934,12 @@ fn poll_scale_completion(client: &mut CloudClient, pid: &str, target_ssp: u32) -
 /// passphrase-reset flows.
 pub fn env_group(action: EnvCommands) -> Result<()> {
     match action {
-        EnvCommands::Set { name, file, dev, prod } => env_set(name, file, dev, prod),
+        EnvCommands::Set {
+            name,
+            file,
+            dev,
+            prod,
+        } => env_set(name, file, dev, prod),
         EnvCommands::List => env_list(),
         EnvCommands::Rm { name } => env_delete(name),
         EnvCommands::Pull { prod } => env_load(prod),
@@ -1043,7 +1082,11 @@ pub fn list() -> Result<()> {
             p["slug"].as_str().unwrap_or("-"),
             p["plan"].as_str().unwrap_or("-"),
             p["status"].as_str().unwrap_or("-"),
-            p["created_at"].as_str().unwrap_or("-").get(..10).unwrap_or("-"),
+            p["created_at"]
+                .as_str()
+                .unwrap_or("-")
+                .get(..10)
+                .unwrap_or("-"),
         );
     }
 
@@ -1107,7 +1150,10 @@ fn load_vault_envs_for_deploy(client: &mut CloudClient, pid: &str, prod: bool) -
     let derived_key = match get_derived_key(client) {
         Ok(dk) => dk,
         Err(e) => {
-            eprintln!("  Warning: Could not load vault passphrase: {}. Skipping vault env vars.", e);
+            eprintln!(
+                "  Warning: Could not load vault passphrase: {}. Skipping vault env vars.",
+                e
+            );
             return Vec::new();
         }
     };
@@ -1145,14 +1191,13 @@ fn resolve_deploy_env_source(
     pid: &str,
 ) -> Vec<String> {
     match source {
-        backend::EnvSource::Str(s) if s == "vault" => {
-            load_vault_envs_for_deploy(client, pid, true)
-        }
+        backend::EnvSource::Str(s) if s == "vault" => load_vault_envs_for_deploy(client, pid, true),
         backend::EnvSource::Vault(whitelist) => {
             let all = load_vault_envs_for_deploy(client, pid, true);
             all.into_iter()
                 .filter(|entry| {
-                    entry.split_once('=')
+                    entry
+                        .split_once('=')
                         .map(|(k, _)| whitelist.iter().any(|w| w == k))
                         .unwrap_or(false)
                 })
@@ -1164,21 +1209,25 @@ fn resolve_deploy_env_source(
             if !envs.is_empty() {
                 println!("  Loaded env-file: {}", path.display());
             }
-            envs.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect()
-        }
-        backend::EnvSource::Map(map) => {
-            map.iter()
-                .map(|(k, v)| {
-                    let val = match v {
-                        serde_yaml::Value::String(s) => s.clone(),
-                        serde_yaml::Value::Number(n) => n.to_string(),
-                        serde_yaml::Value::Bool(b) => b.to_string(),
-                        other => serde_yaml::to_string(other).unwrap_or_default().trim().to_string(),
-                    };
-                    format!("{}={}", k, val)
-                })
+            envs.into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
                 .collect()
         }
+        backend::EnvSource::Map(map) => map
+            .iter()
+            .map(|(k, v)| {
+                let val = match v {
+                    serde_yaml::Value::String(s) => s.clone(),
+                    serde_yaml::Value::Number(n) => n.to_string(),
+                    serde_yaml::Value::Bool(b) => b.to_string(),
+                    other => serde_yaml::to_string(other)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                };
+                format!("{}={}", k, val)
+            })
+            .collect(),
     }
 }
 
@@ -1190,7 +1239,9 @@ fn resolve_deploy_env_entry(
     pid: &str,
 ) -> Vec<String> {
     match entry {
-        backend::EnvEntry::Source(source) => resolve_deploy_env_source(source, config_dir, client, pid),
+        backend::EnvEntry::Source(source) => {
+            resolve_deploy_env_source(source, config_dir, client, pid)
+        }
         backend::EnvEntry::List(sources) => {
             let mut merged = std::collections::BTreeMap::new();
             for source in sources {
@@ -1200,7 +1251,10 @@ fn resolve_deploy_env_entry(
                     }
                 }
             }
-            merged.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect()
+            merged
+                .into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect()
         }
     }
 }
@@ -1283,7 +1337,9 @@ fn derive_fn_endpoint(
             .and_then(|v| v["internal_ip"].as_str())
     };
     let sched_ip = ip_for("scheduler");
-    let any_ip = sched_ip.or_else(|| ip_for("surrealdb")).or_else(|| ip_for("ssp"));
+    let any_ip = sched_ip
+        .or_else(|| ip_for("surrealdb"))
+        .or_else(|| ip_for("ssp"));
 
     let subnet_of = |ip: &str| -> Option<String> {
         let p: Vec<&str> = ip.split('.').collect();
@@ -1427,7 +1483,9 @@ fn resolve_env_for_deploy(
         None => return Vec::new(),
     };
     match env {
-        backend::EnvConfig::Source(source) => resolve_deploy_env_source(source, config_dir, client, pid),
+        backend::EnvConfig::Source(source) => {
+            resolve_deploy_env_source(source, config_dir, client, pid)
+        }
         backend::EnvConfig::List(sources) => {
             let mut merged = std::collections::BTreeMap::new();
             for source in sources {
@@ -1437,14 +1495,15 @@ fn resolve_env_for_deploy(
                     }
                 }
             }
-            merged.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect()
+            merged
+                .into_iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect()
         }
-        backend::EnvConfig::PerEnvironment { cloud, .. } => {
-            match cloud {
-                Some(entry) => resolve_deploy_env_entry(entry, config_dir, client, pid),
-                None => Vec::new(),
-            }
-        }
+        backend::EnvConfig::PerEnvironment { cloud, .. } => match cloud {
+            Some(entry) => resolve_deploy_env_entry(entry, config_dir, client, pid),
+            None => Vec::new(),
+        },
     }
 }
 
@@ -1460,14 +1519,20 @@ fn build_backend_manifest(
     working_dir: &Option<String>,
     app_config: &backend::AppConfig,
 ) -> serde_json::Value {
-    let resources = deploy.resources.clone().unwrap_or(backend::BackendDeployResources {
-        vcpus: 1, memory: 512, disk: 5,
-    });
+    let resources = deploy
+        .resources
+        .clone()
+        .unwrap_or(backend::BackendDeployResources {
+            vcpus: 1,
+            memory: 512,
+            disk: 5,
+        });
     let mut manifest = serde_json::json!({
         "name": name,
         "image": format!("{}/{}", slug, name),
         "image_hash": image_id,
         "port": port,
+        "ports": deploy.ports,
         "expose": deploy.expose,
         "resources": {
             "vcpus": resources.vcpus,
@@ -1570,8 +1635,11 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         }
         // External backends are self-hosted — skip cloud deployment
         if app_config.resolved_hosting() == HostingMode::External {
-            println!("  Skipping external backend '{}' (self-hosted at {})", name,
-                app_config.base_url.as_deref().unwrap_or("?"));
+            println!(
+                "  Skipping external backend '{}' (self-hosted at {})",
+                name,
+                app_config.base_url.as_deref().unwrap_or("?")
+            );
             external_backends.push(serde_json::json!({
                 "name": name,
                 "base_url": app_config.base_url,
@@ -1585,14 +1653,15 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         };
 
         // Resolve Dockerfile path
-        let dockerfile = deploy.dockerfile.clone().unwrap_or_else(|| {
-            match &app_config.dev {
+        let dockerfile = deploy
+            .dockerfile
+            .clone()
+            .unwrap_or_else(|| match &app_config.dev {
                 Some(BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, .. })) => {
                     file.clone()
                 }
                 _ => "Dockerfile".to_string(),
-            }
-        });
+            });
 
         let dockerfile_path = config_dir.join(&dockerfile);
         if !dockerfile_path.exists() {
@@ -1611,12 +1680,17 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         let port = app_config.deploy_port();
 
         // Build Docker image
-        println!("  Building image for backend '{}' (dockerfile={}, context={})...",
-            name, dockerfile_path.display(), context_dir.display());
+        println!(
+            "  Building image for backend '{}' (dockerfile={}, context={})...",
+            name,
+            dockerfile_path.display(),
+            context_dir.display()
+        );
         let build_status = std::process::Command::new("docker")
             .args([
                 "build",
-                "--platform", "linux/amd64",
+                "--platform",
+                "linux/amd64",
                 "-t",
                 &image_tag,
                 "-f",
@@ -1657,7 +1731,10 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                 env_map.insert(k.to_string(), v.to_string());
             }
         }
-        let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let merged_env: Vec<String> = env_map
+            .into_iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
         let working_dir = get_docker_workdir(&image_tag);
 
         // Check if image changed since last deploy (skip export+upload if unchanged)
@@ -1666,8 +1743,21 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
             if let Some(remote_hash) = get_remote_image_hash(&client, &pid, name) {
                 if remote_hash == *id {
                     println!("  Image for backend '{}' unchanged, skipping upload.", name);
-                    let cmd = get_docker_cmd(&image_tag);
-                    backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, &working_dir, app_config));
+                    let cmd = match get_docker_cmd(&image_tag) {
+                        Some(c) => Some(c),
+                        None => deploy.cmd.clone(),
+                    };
+                    backend_manifests.push(build_backend_manifest(
+                        name,
+                        &slug,
+                        &image_id,
+                        port,
+                        deploy,
+                        &merged_env,
+                        &cmd,
+                        &working_dir,
+                        app_config,
+                    ));
                     println!("  Backend '{}' ready for deployment.", name);
                     continue;
                 }
@@ -1678,7 +1768,9 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-{}.tar.gz", slug, name));
         println!("  Exporting image for backend '{}'...", name);
         let container_name = format!("sp00ky-export-{}-{}", slug, name);
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &container_name])
+            .output();
         let create_out = std::process::Command::new("docker")
             .args(["create", "--name", &container_name, &image_tag])
             .output()
@@ -1687,10 +1779,19 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
             bail!("Failed to create container for backend '{}' export", name);
         }
         let export_status = std::process::Command::new("sh")
-            .args(["-c", &format!("docker export {} | gzip > {}", container_name, tmp_tar.to_string_lossy())])
+            .args([
+                "-c",
+                &format!(
+                    "docker export {} | gzip > {}",
+                    container_name,
+                    tmp_tar.to_string_lossy()
+                ),
+            ])
             .status()
             .context("Failed to export backend container")?;
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &container_name])
+            .output();
         if !export_status.success() {
             bail!("Failed to export docker image for backend '{}'", name);
         }
@@ -1699,11 +1800,17 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         let image_data = fs::read(&tmp_tar)
             .context(format!("Failed to read image tar for backend '{}'", name))?;
         let total = image_data.len();
-        println!("  Uploading image for backend '{}' ({:.1}MB)...", name, total as f64 / 1_048_576.0);
+        println!(
+            "  Uploading image for backend '{}' ({:.1}MB)...",
+            name,
+            total as f64 / 1_048_576.0
+        );
 
         let upload_url = format!(
             "{}/v1/projects/{}/images/{}",
-            upload_base_url(&client.base_url), pid, name
+            upload_base_url(&client.base_url),
+            pid,
+            name
         );
         let progress = ProgressReader::new(&image_data, total, &format!("  Uploading '{}'", name));
         let hash_header = image_id.as_deref().unwrap_or("");
@@ -1714,11 +1821,18 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
             .set("X-Image-Hash", hash_header)
             .send(progress)
         {
-            Ok(_) => { println!(); }
+            Ok(_) => {
+                println!();
+            }
             Err(ureq::Error::Status(code, resp)) => {
                 println!();
                 let body = resp.into_string().unwrap_or_default();
-                bail!("Image upload failed for '{}' (HTTP {}): {}", name, code, body);
+                bail!(
+                    "Image upload failed for '{}' (HTTP {}): {}",
+                    name,
+                    code,
+                    body
+                );
             }
             Err(ureq::Error::Transport(t)) => {
                 println!();
@@ -1730,8 +1844,21 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         let _ = fs::remove_file(&tmp_tar);
 
         // Build manifest
-        let cmd = get_docker_cmd(&image_tag);
-        backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, deploy, &merged_env, &cmd, &working_dir, app_config));
+        let cmd = match get_docker_cmd(&image_tag) {
+            Some(c) => Some(c),
+            None => deploy.cmd.clone(),
+        };
+        backend_manifests.push(build_backend_manifest(
+            name,
+            &slug,
+            &image_id,
+            port,
+            deploy,
+            &merged_env,
+            &cmd,
+            &working_dir,
+            app_config,
+        ));
 
         println!("  Backend '{}' ready for deployment.", name);
     }
@@ -1745,11 +1872,16 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
             println!("  Skipping devOnly docker app '{}' (local dev only)", name);
             continue;
         }
-        let image_ref = app_config.image.clone()
+        let image_ref = app_config
+            .image
+            .clone()
             .context(format!("Docker app '{}' is missing 'image'", name))?;
         let port = app_config.deploy_port();
 
-        println!("  Pulling image for docker app '{}' ({})...", name, image_ref);
+        println!(
+            "  Pulling image for docker app '{}' ({})...",
+            name, image_ref
+        );
         let pull_status = std::process::Command::new("docker")
             .args(["pull", "--platform", "linux/amd64", &image_ref])
             .stdout(std::process::Stdio::inherit())
@@ -1766,43 +1898,122 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         let user_env = resolve_env_for_deploy(&app_config.env, config_dir, &mut client, &pid);
         let image_env = get_docker_env(&image_tag);
         let mut env_map = std::collections::BTreeMap::new();
-        for entry in image_env.iter().chain(spky_vars.iter()).chain(user_env.iter()) {
+        for entry in image_env
+            .iter()
+            .chain(spky_vars.iter())
+            .chain(user_env.iter())
+        {
             if let Some((k, v)) = entry.split_once('=') {
                 env_map.insert(k.to_string(), v.to_string());
             }
         }
-        let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let merged_env: Vec<String> = env_map
+            .into_iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
         let working_dir = get_docker_workdir(&image_tag);
         let image_id = get_docker_image_id(&image_tag);
+
+        if let Some(ref id) = image_id {
+            if let Some(remote_hash) = get_remote_image_hash(&client, &pid, name) {
+                if remote_hash == *id {
+                    println!(
+                        "  Image for docker app '{}' unchanged, skipping upload.",
+                        name
+                    );
+                    let cmd = if app_config.args.is_empty() {
+                        match get_docker_cmd(&image_tag) {
+                            Some(c) => Some(c),
+                            None => app_config.deploy.as_ref().and_then(|d| d.cmd.clone()),
+                        }
+                    } else {
+                        Some(app_config.args.join(" "))
+                    };
+                    let deploy = app_config
+                        .deploy
+                        .clone()
+                        .unwrap_or(backend::AppDeployConfig {
+                            dockerfile: None,
+                            context: None,
+                            port: Some(port),
+                            ports: None,
+                            resources: None,
+                            expose: false,
+                            healthcheck: None,
+                            timeout: None,
+                            timeout_overridable: None,
+                            cmd: None,
+                        });
+                    backend_manifests.push(build_backend_manifest(
+                        name,
+                        &slug,
+                        &image_id,
+                        port,
+                        &deploy,
+                        &merged_env,
+                        &cmd,
+                        &working_dir,
+                        app_config,
+                    ));
+                    println!("  Docker app '{}' ready for deployment.", name);
+                    continue;
+                }
+            }
+        }
 
         // Export flat rootfs and upload (mirrors the backend path).
         let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-{}.tar.gz", slug, name));
         println!("  Exporting image for docker app '{}'...", name);
         let container_name = format!("sp00ky-export-{}-{}", slug, name);
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &container_name])
+            .output();
         let create_out = std::process::Command::new("docker")
             .args(["create", "--name", &container_name, &image_tag])
             .output()
-            .context(format!("Failed to create container for docker app '{}'", name))?;
+            .context(format!(
+                "Failed to create container for docker app '{}'",
+                name
+            ))?;
         if !create_out.status.success() {
-            bail!("Failed to create container for docker app '{}' export", name);
+            bail!(
+                "Failed to create container for docker app '{}' export",
+                name
+            );
         }
         let export_status = std::process::Command::new("sh")
-            .args(["-c", &format!("docker export {} | gzip > {}", container_name, tmp_tar.to_string_lossy())])
+            .args([
+                "-c",
+                &format!(
+                    "docker export {} | gzip > {}",
+                    container_name,
+                    tmp_tar.to_string_lossy()
+                ),
+            ])
             .status()
             .context("Failed to export docker-app container")?;
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &container_name])
+            .output();
         if !export_status.success() {
             bail!("Failed to export image for docker app '{}'", name);
         }
 
-        let image_data = fs::read(&tmp_tar)
-            .context(format!("Failed to read image tar for docker app '{}'", name))?;
+        let image_data = fs::read(&tmp_tar).context(format!(
+            "Failed to read image tar for docker app '{}'",
+            name
+        ))?;
         let total = image_data.len();
-        println!("  Uploading image for docker app '{}' ({:.1}MB)...", name, total as f64 / 1_048_576.0);
+        println!(
+            "  Uploading image for docker app '{}' ({:.1}MB)...",
+            name,
+            total as f64 / 1_048_576.0
+        );
         let upload_url = format!(
             "{}/v1/projects/{}/images/{}",
-            upload_base_url(&client.base_url), pid, name
+            upload_base_url(&client.base_url),
+            pid,
+            name
         );
         let progress = ProgressReader::new(&image_data, total, &format!("  Uploading '{}'", name));
         match ureq::put(&upload_url)
@@ -1812,10 +2023,17 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
             .set("X-Image-Hash", image_id.as_deref().unwrap_or(""))
             .send(progress)
         {
-            Ok(_) => { println!(); }
+            Ok(_) => {
+                println!();
+            }
             Err(ureq::Error::Status(code, resp)) => {
                 println!();
-                bail!("Image upload failed for '{}' (HTTP {}): {}", name, code, resp.into_string().unwrap_or_default());
+                bail!(
+                    "Image upload failed for '{}' (HTTP {}): {}",
+                    name,
+                    code,
+                    resp.into_string().unwrap_or_default()
+                );
             }
             Err(ureq::Error::Transport(t)) => {
                 println!();
@@ -1826,27 +2044,45 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
 
         // Manifest: image cmd, or the configured args as the container command.
         let cmd = if app_config.args.is_empty() {
-            get_docker_cmd(&image_tag)
+            match get_docker_cmd(&image_tag) {
+                Some(c) => Some(c),
+                None => app_config.deploy.as_ref().and_then(|d| d.cmd.clone()),
+            }
         } else {
             Some(app_config.args.join(" "))
         };
-        let deploy = app_config.deploy.clone().unwrap_or(backend::AppDeployConfig {
-            dockerfile: None,
-            context: None,
-            port: Some(port),
-            resources: None,
-            expose: false,
-            healthcheck: None,
-            timeout: None,
-            timeout_overridable: None,
-        });
-        backend_manifests.push(build_backend_manifest(name, &slug, &image_id, port, &deploy, &merged_env, &cmd, &working_dir, app_config));
+        let deploy = app_config
+            .deploy
+            .clone()
+            .unwrap_or(backend::AppDeployConfig {
+                dockerfile: None,
+                context: None,
+                port: Some(port),
+                ports: None,
+                resources: None,
+                expose: false,
+                healthcheck: None,
+                timeout: None,
+                timeout_overridable: None,
+                cmd: None,
+            });
+        backend_manifests.push(build_backend_manifest(
+            name,
+            &slug,
+            &image_id,
+            port,
+            &deploy,
+            &merged_env,
+            &cmd,
+            &working_dir,
+            app_config,
+        ));
         println!("  Docker app '{}' ready for deployment.", name);
     }
 
     // Build SurrealDB manifest
     let resolved_surreal = config.resolved_surrealdb();
-    let surrealdb_manifest = match resolved_surreal.hosting {
+    let mut surrealdb_manifest = match resolved_surreal.hosting {
         HostingMode::Cloud => serde_json::json!({
             "hosting": "cloud",
             "namespace": resolved_surreal.namespace,
@@ -1861,18 +2097,47 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
             "password": resolved_surreal.password,
         }),
     };
+    // Attach persistent bucket-storage provisioning when configured. The
+    // spooky-cloud control plane (Go repo ~/dev/spooky-cloud) must read this,
+    // provision a `sizeGB` volume on the SurrealDB server, and mount it at
+    // `bucketPath` so `file:/buckets/<name>` bucket backends resolve to durable
+    // storage. It must ALSO, on that SurrealDB server:
+    //   - enable the `files` experimental cap
+    //     (SURREAL_CAPS_ALLOW_EXPERIMENTAL=…,files), and
+    //   - allowlist the mount path via SURREAL_BUCKET_FOLDER_ALLOWLIST=<bucketPath>
+    //     — verified required: `--allow-all` alone yields "File access denied"
+    //     and every bucket `put` fails without it.
+    // Omitted when unset → byte-compatible with existing deploys.
+    if let Some(gb) = config.bucket_storage_gb() {
+        if let Some(obj) = surrealdb_manifest.as_object_mut() {
+            obj.insert(
+                "storage".to_string(),
+                serde_json::json!({
+                    "sizeGB": gb,
+                    "bucketPath": crate::backend::BUCKET_VOLUME_PATH,
+                }),
+            );
+        }
+    }
 
     // Build and upload frontend if configured
     let mut frontend_manifest: Option<serde_json::Value> = None;
     if let Some((frontend_name, frontend_app)) = config.frontend() {
-        let frontend_deploy = frontend_app.deploy.as_ref()
+        let frontend_deploy = frontend_app
+            .deploy
+            .as_ref()
             .context("Frontend app is missing 'deploy' configuration")?;
-        let dockerfile = frontend_deploy.dockerfile.as_deref()
+        let dockerfile = frontend_deploy
+            .dockerfile
+            .as_deref()
             .context("Frontend app deploy is missing 'dockerfile'")?;
         let dockerfile_path = config_dir.join(dockerfile);
 
         if !dockerfile_path.exists() {
-            bail!("Frontend Dockerfile not found: {}", dockerfile_path.display());
+            bail!(
+                "Frontend Dockerfile not found: {}",
+                dockerfile_path.display()
+            );
         }
 
         let context_dir = match &frontend_deploy.context {
@@ -1893,10 +2158,14 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
 
         println!("  Building frontend image ('{}')...", frontend_name);
         let mut build_args = vec![
-            "build".to_string(), "--no-cache".to_string(),
-            "--platform".to_string(), "linux/amd64".to_string(),
-            "-t".to_string(), image_tag.clone(),
-            "-f".to_string(), dockerfile_path.to_string_lossy().to_string(),
+            "build".to_string(),
+            "--no-cache".to_string(),
+            "--platform".to_string(),
+            "linux/amd64".to_string(),
+            "-t".to_string(),
+            image_tag.clone(),
+            "-f".to_string(),
+            dockerfile_path.to_string_lossy().to_string(),
         ];
         if let Some(ref endpoint) = db_ws_endpoint {
             build_args.push("--build-arg".to_string());
@@ -1935,80 +2204,132 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                 env_map.insert(k.to_string(), v.to_string());
             }
         }
-        let merged_env: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let merged_env: Vec<String> = env_map
+            .into_iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
         let working_dir = get_docker_workdir(&image_tag);
 
         // Check if frontend image changed since last deploy
         let frontend_image_id = get_docker_image_id(&image_tag);
-        let frontend_unchanged = frontend_image_id.as_ref()
+        let frontend_unchanged = frontend_image_id
+            .as_ref()
             .and_then(|id| get_remote_image_hash(&client, &pid, "frontend").map(|h| h == *id))
             .unwrap_or(false);
 
-        let resources = frontend_deploy.resources.clone().unwrap_or(backend::BackendDeployResources {
-            vcpus: 1, memory: 512, disk: 5,
-        });
+        let resources =
+            frontend_deploy
+                .resources
+                .clone()
+                .unwrap_or(backend::BackendDeployResources {
+                    vcpus: 1,
+                    memory: 512,
+                    disk: 5,
+                });
 
         if frontend_unchanged {
             println!("  Frontend image unchanged, skipping upload.");
-            let cmd = get_docker_cmd(&image_tag);
-            frontend_manifest = Some(build_frontend_manifest(frontend_name, &slug, &frontend_image_id, port, &resources, &merged_env, &cmd, &working_dir));
+            let cmd = match get_docker_cmd(&image_tag) {
+                Some(c) => Some(c),
+                None => frontend_deploy.cmd.clone(),
+            };
+            frontend_manifest = Some(build_frontend_manifest(
+                frontend_name,
+                &slug,
+                &frontend_image_id,
+                port,
+                &resources,
+                &merged_env,
+                &cmd,
+                &working_dir,
+            ));
         } else {
-
-        let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-frontend.tar.gz", slug));
-        println!("  Exporting frontend image...");
-        let container_name = format!("sp00ky-export-{}", slug);
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
-        let create_status = std::process::Command::new("docker")
-            .args(["create", "--name", &container_name, &image_tag])
-            .output()
-            .context("Failed to create container for export")?;
-        if !create_status.status.success() {
-            bail!("Failed to create container for frontend export");
-        }
-        let export_status = std::process::Command::new("sh")
-            .args(["-c", &format!("docker export {} | gzip > {}", container_name, tmp_tar.to_string_lossy())])
-            .status()
-            .context("Failed to export frontend container")?;
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &container_name]).output();
-        if !export_status.success() {
-            bail!("Failed to export frontend container");
-        }
-
-        let image_data = fs::read(&tmp_tar).context("Failed to read frontend image tar")?;
-        let total = image_data.len();
-        println!("  Uploading frontend image ({:.1}MB)...", total as f64 / 1_048_576.0);
-        let upload_url = format!("{}/v1/projects/{}/images/frontend", upload_base_url(&client.base_url), pid);
-        let progress = ProgressReader::new(&image_data, total, "  Uploading frontend");
-        let hash_header = frontend_image_id.as_deref().unwrap_or("");
-        match ureq::put(&upload_url)
-            .set("Authorization", &format!("Bearer {}", client.token))
-            .set("Content-Type", "application/octet-stream")
-            .set("Content-Length", &total.to_string())
-            .set("X-Image-Hash", hash_header)
-            .send(progress)
-        {
-            Ok(_) => { println!(); }
-            Err(ureq::Error::Status(code, resp)) => {
-                println!();
-                let body = resp.into_string().unwrap_or_default();
-                bail!("Frontend image upload failed (HTTP {}): {}", code, body);
+            let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-frontend.tar.gz", slug));
+            println!("  Exporting frontend image...");
+            let container_name = format!("sp00ky-export-{}", slug);
+            let _ = std::process::Command::new("docker")
+                .args(["rm", "-f", &container_name])
+                .output();
+            let create_status = std::process::Command::new("docker")
+                .args(["create", "--name", &container_name, &image_tag])
+                .output()
+                .context("Failed to create container for export")?;
+            if !create_status.status.success() {
+                bail!("Failed to create container for frontend export");
             }
-            Err(ureq::Error::Transport(t)) => {
-                println!();
-                bail!("Frontend image upload failed: {}", t);
+            let export_status = std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    &format!(
+                        "docker export {} | gzip > {}",
+                        container_name,
+                        tmp_tar.to_string_lossy()
+                    ),
+                ])
+                .status()
+                .context("Failed to export frontend container")?;
+            let _ = std::process::Command::new("docker")
+                .args(["rm", "-f", &container_name])
+                .output();
+            if !export_status.success() {
+                bail!("Failed to export frontend container");
             }
-        }
-        let _ = fs::remove_file(&tmp_tar);
 
-        let cmd = get_docker_cmd(&image_tag);
-        frontend_manifest = Some(build_frontend_manifest(frontend_name, &slug, &frontend_image_id, port, &resources, &merged_env, &cmd, &working_dir));
+            let image_data = fs::read(&tmp_tar).context("Failed to read frontend image tar")?;
+            let total = image_data.len();
+            println!(
+                "  Uploading frontend image ({:.1}MB)...",
+                total as f64 / 1_048_576.0
+            );
+            let upload_url = format!(
+                "{}/v1/projects/{}/images/frontend",
+                upload_base_url(&client.base_url),
+                pid
+            );
+            let progress = ProgressReader::new(&image_data, total, "  Uploading frontend");
+            let hash_header = frontend_image_id.as_deref().unwrap_or("");
+            match ureq::put(&upload_url)
+                .set("Authorization", &format!("Bearer {}", client.token))
+                .set("Content-Type", "application/octet-stream")
+                .set("Content-Length", &total.to_string())
+                .set("X-Image-Hash", hash_header)
+                .send(progress)
+            {
+                Ok(_) => {
+                    println!();
+                }
+                Err(ureq::Error::Status(code, resp)) => {
+                    println!();
+                    let body = resp.into_string().unwrap_or_default();
+                    bail!("Frontend image upload failed (HTTP {}): {}", code, body);
+                }
+                Err(ureq::Error::Transport(t)) => {
+                    println!();
+                    bail!("Frontend image upload failed: {}", t);
+                }
+            }
+            let _ = fs::remove_file(&tmp_tar);
 
-        println!("  Frontend ready for deployment.");
+            let cmd = match get_docker_cmd(&image_tag) {
+                Some(c) => Some(c),
+                None => frontend_deploy.cmd.clone(),
+            };
+            frontend_manifest = Some(build_frontend_manifest(
+                frontend_name,
+                &slug,
+                &frontend_image_id,
+                port,
+                &resources,
+                &merged_env,
+                &cmd,
+                &working_dir,
+            ));
+
+            println!("  Frontend ready for deployment.");
         } // end else (frontend changed)
     }
 
-    let ssp_count = config.deployment.as_ref()
-        .and_then(|d| d.ssp_count);
+    let ssp_count = config.deployment.as_ref().and_then(|d| d.ssp_count);
 
     // Cloud-side `RUST_LOG` for the scheduler + SSP containers. Only sent
     // when sp00ky.yml has `logLevel:` (or its `cloud:` sub-key) set —
@@ -2031,15 +2352,16 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         "clean": clean,
     });
 
-    let resp = client.post(
-        &format!("/v1/projects/{}/deploy", pid),
-        &deploy_body,
-    )?;
+    println!("PAYLOAD: {}", deploy_body);
+    let resp = client.post(&format!("/v1/projects/{}/deploy", pid), &deploy_body)?;
 
     let deployment: serde_json::Value = resp.into_json().context("Failed to parse response")?;
     let version = deployment["version"].as_u64().unwrap_or(0);
 
-    println!("  Deployment v{} created. Waiting for provisioning...", version);
+    println!(
+        "  Deployment v{} created. Waiting for provisioning...",
+        version
+    );
     println!();
 
     // Phase 1: Stream events until infra is ready (migrating state)
@@ -2076,15 +2398,18 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                         println!();
 
                         if !db_ready {
-                            println!("  ▸ Warning: SurrealDB not reachable at {}, skipping migrations.", db_url);
+                            println!(
+                                "  ▸ Warning: SurrealDB not reachable at {}, skipping migrations.",
+                                db_url
+                            );
                         } else {
                             let resolved = config.resolved_surrealdb();
                             // Use the auto-generated password from the deployment status
-                            let db_password = status_data["surrealdb_password"]
-                                .as_str()
-                                .unwrap_or("");
+                            let db_password =
+                                status_data["surrealdb_password"].as_str().unwrap_or("");
                             let schema = config.resolved_schema();
-                            let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+                            let config_dir =
+                                config_path.parent().unwrap_or(std::path::Path::new("."));
                             let migrations_dir = config_dir.join(&schema.migrations);
 
                             // Apply user migrations via migration engine
@@ -2144,7 +2469,8 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                     println!();
                     println!("  Deployment is running!");
 
-                    if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
+                    if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid))
+                    {
                         if let Ok(status) = status_resp.into_json::<serde_json::Value>() {
                             print_deployment_details(&status);
 
@@ -2156,19 +2482,40 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                             // then surface a clear, actionable warning.
                             if let Some(db_url) = status["urls"]["surrealdb"].as_str() {
                                 let resolved = config.resolved_surrealdb();
-                                if verify_data_plane(db_url, &resolved.namespace, &resolved.database).is_ok() {
+                                if verify_data_plane(
+                                    db_url,
+                                    &resolved.namespace,
+                                    &resolved.database,
+                                )
+                                .is_ok()
+                                {
                                     println!("  ▸ Data plane healthy (/spooky responds).");
                                 } else {
                                     println!("  ▸ Data plane not responding; re-applying remote functions...");
-                                    let db_password = status["surrealdb_password"].as_str().unwrap_or("");
+                                    let db_password =
+                                        status["surrealdb_password"].as_str().unwrap_or("");
                                     apply_remote_fns_and_internal_schema(
-                                        db_url, db_password, &status, &config,
-                                        config_path.as_path(), &mut client, &pid,
+                                        db_url,
+                                        db_password,
+                                        &status,
+                                        &config,
+                                        config_path.as_path(),
+                                        &mut client,
+                                        &pid,
                                     );
-                                    if let Err(e) = verify_data_plane(db_url, &resolved.namespace, &resolved.database) {
+                                    if let Err(e) = verify_data_plane(
+                                        db_url,
+                                        &resolved.namespace,
+                                        &resolved.database,
+                                    ) {
                                         println!("  ▸ WARNING: SurrealDB '/spooky' still not responding ({e}).");
                                         println!("    The app may hang on \"Loading database…\". Verify the scheduler is running:");
-                                        println!("      {}/api/{}/{}/spooky", db_url.trim_end_matches('/'), resolved.namespace, resolved.database);
+                                        println!(
+                                            "      {}/api/{}/{}/spooky",
+                                            db_url.trim_end_matches('/'),
+                                            resolved.namespace,
+                                            resolved.database
+                                        );
                                     } else {
                                         println!("  ▸ Data plane healthy after re-apply.");
                                     }
@@ -2260,7 +2607,12 @@ fn get_docker_cmd(tag: &str) -> Option<String> {
     // binary and the deployed container fails with "no command specified".
     let inspect = |field: &str| -> Option<Vec<String>> {
         let out = std::process::Command::new("docker")
-            .args(["inspect", "--format", &format!("{{{{json .Config.{}}}}}", field), tag])
+            .args([
+                "inspect",
+                "--format",
+                &format!("{{{{json .Config.{}}}}}", field),
+                tag,
+            ])
             .output()
             .ok()?;
         if !out.status.success() {
@@ -2280,25 +2632,36 @@ fn get_docker_cmd(tag: &str) -> Option<String> {
     }
     // Shell-quote arguments that contain spaces or special chars
     // e.g. ["nginx", "-g", "daemon off;"] → "nginx -g 'daemon off;'"
-    let quoted: Vec<String> = parts.iter().map(|p| {
-        if p.contains(' ') || p.contains(';') || p.contains('\'') || p.contains('"') {
-            format!("'{}'", p.replace('\'', "'\\''"))
-        } else {
-            p.clone()
-        }
-    }).collect();
+    let quoted: Vec<String> = parts
+        .iter()
+        .map(|p| {
+            if p.contains(' ') || p.contains(';') || p.contains('\'') || p.contains('"') {
+                format!("'{}'", p.replace('\'', "'\\''"))
+            } else {
+                p.clone()
+            }
+        })
+        .collect();
     Some(quoted.join(" "))
 }
 
 /// Get the remote image hash from the API.
 fn get_remote_image_hash(client: &CloudClient, pid: &str, image_name: &str) -> Option<String> {
-    let url = format!("{}/v1/projects/{}/images/{}/hash", client.base_url, pid, image_name);
+    let url = format!(
+        "{}/v1/projects/{}/images/{}/hash",
+        client.base_url, pid, image_name
+    );
     let resp = ureq::get(&url)
         .set("Authorization", &format!("Bearer {}", client.token))
-        .call().ok()?;
+        .call()
+        .ok()?;
     let data: serde_json::Value = resp.into_json().ok()?;
     let hash = data["hash"].as_str()?.to_string();
-    if hash.is_empty() { None } else { Some(hash) }
+    if hash.is_empty() {
+        None
+    } else {
+        Some(hash)
+    }
 }
 
 /// A Read wrapper that prints upload progress percentage.
@@ -2312,7 +2675,13 @@ struct ProgressReader<'a> {
 
 impl<'a> ProgressReader<'a> {
     fn new(data: &'a [u8], total: usize, label: &str) -> Self {
-        Self { data, pos: 0, total, label: label.to_string(), last_pct: 0 }
+        Self {
+            data,
+            pos: 0,
+            total,
+            label: label.to_string(),
+            last_pct: 0,
+        }
     }
 }
 
@@ -2322,7 +2691,11 @@ impl<'a> std::io::Read for ProgressReader<'a> {
         let n = std::cmp::min(buf.len(), remaining.len());
         buf[..n].copy_from_slice(&remaining[..n]);
         self.pos += n;
-        let pct = if self.total > 0 { (self.pos * 100 / self.total) as u8 } else { 100 };
+        let pct = if self.total > 0 {
+            (self.pos * 100 / self.total) as u8
+        } else {
+            100
+        };
         if pct != self.last_pct {
             self.last_pct = pct;
             print!("\r  {} {}%", self.label, pct);
@@ -2455,10 +2828,7 @@ fn render_vm_table(
 fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
     use std::sync::{Arc, Mutex};
 
-    let events_url = format!(
-        "{}/v1/projects/{}/deployment/events",
-        client.base_url, pid
-    );
+    let events_url = format!("{}/v1/projects/{}/deployment/events", client.base_url, pid);
     let sse_result = ureq::get(&events_url)
         .set("Authorization", &format!("Bearer {}", client.token))
         .set("Accept", "text/event-stream")
@@ -2743,7 +3113,11 @@ fn resolve_filters(filter: Option<&str>, service: Option<&str>) -> Option<Vec<St
             _ => {}
         }
     }
-    if services.is_empty() { None } else { Some(services) }
+    if services.is_empty() {
+        None
+    } else {
+        Some(services)
+    }
 }
 
 /// Check if a service name matches any of the filter patterns.
@@ -2951,7 +3325,10 @@ fn spawn_sse_reader(
                 for line in reader.lines() {
                     match line {
                         Ok(line) => {
-                            if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                            if let Some(data) = line
+                                .strip_prefix("data: ")
+                                .or_else(|| line.strip_prefix("data:"))
+                            {
                                 if let Some(entry) = parse_log_line(data) {
                                     if tx.send(LogEvent::Entry(entry)).is_err() {
                                         return;
@@ -3041,7 +3418,9 @@ fn logs_split(
     // If an explicit filter is set, pre-create panels for those services.
     // Otherwise we dynamically add panels as data arrives.
     let explicit_filter = filters.is_some();
-    let has_glob = filters.as_ref().is_some_and(|f| f.iter().any(|p| p.contains('*') || p.contains('?')));
+    let has_glob = filters
+        .as_ref()
+        .is_some_and(|f| f.iter().any(|p| p.contains('*') || p.contains('?')));
     let mut panel_order: Vec<String> = if !has_glob {
         if let Some(ref f) = filters {
             let mut v: Vec<String> = f.iter().cloned().collect();
@@ -3092,7 +3471,9 @@ fn logs_split(
             loop {
                 match rx.try_recv() {
                     Ok(LogEvent::Entry(entry)) => {
-                        let LogEntry { service, message, .. } = entry;
+                        let LogEntry {
+                            service, message, ..
+                        } = entry;
                         // Dynamically add panels for new services (when no explicit filter)
                         if !panels.contains_key(&service) {
                             if explicit_filter {
@@ -3140,7 +3521,6 @@ fn logs_split(
         let stream_status = stream_ended;
         let visible_panels: Vec<String> = panel_order.clone();
         terminal.draw(|frame| {
-
             if visible_panels.is_empty() {
                 let msg = Paragraph::new(Line::from(Span::styled(
                     " Waiting for logs...",
@@ -3153,10 +3533,7 @@ fn logs_split(
             // Reserve 1 line at the bottom for the status bar
             let outer = Layout::default()
                 .direction(ratatui::layout::Direction::Vertical)
-                .constraints([
-                    Constraint::Min(0),
-                    Constraint::Length(1),
-                ])
+                .constraints([Constraint::Min(0), Constraint::Length(1)])
                 .split(frame.area());
 
             let panel_area = outer[0];
@@ -3171,9 +3548,7 @@ fn logs_split(
             };
             let n = show.len() as u32;
 
-            let constraints: Vec<Constraint> = (0..n)
-                .map(|_| Constraint::Ratio(1, n))
-                .collect();
+            let constraints: Vec<Constraint> = (0..n).map(|_| Constraint::Ratio(1, n)).collect();
             let chunks = Layout::default()
                 .direction(direction.clone())
                 .constraints(constraints)
@@ -3208,8 +3583,7 @@ fn logs_split(
                     .title(format!(" {} ", svc))
                     .title_style(Style::default().fg(color));
 
-                let paragraph = Paragraph::new(lines)
-                    .block(block);
+                let paragraph = Paragraph::new(lines).block(block);
 
                 frame.render_widget(paragraph, area);
             }
@@ -3220,7 +3594,11 @@ fn logs_split(
             } else {
                 " Streaming logs — press q to exit"
             };
-            let status_color = if stream_status { Color::Red } else { Color::DarkGray };
+            let status_color = if stream_status {
+                Color::Red
+            } else {
+                Color::DarkGray
+            };
             let status = Paragraph::new(Line::from(Span::styled(
                 status_text,
                 Style::default().fg(status_color),
@@ -3241,7 +3619,11 @@ fn logs_split(
     }
 
     crossterm::terminal::disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen, crossterm::cursor::Show)?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    )?;
     Ok(())
 }
 
@@ -3391,7 +3773,10 @@ pub fn logs(args: LogsArgs) -> Result<()> {
     match split.as_deref() {
         Some("h") => logs_split(rx, &filters, ratatui::layout::Direction::Vertical)?,
         Some("v") => logs_split(rx, &filters, ratatui::layout::Direction::Horizontal)?,
-        Some(other) => bail!("Invalid split mode '{}'. Use 'h' (horizontal) or 'v' (vertical).", other),
+        Some(other) => bail!(
+            "Invalid split mode '{}'. Use 'h' (horizontal) or 'v' (vertical).",
+            other
+        ),
         None => logs_stream(rx, &filters, show_timestamps)?,
     }
 
@@ -3479,7 +3864,10 @@ pub fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
     )?;
     let result: serde_json::Value = resp.into_json().context("Failed to parse response")?;
     let stopped = result["stopped"].as_u64().unwrap_or(0);
-    println!("  Stopped {} container(s). Worker will recreate them shortly.", stopped);
+    println!(
+        "  Stopped {} container(s). Worker will recreate them shortly.",
+        stopped
+    );
     Ok(())
 }
 
@@ -3527,9 +3915,7 @@ pub fn destroy() -> Result<()> {
         }
     }
 
-    println!(
-        "  Destroy is still in progress. Run `sp00ky cloud status` to check."
-    );
+    println!("  Destroy is still in progress. Run `sp00ky cloud status` to check.");
     Ok(())
 }
 
@@ -3552,7 +3938,10 @@ fn resolve_backup_id(client: &mut CloudClient, pid: &str, input: &str) -> Result
         .filter(|b| b["name"].as_str() == Some(input))
         .collect();
     if by_name.len() == 1 {
-        return Ok(by_name.remove(0)["id"].as_str().unwrap_or(input).to_string());
+        return Ok(by_name.remove(0)["id"]
+            .as_str()
+            .unwrap_or(input)
+            .to_string());
     }
     if by_name.len() > 1 {
         bail!(
@@ -3564,10 +3953,18 @@ fn resolve_backup_id(client: &mut CloudClient, pid: &str, input: &str) -> Result
 
     let mut by_prefix: Vec<&serde_json::Value> = backups
         .iter()
-        .filter(|b| b["id"].as_str().map(|id| id.starts_with(input)).unwrap_or(false))
+        .filter(|b| {
+            b["id"]
+                .as_str()
+                .map(|id| id.starts_with(input))
+                .unwrap_or(false)
+        })
         .collect();
     if by_prefix.len() == 1 {
-        return Ok(by_prefix.remove(0)["id"].as_str().unwrap_or(input).to_string());
+        return Ok(by_prefix.remove(0)["id"]
+            .as_str()
+            .unwrap_or(input)
+            .to_string());
     }
     if by_prefix.len() > 1 {
         bail!(
@@ -3615,7 +4012,10 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                 println!("  No backups found.");
                 return Ok(());
             }
-            println!("  {:<36}  {:<12}  {:<10}  {}", "ID", "STATUS", "SIZE", "CREATED");
+            println!(
+                "  {:<36}  {:<12}  {:<10}  {}",
+                "ID", "STATUS", "SIZE", "CREATED"
+            );
             println!("  {}", "-".repeat(80));
             for b in &backups {
                 let id = b["id"].as_str().unwrap_or("?");
@@ -3630,8 +4030,18 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                 } else {
                     "—".to_string()
                 };
-                let label = if name.is_empty() { id.to_string() } else { format!("{} ({})", name, &id[..8]) };
-                println!("  {:<36}  {:<12}  {:<10}  {}", label, status, size_str, &created[..19]);
+                let label = if name.is_empty() {
+                    id.to_string()
+                } else {
+                    format!("{} ({})", name, &id[..8])
+                };
+                println!(
+                    "  {:<36}  {:<12}  {:<10}  {}",
+                    label,
+                    status,
+                    size_str,
+                    &created[..19]
+                );
             }
         }
         CloudBackupCommands::Create { name } => {
@@ -3640,7 +4050,10 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
             let resp = client.post(&format!("/v1/projects/{}/backups", pid), &body)?;
             let result: serde_json::Value = resp.into_json()?;
             println!("  Backup created: {}", result["id"].as_str().unwrap_or("?"));
-            println!("  Status: {}", result["status"].as_str().unwrap_or("pending"));
+            println!(
+                "  Status: {}",
+                result["status"].as_str().unwrap_or("pending")
+            );
         }
         CloudBackupCommands::Restore { backup_id } => {
             let backup_id = resolve_backup_id(&mut client, &pid, &backup_id)?;
@@ -3683,12 +4096,7 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         if !last_status.is_empty() {
                             println!();
                         }
-                        final_error = Some(
-                            row["error"]
-                                .as_str()
-                                .unwrap_or("unknown")
-                                .to_string(),
-                        );
+                        final_error = Some(row["error"].as_str().unwrap_or("unknown").to_string());
                         final_status = Some(status);
                         break;
                     }
@@ -3796,7 +4204,11 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                 bail!("Failed to delete backup");
             }
         }
-        CloudBackupCommands::Configure { enabled, schedule, retention } => {
+        CloudBackupCommands::Configure {
+            enabled,
+            schedule,
+            retention,
+        } => {
             let body = serde_json::json!({
                 "enabled": enabled,
                 "schedule": schedule,
@@ -3818,12 +4230,11 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
             println!("  ╚══════════════════════════════════════════════════════╝");
             println!();
 
-            let confirmed = inquire::Confirm::new(
-                "Are you absolutely sure you want to reset the database?"
-            )
-            .with_default(false)
-            .prompt()
-            .context("Failed to read confirmation")?;
+            let confirmed =
+                inquire::Confirm::new("Are you absolutely sure you want to reset the database?")
+                    .with_default(false)
+                    .prompt()
+                    .context("Failed to read confirmation")?;
 
             if !confirmed {
                 println!("  Cancelled.");
@@ -3832,12 +4243,10 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
 
             // Offer to create a backup first
             if !no_backup {
-                let backup_first = inquire::Confirm::new(
-                    "Create a backup before resetting?"
-                )
-                .with_default(true)
-                .prompt()
-                .context("Failed to read confirmation")?;
+                let backup_first = inquire::Confirm::new("Create a backup before resetting?")
+                    .with_default(true)
+                    .prompt()
+                    .context("Failed to read confirmation")?;
 
                 if backup_first {
                     println!("  Creating backup before reset...");
@@ -3852,7 +4261,10 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         thread::sleep(Duration::from_secs(5));
                         let status_resp = client.get(&format!("/v1/projects/{}/backups", pid))?;
                         let backups: Vec<serde_json::Value> = status_resp.into_json()?;
-                        if let Some(b) = backups.iter().find(|b| b["id"].as_str() == Some(&backup_id)) {
+                        if let Some(b) = backups
+                            .iter()
+                            .find(|b| b["id"].as_str() == Some(&backup_id))
+                        {
                             match b["status"].as_str() {
                                 Some("completed") => {
                                     println!("  Backup completed.");
@@ -3877,7 +4289,10 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                 &serde_json::json!({}),
             )?;
             let result: serde_json::Value = resp.into_json()?;
-            println!("  Database reset: {}", result["status"].as_str().unwrap_or("done"));
+            println!(
+                "  Database reset: {}",
+                result["status"].as_str().unwrap_or("done")
+            );
 
             // Re-run migrations
             println!("  Running migrations...");
@@ -3886,7 +4301,8 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
 
             if let Some(db_url) = result["surrealdb_ip"].as_str() {
                 let resolved = config.resolved_surrealdb();
-                let db_password = result.get("db_password")
+                let db_password = result
+                    .get("db_password")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
@@ -3922,12 +4338,17 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                 if let Some(sched_url) = result["scheduler_url"].as_str() {
                     let surreal_client = if db_password.is_empty() {
                         crate::surreal_client::SurrealClient::new_unauthenticated(
-                            &surreal_url, &resolved.namespace, &resolved.database,
+                            &surreal_url,
+                            &resolved.namespace,
+                            &resolved.database,
                         )
                     } else {
                         crate::surreal_client::SurrealClient::new(
-                            &surreal_url, &resolved.namespace, &resolved.database,
-                            "root", db_password,
+                            &surreal_url,
+                            &resolved.namespace,
+                            &resolved.database,
+                            "root",
+                            db_password,
                         )
                     };
                     let mode = config.mode.clone().unwrap_or_default();
@@ -3939,7 +4360,9 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         docker_alias_endpoint(&mode)
                     };
                     let functions_sql = crate::schema_builder::build_remote_functions_schema(
-                        &mode, &fn_endpoint, "",
+                        &mode,
+                        &fn_endpoint,
+                        "",
                     );
                     match surreal_client.execute(&functions_sql) {
                         Ok(_) => println!("  Remote functions applied."),
@@ -4019,7 +4442,10 @@ pub fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
             };
 
             if new_plan == current_plan && new_interval == current_interval {
-                println!("  No changes needed — already on {} ({}).", new_plan, new_interval);
+                println!(
+                    "  No changes needed — already on {} ({}).",
+                    new_plan, new_interval
+                );
                 return Ok(());
             }
 
@@ -4072,7 +4498,10 @@ pub fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
                 }
                 Err(_) => {
                     // No billing account — start checkout and wait for payment
-                    println!("No billing account found. Starting checkout for '{}'...", slug);
+                    println!(
+                        "No billing account found. Starting checkout for '{}'...",
+                        slug
+                    );
                     wait_for_billing(&mut client, &slug)?;
                 }
             }
@@ -4092,14 +4521,16 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
     match action {
         CloudTeamCommands::List => {
             let resp = client.get("/v1/tenants")?;
-            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenants: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse tenants")?;
 
             // Find the active tenant (personal or first one)
             let tenant = tenants.first().context("No tenant found")?;
             let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
 
             let resp = client.get(&format!("/v1/tenants/{}/members", tenant_id))?;
-            let members: Vec<serde_json::Value> = resp.into_json().context("Failed to parse members")?;
+            let members: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse members")?;
 
             if members.is_empty() {
                 println!("No team members found.");
@@ -4109,7 +4540,8 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
             println!("{:<30} {:<10} {}", "EMAIL", "ROLE", "JOINED");
             println!("{}", "-".repeat(60));
             for member in &members {
-                let email = member["email"].as_str()
+                let email = member["email"]
+                    .as_str()
                     .or_else(|| member["github_login"].as_str())
                     .unwrap_or("-");
                 let role = member["role"].as_str().unwrap_or("-");
@@ -4123,7 +4555,8 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
 
         CloudTeamCommands::Invite { email } => {
             let resp = client.get("/v1/tenants")?;
-            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenants: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse tenants")?;
             let tenant = tenants.first().context("No tenant found")?;
             let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
 
@@ -4142,10 +4575,7 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
                 body["derived_key"] = serde_json::Value::String(dk);
             }
 
-            client.post(
-                &format!("/v1/tenants/{}/invitations", tenant_id),
-                &body,
-            )?;
+            client.post(&format!("/v1/tenants/{}/invitations", tenant_id), &body)?;
 
             println!("  Invitation sent to {}.", email);
             println!("  They will receive an email with a link to accept.");
@@ -4154,19 +4584,24 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
 
         CloudTeamCommands::Invitations => {
             let resp = client.get("/v1/tenants")?;
-            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenants: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse tenants")?;
             let tenant = tenants.first().context("No tenant found")?;
             let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
 
             let resp = client.get(&format!("/v1/tenants/{}/invitations", tenant_id))?;
-            let invitations: Vec<serde_json::Value> = resp.into_json().context("Failed to parse invitations")?;
+            let invitations: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse invitations")?;
 
             if invitations.is_empty() {
                 println!("No pending invitations.");
                 return Ok(());
             }
 
-            println!("{:<30} {:<10} {:<12} {}", "EMAIL", "ROLE", "STATUS", "EXPIRES");
+            println!(
+                "{:<30} {:<10} {:<12} {}",
+                "EMAIL", "ROLE", "STATUS", "EXPIRES"
+            );
             println!("{}", "-".repeat(70));
             for inv in &invitations {
                 let email = inv["email"].as_str().unwrap_or("-");
@@ -4181,17 +4616,20 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
 
         CloudTeamCommands::Revoke { email } => {
             let resp = client.get("/v1/tenants")?;
-            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenants: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse tenants")?;
             let tenant = tenants.first().context("No tenant found")?;
             let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
 
             // Find the invitation by email
             let resp = client.get(&format!("/v1/tenants/{}/invitations", tenant_id))?;
-            let invitations: Vec<serde_json::Value> = resp.into_json().context("Failed to parse invitations")?;
+            let invitations: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse invitations")?;
 
-            let inv = invitations.iter().find(|i| {
-                i["email"].as_str() == Some(&email)
-            }).context(format!("No pending invitation found for '{}'", email))?;
+            let inv = invitations
+                .iter()
+                .find(|i| i["email"].as_str() == Some(&email))
+                .context(format!("No pending invitation found for '{}'", email))?;
 
             let inv_id = inv["id"].as_str().context("No invitation ID")?;
 
@@ -4202,17 +4640,23 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
 
         CloudTeamCommands::Remove { email } => {
             let resp = client.get("/v1/tenants")?;
-            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenants: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse tenants")?;
             let tenant = tenants.first().context("No tenant found")?;
             let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
 
             // Find the member by email
             let resp = client.get(&format!("/v1/tenants/{}/members", tenant_id))?;
-            let members: Vec<serde_json::Value> = resp.into_json().context("Failed to parse members")?;
+            let members: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse members")?;
 
-            let member = members.iter().find(|m| {
-                m["email"].as_str() == Some(&email) || m["github_login"].as_str() == Some(&email)
-            }).context(format!("No member found with email '{}'", email))?;
+            let member = members
+                .iter()
+                .find(|m| {
+                    m["email"].as_str() == Some(&email)
+                        || m["github_login"].as_str() == Some(&email)
+                })
+                .context(format!("No member found with email '{}'", email))?;
 
             let member_id = member["id"].as_str().context("No member ID")?;
 
@@ -4238,7 +4682,8 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
 
         CloudTeamCommands::Rename { name } => {
             let resp = client.get("/v1/tenants")?;
-            let tenants: Vec<serde_json::Value> = resp.into_json().context("Failed to parse tenants")?;
+            let tenants: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse tenants")?;
             let tenant = tenants.first().context("No tenant found")?;
             let tenant_id = tenant["id"].as_str().context("No tenant ID")?;
             let current_name = tenant["name"].as_str().unwrap_or("-");
@@ -4257,8 +4702,12 @@ pub fn team(action: CloudTeamCommands) -> Result<()> {
                 &format!("/v1/tenants/{}", tenant_id),
                 &serde_json::json!({ "name": new_name }),
             )?;
-            let updated: serde_json::Value = resp.into_json().context("Failed to parse response")?;
-            println!("  Tenant renamed to '{}'.", updated["name"].as_str().unwrap_or(&new_name));
+            let updated: serde_json::Value =
+                resp.into_json().context("Failed to parse response")?;
+            println!(
+                "  Tenant renamed to '{}'.",
+                updated["name"].as_str().unwrap_or(&new_name)
+            );
             Ok(())
         }
     }
@@ -4292,18 +4741,25 @@ fn vault(action: CloudVaultCommands) -> Result<()> {
         CloudVaultCommands::ApproveReset { email } => {
             // List pending resets and find the one for this email
             let resp = client.get(&format!("/v1/tenants/{}/vault-resets", tenant_id))?;
-            let resets: Vec<serde_json::Value> = resp.into_json().context("Failed to parse reset requests")?;
+            let resets: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse reset requests")?;
 
-            let reset = resets.iter().find(|r| {
-                r["email"].as_str() == Some(&email) && r["status"].as_str() == Some("pending")
-            }).context(format!("No pending reset request found for '{}'", email))?;
+            let reset = resets
+                .iter()
+                .find(|r| {
+                    r["email"].as_str() == Some(&email) && r["status"].as_str() == Some("pending")
+                })
+                .context(format!("No pending reset request found for '{}'", email))?;
 
             let reset_id = reset["id"].as_str().context("No reset ID")?;
 
             let dk = get_derived_key(&mut client)?;
 
             client.post(
-                &format!("/v1/tenants/{}/vault-resets/{}/approve", tenant_id, reset_id),
+                &format!(
+                    "/v1/tenants/{}/vault-resets/{}/approve",
+                    tenant_id, reset_id
+                ),
                 &serde_json::json!({ "derived_key": dk }),
             )?;
 
@@ -4315,12 +4771,15 @@ fn vault(action: CloudVaultCommands) -> Result<()> {
         CloudVaultCommands::CompleteReset => {
             // Check if we have an approved reset
             let resp = client.get(&format!("/v1/tenants/{}/vault-resets/mine", tenant_id))?;
-            let reset: serde_json::Value = resp.into_json().context("Failed to parse reset status")?;
+            let reset: serde_json::Value =
+                resp.into_json().context("Failed to parse reset status")?;
 
             let status = reset["status"].as_str().unwrap_or("");
             if status == "pending" {
                 println!("  Your reset request is still pending admin approval.");
-                println!("  Ask a team admin to run: sp00ky cloud vault approve-reset <your-email>");
+                println!(
+                    "  Ask a team admin to run: sp00ky cloud vault approve-reset <your-email>"
+                );
                 return Ok(());
             }
             if status != "approved" {
@@ -4377,7 +4836,8 @@ fn vault(action: CloudVaultCommands) -> Result<()> {
 
         CloudVaultCommands::ListResets => {
             let resp = client.get(&format!("/v1/tenants/{}/vault-resets", tenant_id))?;
-            let resets: Vec<serde_json::Value> = resp.into_json().context("Failed to parse reset requests")?;
+            let resets: Vec<serde_json::Value> =
+                resp.into_json().context("Failed to parse reset requests")?;
 
             if resets.is_empty() {
                 println!("No pending vault reset requests.");
@@ -4444,8 +4904,6 @@ pub fn keys(action: CloudKeyCommands) -> Result<()> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-
-
 fn print_deployment_details(data: &serde_json::Value) {
     if let Some(dep) = data.get("deployment") {
         println!(
@@ -4461,12 +4919,24 @@ fn print_deployment_details(data: &serde_json::Value) {
     // Collect component versions from /api/spooky (keyed by entity name)
     let mut component_versions: std::collections::HashMap<String, (String, String)> =
         std::collections::HashMap::new();
-    if let Some(db_url) = data.get("urls").and_then(|u| u.get("surrealdb")).and_then(|v| v.as_str()) {
-        let config_path = std::env::current_dir().unwrap_or_default().join("sp00ky.yml");
+    if let Some(db_url) = data
+        .get("urls")
+        .and_then(|u| u.get("surrealdb"))
+        .and_then(|v| v.as_str())
+    {
+        let config_path = std::env::current_dir()
+            .unwrap_or_default()
+            .join("sp00ky.yml");
         let config = backend::load_config(&config_path);
         let resolved = config.resolved_surrealdb();
-        let spooky_url = format!("{}/api/{}/{}/spooky", db_url, resolved.namespace, resolved.database);
-        if let Ok(resp) = ureq::get(&spooky_url).timeout(std::time::Duration::from_secs(5)).call() {
+        let spooky_url = format!(
+            "{}/api/{}/{}/spooky",
+            db_url, resolved.namespace, resolved.database
+        );
+        if let Ok(resp) = ureq::get(&spooky_url)
+            .timeout(std::time::Duration::from_secs(5))
+            .call()
+        {
             if let Ok(entities) = resp.into_json::<Vec<serde_json::Value>>() {
                 for entity in &entities {
                     let name = entity["entity"].as_str().unwrap_or("").to_string();
@@ -4516,8 +4986,13 @@ fn print_deployment_details(data: &serde_json::Value) {
                 let version = if let Some(v) = component_ver {
                     v.to_string()
                 } else {
-                    let raw_hash = vm["image_hash"].as_str()
-                        .or_else(|| vm.get("metadata").and_then(|m| m.get("image_hash")).and_then(|v| v.as_str()))
+                    let raw_hash = vm["image_hash"]
+                        .as_str()
+                        .or_else(|| {
+                            vm.get("metadata")
+                                .and_then(|m| m.get("image_hash"))
+                                .and_then(|v| v.as_str())
+                        })
                         .unwrap_or("-");
                     if raw_hash.len() > 12 && raw_hash != "-" {
                         let h = raw_hash.trim_start_matches("sha256:");
@@ -4545,7 +5020,8 @@ fn print_deployment_details(data: &serde_json::Value) {
     }
 
     // Print public endpoints (skip internal ssp/scheduler URLs)
-    let public_urls: Vec<_> = urls.iter()
+    let public_urls: Vec<_> = urls
+        .iter()
         .filter(|(name, url)| {
             url.starts_with("http") && !matches!(name.as_str(), "ssp" | "scheduler")
         })
@@ -4561,10 +5037,15 @@ fn print_deployment_details(data: &serde_json::Value) {
     // Print spooky status endpoint
     if let Some(db_url) = urls.get("surrealdb") {
         if db_url.starts_with("http") {
-            let config_path = std::env::current_dir().unwrap_or_default().join("sp00ky.yml");
+            let config_path = std::env::current_dir()
+                .unwrap_or_default()
+                .join("sp00ky.yml");
             let config = backend::load_config(&config_path);
             let resolved = config.resolved_surrealdb();
-            println!("    \x1b[90mstatus\x1b[0m {}/api/{}/{}/spooky", db_url, resolved.namespace, resolved.database);
+            println!(
+                "    \x1b[90mstatus\x1b[0m {}/api/{}/{}/spooky",
+                db_url, resolved.namespace, resolved.database
+            );
         }
     }
 }
@@ -4615,8 +5096,10 @@ fn domain_add(domain: String, app: Option<String>) -> Result<()> {
         }
     }
     println!();
-    println!("Status: {} (checking automatically — run `sp00ky cloud domain list` to track)",
-        data["status"].as_str().unwrap_or("pending_dns"));
+    println!(
+        "Status: {} (checking automatically — run `sp00ky cloud domain list` to track)",
+        data["status"].as_str().unwrap_or("pending_dns")
+    );
     Ok(())
 }
 
@@ -4636,9 +5119,9 @@ fn domain_list() -> Result<()> {
     for d in &data {
         let status = d["status"].as_str().unwrap_or("-");
         let dot = match status {
-            "active" => "\x1b[32m●\x1b[0m",   // green
-            "failed" => "\x1b[31m●\x1b[0m",   // red
-            _ => "\x1b[33m◐\x1b[0m",          // yellow (pending/verifying)
+            "active" => "\x1b[32m●\x1b[0m", // green
+            "failed" => "\x1b[31m●\x1b[0m", // red
+            _ => "\x1b[33m◐\x1b[0m",        // yellow (pending/verifying)
         };
         println!(
             "{:<34} {} {:<10} {} {}",
@@ -4687,7 +5170,11 @@ pub fn link(action: CloudLinkCommands) -> Result<()> {
     match action {
         CloudLinkCommands::Setup => link_setup(),
         CloudLinkCommands::Status => link_status(),
-        CloudLinkCommands::Settings { branch, auto_deploy, config_path } => link_settings(branch, auto_deploy, config_path),
+        CloudLinkCommands::Settings {
+            branch,
+            auto_deploy,
+            config_path,
+        } => link_settings(branch, auto_deploy, config_path),
         CloudLinkCommands::Unlink => link_unlink(),
         CloudLinkCommands::Trigger => link_trigger(),
         CloudLinkCommands::Runs => link_runs(),
@@ -4745,7 +5232,14 @@ fn find_manifest_candidates(root: &std::path::Path) -> Vec<String> {
             if path.is_dir() {
                 if matches!(
                     name.as_str(),
-                    ".git" | "node_modules" | "target" | "dist" | "build" | ".next" | "vendor" | ".sp00ky"
+                    ".git"
+                        | "node_modules"
+                        | "target"
+                        | "dist"
+                        | "build"
+                        | ".next"
+                        | "vendor"
+                        | ".sp00ky"
                 ) {
                     continue;
                 }
@@ -4860,8 +5354,18 @@ fn link_setup() -> Result<()> {
                     &serde_json::json!({ "branch": branch, "config_path": config_path }),
                 )?;
 
-                println!("Linked to {}/{} (branch '{}', manifest '{}')", repo_owner, repo_name, branch, config_path);
-                println!("  Auto-deploy: {}", if data["auto_deploy"].as_bool().unwrap_or(true) { "enabled" } else { "disabled" });
+                println!(
+                    "Linked to {}/{} (branch '{}', manifest '{}')",
+                    repo_owner, repo_name, branch, config_path
+                );
+                println!(
+                    "  Auto-deploy: {}",
+                    if data["auto_deploy"].as_bool().unwrap_or(true) {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                );
 
                 // Offer to deploy now
                 if is_interactive() {
@@ -4876,7 +5380,10 @@ fn link_setup() -> Result<()> {
                             &serde_json::json!({}),
                         )?;
                         let run: serde_json::Value = resp.into_json()?;
-                        println!("Build triggered (run: {})", run["run_id"].as_str().unwrap_or("?"));
+                        println!(
+                            "Build triggered (run: {})",
+                            run["run_id"].as_str().unwrap_or("?")
+                        );
                         println!("  Commit: {}", run["commit_sha"].as_str().unwrap_or("?"));
                     }
                 }
@@ -4916,7 +5423,10 @@ fn link_setup() -> Result<()> {
                         }),
                     )?;
 
-                    println!("Linked to {} (branch '{}', manifest '{}')", selection, branch, config_path);
+                    println!(
+                        "Linked to {} (branch '{}', manifest '{}')",
+                        selection, branch, config_path
+                    );
 
                     // Offer to deploy
                     if is_interactive() {
@@ -4931,7 +5441,10 @@ fn link_setup() -> Result<()> {
                                 &serde_json::json!({}),
                             )?;
                             let run: serde_json::Value = resp.into_json()?;
-                            println!("Build triggered (run: {})", run["run_id"].as_str().unwrap_or("?"));
+                            println!(
+                                "Build triggered (run: {})",
+                                run["run_id"].as_str().unwrap_or("?")
+                            );
                         }
                     }
                     return Ok(());
@@ -4960,26 +5473,48 @@ fn link_status() -> Result<()> {
     match status {
         "linked" => {
             println!("Project: {}", slug);
-            println!("Repository: {}/{}",
+            println!(
+                "Repository: {}/{}",
                 data["repo_owner"].as_str().unwrap_or("?"),
-                data["repo_name"].as_str().unwrap_or("?"));
+                data["repo_name"].as_str().unwrap_or("?")
+            );
             println!("Branch: {}", data["branch"].as_str().unwrap_or("?"));
-            println!("Auto-deploy: {}", if data["auto_deploy"].as_bool().unwrap_or(true) { "enabled" } else { "disabled" });
+            println!(
+                "Auto-deploy: {}",
+                if data["auto_deploy"].as_bool().unwrap_or(true) {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
 
             if let Some(runs) = data["runs"].as_array() {
                 if !runs.is_empty() {
                     println!();
                     println!("Recent runs:");
-                    println!("  {:<10} {:<12} {:<20} {}", "STATUS", "COMMIT", "TIME", "MESSAGE");
+                    println!(
+                        "  {:<10} {:<12} {:<20} {}",
+                        "STATUS", "COMMIT", "TIME", "MESSAGE"
+                    );
                     println!("  {}", "-".repeat(60));
                     for run in runs {
                         let sha = run["commit_sha"].as_str().unwrap_or("?");
                         let short_sha = if sha.len() > 8 { &sha[..8] } else { sha };
-                        println!("  {:<10} {:<12} {:<20} {}",
+                        println!(
+                            "  {:<10} {:<12} {:<20} {}",
                             run["status"].as_str().unwrap_or("?"),
                             short_sha,
-                            run["created_at"].as_str().unwrap_or("?").get(..19).unwrap_or("?"),
-                            run["commit_message"].as_str().unwrap_or("").lines().next().unwrap_or(""),
+                            run["created_at"]
+                                .as_str()
+                                .unwrap_or("?")
+                                .get(..19)
+                                .unwrap_or("?"),
+                            run["commit_message"]
+                                .as_str()
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or(""),
                         );
                     }
                 }
@@ -4997,43 +5532,51 @@ fn link_status() -> Result<()> {
     Ok(())
 }
 
-fn link_settings(branch: Option<String>, auto_deploy: Option<bool>, config_path: Option<String>) -> Result<()> {
+fn link_settings(
+    branch: Option<String>,
+    auto_deploy: Option<bool>,
+    config_path: Option<String>,
+) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (_slug, pid) = resolve_project_id(&mut client)?;
 
     // If no flags provided, use interactive prompts
-    let (branch, auto_deploy, config_path) = if branch.is_none() && auto_deploy.is_none() && config_path.is_none() && is_interactive() {
-        // Get current settings first
-        let resp = client.get(&format!("/v1/projects/{}/link", pid))?;
-        let data: serde_json::Value = resp.into_json()?;
-        if data["status"].as_str() != Some("linked") {
-            bail!("Project is not linked. Run `sp00ky cloud link setup` first.");
-        }
+    let (branch, auto_deploy, config_path) =
+        if branch.is_none() && auto_deploy.is_none() && config_path.is_none() && is_interactive() {
+            // Get current settings first
+            let resp = client.get(&format!("/v1/projects/{}/link", pid))?;
+            let data: serde_json::Value = resp.into_json()?;
+            if data["status"].as_str() != Some("linked") {
+                bail!("Project is not linked. Run `sp00ky cloud link setup` first.");
+            }
 
-        let current_branch = data["branch"].as_str().unwrap_or("main").to_string();
-        let current_auto = data["auto_deploy"].as_bool().unwrap_or(true);
-        let current_config = data["config_path"].as_str().unwrap_or("sp00ky.yml").to_string();
+            let current_branch = data["branch"].as_str().unwrap_or("main").to_string();
+            let current_auto = data["auto_deploy"].as_bool().unwrap_or(true);
+            let current_config = data["config_path"]
+                .as_str()
+                .unwrap_or("sp00ky.yml")
+                .to_string();
 
-        let new_branch = inquire::Text::new("Branch:")
-            .with_default(&current_branch)
-            .prompt()
-            .context("Failed to read branch")?;
+            let new_branch = inquire::Text::new("Branch:")
+                .with_default(&current_branch)
+                .prompt()
+                .context("Failed to read branch")?;
 
-        let new_config = inquire::Text::new("Path to sp00ky.yml:")
-            .with_default(&current_config)
-            .prompt()
-            .context("Failed to read manifest path")?;
+            let new_config = inquire::Text::new("Path to sp00ky.yml:")
+                .with_default(&current_config)
+                .prompt()
+                .context("Failed to read manifest path")?;
 
-        let new_auto = inquire::Confirm::new("Auto-deploy on push?")
-            .with_default(current_auto)
-            .prompt()
-            .context("Failed to read auto-deploy setting")?;
+            let new_auto = inquire::Confirm::new("Auto-deploy on push?")
+                .with_default(current_auto)
+                .prompt()
+                .context("Failed to read auto-deploy setting")?;
 
-        (Some(new_branch), Some(new_auto), Some(new_config))
-    } else {
-        (branch, auto_deploy, config_path)
-    };
+            (Some(new_branch), Some(new_auto), Some(new_config))
+        } else {
+            (branch, auto_deploy, config_path)
+        };
 
     let mut body = serde_json::Map::new();
     if let Some(b) = &branch {
@@ -5043,7 +5586,10 @@ fn link_settings(branch: Option<String>, auto_deploy: Option<bool>, config_path:
         body.insert("auto_deploy".to_string(), serde_json::Value::Bool(a));
     }
     if let Some(c) = &config_path {
-        body.insert("config_path".to_string(), serde_json::Value::String(c.clone()));
+        body.insert(
+            "config_path".to_string(),
+            serde_json::Value::String(c.clone()),
+        );
     }
 
     client.patch(
@@ -5071,10 +5617,13 @@ fn link_unlink() -> Result<()> {
     let (slug, pid) = resolve_project_id(&mut client)?;
 
     if is_interactive() {
-        let confirm = inquire::Confirm::new(&format!("Unlink project '{}'? This will stop automated deployments.", slug))
-            .with_default(false)
-            .prompt()
-            .context("Failed to read confirmation")?;
+        let confirm = inquire::Confirm::new(&format!(
+            "Unlink project '{}'? This will stop automated deployments.",
+            slug
+        ))
+        .with_default(false)
+        .prompt()
+        .context("Failed to read confirmation")?;
 
         if !confirm {
             println!("Cancelled.");
@@ -5116,11 +5665,16 @@ fn link_runs() -> Result<()> {
     let runs: Vec<serde_json::Value> = resp.into_json()?;
 
     if runs.is_empty() {
-        println!("No build runs found. Push to the linked branch or run `sp00ky cloud link trigger`.");
+        println!(
+            "No build runs found. Push to the linked branch or run `sp00ky cloud link trigger`."
+        );
         return Ok(());
     }
 
-    println!("{:<10} {:<12} {:<20} {}", "STATUS", "COMMIT", "TIME", "MESSAGE");
+    println!(
+        "{:<10} {:<12} {:<20} {}",
+        "STATUS", "COMMIT", "TIME", "MESSAGE"
+    );
     println!("{}", "-".repeat(70));
 
     for run in &runs {
@@ -5128,11 +5682,16 @@ fn link_runs() -> Result<()> {
         let short_sha = if sha.len() > 8 { &sha[..8] } else { sha };
         let time = run["created_at"].as_str().unwrap_or("?");
         let short_time = time.get(..19).unwrap_or(time);
-        let msg = run["commit_message"].as_str().unwrap_or("")
-            .lines().next().unwrap_or("");
+        let msg = run["commit_message"]
+            .as_str()
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("");
         let msg_truncated = if msg.len() > 40 { &msg[..37] } else { msg };
 
-        println!("{:<10} {:<12} {:<20} {}",
+        println!(
+            "{:<10} {:<12} {:<20} {}",
             run["status"].as_str().unwrap_or("?"),
             short_sha,
             short_time,
@@ -5165,7 +5724,9 @@ fn vault_passphrase_path_legacy() -> PathBuf {
 }
 
 fn load_cached_derived_key() -> Option<String> {
-    fs::read_to_string(vault_derived_key_path()).ok().map(|s| s.trim().to_string())
+    fs::read_to_string(vault_derived_key_path())
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 fn save_cached_derived_key(hex_key: &str) -> Result<()> {
@@ -5205,7 +5766,9 @@ fn generate_salt() -> String {
 fn fetch_key_params(client: &mut CloudClient) -> Result<String> {
     let resp = client.get("/v1/vault/key-params")?;
     let data: serde_json::Value = resp.into_json()?;
-    let salt_hex = data["salt"].as_str().context("No salt in key-params response")?;
+    let salt_hex = data["salt"]
+        .as_str()
+        .context("No salt in key-params response")?;
     Ok(salt_hex.to_string())
 }
 
@@ -5290,7 +5853,10 @@ fn ensure_vault(client: &mut CloudClient) -> Result<()> {
     let salt = hex::decode(&salt_hex).context("Invalid salt")?;
     println!("Deriving encryption key (this may take a moment)...");
     let dk = derive_key(&passphrase, &salt)?;
-    client.post("/v1/vault/init", &serde_json::json!({ "derived_key": dk, "salt": salt_hex }))?;
+    client.post(
+        "/v1/vault/init",
+        &serde_json::json!({ "derived_key": dk, "salt": salt_hex }),
+    )?;
     println!("Vault initialized.");
 
     let cache = inquire::Confirm::new("Cache derived key locally in ~/.sp00ky/?")
@@ -5342,7 +5908,10 @@ fn env_init() -> Result<()> {
     let salt = hex::decode(&salt_hex).context("Invalid salt")?;
     println!("Deriving encryption key (this may take a moment)...");
     let dk = derive_key(&passphrase, &salt)?;
-    client.post("/v1/vault/init", &serde_json::json!({ "derived_key": dk, "salt": salt_hex }))?;
+    client.post(
+        "/v1/vault/init",
+        &serde_json::json!({ "derived_key": dk, "salt": salt_hex }),
+    )?;
     println!("Vault initialized successfully.");
 
     let cache = inquire::Confirm::new("Cache derived key locally in ~/.sp00ky/?")
@@ -5419,14 +5988,22 @@ fn env_set(
         } else {
             "production"
         };
-        println!("Set {} ({}) for project '{}' from {}.", name, scope, slug, path);
+        println!(
+            "Set {} ({}) for project '{}' from {}.",
+            name, scope, slug, path
+        );
         return Ok(());
     }
 
     // Ask which environments
     let env_choice = inquire::Select::new(
         "Which environment(s)?",
-        vec!["Both (same value)", "Development only", "Production only", "Both (different values)"],
+        vec![
+            "Both (same value)",
+            "Development only",
+            "Production only",
+            "Both (different values)",
+        ],
     )
     .prompt()
     .context("Failed to read environment choice")?;
@@ -5536,9 +6113,11 @@ fn env_import(file: String) -> Result<()> {
     .prompt()
     .context("Failed to read environment choice")?;
 
-    let confirm = inquire::Confirm::new(
-        &format!("Import {} variables to project '{}'?", pairs.len(), slug),
-    )
+    let confirm = inquire::Confirm::new(&format!(
+        "Import {} variables to project '{}'?",
+        pairs.len(),
+        slug
+    ))
     .with_default(true)
     .prompt()
     .unwrap_or(false);
@@ -5606,8 +6185,16 @@ fn env_list() -> Result<()> {
     println!("{:<30} {:<6} {:<6} {}", "NAME", "DEV", "PROD", "UPDATED");
     println!("{}", "-".repeat(65));
     for var in &data {
-        let dev = if var["has_dev"].as_bool() == Some(true) { "yes" } else { "-" };
-        let prod = if var["has_prod"].as_bool() == Some(true) { "yes" } else { "-" };
+        let dev = if var["has_dev"].as_bool() == Some(true) {
+            "yes"
+        } else {
+            "-"
+        };
+        let prod = if var["has_prod"].as_bool() == Some(true) {
+            "yes"
+        } else {
+            "-"
+        };
         let updated = var["updated_at"].as_str().unwrap_or("-");
         let short_time = updated.get(..19).unwrap_or(updated);
         println!(
@@ -5661,7 +6248,11 @@ fn env_delete(name: String) -> Result<()> {
     let (slug, project) = ensure_project(&mut client)?;
     let pid = project_id(&project);
 
-    client.delete(&format!("/v1/projects/{}/envs/{}", pid, name.to_uppercase()))?;
+    client.delete(&format!(
+        "/v1/projects/{}/envs/{}",
+        pid,
+        name.to_uppercase()
+    ))?;
     println!("Deleted {} from project '{}'.", name.to_uppercase(), slug);
 
     Ok(())
@@ -5681,7 +6272,9 @@ fn env_ci_access(disable: bool, status: bool) -> Result<()> {
         if data["enabled"].as_bool() == Some(true) {
             println!("CI/CD vault access is ENABLED — push deploys can read production secrets.");
         } else {
-            println!("CI/CD vault access is DISABLED. Enable it with `sp00ky cloud env ci-access`.");
+            println!(
+                "CI/CD vault access is DISABLED. Enable it with `sp00ky cloud env ci-access`."
+            );
         }
         return Ok(());
     }
@@ -5735,11 +6328,14 @@ fn env_change_passphrase() -> Result<()> {
     let new_salt_hex = generate_salt();
     let new_dk = derive_key(&new_pp, &hex::decode(&new_salt_hex)?)?;
 
-    client.post("/v1/vault/change-passphrase", &serde_json::json!({
-        "current_derived_key": current_dk,
-        "new_derived_key": new_dk,
-        "new_salt": new_salt_hex,
-    }))?;
+    client.post(
+        "/v1/vault/change-passphrase",
+        &serde_json::json!({
+            "current_derived_key": current_dk,
+            "new_derived_key": new_dk,
+            "new_salt": new_salt_hex,
+        }),
+    )?;
 
     // Update cached derived key
     if vault_derived_key_path().exists() {
@@ -5832,7 +6428,9 @@ mod logs_tests {
         let before = chrono::Utc::now();
         let two_hours_ago = parse_time_anchor("2h").unwrap();
         let after = chrono::Utc::now();
-        assert!(two_hours_ago <= before - chrono::Duration::hours(2) + chrono::Duration::seconds(1));
+        assert!(
+            two_hours_ago <= before - chrono::Duration::hours(2) + chrono::Duration::seconds(1)
+        );
         assert!(two_hours_ago >= after - chrono::Duration::hours(2) - chrono::Duration::seconds(1));
     }
 
@@ -5891,7 +6489,10 @@ mod fn_endpoint_tests {
         let status = vms(&[("scheduler", "172.21.0.3"), ("surrealdb", "172.21.0.2")]);
         let ep = derive_fn_endpoint(&DeployMode::Cluster, &status).unwrap();
         assert_eq!(ep, "http://scheduler:9667");
-        assert!(!ep.contains("172."), "must not bake a Docker bridge IP: {ep}");
+        assert!(
+            !ep.contains("172."),
+            "must not bake a Docker bridge IP: {ep}"
+        );
     }
 
     #[test]
@@ -5964,4 +6565,3 @@ mod fn_endpoint_tests {
         assert!(!is_stable_endpoint_host("")); // empty host
     }
 }
-

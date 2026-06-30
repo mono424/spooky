@@ -62,7 +62,9 @@ impl CodeGenerator {
     ) -> Result<String> {
         let mut content = match self.format {
             OutputFormat::JsonSchema => json_schema_content.to_string(),
-            OutputFormat::Typescript => self.generate_typescript(json_schema_content, backend_definitions)?,
+            OutputFormat::Typescript => {
+                self.generate_typescript(json_schema_content, backend_definitions)?
+            }
             OutputFormat::Dart => self.generate_dart(json_schema_content)?,
             OutputFormat::Surql => {
                 let mut schema = String::new();
@@ -73,9 +75,12 @@ impl CodeGenerator {
                     schema.push_str("-- SURREALISM MODULES\n");
                     schema.push_str("-- ==================================================\n");
                     schema.push_str("\n-- Define bucket for module files\n");
-                    schema.push_str("DEFINE BUCKET IF NOT EXISTS modules BACKEND \"file:/modules\";\n\n");
+                    schema.push_str(
+                        "DEFINE BUCKET IF NOT EXISTS modules BACKEND \"file:/modules\";\n\n",
+                    );
                     schema.push_str("-- Define the XOR module\n");
-                    schema.push_str("DEFINE MODULE mod::xor AS f\"modules:/xor_module.surli\";\n\n");
+                    schema
+                        .push_str("DEFINE MODULE mod::xor AS f\"modules:/xor_module.surli\";\n\n");
                     // TODO: re-enable when ssp API stabilizes
                     // schema.push_str("-- Define the SSP module\n");
                     // schema.push_str("DEFINE MODULE mod::ssp AS f\"modules:/ssp_module.surli\";\n\n");
@@ -89,7 +94,7 @@ impl CodeGenerator {
                     schema.push_str(events);
                 }
                 schema
-            },
+            }
         };
 
         if self.include_header {
@@ -197,12 +202,17 @@ impl CodeGenerator {
 
             // Check if this is the top-level Schema interface with an exact match
             // We only want to remove "export interface Schema {" not "export interface SchemaFoo {"
-            if line.trim() == "export interface Schema {" ||
-               (line.trim().starts_with("export interface Schema") &&
-                (line.trim().ends_with("{") || !line.contains("{"))) {
+            if line.trim() == "export interface Schema {"
+                || (line.trim().starts_with("export interface Schema")
+                    && (line.trim().ends_with("{") || !line.contains("{")))
+            {
                 // Check if it's exactly "Schema" and not "SchemaSomething"
                 let after_interface = line.split("export interface").nth(1).unwrap_or("");
-                let interface_name = after_interface.trim().split_whitespace().next().unwrap_or("");
+                let interface_name = after_interface
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
 
                 if interface_name == "Schema" || interface_name == "Schema{" {
                     // Start skipping lines and track braces
@@ -285,10 +295,15 @@ impl CodeGenerator {
         result.join("\n")
     }
 
-    fn add_schema_metadata(&self, content: &str, json_schema_content: &str, backend_definitions: Option<&BTreeMap<String, BackendDefinition>>) -> Result<String> {
+    fn add_schema_metadata(
+        &self,
+        content: &str,
+        json_schema_content: &str,
+        backend_definitions: Option<&BTreeMap<String, BackendDefinition>>,
+    ) -> Result<String> {
         // Parse JSON schema to extract schema information
-        let schema: serde_json::Value = serde_json::from_str(json_schema_content)
-            .context("Failed to parse JSON schema")?;
+        let schema: serde_json::Value =
+            serde_json::from_str(json_schema_content).context("Failed to parse JSON schema")?;
 
         // Pre-compute relationships so per-table JSDoc can summarize them
         let table_relationships = self.extract_table_relationships(&schema)?;
@@ -303,13 +318,20 @@ impl CodeGenerator {
             if let serde_json::Value::Object(defs_obj) = definitions {
                 // Process each table (skip Relationships and RelationTables)
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Access" || table_name == "Buckets" || table_name.starts_with("_00_") {
+                    if table_name == "Relationships"
+                        || table_name == "RelationTables"
+                        || table_name == "Access"
+                        || table_name == "Buckets"
+                        || table_name.starts_with("_00_")
+                    {
                         continue;
                     }
 
                     // Per-table JSDoc — surfaces relationships and a useQuery example so
                     // hover-docs in IDEs and LLM reads of this file get inline context.
-                    for line in self.table_jsdoc_lines(table_name, table_relationships.get(table_name)) {
+                    for line in
+                        self.table_jsdoc_lines(table_name, table_relationships.get(table_name))
+                    {
                         tables_lines.push(line);
                     }
 
@@ -323,16 +345,20 @@ impl CodeGenerator {
                             for (col_name, col_def) in props_obj {
                                 let col_type = self.map_json_schema_type_to_value_type(col_def);
                                 let is_optional = self.is_field_optional(table_def, col_name);
-                                let is_record_id = col_def.get("x-is-record-id")
+                                let is_record_id = col_def
+                                    .get("x-is-record-id")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
-                                let is_datetime = col_def.get("x-is-datetime")
+                                let is_datetime = col_def
+                                    .get("x-is-datetime")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
-                                let is_bytes = col_def.get("x-is-bytes")
+                                let is_bytes = col_def
+                                    .get("x-is-bytes")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
-                                let crdt_variant = col_def.get("x-crdt")
+                                let crdt_variant = col_def
+                                    .get("x-crdt")
                                     .and_then(|v| v.as_str())
                                     .filter(|s| !s.is_empty());
                                 let has_cursor = col_def.get("x-cursor").is_some();
@@ -394,7 +420,10 @@ impl CodeGenerator {
                                 } else {
                                     tables_lines.push(format!(
                                         "        {}: {{ type: '{}' as const, {}, optional: {} }},",
-                                        clean_col_name, runtime_type, flags.join(", "), is_optional
+                                        clean_col_name,
+                                        runtime_type,
+                                        flags.join(", "),
+                                        is_optional
                                     ));
                                 }
                             }
@@ -428,7 +457,7 @@ impl CodeGenerator {
 
         // Build access array
         tables_lines.push("  access: {".to_string());
-        
+
         if let Some(definitions) = schema.get("definitions") {
             if let Some(access) = definitions.get("Access") {
                 if let Some(const_val) = access.get("const") {
@@ -442,7 +471,6 @@ impl CodeGenerator {
                 }
             }
         }
-
 
         tables_lines.push("  },".to_string());
 
@@ -461,13 +489,21 @@ impl CodeGenerator {
                                 if let Some(max_size) = obj.get("maxSize") {
                                     tables_lines.push(format!("      maxSize: {},", max_size));
                                 }
-                                if let Some(serde_json::Value::Array(exts)) = obj.get("allowedExtensions") {
-                                    let ext_strs: Vec<String> = exts.iter()
+                                if let Some(serde_json::Value::Array(exts)) =
+                                    obj.get("allowedExtensions")
+                                {
+                                    let ext_strs: Vec<String> = exts
+                                        .iter()
                                         .filter_map(|e| e.as_str().map(|s| format!("'{}'", s)))
                                         .collect();
-                                    tables_lines.push(format!("      allowedExtensions: [{}] as const,", ext_strs.join(", ")));
+                                    tables_lines.push(format!(
+                                        "      allowedExtensions: [{}] as const,",
+                                        ext_strs.join(", ")
+                                    ));
                                 }
-                                if let Some(serde_json::Value::Bool(auth)) = obj.get("pathPrefixAuth") {
+                                if let Some(serde_json::Value::Bool(auth)) =
+                                    obj.get("pathPrefixAuth")
+                                {
                                     tables_lines.push(format!("      pathPrefixAuth: {},", auth));
                                 }
                                 tables_lines.push("    },".to_string());
@@ -488,7 +524,7 @@ impl CodeGenerator {
             tables_lines.push("  backends: {".to_string());
             for (backend_name, backend_def) in backends {
                 tables_lines.push(format!("    \"{}\": {{", backend_name));
-                
+
                 if let Some(table) = &backend_def.outbox_table {
                     tables_lines.push(format!("      outboxTable: '{}' as const,", table));
                 }
@@ -499,8 +535,14 @@ impl CodeGenerator {
                     tables_lines.push("          args: {".to_string());
                     for (arg_name, arg_def) in &route_def.args {
                         tables_lines.push(format!("            \"{}\": {{", arg_name));
-                        tables_lines.push(format!("              type: '{}' as const,", arg_def.arg_type));
-                        tables_lines.push(format!("              optional: {} as const", !arg_def.required));
+                        tables_lines.push(format!(
+                            "              type: '{}' as const,",
+                            arg_def.arg_type
+                        ));
+                        tables_lines.push(format!(
+                            "              optional: {} as const",
+                            !arg_def.required
+                        ));
                         tables_lines.push("            },".to_string());
                     }
                     tables_lines.push("          }".to_string());
@@ -525,7 +567,6 @@ impl CodeGenerator {
             Ok(format!("{}\n\n{}", content, tables_lines.join("\n")))
         }
     }
-
 
     /// Build JSDoc lines for a table entry in the generated `schema.tables` array.
     /// Indented to sit at the `    {` level (4 spaces).
@@ -686,7 +727,10 @@ impl CodeGenerator {
         true // If no required array, assume optional
     }
 
-    fn extract_table_relationships(&self, schema: &serde_json::Value) -> Result<std::collections::BTreeMap<String, Vec<(String, String, String)>>> {
+    fn extract_table_relationships(
+        &self,
+        schema: &serde_json::Value,
+    ) -> Result<std::collections::BTreeMap<String, Vec<(String, String, String)>>> {
         let mut table_relationships = std::collections::BTreeMap::new();
 
         if let Some(defs) = schema.get("definitions") {
@@ -708,7 +752,11 @@ impl CodeGenerator {
                     .collect();
 
                 for (table_name, table_def) in defs_obj {
-                    if table_name == "Relationships" || table_name == "RelationTables" || table_name == "Buckets" || table_name.starts_with("_00_") {
+                    if table_name == "Relationships"
+                        || table_name == "RelationTables"
+                        || table_name == "Buckets"
+                        || table_name.starts_with("_00_")
+                    {
                         continue;
                     }
 
@@ -734,14 +782,21 @@ impl CodeGenerator {
                                         if let Some(desc) = items.get("description") {
                                             if let Some(desc_str) = desc.as_str() {
                                                 if desc_str.starts_with("Record ID of table: ") {
-                                                    let related_table = desc_str.replace("Record ID of table: ", "");
-                                                    let actual_target = if related_table == "commented_on" {
-                                                        "comment".to_string()
-                                                    } else {
-                                                        related_table.clone()
-                                                    };
-                                                    if known_tables.contains(actual_target.as_str()) {
-                                                        table_rels.push((field_name.clone(), actual_target, "many".to_string()));
+                                                    let related_table = desc_str
+                                                        .replace("Record ID of table: ", "");
+                                                    let actual_target =
+                                                        if related_table == "commented_on" {
+                                                            "comment".to_string()
+                                                        } else {
+                                                            related_table.clone()
+                                                        };
+                                                    if known_tables.contains(actual_target.as_str())
+                                                    {
+                                                        table_rels.push((
+                                                            field_name.clone(),
+                                                            actual_target,
+                                                            "many".to_string(),
+                                                        ));
                                                     }
                                                 }
                                             }
@@ -751,9 +806,14 @@ impl CodeGenerator {
                                     if let Some(desc) = field_def.get("description") {
                                         if let Some(desc_str) = desc.as_str() {
                                             if desc_str.starts_with("Record ID of table: ") {
-                                                let related_table = desc_str.replace("Record ID of table: ", "");
+                                                let related_table =
+                                                    desc_str.replace("Record ID of table: ", "");
                                                 if known_tables.contains(related_table.as_str()) {
-                                                    table_rels.push((field_name.clone(), related_table, "one".to_string()));
+                                                    table_rels.push((
+                                                        field_name.clone(),
+                                                        related_table,
+                                                        "one".to_string(),
+                                                    ));
                                                 }
                                             }
                                         }
@@ -777,10 +837,14 @@ impl CodeGenerator {
     }
 
     #[allow(dead_code)]
-    fn add_relationships_interface(&self, content: &str, json_schema_content: &str) -> Result<String> {
+    fn add_relationships_interface(
+        &self,
+        content: &str,
+        json_schema_content: &str,
+    ) -> Result<String> {
         // Parse JSON schema to extract relationships
-        let schema: serde_json::Value = serde_json::from_str(json_schema_content)
-            .context("Failed to parse JSON schema")?;
+        let schema: serde_json::Value =
+            serde_json::from_str(json_schema_content).context("Failed to parse JSON schema")?;
 
         let relationships = schema
             .get("definitions")
@@ -905,7 +969,8 @@ impl CodeGenerator {
                     "".to_string(),
                     "/**".to_string(),
                     " * Relationships between tables - nested object structure".to_string(),
-                    " * Maps each table to its relationship fields with their definitions".to_string(),
+                    " * Maps each table to its relationship fields with their definitions"
+                        .to_string(),
                     " */".to_string(),
                     "export interface Relationships {".to_string(),
                 ];
@@ -919,9 +984,14 @@ impl CodeGenerator {
                             interface_lines.push(format!("    {}: {{", table_name));
                             for (field_name, related_table, cardinality) in rels {
                                 interface_lines.push(format!("        {}: {{", field_name));
-                                interface_lines.push(format!("            model: SchemaDefinition[\"{}\"];", related_table));
-                                interface_lines.push(format!("            table: \"{}\";", related_table));
-                                interface_lines.push(format!("            cardinality: \"{}\";", cardinality));
+                                interface_lines.push(format!(
+                                    "            model: SchemaDefinition[\"{}\"];",
+                                    related_table
+                                ));
+                                interface_lines
+                                    .push(format!("            table: \"{}\";", related_table));
+                                interface_lines
+                                    .push(format!("            cardinality: \"{}\";", cardinality));
                                 interface_lines.push("        };".to_string());
                             }
                             interface_lines.push("    };".to_string());
@@ -941,7 +1011,11 @@ impl CodeGenerator {
 
                 // RELATION_TABLES constant also removed - not needed for runtime
 
-                return Ok(format!("{}\n\n{}\n", updated_content, interface_lines.join("\n")));
+                return Ok(format!(
+                    "{}\n\n{}\n",
+                    updated_content,
+                    interface_lines.join("\n")
+                ));
             }
         }
 
@@ -950,14 +1024,18 @@ impl CodeGenerator {
     }
 
     #[allow(dead_code)]
-    fn update_interface_relationships(&self, content: &str, table_relationships: &std::collections::BTreeMap<String, Vec<(String, String, String)>>) -> Result<String> {
+    fn update_interface_relationships(
+        &self,
+        content: &str,
+        table_relationships: &std::collections::BTreeMap<String, Vec<(String, String, String)>>,
+    ) -> Result<String> {
         let lines: Vec<&str> = content.lines().collect();
         let mut result = Vec::new();
         let mut i = 0;
 
         while i < lines.len() {
             let line = lines[i];
-            
+
             // Check if this line starts an interface definition
             if line.trim_start().starts_with("export interface ") {
                 let interface_name = line
@@ -965,19 +1043,19 @@ impl CodeGenerator {
                     .nth(2)
                     .unwrap_or("")
                     .trim_end_matches(" {");
-                
+
                 // Check if this interface has relationships we need to update
                 if let Some(relationships) = table_relationships.get(interface_name) {
                     result.push(line.to_string());
-                    
+
                     // Find the opening brace
                     let mut brace_found = false;
                     let mut j = i;
-                    
+
                     while j < lines.len() && !brace_found {
                         if lines[j].contains("{") {
                             brace_found = true;
-                            
+
                             // If opening brace is not on the same line, add those lines too
                             if j > i {
                                 for k in (i + 1)..=j {
@@ -988,13 +1066,13 @@ impl CodeGenerator {
                         }
                         j += 1;
                     }
-                    
+
                     // Now find the closing brace and update relationship fields
                     if brace_found {
                         let mut brace_count = 0;
                         let mut started = false;
                         let mut closing_line_idx = i;
-                        
+
                         for k in i..lines.len() {
                             for ch in lines[k].chars() {
                                 if ch == '{' {
@@ -1012,12 +1090,12 @@ impl CodeGenerator {
                                 break;
                             }
                         }
-                        
+
                         // Process lines within the interface
                         for k in (i + 1)..closing_line_idx {
                             let current_line = lines[k];
                             let mut updated_line = current_line.to_string();
-                            
+
                             // Check if this line contains a relationship field
                             for (field_name, related_table, cardinality) in relationships {
                                 if current_line.contains(field_name) {
@@ -1025,38 +1103,62 @@ impl CodeGenerator {
                                     if cardinality == "many" {
                                         // For many relationships, use array of related type
                                         if current_line.contains("string[]") {
-                                            updated_line = current_line.replace("string[]", &format!("SchemaDefinition[\"{}\"][]", related_table));
+                                            updated_line = current_line.replace(
+                                                "string[]",
+                                                &format!(
+                                                    "SchemaDefinition[\"{}\"][]",
+                                                    related_table
+                                                ),
+                                            );
                                         } else if current_line.contains("string") {
-                                            updated_line = current_line.replace("string", &format!("SchemaDefinition[\"{}\"][]", related_table));
+                                            updated_line = current_line.replace(
+                                                "string",
+                                                &format!(
+                                                    "SchemaDefinition[\"{}\"][]",
+                                                    related_table
+                                                ),
+                                            );
                                         }
 
                                         // Handle nullable arrays
                                         if current_line.contains("| null") {
                                             updated_line = updated_line.replace(
-                                                &format!("SchemaDefinition[\"{}\"][]", related_table),
-                                                &format!("SchemaDefinition[\"{}\"][] | null", related_table)
+                                                &format!(
+                                                    "SchemaDefinition[\"{}\"][]",
+                                                    related_table
+                                                ),
+                                                &format!(
+                                                    "SchemaDefinition[\"{}\"][] | null",
+                                                    related_table
+                                                ),
                                             );
                                         }
                                     } else {
                                         // For one relationships, use single related type
                                         if current_line.contains("string") {
-                                            updated_line = current_line.replace("string", &format!("SchemaDefinition[\"{}\"]", related_table));
+                                            updated_line = current_line.replace(
+                                                "string",
+                                                &format!("SchemaDefinition[\"{}\"]", related_table),
+                                            );
                                         }
 
                                         // Handle nullable single values
                                         if current_line.contains("| null") {
                                             updated_line = updated_line.replace(
                                                 &format!("SchemaDefinition[\"{}\"]", related_table),
-                                                &format!("SchemaDefinition[\"{}\"] | null", related_table)
+                                                &format!(
+                                                    "SchemaDefinition[\"{}\"] | null",
+                                                    related_table
+                                                ),
                                             );
                                         }
                                     }
                                 }
                             }
-                            
+
                             result.push(updated_line);
                         }
-                        
+
                         // Add the closing brace
                         result.push(lines[closing_line_idx].to_string());
                         i = closing_line_idx;
@@ -1068,10 +1170,10 @@ impl CodeGenerator {
             } else {
                 result.push(line.to_string());
             }
-            
+
             i += 1;
         }
-        
+
         Ok(result.join("\n"))
     }
 
@@ -1119,7 +1221,7 @@ impl CodeGenerator {
 
         while i < lines.len() {
             let line = lines[i];
-            
+
             // Strip comments to correctly check for semicolons
             let clean_line = if let Some(idx) = line.find("--") {
                 &line[..idx]
@@ -1130,7 +1232,7 @@ impl CodeGenerator {
             } else {
                 line
             };
-            
+
             let trimmed = clean_line.trim();
 
             // Skip empty lines (were just comments or whitespace)
@@ -1142,16 +1244,16 @@ impl CodeGenerator {
                 // if trimmed.ends_with(';') { replacement.push(';') } else { skip_permissions = true }
                 // So if we are in skip_permissions mode, we look for ';'.
                 // If line is empty, just continue.
-                
+
                 // But wait, if we are NOT in skip_permissions mode, we might want to preserve comments?
                 // The logical flow below pushes `result.push(line.to_string())` at the end.
                 // If I change `trimmed` to be comment-free, I might lose comments in output?
                 // The task is to GENERATE valid schema. Comments valid.
                 // But for LOGIC CHECKS, use `trimmed`.
                 // For OUTPUT, use `line`.
-                
+
                 // Let's use `trimmed` for logic, keep `line` for output unless replacing.
-                
+
                 // BUT if I skip empty lines here, I lose them. I should proceed.
             }
 
@@ -1184,8 +1286,11 @@ impl CodeGenerator {
                 access_brace_count = 0;
                 // Count braces in the start line
                 for ch in trimmed.chars() {
-                    if ch == '{' { access_brace_count += 1; }
-                    else if ch == '}' { access_brace_count -= 1; }
+                    if ch == '{' {
+                        access_brace_count += 1;
+                    } else if ch == '}' {
+                        access_brace_count -= 1;
+                    }
                 }
 
                 if access_brace_count == 0 && trimmed.ends_with(';') {
@@ -1197,8 +1302,11 @@ impl CodeGenerator {
 
             if in_define_access {
                 for ch in trimmed.chars() {
-                    if ch == '{' { access_brace_count += 1; }
-                    else if ch == '}' { access_brace_count -= 1; }
+                    if ch == '{' {
+                        access_brace_count += 1;
+                    } else if ch == '}' {
+                        access_brace_count -= 1;
+                    }
                 }
 
                 if access_brace_count == 0 && trimmed.ends_with(';') {
@@ -1231,14 +1339,14 @@ impl CodeGenerator {
                     "PERMISSIONS FOR select, create, update WHERE true"
                 };
                 let mut replacement = perms.to_string();
-                
+
                 if trimmed.ends_with(';') {
                     replacement.push(';');
                 } else {
                     // It's a block, skip subsequent lines properly
                     skip_permissions = true;
                 }
-                
+
                 result.push(replacement);
                 i += 1;
                 continue;
@@ -1277,7 +1385,7 @@ impl CodeGenerator {
                 i += 1;
                 continue;
             }
-            
+
             result.push(line.to_string());
             i += 1;
         }

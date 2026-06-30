@@ -37,8 +37,13 @@ pub fn run(fix: bool) -> Result<()> {
         PREFIX
     );
 
-    let main = fetch_main_stats(&surreal.namespace, &surreal.database, &surreal.username, &surreal.password)
-        .context("Failed to fetch counts/hashes from SurrealDB")?;
+    let main = fetch_main_stats(
+        &surreal.namespace,
+        &surreal.database,
+        &surreal.username,
+        &surreal.password,
+    )
+    .context("Failed to fetch counts/hashes from SurrealDB")?;
     let replica = fetch_scheduler_stats().unwrap_or_else(|e| {
         eprintln!("{} Warning: scheduler unavailable: {:#}", PREFIX, e);
         BTreeMap::new()
@@ -75,7 +80,12 @@ pub fn run(fix: bool) -> Result<()> {
 }
 
 /// Counts + hashes per non-`_00_` table from the upstream SurrealDB.
-fn fetch_main_stats(ns: &str, db: &str, user: &str, pass: &str) -> Result<BTreeMap<String, TableStat>> {
+fn fetch_main_stats(
+    ns: &str,
+    db: &str,
+    user: &str,
+    pass: &str,
+) -> Result<BTreeMap<String, TableStat>> {
     let url = format!("http://localhost:{}/sql", SURREAL_PORT);
     let info: Value = surreal_query(&url, ns, db, user, pass, "INFO FOR DB")?;
     let tables = extract_tables(&info)?;
@@ -85,7 +95,8 @@ fn fetch_main_stats(ns: &str, db: &str, user: &str, pass: &str) -> Result<BTreeM
         // GROUP ALL returns [] when the table is empty.
         let count_q = format!("SELECT count() AS total FROM {} GROUP ALL", table);
         let count_res: Value = surreal_query(&url, ns, db, user, pass, &count_q)?;
-        let count = count_res.as_array()
+        let count = count_res
+            .as_array()
             .and_then(|arr| arr.first())
             .and_then(|row| row.get("total"))
             .and_then(|v| v.as_u64())
@@ -110,16 +121,24 @@ fn fetch_main_stats(ns: &str, db: &str, user: &str, pass: &str) -> Result<BTreeM
             .unwrap_or_default();
         let hash = snapshot_hash::hash_table(pairs);
 
-        out.insert(table, TableStat { count, hash: Some(hash) });
+        out.insert(
+            table,
+            TableStat {
+                count,
+                hash: Some(hash),
+            },
+        );
     }
     Ok(out)
 }
 
 fn extract_tables(info: &Value) -> Result<Vec<String>> {
-    let tables_obj = info.get("tables")
+    let tables_obj = info
+        .get("tables")
         .and_then(|v| v.as_object())
         .context("INFO FOR DB response missing `tables`")?;
-    Ok(tables_obj.keys()
+    Ok(tables_obj
+        .keys()
         .filter(|name| !name.starts_with("_00_"))
         .cloned()
         .collect())
@@ -127,18 +146,32 @@ fn extract_tables(info: &Value) -> Result<Vec<String>> {
 
 /// Wrap a single SurrealQL statement, post it to /sql, and return the first
 /// statement's result payload.
-fn surreal_query(url: &str, ns: &str, db: &str, user: &str, pass: &str, sql: &str) -> Result<Value> {
+fn surreal_query(
+    url: &str,
+    ns: &str,
+    db: &str,
+    user: &str,
+    pass: &str,
+    sql: &str,
+) -> Result<Value> {
     let resp = ureq::post(url)
         .set("Surreal-NS", ns)
         .set("Surreal-DB", db)
         .set("Accept", "application/json")
         .set("Content-Type", "text/plain")
-        .set("Authorization", &format!("Basic {}", base64_encode(&format!("{}:{}", user, pass))))
+        .set(
+            "Authorization",
+            &format!("Basic {}", base64_encode(&format!("{}:{}", user, pass))),
+        )
         .timeout(HTTP_TIMEOUT)
         .send_string(sql)
         .map_err(|e| anyhow::anyhow!("SurrealDB HTTP error: {}", e))?;
-    let body: Vec<Value> = resp.into_json().context("Failed to parse SurrealDB response")?;
-    let first = body.into_iter().next()
+    let body: Vec<Value> = resp
+        .into_json()
+        .context("Failed to parse SurrealDB response")?;
+    let first = body
+        .into_iter()
+        .next()
         .context("SurrealDB returned no statement results")?;
     if first.get("status").and_then(|v| v.as_str()) != Some("OK") {
         bail!("SurrealDB query failed: {}", first);
@@ -161,8 +194,16 @@ fn base64_encode(input: &str) -> String {
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
         out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
         out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
-        out.push(if chunk.len() > 1 { TABLE[((n >> 6) & 0x3f) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[(n & 0x3f) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 0x3f) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -170,11 +211,16 @@ fn base64_encode(input: &str) -> String {
 /// Per-table counts + hashes from the scheduler's `/health/snapshot` endpoint.
 fn fetch_scheduler_stats() -> Result<BTreeMap<String, TableStat>> {
     let url = format!("http://localhost:{}/health/snapshot", SCHEDULER_PORT);
-    let resp = ureq::get(&url).timeout(HTTP_TIMEOUT).call()
+    let resp = ureq::get(&url)
+        .timeout(HTTP_TIMEOUT)
+        .call()
         .map_err(|e| anyhow::anyhow!("Scheduler HTTP error: {}", e))?;
-    let body: Value = resp.into_json().context("Failed to parse scheduler response")?;
+    let body: Value = resp
+        .into_json()
+        .context("Failed to parse scheduler response")?;
 
-    let tables = body.get("tables")
+    let tables = body
+        .get("tables")
         .and_then(|v| v.as_object())
         .context("Scheduler /health/snapshot missing `tables`")?;
     let hashes = body.get("hashes").and_then(|v| v.as_object());
@@ -195,15 +241,21 @@ fn fetch_scheduler_stats() -> Result<BTreeMap<String, TableStat>> {
 /// `circuit_hashes` fields.
 fn fetch_ssp_stats() -> Result<BTreeMap<String, TableStat>> {
     let url = format!("http://localhost:{}/info", SSP_PORT);
-    let resp = ureq::get(&url).timeout(HTTP_TIMEOUT).call()
+    let resp = ureq::get(&url)
+        .timeout(HTTP_TIMEOUT)
+        .call()
         .map_err(|e| anyhow::anyhow!("SSP HTTP error: {}", e))?;
     let body: Value = resp.into_json().context("Failed to parse SSP response")?;
-    let entities = body.as_array().context("SSP /info should return an array")?;
-    let ssp_entry = entities.iter()
+    let entities = body
+        .as_array()
+        .context("SSP /info should return an array")?;
+    let ssp_entry = entities
+        .iter()
         .find(|e| e.get("entity").and_then(|v| v.as_str()) == Some("ssp"))
         .context("SSP /info has no ssp entity")?;
 
-    let tables = ssp_entry.get("circuit_tables")
+    let tables = ssp_entry
+        .get("circuit_tables")
         .and_then(|v| v.as_object())
         .context("SSP /info missing circuit_tables (rebuild the SSP image)")?;
     let hashes = ssp_entry.get("circuit_hashes").and_then(|v| v.as_object());
@@ -228,8 +280,13 @@ fn force_resync_ssps() -> Result<u64> {
         .timeout(HTTP_TIMEOUT)
         .send_string("")
         .map_err(|e| anyhow::anyhow!("Scheduler /admin/ssp/resync-all error: {}", e))?;
-    let body: Value = resp.into_json().context("Failed to parse resync-all response")?;
-    Ok(body.get("marked_for_resync").and_then(|v| v.as_u64()).unwrap_or(0))
+    let body: Value = resp
+        .into_json()
+        .context("Failed to parse resync-all response")?;
+    Ok(body
+        .get("marked_for_resync")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0))
 }
 
 fn count_mismatches(
@@ -237,11 +294,13 @@ fn count_mismatches(
     replica: &BTreeMap<String, TableStat>,
     circuit: &BTreeMap<String, TableStat>,
 ) -> usize {
-    let all_tables: std::collections::BTreeSet<&String> = main.keys()
+    let all_tables: std::collections::BTreeSet<&String> = main
+        .keys()
         .chain(replica.keys())
         .chain(circuit.keys())
         .collect();
-    all_tables.into_iter()
+    all_tables
+        .into_iter()
         .filter(|t| !is_table_match(*t, main, replica, circuit))
         .count()
 }
@@ -278,7 +337,8 @@ fn print_table(
     replica: &BTreeMap<String, TableStat>,
     circuit: &BTreeMap<String, TableStat>,
 ) {
-    let all_tables: std::collections::BTreeSet<&String> = main.keys()
+    let all_tables: std::collections::BTreeSet<&String> = main
+        .keys()
         .chain(replica.keys())
         .chain(circuit.keys())
         .collect();
@@ -286,13 +346,25 @@ fn print_table(
     let table_w = all_tables.iter().map(|t| t.len()).max().unwrap_or(8).max(8);
     println!(
         "  {:<tw$}  {:>6}  {:<hw$}  {:>6}  {:<hw$}  {:>6}  {:<hw$}  status",
-        "table", "main#", "main hash", "rep#", "replica hash", "ssp#", "ssp hash",
+        "table",
+        "main#",
+        "main hash",
+        "rep#",
+        "replica hash",
+        "ssp#",
+        "ssp hash",
         tw = table_w,
         hw = HASH_DISPLAY_LEN,
     );
     println!(
         "  {:-<tw$}  {:->6}  {:-<hw$}  {:->6}  {:-<hw$}  {:->6}  {:-<hw$}  ------",
-        "", "", "", "", "", "", "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
         tw = table_w,
         hw = HASH_DISPLAY_LEN,
     );

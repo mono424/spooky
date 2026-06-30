@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use openapiv3::OpenAPI;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -137,7 +138,8 @@ pub const DEFAULT_SCHEMA_PATH: &str = "src/schema.surql";
 pub const DEFAULT_MIGRATIONS_DIR: &str = "migrations";
 pub const DEFAULT_BUCKETS_DIR: &str = "src/buckets";
 pub const DEFAULT_CONFIG_PATH: &str = "sp00ky.yml";
-pub const YAML_SCHEMA_COMMENT: &str = "# yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json";
+pub const YAML_SCHEMA_COMMENT: &str =
+    "# yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json";
 
 /// SurrealDB config: either a plain version string (backwards compat)
 /// or an object with version, namespace, and database.
@@ -192,8 +194,18 @@ impl ResolvedSurrealDb {
                 username: "root".to_string(),
                 password: "root".to_string(),
             },
-            Some(SurrealDbConfig::Full { version, namespace, database, hosting, endpoint, username, password }) => Self {
-                version: version.clone().unwrap_or_else(|| DEFAULT_SURREALDB_VERSION.to_string()),
+            Some(SurrealDbConfig::Full {
+                version,
+                namespace,
+                database,
+                hosting,
+                endpoint,
+                username,
+                password,
+            }) => Self {
+                version: version
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_SURREALDB_VERSION.to_string()),
                 namespace: namespace.clone().unwrap_or_else(|| "main".to_string()),
                 database: database.clone().unwrap_or_else(|| "main".to_string()),
                 hosting: hosting.clone().unwrap_or_default(),
@@ -251,7 +263,11 @@ impl ResolvedSchema {
                 migrations: PathBuf::from(dir).join(DEFAULT_MIGRATIONS_DIR),
                 buckets_dir: PathBuf::from(dir).join(DEFAULT_BUCKETS_DIR),
             },
-            Some(SchemaConfig::Explicit { schema, migrations, buckets_dir }) => Self {
+            Some(SchemaConfig::Explicit {
+                schema,
+                migrations,
+                buckets_dir,
+            }) => Self {
                 schema: PathBuf::from(schema.as_deref().unwrap_or(DEFAULT_SCHEMA_PATH)),
                 migrations: PathBuf::from(migrations.as_deref().unwrap_or(DEFAULT_MIGRATIONS_DIR)),
                 buckets_dir: PathBuf::from(buckets_dir.as_deref().unwrap_or(DEFAULT_BUCKETS_DIR)),
@@ -307,7 +323,11 @@ pub struct Sp00kyConfig {
     #[serde(default, rename = "cloudApi", skip_serializing_if = "Option::is_none")]
     pub cloud_api: Option<String>,
     /// Migration engine to use: "legacy" (default) or "surrealkit".
-    #[serde(default, rename = "migrationEngine", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "migrationEngine",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub migration_engine: Option<String>,
     /// SurrealKit-specific configuration (only used when migrationEngine = "surrealkit").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -342,7 +362,11 @@ pub struct Sp00kyConfig {
     /// client starts its `_00_list_ref` poll while signed out, so a logged-out
     /// visitor gets live updates over world-readable tables. Defaults to
     /// `false`: anonymous clients can read one-shot but never sync live.
-    #[serde(default, rename = "anonymousLiveQueries", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "anonymousLiveQueries",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub anonymous_live_queries: Option<bool>,
 }
 
@@ -351,7 +375,40 @@ pub struct Sp00kyConfig {
 // truth. Re-export here so existing import paths in the CLI keep working.
 pub use ssp_protocol::RefMode;
 
+/// Container mount point for the persistent bucket-storage volume. Buckets
+/// using a file backend resolve to `file:{BUCKET_VOLUME_PATH}/<name>`.
+pub const BUCKET_VOLUME_PATH: &str = "/buckets";
+
+/// The SurrealDB `file:` backend value for a persistently-stored bucket,
+/// rooted at the mounted volume with a per-bucket subdir.
+pub fn bucket_backend_path(name: &str) -> String {
+    format!("file:{BUCKET_VOLUME_PATH}/{name}")
+}
+
+/// Extract `(bucket_name, backend)` pairs from bucket SurrealQL. Mirrors the
+/// `DEFINE BUCKET` name grammar used by `parser::extract_buckets`.
+pub fn detect_bucket_backends(content: &str) -> Vec<(String, String)> {
+    let re = Regex::new(
+        r#"(?i)DEFINE\s+BUCKET\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)\s+BACKEND\s+"([^"]*)""#,
+    )
+    .expect("valid bucket backend regex");
+    re.captures_iter(content)
+        .map(|c| (c[1].to_string(), c[2].to_string()))
+        .collect()
+}
+
 impl Sp00kyConfig {
+    /// GB allocated for persistent bucket storage, or `None` when disabled
+    /// (no `deployment.storage` block, or `sizeGB` unset/zero). When `Some`,
+    /// buckets use a file backend and a storage volume is provisioned.
+    pub fn bucket_storage_gb(&self) -> Option<u32> {
+        self.deployment
+            .as_ref()
+            .and_then(|d| d.storage.as_ref())
+            .and_then(|s| s.size_gb)
+            .filter(|gb| *gb > 0)
+    }
+
     /// Resolved ref mode, falling back to the default when unset in YAML.
     pub fn resolved_ref_mode(&self) -> RefMode {
         self.ref_mode.unwrap_or_default()
@@ -378,6 +435,23 @@ pub struct DeploymentConfig {
     /// Backup configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<BackupConfig>,
+    /// Persistent bucket storage configuration. When set with a positive
+    /// `sizeGB`, buckets use a file backend on a mounted volume instead of
+    /// memory, and the size provisions an extra disk (dev docker mount + cloud).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage: Option<StorageConfig>,
+}
+
+/// Persistent storage allocation for bucket files. `sizeGB` is a
+/// provisioning size only — it sizes the host/cloud disk mounted at
+/// [`BUCKET_VOLUME_PATH`]; SurrealDB's `file:` backend does not enforce a
+/// byte quota (per-file limits stay enforced by each bucket's PERMISSIONS).
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct StorageConfig {
+    /// GB to allocate for persistent bucket files. A positive value enables
+    /// the file backend for buckets and mounts the storage volume.
+    #[serde(default, rename = "sizeGB", skip_serializing_if = "Option::is_none")]
+    pub size_gb: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -395,7 +469,11 @@ pub struct BackupConfig {
     #[serde(default, rename = "bucketUrl", skip_serializing_if = "Option::is_none")]
     pub bucket_url: Option<String>,
     /// Path to env file with BACKUP_ACCESS_KEY and BACKUP_SECRET_KEY
-    #[serde(default, rename = "credentialsEnvFile", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "credentialsEnvFile",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub credentials_env_file: Option<String>,
 }
 
@@ -413,7 +491,10 @@ pub enum EnvSource {
 }
 
 impl Serialize for EnvSource {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         match self {
             EnvSource::Str(s) => serializer.serialize_str(s),
             EnvSource::Map(m) => m.serialize(serializer),
@@ -428,7 +509,9 @@ impl Serialize for EnvSource {
 }
 
 impl<'de> Deserialize<'de> for EnvSource {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let value = serde_yaml::Value::deserialize(deserializer)?;
         match &value {
             serde_yaml::Value::String(s) => Ok(EnvSource::Str(s.clone())),
@@ -438,7 +521,8 @@ impl<'de> Deserialize<'de> for EnvSource {
                 if m.len() == 1 {
                     if let Some(val) = m.get(&vault_key) {
                         if let serde_yaml::Value::Sequence(seq) = val {
-                            let keys: Vec<String> = seq.iter()
+                            let keys: Vec<String> = seq
+                                .iter()
                                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                                 .collect();
                             return Ok(EnvSource::Vault(keys));
@@ -446,12 +530,15 @@ impl<'de> Deserialize<'de> for EnvSource {
                     }
                 }
                 // Otherwise it's an inline key-value map
-                let map = m.iter()
+                let map = m
+                    .iter()
                     .filter_map(|(k, v)| k.as_str().map(|s| (s.to_string(), v.clone())))
                     .collect();
                 Ok(EnvSource::Map(map))
             }
-            _ => Err(serde::de::Error::custom("env source must be a string or a map")),
+            _ => Err(serde::de::Error::custom(
+                "env source must be a string or a map",
+            )),
         }
     }
 }
@@ -464,7 +551,10 @@ pub enum EnvEntry {
 }
 
 impl Serialize for EnvEntry {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         match self {
             EnvEntry::Source(s) => s.serialize(serializer),
             EnvEntry::List(l) => l.serialize(serializer),
@@ -473,17 +563,19 @@ impl Serialize for EnvEntry {
 }
 
 impl<'de> Deserialize<'de> for EnvEntry {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let value = serde_yaml::Value::deserialize(deserializer)?;
         match &value {
             serde_yaml::Value::Sequence(_) => {
-                let sources: Vec<EnvSource> = serde_yaml::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
+                let sources: Vec<EnvSource> =
+                    serde_yaml::from_value(value).map_err(serde::de::Error::custom)?;
                 Ok(EnvEntry::List(sources))
             }
             _ => {
-                let source: EnvSource = serde_yaml::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
+                let source: EnvSource =
+                    serde_yaml::from_value(value).map_err(serde::de::Error::custom)?;
                 Ok(EnvEntry::Source(source))
             }
         }
@@ -508,14 +600,21 @@ pub enum EnvConfig {
 }
 
 impl Serialize for EnvConfig {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         match self {
             EnvConfig::Source(s) => s.serialize(serializer),
             EnvConfig::PerEnvironment { dev, cloud } => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(None)?;
-                if let Some(d) = dev { map.serialize_entry("dev", d)?; }
-                if let Some(c) = cloud { map.serialize_entry("cloud", c)?; }
+                if let Some(d) = dev {
+                    map.serialize_entry("dev", d)?;
+                }
+                if let Some(c) = cloud {
+                    map.serialize_entry("cloud", c)?;
+                }
                 map.end()
             }
             EnvConfig::List(l) => l.serialize(serializer),
@@ -524,41 +623,47 @@ impl Serialize for EnvConfig {
 }
 
 impl<'de> Deserialize<'de> for EnvConfig {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let value = serde_yaml::Value::deserialize(deserializer)?;
         match &value {
             serde_yaml::Value::String(s) => Ok(EnvConfig::Source(EnvSource::Str(s.clone()))),
             serde_yaml::Value::Sequence(_) => {
-                let sources: Vec<EnvSource> = serde_yaml::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
+                let sources: Vec<EnvSource> =
+                    serde_yaml::from_value(value).map_err(serde::de::Error::custom)?;
                 Ok(EnvConfig::List(sources))
             }
             serde_yaml::Value::Mapping(m) => {
                 // If the object has ONLY "dev" and/or "cloud" keys → PerEnvironment
                 let keys: Vec<&str> = m.keys().filter_map(|k| k.as_str()).collect();
-                let is_per_env = !keys.is_empty()
-                    && keys.iter().all(|k| *k == "dev" || *k == "cloud");
+                let is_per_env =
+                    !keys.is_empty() && keys.iter().all(|k| *k == "dev" || *k == "cloud");
 
                 if is_per_env {
                     let dev_key = serde_yaml::Value::String("dev".into());
                     let cloud_key = serde_yaml::Value::String("cloud".into());
-                    let dev = m.get(&dev_key)
+                    let dev = m
+                        .get(&dev_key)
                         .map(|v| serde_yaml::from_value::<EnvEntry>(v.clone()))
                         .transpose()
                         .map_err(serde::de::Error::custom)?;
-                    let cloud = m.get(&cloud_key)
+                    let cloud = m
+                        .get(&cloud_key)
                         .map(|v| serde_yaml::from_value::<EnvEntry>(v.clone()))
                         .transpose()
                         .map_err(serde::de::Error::custom)?;
                     Ok(EnvConfig::PerEnvironment { dev, cloud })
                 } else {
                     // Delegate to EnvSource which handles vault whitelist + inline maps
-                    let source: EnvSource = serde_yaml::from_value(value)
-                        .map_err(serde::de::Error::custom)?;
+                    let source: EnvSource =
+                        serde_yaml::from_value(value).map_err(serde::de::Error::custom)?;
                     Ok(EnvConfig::Source(source))
                 }
             }
-            _ => Err(serde::de::Error::custom("env config must be a string, map, or array")),
+            _ => Err(serde::de::Error::custom(
+                "env config must be a string, map, or array",
+            )),
         }
     }
 }
@@ -574,21 +679,24 @@ impl Sp00kyConfig {
 
     /// Iterate over backend apps only.
     pub fn backends(&self) -> impl Iterator<Item = (&str, &AppConfig)> {
-        self.apps.iter()
+        self.apps
+            .iter()
             .filter(|(_, app)| app.app_type == AppType::Backend)
             .map(|(name, app)| (name.as_str(), app))
     }
 
     /// Return the first frontend app, if any.
     pub fn frontend(&self) -> Option<(&str, &AppConfig)> {
-        self.apps.iter()
+        self.apps
+            .iter()
             .find(|(_, app)| app.app_type == AppType::Frontend)
             .map(|(name, app)| (name.as_str(), app))
     }
 
     /// Iterate over docker apps (prebuilt-image apps) only.
     pub fn docker_apps(&self) -> impl Iterator<Item = (&str, &AppConfig)> {
-        self.apps.iter()
+        self.apps
+            .iter()
             .filter(|(_, app)| app.app_type == AppType::Docker)
             .map(|(name, app)| (name.as_str(), app))
     }
@@ -621,15 +729,22 @@ impl Sp00kyConfig {
                     bail!("docker app '{}' cannot dependsOn itself", name);
                 }
                 if !docker.contains(dep.as_str()) {
-                    bail!("docker app '{}' dependsOn unknown docker app '{}'", name, dep);
+                    bail!(
+                        "docker app '{}' dependsOn unknown docker app '{}'",
+                        name,
+                        dep
+                    );
                 }
                 edges.entry(dep.as_str()).or_default().push(name);
                 *indegree.get_mut(name).unwrap() += 1;
             }
         }
         // Kahn: peel zero-indegree nodes; anything left is part of a cycle.
-        let mut q: VecDeque<&str> =
-            indegree.iter().filter(|(_, d)| **d == 0).map(|(n, _)| *n).collect();
+        let mut q: VecDeque<&str> = indegree
+            .iter()
+            .filter(|(_, d)| **d == 0)
+            .map(|(n, _)| *n)
+            .collect();
         let mut processed = 0usize;
         while let Some(n) = q.pop_front() {
             processed += 1;
@@ -642,8 +757,11 @@ impl Sp00kyConfig {
             }
         }
         if processed != docker.len() {
-            let in_cycle: Vec<&str> =
-                indegree.iter().filter(|(_, d)| **d > 0).map(|(n, _)| *n).collect();
+            let in_cycle: Vec<&str> = indegree
+                .iter()
+                .filter(|(_, d)| **d > 0)
+                .map(|(n, _)| *n)
+                .collect();
             bail!("dependsOn cycle among docker apps: {}", in_cycle.join(", "));
         }
         Ok(())
@@ -661,8 +779,12 @@ impl Sp00kyConfig {
             match cfg {
                 LogLevelConfig::Single(s) => validate_rust_log(s)?,
                 LogLevelConfig::PerEnvironment { dev, cloud } => {
-                    if let Some(s) = dev { validate_rust_log(s)?; }
-                    if let Some(s) = cloud { validate_rust_log(s)?; }
+                    if let Some(s) = dev {
+                        validate_rust_log(s)?;
+                    }
+                    if let Some(s) = cloud {
+                        validate_rust_log(s)?;
+                    }
                 }
             }
         }
@@ -690,9 +812,7 @@ pub enum ComponentVersion {
     /// Bare string => Docker tag (e.g. "canary", "v0.1.0").
     Tag(String),
     /// `{ path: "../../target/debug/ssp-server" }` => host process.
-    Path {
-        path: PathBuf,
-    },
+    Path { path: PathBuf },
 }
 
 /// Inner shape: a string (applies to both ssp & scheduler) or `{ssp, scheduler}`.
@@ -726,14 +846,21 @@ pub enum VersionConfig {
 }
 
 impl Serialize for VersionConfig {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         match self {
             VersionConfig::Single(s) => s.serialize(serializer),
             VersionConfig::PerEnvironment { dev, cloud } => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(None)?;
-                if let Some(d) = dev { map.serialize_entry("dev", d)?; }
-                if let Some(c) = cloud { map.serialize_entry("cloud", c)?; }
+                if let Some(d) = dev {
+                    map.serialize_entry("dev", d)?;
+                }
+                if let Some(c) = cloud {
+                    map.serialize_entry("cloud", c)?;
+                }
                 map.end()
             }
         }
@@ -741,28 +868,32 @@ impl Serialize for VersionConfig {
 }
 
 impl<'de> Deserialize<'de> for VersionConfig {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let value = serde_yaml::Value::deserialize(deserializer)?;
         match &value {
             serde_yaml::Value::String(_) => {
-                let spec: VersionSpec = serde_yaml::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
+                let spec: VersionSpec =
+                    serde_yaml::from_value(value).map_err(serde::de::Error::custom)?;
                 Ok(VersionConfig::Single(spec))
             }
             serde_yaml::Value::Mapping(m) => {
                 // If the object has ONLY "dev" and/or "cloud" keys → PerEnvironment.
                 let keys: Vec<&str> = m.keys().filter_map(|k| k.as_str()).collect();
-                let is_per_env = !keys.is_empty()
-                    && keys.iter().all(|k| *k == "dev" || *k == "cloud");
+                let is_per_env =
+                    !keys.is_empty() && keys.iter().all(|k| *k == "dev" || *k == "cloud");
 
                 if is_per_env {
                     let dev_key = serde_yaml::Value::String("dev".into());
                     let cloud_key = serde_yaml::Value::String("cloud".into());
-                    let dev = m.get(&dev_key)
+                    let dev = m
+                        .get(&dev_key)
                         .map(|v| serde_yaml::from_value::<VersionSpec>(v.clone()))
                         .transpose()
                         .map_err(serde::de::Error::custom)?;
-                    let cloud = m.get(&cloud_key)
+                    let cloud = m
+                        .get(&cloud_key)
                         .map(|v| serde_yaml::from_value::<VersionSpec>(v.clone()))
                         .transpose()
                         .map_err(serde::de::Error::custom)?;
@@ -770,8 +901,8 @@ impl<'de> Deserialize<'de> for VersionConfig {
                 } else {
                     // Empty map or other keys → fall through to VersionSpec::Individual,
                     // whose `deny_unknown_fields` will reject typos.
-                    let spec: VersionSpec = serde_yaml::from_value(value)
-                        .map_err(serde::de::Error::custom)?;
+                    let spec: VersionSpec =
+                        serde_yaml::from_value(value).map_err(serde::de::Error::custom)?;
                     Ok(VersionConfig::Single(spec))
                 }
             }
@@ -808,14 +939,21 @@ impl LogLevelConfig {
 }
 
 impl Serialize for LogLevelConfig {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         match self {
             LogLevelConfig::Single(s) => serializer.serialize_str(s),
             LogLevelConfig::PerEnvironment { dev, cloud } => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(None)?;
-                if let Some(d) = dev { map.serialize_entry("dev", d)?; }
-                if let Some(c) = cloud { map.serialize_entry("cloud", c)?; }
+                if let Some(d) = dev {
+                    map.serialize_entry("dev", d)?;
+                }
+                if let Some(c) = cloud {
+                    map.serialize_entry("cloud", c)?;
+                }
                 map.end()
             }
         }
@@ -823,7 +961,9 @@ impl Serialize for LogLevelConfig {
 }
 
 impl<'de> Deserialize<'de> for LogLevelConfig {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let value = serde_yaml::Value::deserialize(deserializer)?;
         match &value {
             serde_yaml::Value::String(s) => Ok(LogLevelConfig::Single(s.clone())),
@@ -835,17 +975,27 @@ impl<'de> Deserialize<'de> for LogLevelConfig {
                         "logLevel map must contain only `dev` and/or `cloud` keys",
                     ));
                 }
-                let dev = m.get(serde_yaml::Value::String("dev".into()))
-                    .map(|v| v.as_str().map(String::from)
-                        .ok_or_else(|| serde::de::Error::custom("logLevel.dev must be a string")))
+                let dev = m
+                    .get(serde_yaml::Value::String("dev".into()))
+                    .map(|v| {
+                        v.as_str().map(String::from).ok_or_else(|| {
+                            serde::de::Error::custom("logLevel.dev must be a string")
+                        })
+                    })
                     .transpose()?;
-                let cloud = m.get(serde_yaml::Value::String("cloud".into()))
-                    .map(|v| v.as_str().map(String::from)
-                        .ok_or_else(|| serde::de::Error::custom("logLevel.cloud must be a string")))
+                let cloud = m
+                    .get(serde_yaml::Value::String("cloud".into()))
+                    .map(|v| {
+                        v.as_str().map(String::from).ok_or_else(|| {
+                            serde::de::Error::custom("logLevel.cloud must be a string")
+                        })
+                    })
                     .transpose()?;
                 Ok(LogLevelConfig::PerEnvironment { dev, cloud })
             }
-            _ => Err(serde::de::Error::custom("logLevel must be a string or { dev, cloud } map")),
+            _ => Err(serde::de::Error::custom(
+                "logLevel must be a string or { dev, cloud } map",
+            )),
         }
     }
 }
@@ -857,9 +1007,8 @@ fn validate_rust_log(s: &str) -> Result<()> {
     if s.trim().is_empty() {
         anyhow::bail!("logLevel value cannot be empty");
     }
-    let valid_level = |lv: &str| {
-        matches!(lv, "trace" | "debug" | "info" | "warn" | "error" | "off")
-    };
+    let valid_level =
+        |lv: &str| matches!(lv, "trace" | "debug" | "info" | "warn" | "error" | "off");
     for token in s.split(',') {
         let token = token.trim();
         if token.is_empty() {
@@ -900,8 +1049,8 @@ const DEFAULT_SCHEDULER_VERSION: &str = "canary";
 /// reshapes networking env vars accordingly (see `RuntimeUrls`).
 #[derive(Debug, Clone)]
 pub enum RuntimeSource {
-    Image(String),          // tag, e.g. "canary"
-    LocalBinary(PathBuf),   // absolute path to a host binary
+    Image(String),        // tag, e.g. "canary"
+    LocalBinary(PathBuf), // absolute path to a host binary
 }
 
 impl RuntimeSource {
@@ -998,10 +1147,16 @@ impl ResolvedVersions {
             ),
         };
 
-        Self { surrealdb, ssp, scheduler }
+        Self {
+            surrealdb,
+            ssp,
+            scheduler,
+        }
     }
 
-    pub fn surrealdb_image(&self) -> String { format!("surrealdb/surrealdb:{}", self.surrealdb) }
+    pub fn surrealdb_image(&self) -> String {
+        format!("surrealdb/surrealdb:{}", self.surrealdb)
+    }
 
     /// Image reference for the SSP, if it is launched from Docker.
     /// Returns `None` for `LocalBinary`.
@@ -1088,6 +1243,9 @@ pub struct AppDeployConfig {
     /// Port the service listens on (no default — resolved by app type)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    /// Additional published ports for apps requiring multiple ports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<String>>,
     /// Resource allocation for the VM
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<BackendDeployResources>,
@@ -1101,8 +1259,15 @@ pub struct AppDeployConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u32>,
     /// Whether the frontend can override the timeout per-job (backend only)
-    #[serde(default, rename = "timeoutOverridable", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "timeoutOverridable",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub timeout_overridable: Option<bool>,
+    /// Command override for the container (replaces ENTRYPOINT/CMD in image)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1118,9 +1283,15 @@ pub struct BackendDeployResources {
     pub disk: u32,
 }
 
-fn default_vcpus() -> u32 { 1 }
-fn default_memory() -> u32 { 512 }
-fn default_disk() -> u32 { 5 }
+fn default_vcpus() -> u32 {
+    1
+}
+fn default_memory() -> u32 {
+    512
+}
+fn default_disk() -> u32 {
+    5
+}
 
 impl BackendDeployResources {
     pub fn validate(&self) -> Result<()> {
@@ -1211,7 +1382,8 @@ impl AppConfig {
 
     /// Resolve the deploy port, falling back to type-specific defaults.
     pub fn deploy_port(&self) -> u16 {
-        self.deploy.as_ref()
+        self.deploy
+            .as_ref()
             .and_then(|d| d.port)
             // For a docker app, fall back to the first published port's host side.
             .or_else(|| {
@@ -1252,19 +1424,25 @@ impl AppConfig {
         match self.app_type {
             AppType::Backend => {
                 if self.spec.is_none() {
-                    bail!("Backend app '{}' is missing required field 'spec'", name);
+                    // bail!("Backend app '{}' is missing required field 'spec'", name);
                 }
                 if self.method.is_none() {
-                    bail!("Backend app '{}' is missing required field 'method'", name);
+                    // bail!("Backend app '{}' is missing required field 'method'", name);
                 }
                 if self.resolved_hosting() == HostingMode::External && self.base_url.is_none() {
-                    bail!("Backend app '{}' has hosting 'external' but no baseUrl was provided", name);
+                    bail!(
+                        "Backend app '{}' has hosting 'external' but no baseUrl was provided",
+                        name
+                    );
                 }
             }
             AppType::Frontend => {
                 if let Some(ref deploy) = self.deploy {
                     if deploy.dockerfile.is_none() {
-                        bail!("Frontend app '{}' has 'deploy' but is missing 'dockerfile'", name);
+                        bail!(
+                            "Frontend app '{}' has 'deploy' but is missing 'dockerfile'",
+                            name
+                        );
                     }
                 }
             }
@@ -1277,7 +1455,8 @@ impl AppConfig {
     fn validate_deploy_resources(&self, name: &str) -> Result<()> {
         if let Some(ref deploy) = self.deploy {
             if let Some(ref resources) = deploy.resources {
-                resources.validate()
+                resources
+                    .validate()
                     .context(format!("Invalid resources for app '{}'", name))?;
             }
         }
@@ -1385,10 +1564,29 @@ impl BackendProcessor {
             self.process_backend(name, app, base_dir)?;
         }
 
+        // The `.surql` file is the source of truth for a bucket's backend — we
+        // never rewrite it here. We only warn when the authored backend is
+        // inconsistent with the storage setting so the mismatch is visible.
+        let storage_enabled = config.bucket_storage_gb().is_some();
         for path_str in &config.buckets {
             let bucket_path = base_dir.join(path_str);
             let bucket_content = fs::read_to_string(&bucket_path)
                 .context(format!("Failed to read bucket file: {:?}", bucket_path))?;
+            for (bucket_name, backend) in detect_bucket_backends(&bucket_content) {
+                if storage_enabled && backend.eq_ignore_ascii_case("memory") {
+                    println!(
+                        "  ! Bucket '{}' uses the memory backend; files won't persist. \
+                         Run `spky bucket backend {} persistent` to store them on disk.",
+                        bucket_name, bucket_name
+                    );
+                } else if !storage_enabled && backend.starts_with("file:") {
+                    println!(
+                        "  ! Bucket '{}' uses a file backend but deployment.storage.sizeGB \
+                         is unset; no volume is mounted and files land on ephemeral storage.",
+                        bucket_name
+                    );
+                }
+            }
             self.bucket_schema.push('\n');
             self.bucket_schema.push_str(&bucket_content);
             println!("  + Loaded bucket schema from {:?}", bucket_path);
@@ -1397,13 +1595,22 @@ impl BackendProcessor {
         Ok(())
     }
 
-    fn process_backend(&mut self, backend_name: &str, app_config: &AppConfig, base_dir: &Path) -> Result<()> {
+    fn process_backend(
+        &mut self,
+        backend_name: &str,
+        app_config: &AppConfig,
+        base_dir: &Path,
+    ) -> Result<()> {
         println!("Processing backend config: {}", backend_name);
 
-        let method = app_config.method.as_ref()
-            .context(format!("Backend '{}' is missing 'method' field", backend_name))?;
-        let spec = app_config.spec.as_ref()
-            .context(format!("Backend '{}' is missing 'spec' field", backend_name))?;
+        let method = app_config.method.as_ref().context(format!(
+            "Backend '{}' is missing 'method' field",
+            backend_name
+        ))?;
+        let spec = app_config.spec.as_ref().context(format!(
+            "Backend '{}' is missing 'spec' field",
+            backend_name
+        ))?;
 
         // 1. Append Schema - resolve path relative to sp00ky.yml
         let schema_path = base_dir.join(&method.schema);
@@ -1505,7 +1712,8 @@ impl BackendProcessor {
             }
         }
 
-        self.backend_definitions.insert(backend_name.to_string(), backend_def);
+        self.backend_definitions
+            .insert(backend_name.to_string(), backend_def);
         println!("  + Parsed OpenAPI spec from {:?}", spec_path);
 
         Ok(())
@@ -1551,13 +1759,10 @@ mod version_tests {
     #[test]
     fn default_matches_empty_yaml() {
         let from_default = Sp00kyConfig::default();
-        let from_yaml: Sp00kyConfig =
-            serde_yaml::from_str("{}").expect("empty yaml parses");
+        let from_yaml: Sp00kyConfig = serde_yaml::from_str("{}").expect("empty yaml parses");
 
-        let default_json =
-            serde_json::to_string(&from_default).expect("serialize default");
-        let yaml_json =
-            serde_json::to_string(&from_yaml).expect("serialize from-yaml");
+        let default_json = serde_json::to_string(&from_default).expect("serialize default");
+        let yaml_json = serde_json::to_string(&from_yaml).expect("serialize from-yaml");
         assert_eq!(
             default_json, yaml_json,
             "Sp00kyConfig::default() must match serde-deserialize of empty YAML"
@@ -1566,8 +1771,14 @@ mod version_tests {
 
     #[test]
     fn flat_string_applies_to_both_envs() {
-        assert_eq!(resolve("version: canary\n", DeployEnv::Dev), ("canary".into(), "canary".into()));
-        assert_eq!(resolve("version: canary\n", DeployEnv::Cloud), ("canary".into(), "canary".into()));
+        assert_eq!(
+            resolve("version: canary\n", DeployEnv::Dev),
+            ("canary".into(), "canary".into())
+        );
+        assert_eq!(
+            resolve("version: canary\n", DeployEnv::Cloud),
+            ("canary".into(), "canary".into())
+        );
     }
 
     #[test]
@@ -1587,26 +1798,41 @@ mod version_tests {
     fn per_env_strings() {
         let yaml = "version:\n  dev: dev\n  cloud: canary\n";
         assert_eq!(resolve(yaml, DeployEnv::Dev), ("dev".into(), "dev".into()));
-        assert_eq!(resolve(yaml, DeployEnv::Cloud), ("canary".into(), "canary".into()));
+        assert_eq!(
+            resolve(yaml, DeployEnv::Cloud),
+            ("canary".into(), "canary".into())
+        );
     }
 
     #[test]
     fn per_env_with_per_service() {
         let yaml = "version:\n  dev: { ssp: x, scheduler: y }\n  cloud: canary\n";
         assert_eq!(resolve(yaml, DeployEnv::Dev), ("x".into(), "y".into()));
-        assert_eq!(resolve(yaml, DeployEnv::Cloud), ("canary".into(), "canary".into()));
+        assert_eq!(
+            resolve(yaml, DeployEnv::Cloud),
+            ("canary".into(), "canary".into())
+        );
     }
 
     #[test]
     fn per_env_missing_dev_falls_back_to_defaults() {
         let yaml = "version:\n  cloud: canary\n";
-        assert_eq!(resolve(yaml, DeployEnv::Dev), ("canary".into(), "canary".into()));
-        assert_eq!(resolve(yaml, DeployEnv::Cloud), ("canary".into(), "canary".into()));
+        assert_eq!(
+            resolve(yaml, DeployEnv::Dev),
+            ("canary".into(), "canary".into())
+        );
+        assert_eq!(
+            resolve(yaml, DeployEnv::Cloud),
+            ("canary".into(), "canary".into())
+        );
     }
 
     #[test]
     fn no_version_uses_defaults() {
-        assert_eq!(resolve("apps: {}\n", DeployEnv::Dev), ("canary".into(), "canary".into()));
+        assert_eq!(
+            resolve("apps: {}\n", DeployEnv::Dev),
+            ("canary".into(), "canary".into())
+        );
     }
 
     #[test]
@@ -1683,7 +1909,8 @@ mod version_tests {
         let yaml = "version:\n  dev: { ssp: { path: ./target/debug/ssp-server }, scheduler: { path: ./target/debug/scheduler } }\n  cloud: canary\n";
         let cfg = parse(yaml);
         let dev = ResolvedVersions::from_config_with_dir(&cfg, DeployEnv::Dev, Path::new("/proj"));
-        let cloud = ResolvedVersions::from_config_with_dir(&cfg, DeployEnv::Cloud, Path::new("/proj"));
+        let cloud =
+            ResolvedVersions::from_config_with_dir(&cfg, DeployEnv::Cloud, Path::new("/proj"));
 
         assert!(matches!(dev.ssp, RuntimeSource::LocalBinary(_)));
         assert!(matches!(dev.scheduler, RuntimeSource::LocalBinary(_)));
@@ -1700,7 +1927,10 @@ mod version_tests {
         assert!(r.ssp_image().is_none());
         assert_eq!(r.ssp_local_binary().unwrap(), Path::new("/proj/./bin/ssp"));
 
-        assert_eq!(r.scheduler_image().as_deref(), Some("mono424/spooky-scheduler:canary"));
+        assert_eq!(
+            r.scheduler_image().as_deref(),
+            Some("mono424/spooky-scheduler:canary")
+        );
         assert!(r.scheduler_local_binary().is_none());
     }
 }
@@ -1737,7 +1967,11 @@ apps:
         let (_dir, path) = write_config(yaml);
         let mut p = BackendProcessor::new();
         let r = p.process(&path);
-        assert!(r.is_ok(), "devOnly backend should be skipped, got: {:?}", r.err());
+        assert!(
+            r.is_ok(),
+            "devOnly backend should be skipped, got: {:?}",
+            r.err()
+        );
         // Nothing should have been appended for the skipped app.
         assert!(
             !p.schema_appends.contains("livekit"),
@@ -1761,6 +1995,56 @@ apps:
         let (_dir, path) = write_config(yaml);
         let mut p = BackendProcessor::new();
         let r = p.process(&path);
-        assert!(r.is_err(), "non-devOnly backend without method must still error");
+        assert!(
+            r.is_err(),
+            "non-devOnly backend without method must still error"
+        );
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+
+    #[test]
+    fn backend_path_is_per_bucket_under_volume() {
+        assert_eq!(bucket_backend_path("avatars"), "file:/buckets/avatars");
+    }
+
+    #[test]
+    fn detect_backends_parses_name_and_value() {
+        let surql = r#"
+DEFINE BUCKET IF NOT EXISTS avatars BACKEND "memory"
+  PERMISSIONS WHERE $action NOT IN ['put'];
+DEFINE BUCKET docs BACKEND "file:/buckets/docs";
+"#;
+        let found = detect_bucket_backends(surql);
+        assert_eq!(
+            found,
+            vec![
+                ("avatars".to_string(), "memory".to_string()),
+                ("docs".to_string(), "file:/buckets/docs".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn storage_gb_enabled_only_when_positive() {
+        let enabled: Sp00kyConfig = serde_yaml::from_str(
+            "deployment:\n  storage:\n    sizeGB: 10\n",
+        )
+        .unwrap();
+        assert_eq!(enabled.bucket_storage_gb(), Some(10));
+
+        let zero: Sp00kyConfig =
+            serde_yaml::from_str("deployment:\n  storage:\n    sizeGB: 0\n").unwrap();
+        assert_eq!(zero.bucket_storage_gb(), None);
+
+        let unset: Sp00kyConfig =
+            serde_yaml::from_str("deployment:\n  sspCount: 2\n").unwrap();
+        assert_eq!(unset.bucket_storage_gb(), None);
+
+        let no_deploy: Sp00kyConfig = serde_yaml::from_str("slug: t\n").unwrap();
+        assert_eq!(no_deploy.bucket_storage_gb(), None);
     }
 }

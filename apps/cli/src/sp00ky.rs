@@ -1,5 +1,5 @@
-use crate::backend::DeployMode;
 use crate::annotations::has_annotation;
+use crate::backend::DeployMode;
 use crate::parser::{FieldType, TableSchema};
 use std::collections::BTreeMap;
 
@@ -116,7 +116,9 @@ pub fn generate_sp00ky_events(
 
         // --- Versioning Logic ---
         events.push_str("    LET $sp00ky_ver_rec = IF $event = \"CREATE\" {\n");
-        events.push_str("        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)\n");
+        events.push_str(
+            "        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)\n",
+        );
         events.push_str("    } ELSE IF $event = \"UPDATE\" {\n");
         events.push_str("        IF $sp00ky_target_version != NONE AND $sp00ky_target_version.id == $after.id {\n");
         events.push_str("            LET $u = (UPDATE _00_version SET version = <int>$sp00ky_target_version.version WHERE record_id = $after.id RETURN AFTER);\n");
@@ -264,9 +266,13 @@ pub fn generate_sp00ky_events(
     events.push_str("DEFINE EVENT OVERWRITE _00_user_feature_mutation ON TABLE _00_user_feature\n");
     events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
     events.push_str("    LET $sp00ky_ver_rec = IF $event = \"CREATE\" {\n");
-    events.push_str("        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)\n");
+    events.push_str(
+        "        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)\n",
+    );
     events.push_str("    } ELSE {\n");
-    events.push_str("        (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)\n");
+    events.push_str(
+        "        (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)\n",
+    );
     events.push_str("    };\n");
     events.push_str("    LET $plain_after = {\n");
     events.push_str("        id: <string>($after.id OR \"\"),\n");
@@ -338,14 +344,21 @@ mod tests {
         for mode in [DeployMode::Singlenode, DeployMode::Cluster] {
             let out = gen(false, mode);
             assert!(
-                out.contains("DEFINE EVENT OVERWRITE _00_user_feature_mutation ON TABLE _00_user_feature"),
+                out.contains(
+                    "DEFINE EVENT OVERWRITE _00_user_feature_mutation ON TABLE _00_user_feature"
+                ),
                 "missing mutation event"
             );
             assert!(
-                out.contains("DEFINE EVENT OVERWRITE _00_user_feature_delete ON TABLE _00_user_feature"),
+                out.contains(
+                    "DEFINE EVENT OVERWRITE _00_user_feature_delete ON TABLE _00_user_feature"
+                ),
                 "missing delete event"
             );
-            assert!(out.contains("table: '_00_user_feature'"), "missing ingest payload table");
+            assert!(
+                out.contains("table: '_00_user_feature'"),
+                "missing ingest payload table"
+            );
             assert!(
                 out.contains("http::post($sp00ky_endpoint + '/ingest'"),
                 "feature-flag changes must notify the SSP ingest endpoint"
@@ -356,7 +369,10 @@ mod tests {
     #[test]
     fn user_feature_events_use_dbsp_in_surrealism_mode() {
         let out = gen(false, DeployMode::Surrealism);
-        assert!(out.contains("mod::dbsp::ingest('_00_user_feature'"), "missing dbsp ingest");
+        assert!(
+            out.contains("mod::dbsp::ingest('_00_user_feature'"),
+            "missing dbsp ingest"
+        );
         assert!(
             !out.contains("http::post"),
             "surrealism mode must not emit http::post"
@@ -387,7 +403,10 @@ DEFINE FIELD token ON TABLE secrets TYPE string;
 "#;
         let mut parser = SchemaParser::new();
         parser.parse_file(schema).unwrap();
-        assert!(parser.tables["secrets"].no_sync, "secrets must be marked no_sync");
+        assert!(
+            parser.tables["secrets"].no_sync,
+            "secrets must be marked no_sync"
+        );
 
         for is_client in [false, true] {
             let out = generate_sp00ky_events(
@@ -398,7 +417,10 @@ DEFINE FIELD token ON TABLE secrets TYPE string;
                 None,
                 None,
             );
-            assert!(out.contains("ON TABLE public"), "public table must get events");
+            assert!(
+                out.contains("ON TABLE public"),
+                "public table must get events"
+            );
             assert!(
                 !out.contains("ON TABLE secrets"),
                 "@nosync table must not get events (is_client={is_client})"

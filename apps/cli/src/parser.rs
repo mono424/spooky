@@ -51,6 +51,9 @@ pub struct BucketDefinition {
     pub max_size: Option<u64>,
     pub allowed_extensions: Vec<String>,
     pub path_prefix_auth: bool,
+    /// Storage backend as authored in the `.surql` (e.g. "memory" or
+    /// "file:/buckets/<name>"). Empty when it couldn't be parsed.
+    pub backend: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,12 +235,10 @@ impl SchemaParser {
         )
         .unwrap();
 
-        let max_size_re =
-            Regex::new(r"file::head\(\$file\)\.size\s*<=?\s*(\d+)").unwrap();
-        let ext_re =
-            Regex::new(r"string::ends_with\(file::key\(\$file\),\s*'\.(\w+)'\)").unwrap();
-        let auth_re =
-            Regex::new(r"string::starts_with\(file::key\(\$file\),.*\$auth").unwrap();
+        let max_size_re = Regex::new(r"file::head\(\$file\)\.size\s*<=?\s*(\d+)").unwrap();
+        let ext_re = Regex::new(r"string::ends_with\(file::key\(\$file\),\s*'\.(\w+)'\)").unwrap();
+        let auth_re = Regex::new(r"string::starts_with\(file::key\(\$file\),.*\$auth").unwrap();
+        let backend_re = Regex::new(r#"(?i)BACKEND\s+"([^"]*)""#).unwrap();
 
         for cap in block_re.captures_iter(content) {
             let name = cap[1].to_string();
@@ -254,6 +255,11 @@ impl SchemaParser {
 
             let path_prefix_auth = auth_re.is_match(body);
 
+            let backend = backend_re
+                .captures(body)
+                .map(|c| c[1].to_string())
+                .unwrap_or_default();
+
             self.buckets.insert(
                 name.clone(),
                 BucketDefinition {
@@ -261,6 +267,7 @@ impl SchemaParser {
                     max_size,
                     allowed_extensions,
                     path_prefix_auth,
+                    backend,
                 },
             );
         }
@@ -277,6 +284,7 @@ impl SchemaParser {
                         max_size: None,
                         allowed_extensions: Vec::new(),
                         path_prefix_auth: false,
+                        backend: String::new(),
                     },
                 );
             }

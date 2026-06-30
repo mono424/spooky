@@ -23,13 +23,18 @@ fn resolve_devtools_mcp() -> Result<PathBuf> {
 
     for candidate in &candidates {
         if candidate.exists() {
-            return Ok(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
+            return Ok(candidate
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.clone()));
         }
     }
 
     // Try node resolution as last resort
     let output = Command::new("node")
-        .args(["-e", "console.log(require.resolve('@spooky-sync/devtools-mcp'))"])
+        .args([
+            "-e",
+            "console.log(require.resolve('@spooky-sync/devtools-mcp'))",
+        ])
         .output();
 
     if let Ok(output) = output {
@@ -57,16 +62,15 @@ fn resolve_devtools_mcp() -> Result<PathBuf> {
 }
 
 pub fn run() -> Result<()> {
-    let mcp_path =
-        resolve_devtools_mcp().context("Failed to locate MCP server")?;
+    let mcp_path = resolve_devtools_mcp().context("Failed to locate MCP server")?;
 
     // Load sp00ky.yml for SurrealDB connection defaults
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let db = ResolvedSurrealDb::from_config(&config.surrealdb);
 
     // In dev mode, SurrealDB runs on port 8666
-    let surreal_url = std::env::var("SURREAL_URL")
-        .unwrap_or_else(|_| format!("http://localhost:8666"));
+    let surreal_url =
+        std::env::var("SURREAL_URL").unwrap_or_else(|_| format!("http://localhost:8666"));
 
     let mut child = Command::new("node")
         .arg(&mcp_path)

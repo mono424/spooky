@@ -157,8 +157,10 @@ pub fn create(
     let file_name = format!("{}_{}.surql", timestamp, sanitized);
     let file_path = migrations_dir.join(&file_name);
 
-    fs::create_dir_all(migrations_dir)
-        .context(format!("Failed to create migrations directory: {:?}", migrations_dir))?;
+    fs::create_dir_all(migrations_dir).context(format!(
+        "Failed to create migrations directory: {:?}",
+        migrations_dir
+    ))?;
 
     // Try auto-diff if builder_config is provided
     if let Some(config) = builder_config {
@@ -293,7 +295,9 @@ fn apply_impl(
     migrations_dir: &Path,
     secrets: Option<&[(String, String)]>,
 ) -> Result<()> {
-    client.ensure_ns_db().context("Failed to ensure namespace/database exist")?;
+    client
+        .ensure_ns_db()
+        .context("Failed to ensure namespace/database exist")?;
     client.ping().context("Cannot connect to SurrealDB")?;
     client.ensure_migration_table()?;
 
@@ -344,18 +348,13 @@ fn apply_impl(
             None => raw,
         };
 
-        println!(
-            "  Applying {}_{} ...",
-            migration.version, migration.name
-        );
+        println!("  Applying {}_{} ...", migration.version, migration.name);
 
         // Apply migration statements directly (SurrealDB DDL doesn't support transactions)
-        client
-            .execute(&sql)
-            .context(format!(
-                "Failed to apply migration {}_{}",
-                migration.version, migration.name
-            ))?;
+        client.execute(&sql).context(format!(
+            "Failed to apply migration {}_{}",
+            migration.version, migration.name
+        ))?;
 
         client.record_migration(&migration.version, &migration.name, &hash)?;
 
@@ -442,11 +441,7 @@ fn find_unresolved_placeholders(s: &str) -> Vec<String> {
 ///   2. Extract live DB schema → `actual_schema`
 ///   3. `diff_schemas(&actual_schema, &expected_schema)` → corrective diff
 ///   4. If non-empty, write a corrective migration file
-pub fn fix(
-    client: &dyn MigrationDB,
-    migrations_dir: &Path,
-    fix_checksums: bool,
-) -> Result<()> {
+pub fn fix(client: &dyn MigrationDB, migrations_dir: &Path, fix_checksums: bool) -> Result<()> {
     // Ensure the DB is reachable
     client.ensure_ns_db().context(
         "Cannot connect to SurrealDB.\n\
@@ -567,8 +562,7 @@ fn extract_live_schema(client: &dyn MigrationDB) -> Result<String> {
         }
 
         for table_name in &table_names {
-            let table_responses =
-                client.execute(&format!("INFO FOR TABLE {};", table_name))?;
+            let table_responses = client.execute(&format!("INFO FOR TABLE {};", table_name))?;
             let table_info = table_responses
                 .into_iter()
                 .next()
@@ -663,12 +657,7 @@ pub fn apply_internal_schema(
     println!(
         "  Discovered {} user table(s): {}",
         parser.tables.len(),
-        parser
-            .tables
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", ")
+        parser.tables.keys().cloned().collect::<Vec<_>>().join(", ")
     );
 
     // 3. Build internal SQL
@@ -681,11 +670,8 @@ pub fn apply_internal_schema(
     // Substitute the {{CRDT_UPDATE_RULE}} placeholder. Same code path used
     // by schema_builder.rs and main.rs codegen so the rule renders
     // consistently.
-    meta_tables_remote = crate::schema_builder::substitute_crdt_update_rule(
-        &meta_tables_remote,
-        &content,
-        &parser,
-    );
+    meta_tables_remote =
+        crate::schema_builder::substitute_crdt_update_rule(&meta_tables_remote, &content, &parser);
 
     // Replace unregister_view for singlenode/cluster mode — uses $sp00ky_endpoint param
     if *mode == DeployMode::Singlenode || *mode == DeployMode::Cluster {
@@ -714,7 +700,10 @@ pub fn apply_internal_schema(
     internal_sql.push_str(&sp00ky_events);
 
     // 4. Execute against DB
-    println!("  + Executing internal schema ({} bytes)...", internal_sql.len());
+    println!(
+        "  + Executing internal schema ({} bytes)...",
+        internal_sql.len()
+    );
     client
         .execute(&internal_sql)
         .context("Failed to apply internal Sp00ky schema")?;
@@ -840,12 +829,7 @@ mod tests {
     // ── Helpers ─────────────────────────────────────────────────────────
 
     /// Create a flat migration file in the migrations directory.
-    fn create_migration_file(
-        base: &Path,
-        version: &str,
-        name: &str,
-        content: &str,
-    ) -> PathBuf {
+    fn create_migration_file(base: &Path, version: &str, name: &str, content: &str) -> PathBuf {
         fs::create_dir_all(base).unwrap();
         let file_path = base.join(format!("{}_{}.surql", version, name));
         fs::write(&file_path, content).unwrap();
@@ -897,10 +881,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_name_mixed_transforms() {
-        assert_eq!(
-            sanitize_name("Add User-Avatar v2!"),
-            "add_user_avatar_v2"
-        );
+        assert_eq!(sanitize_name("Add User-Avatar v2!"), "add_user_avatar_v2");
     }
 
     #[test]
@@ -1093,7 +1074,11 @@ mod tests {
 
         create(&migrations_dir, "add_users", None, None, None).unwrap();
 
-        let entry = fs::read_dir(&migrations_dir).unwrap().next().unwrap().unwrap();
+        let entry = fs::read_dir(&migrations_dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
         let name = entry.file_name().to_string_lossy().to_string();
 
         // Format: {14-digit timestamp}_{sanitized_name}.surql
@@ -1110,7 +1095,11 @@ mod tests {
 
         create(&migrations_dir, "Add User-Avatar!", None, None, None).unwrap();
 
-        let entry = fs::read_dir(&migrations_dir).unwrap().next().unwrap().unwrap();
+        let entry = fs::read_dir(&migrations_dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
         let name = entry.file_name().to_string_lossy().to_string();
         assert!(name.ends_with("_add_user_avatar.surql"));
     }
@@ -1122,7 +1111,11 @@ mod tests {
 
         create(&migrations_dir, "test", None, None, None).unwrap();
 
-        let entry = fs::read_dir(&migrations_dir).unwrap().next().unwrap().unwrap();
+        let entry = fs::read_dir(&migrations_dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
         let content = fs::read_to_string(entry.path()).unwrap();
         assert!(content.starts_with("-- Migration: test"));
         assert!(content.contains("-- Created:"));
@@ -1140,7 +1133,11 @@ mod tests {
 
         create(&migrations_dir, "initial", Some(&schema_path), None, None).unwrap();
 
-        let entry = fs::read_dir(&migrations_dir).unwrap().next().unwrap().unwrap();
+        let entry = fs::read_dir(&migrations_dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
         let content = fs::read_to_string(entry.path()).unwrap();
         assert!(content.contains("DEFINE TABLE user SCHEMAFULL;"));
         assert!(content.contains("WARNING"));
@@ -1235,9 +1232,18 @@ mod tests {
         // Verify the SQL was actually executed (wrapped in transactions)
         let queries = mock.executed_queries.borrow();
         assert_eq!(queries.len(), 3);
-        assert_eq!(queries[0], "BEGIN TRANSACTION;\nCREATE first;\nCOMMIT TRANSACTION;");
-        assert_eq!(queries[1], "BEGIN TRANSACTION;\nCREATE second;\nCOMMIT TRANSACTION;");
-        assert_eq!(queries[2], "BEGIN TRANSACTION;\nCREATE third;\nCOMMIT TRANSACTION;");
+        assert_eq!(
+            queries[0],
+            "BEGIN TRANSACTION;\nCREATE first;\nCOMMIT TRANSACTION;"
+        );
+        assert_eq!(
+            queries[1],
+            "BEGIN TRANSACTION;\nCREATE second;\nCOMMIT TRANSACTION;"
+        );
+        assert_eq!(
+            queries[2],
+            "BEGIN TRANSACTION;\nCREATE third;\nCOMMIT TRANSACTION;"
+        );
     }
 
     #[test]
@@ -1435,11 +1441,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // Don't create any files on disk
         let filesystem = scan_migrations(dir.path()).unwrap();
-        let applied = vec![make_applied(
-            "20240101120000",
-            "initial",
-            "some_checksum",
-        )];
+        let applied = vec![make_applied("20240101120000", "initial", "some_checksum")];
 
         let warnings = validate_applied_checksums(&applied, &filesystem).unwrap();
         assert_eq!(warnings.len(), 1);

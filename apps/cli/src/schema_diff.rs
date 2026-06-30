@@ -372,7 +372,14 @@ fn extract_field_type(stmt: &str) -> Option<String> {
     let type_pos = upper.find(" TYPE ")?;
     let after_type = &stmt[type_pos + 6..];
     // TYPE clause ends at the next known keyword or end of statement
-    let end_keywords = [" DEFAULT ", " VALUE ", " ASSERT ", " PERMISSIONS ", " COMMENT ", " READONLY"];
+    let end_keywords = [
+        " DEFAULT ",
+        " VALUE ",
+        " ASSERT ",
+        " PERMISSIONS ",
+        " COMMENT ",
+        " READONLY",
+    ];
     let end_pos = end_keywords
         .iter()
         .filter_map(|kw| after_type.to_uppercase().find(kw))
@@ -418,13 +425,22 @@ fn detect_potential_renames(
             // Format: "REMOVE FIELD IF EXISTS {field} ON TABLE {table};"
             let is_rename_candidate = (|| {
                 let upper = remove_stmt.to_uppercase();
-                let field_pos = upper.find("REMOVE FIELD IF EXISTS ")
+                let field_pos = upper
+                    .find("REMOVE FIELD IF EXISTS ")
                     .map(|p| p + "REMOVE FIELD IF EXISTS ".len())
-                    .or_else(|| upper.find("REMOVE FIELD ").map(|p| p + "REMOVE FIELD ".len()))?;
+                    .or_else(|| {
+                        upper
+                            .find("REMOVE FIELD ")
+                            .map(|p| p + "REMOVE FIELD ".len())
+                    })?;
                 let rest = &remove_stmt[field_pos..];
                 let on_pos = rest.to_uppercase().find(" ON TABLE ")?;
                 let field_name = rest[..on_pos].trim().to_lowercase();
-                let table_name = rest[on_pos + " ON TABLE ".len()..].trim().trim_end_matches(';').trim().to_lowercase();
+                let table_name = rest[on_pos + " ON TABLE ".len()..]
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim()
+                    .to_lowercase();
 
                 // Look up the original DEFINE FIELD statement to get its type
                 let old_key = StatementKey {
@@ -592,10 +608,9 @@ mod tests {
 
     #[test]
     fn test_key_index() {
-        let key = extract_statement_key(
-            "DEFINE INDEX idx_email ON TABLE user FIELDS email UNIQUE;",
-        )
-        .unwrap();
+        let key =
+            extract_statement_key("DEFINE INDEX idx_email ON TABLE user FIELDS email UNIQUE;")
+                .unwrap();
         assert_eq!(key.kind, "INDEX");
         assert_eq!(key.identity, "user/idx_email");
     }
@@ -716,7 +731,10 @@ mod tests {
             kind: "TABLE".to_string(),
             identity: "user".to_string(),
         };
-        assert_eq!(generate_remove_statement(&key), "REMOVE TABLE IF EXISTS user;");
+        assert_eq!(
+            generate_remove_statement(&key),
+            "REMOVE TABLE IF EXISTS user;"
+        );
     }
 
     #[test]
@@ -761,7 +779,10 @@ mod tests {
     fn test_migration_string_format() {
         let diff = SchemaDiff {
             removed: vec!["REMOVE FIELD IF EXISTS old ON TABLE user;".to_string()],
-            modified: vec![("DEFINE TABLE user SCHEMALESS;".to_string(), "DEFINE TABLE user SCHEMAFULL;".to_string())],
+            modified: vec![(
+                "DEFINE TABLE user SCHEMALESS;".to_string(),
+                "DEFINE TABLE user SCHEMAFULL;".to_string(),
+            )],
             added: vec!["DEFINE FIELD avatar ON TABLE user TYPE string;".to_string()],
         };
         let output = diff.to_migration_string();
@@ -817,7 +838,9 @@ mod tests {
         assert!(diff.removed[0].contains("session -> chat_session"));
         assert!(diff.removed[0].contains("on table conversation"));
         // The actual REMOVE should be commented out
-        assert!(diff.removed[0].contains("-- REMOVE FIELD IF EXISTS session ON TABLE conversation;"));
+        assert!(
+            diff.removed[0].contains("-- REMOVE FIELD IF EXISTS session ON TABLE conversation;")
+        );
     }
 
     #[test]

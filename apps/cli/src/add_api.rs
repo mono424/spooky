@@ -4,7 +4,10 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::backend::{AppConfig, AppType, AuthConfig, AuthType, BackendMethod, MethodType, Sp00kyConfig, YAML_SCHEMA_COMMENT};
+use crate::backend::{
+    AppConfig, AppType, AuthConfig, AuthType, BackendMethod, MethodType, Sp00kyConfig,
+    YAML_SCHEMA_COMMENT,
+};
 
 // ── Outbox schema template ──────────────────────────────────────────────────
 
@@ -161,10 +164,7 @@ pub fn add_api(
 
     // Sanity check: no duplicate
     if sp00ky_config.apps.contains_key(&backend_name) {
-        bail!(
-            "App '{}' already exists in sp00ky.yml",
-            backend_name
-        );
+        bail!("App '{}' already exists in sp00ky.yml", backend_name);
     }
 
     // Step 5: Base URL
@@ -248,12 +248,13 @@ pub fn add_api(
     let surql_content = outbox_template(&table_name);
 
     if let Some(parent) = resolved_schema_output.parent() {
-        fs::create_dir_all(parent)
-            .context(format!("Failed to create directory: {:?}", parent))?;
+        fs::create_dir_all(parent).context(format!("Failed to create directory: {:?}", parent))?;
     }
 
-    fs::write(&resolved_schema_output, &surql_content)
-        .context(format!("Failed to write schema: {:?}", resolved_schema_output))?;
+    fs::write(&resolved_schema_output, &surql_content).context(format!(
+        "Failed to write schema: {:?}",
+        resolved_schema_output
+    ))?;
 
     // 2. Update sp00ky.yml
     let new_app = AppConfig {
@@ -282,8 +283,8 @@ pub fn add_api(
 
     sp00ky_config.apps.insert(backend_name.clone(), new_app);
 
-    let yaml_output = serde_yaml::to_string(&sp00ky_config)
-        .context("Failed to serialize config to YAML")?;
+    let yaml_output =
+        serde_yaml::to_string(&sp00ky_config).context("Failed to serialize config to YAML")?;
     let yaml_output = format!("{}\n{}", YAML_SCHEMA_COMMENT, yaml_output);
 
     fs::write(&config_path, &yaml_output)

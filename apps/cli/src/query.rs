@@ -251,7 +251,8 @@ fn render_responses(responses: &[SurrealResponse], json: bool) -> bool {
             } else {
                 r.result.clone().unwrap_or(Value::Null)
             };
-            let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
+            let text =
+                serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
             if r.status == "ERR" {
                 eprintln!("{}", text);
             } else {
@@ -369,7 +370,12 @@ fn render_table(rows: &[Value]) -> String {
         .enumerate()
         .map(|(i, c)| format!("{:<width$}", c, width = widths[i]))
         .collect();
-    out.push_str(&format!("{}{}{}\n", BOLD, header.join("  ").trim_end(), RESET));
+    out.push_str(&format!(
+        "{}{}{}\n",
+        BOLD,
+        header.join("  ").trim_end(),
+        RESET
+    ));
 
     let sep: Vec<String> = widths.iter().map(|w| "-".repeat(*w)).collect();
     out.push_str(sep.join("  ").trim_end());

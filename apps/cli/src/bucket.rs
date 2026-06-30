@@ -75,8 +75,8 @@ const PRESETS: &[Preset] = &[
 ];
 
 const DANGEROUS_EXTENSIONS: &[&str] = &[
-    "exe", "sh", "bat", "cmd", "ps1", "msi", "com", "scr", "vbs", "js", "wsh", "wsf", "jar",
-    "py", "rb", "pl", "php",
+    "exe", "sh", "bat", "cmd", "ps1", "msi", "com", "scr", "vbs", "js", "wsh", "wsf", "jar", "py",
+    "rb", "pl", "php",
 ];
 
 // ── Size parsing ─────────────────────────────────────────────────────────────
@@ -102,7 +102,10 @@ fn parse_size(input: &str) -> Result<u64> {
         if let Ok(n) = input.parse::<u64>() {
             return Ok(n);
         }
-        bail!("Invalid size format: '{}'. Use formats like 5mb, 500kb, 1gb, or raw bytes.", input);
+        bail!(
+            "Invalid size format: '{}'. Use formats like 5mb, 500kb, 1gb, or raw bytes.",
+            input
+        );
     }
 }
 
@@ -122,7 +125,10 @@ fn format_size(bytes: u64) -> String {
 
 fn validate_bucket_name(name: &str) -> Result<()> {
     if name.len() < 2 || name.len() > 64 {
-        bail!("Bucket name must be between 2 and 64 characters, got {}.", name.len());
+        bail!(
+            "Bucket name must be between 2 and 64 characters, got {}.",
+            name.len()
+        );
     }
 
     let re = Regex::new(r"^[a-z][a-z0-9_]*$")?;
@@ -167,10 +173,7 @@ fn check_duplicate_bucket(name: &str, buckets_dir: &Path, config_path: &Path) ->
     // Check if .surql file already exists
     let surql_path = buckets_dir.join(format!("{}.surql", name));
     if surql_path.exists() {
-        bail!(
-            "Bucket file already exists: {}",
-            surql_path.display()
-        );
+        bail!("Bucket file already exists: {}", surql_path.display());
     }
 
     // Scan existing bucket files for DEFINE BUCKET with same name
@@ -179,8 +182,8 @@ fn check_duplicate_bucket(name: &str, buckets_dir: &Path, config_path: &Path) ->
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("surql") {
-                let content = fs::read_to_string(&path)
-                    .context(format!("Failed to read {:?}", path))?;
+                let content =
+                    fs::read_to_string(&path).context(format!("Failed to read {:?}", path))?;
                 let pattern = format!("DEFINE BUCKET IF NOT EXISTS {}", name);
                 if content.contains(&pattern) {
                     bail!(
@@ -195,8 +198,7 @@ fn check_duplicate_bucket(name: &str, buckets_dir: &Path, config_path: &Path) ->
 
     // Check sp00ky.yml for duplicate path reference
     if config_path.exists() {
-        let content = fs::read_to_string(config_path)
-            .context("Failed to read sp00ky.yml")?;
+        let content = fs::read_to_string(config_path).context("Failed to read sp00ky.yml")?;
         let expected_entry = format!("{}.surql", name);
         if content.contains(&expected_entry) {
             bail!(
@@ -241,17 +243,18 @@ fn update_sp00ky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()
 
     if !config_path.exists() {
         let content = format!("{}\nbuckets:\n{}\n", YAML_SCHEMA_COMMENT, entry);
-        fs::write(config_path, content)
-            .context(format!("Failed to create {:?}", config_path))?;
+        fs::write(config_path, content).context(format!("Failed to create {:?}", config_path))?;
         return Ok(());
     }
 
-    let content = fs::read_to_string(config_path)
-        .context("Failed to read sp00ky.yml")?;
+    let content = fs::read_to_string(config_path).context("Failed to read sp00ky.yml")?;
 
     // Check for duplicate
     if content.contains(relative_surql_path) {
-        bail!("sp00ky.yml already contains entry for {}", relative_surql_path);
+        bail!(
+            "sp00ky.yml already contains entry for {}",
+            relative_surql_path
+        );
     }
 
     if content.contains("buckets:") {
@@ -309,8 +312,7 @@ fn update_sp00ky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()
             new_content
         };
 
-        fs::write(config_path, new_content)
-            .context("Failed to write updated sp00ky.yml")?;
+        fs::write(config_path, new_content).context("Failed to write updated sp00ky.yml")?;
     } else {
         // No buckets key — append section to end
         let mut new_content = content.clone();
@@ -318,8 +320,7 @@ fn update_sp00ky_yml(config_path: &Path, relative_surql_path: &str) -> Result<()
             new_content.push('\n');
         }
         new_content.push_str(&format!("buckets:\n{}\n", entry));
-        fs::write(config_path, new_content)
-            .context("Failed to write updated sp00ky.yml")?;
+        fs::write(config_path, new_content).context("Failed to write updated sp00ky.yml")?;
     }
 
     Ok(())
@@ -332,7 +333,8 @@ pub fn add(
     preset: Option<String>,
     max_size: Option<String>,
     extensions: Option<String>,
-    backend: String,
+    backend: Option<String>,
+    storage_enabled: bool,
     path_prefix_auth: Option<bool>,
     config: PathBuf,
     buckets_dir: PathBuf,
@@ -380,7 +382,8 @@ pub fn add(
         if !default.is_empty() {
             prompt = prompt.with_default(&default);
         }
-        prompt = prompt.with_help_message("Lowercase letters, digits, underscores. e.g. user_avatars");
+        prompt =
+            prompt.with_help_message("Lowercase letters, digits, underscores. e.g. user_avatars");
 
         let input = prompt.prompt()?;
         validate_bucket_name(&input)?;
@@ -389,6 +392,16 @@ pub fn add(
 
     // Check for duplicates
     check_duplicate_bucket(&bucket_name, &buckets_dir, &config)?;
+
+    // Resolve the backend: an explicit `--backend` wins; otherwise default to a
+    // persistent file path when storage is enabled, else memory.
+    let backend = backend.unwrap_or_else(|| {
+        if storage_enabled {
+            crate::backend::bucket_backend_path(&bucket_name)
+        } else {
+            "memory".to_string()
+        }
+    });
 
     // Step 3: Max file size
     let size_bytes = if let Some(size_str) = max_size {
@@ -407,7 +420,10 @@ pub fn add(
         bail!("Max file size cannot exceed 10 GB.");
     }
     if size_bytes > 1024 * 1024 * 1024 {
-        println!("\n  Warning: Max size is over 1 GB ({}). Make sure this is intentional.\n", format_size(size_bytes));
+        println!(
+            "\n  Warning: Max size is over 1 GB ({}). Make sure this is intentional.\n",
+            format_size(size_bytes)
+        );
     }
 
     // Step 4: Extensions
@@ -469,10 +485,21 @@ pub fn add(
     println!("  ─────────────────────────────────");
     println!("  Name:        {}", bucket_name);
     println!("  Preset:      {}", selected_preset.label);
-    println!("  Max size:    {} ({} bytes)", format_size(size_bytes), size_bytes);
+    println!(
+        "  Max size:    {} ({} bytes)",
+        format_size(size_bytes),
+        size_bytes
+    );
     println!("  Extensions:  {}", exts.join(", "));
     println!("  Backend:     {}", backend);
-    println!("  Auth:        {}", if _use_path_prefix_auth { "per-user path isolation" } else { "none" });
+    println!(
+        "  Auth:        {}",
+        if _use_path_prefix_auth {
+            "per-user path isolation"
+        } else {
+            "none"
+        }
+    );
     println!("  File:        {}", surql_relative);
     println!("  Config:      {}", config.display());
     println!();
@@ -491,14 +518,15 @@ pub fn add(
     // ── Generate files ───────────────────────────────────────────────────
 
     // Create buckets directory
-    fs::create_dir_all(&buckets_dir)
-        .context(format!("Failed to create buckets directory: {:?}", buckets_dir))?;
+    fs::create_dir_all(&buckets_dir).context(format!(
+        "Failed to create buckets directory: {:?}",
+        buckets_dir
+    ))?;
 
     // Write .surql file
     let surql_content = generate_surql(&bucket_name, &backend, size_bytes, &exts);
     let surql_path = buckets_dir.join(&surql_filename);
-    fs::write(&surql_path, &surql_content)
-        .context(format!("Failed to write {:?}", surql_path))?;
+    fs::write(&surql_path, &surql_content).context(format!("Failed to write {:?}", surql_path))?;
 
     // Update sp00ky.yml
     update_sp00ky_yml(&config, &surql_relative)?;
@@ -512,6 +540,116 @@ pub fn add(
     println!("    Config:  {} (updated)", config.display());
     println!();
     println!("  Run `sp00ky` to regenerate types with the new bucket.");
+    println!();
+
+    Ok(())
+}
+
+// ── Backend switching ─────────────────────────────────────────────────────────
+
+/// Build the regex that matches a single bucket's `DEFINE BUCKET … BACKEND "…"`
+/// prefix (group 1) so the quoted backend value can be rewritten.
+fn bucket_backend_re(name: &str) -> Result<Regex> {
+    Regex::new(&format!(
+        r#"(?i)(DEFINE\s+BUCKET\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?{}\s+BACKEND\s+)"[^"]*""#,
+        regex::escape(name)
+    ))
+    .context("Failed to build bucket backend regex")
+}
+
+/// Locate the `.surql` file that defines `name`. Prefers `<name>.surql`, then
+/// scans the buckets directory for any file containing the definition.
+fn find_bucket_file(name: &str, buckets_dir: &Path) -> Result<PathBuf> {
+    if !buckets_dir.exists() {
+        bail!("Buckets directory not found: {}", buckets_dir.display());
+    }
+    let def_re = Regex::new(&format!(
+        r"(?i)DEFINE\s+BUCKET\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?{}\b",
+        regex::escape(name)
+    ))?;
+
+    let direct = buckets_dir.join(format!("{}.surql", name));
+    if direct.exists() {
+        let content = fs::read_to_string(&direct)?;
+        if def_re.is_match(&content) {
+            return Ok(direct);
+        }
+    }
+
+    for entry in fs::read_dir(buckets_dir).context("Failed to read buckets directory")? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("surql") {
+            let content = fs::read_to_string(&path)?;
+            if def_re.is_match(&content) {
+                return Ok(path);
+            }
+        }
+    }
+
+    bail!(
+        "No bucket named '{}' found in {}",
+        name,
+        buckets_dir.display()
+    );
+}
+
+/// Switch an existing bucket's storage backend between `memory` and
+/// `persistent` (a `file:` backend on the storage volume) by rewriting the
+/// `BACKEND "…"` clause in its authored `.surql` file.
+pub fn set_backend(
+    name: String,
+    target: Option<String>,
+    buckets_dir: PathBuf,
+) -> Result<()> {
+    validate_bucket_name(&name)?;
+    let surql_path = find_bucket_file(&name, &buckets_dir)?;
+
+    let target = match target {
+        Some(t) => t.to_lowercase(),
+        None => Select::new(
+            "Backend for this bucket:",
+            vec!["persistent".to_string(), "memory".to_string()],
+        )
+        .with_help_message("persistent = file backend on the storage volume; memory = in-RAM")
+        .prompt()?,
+    };
+
+    let new_backend = match target.as_str() {
+        "memory" => "memory".to_string(),
+        "persistent" | "file" => crate::backend::bucket_backend_path(&name),
+        other => bail!(
+            "Unknown backend '{}'. Use 'memory' or 'persistent'.",
+            other
+        ),
+    };
+
+    let content = fs::read_to_string(&surql_path)
+        .context(format!("Failed to read {:?}", surql_path))?;
+    let re = bucket_backend_re(&name)?;
+    if !re.is_match(&content) {
+        bail!(
+            "Could not find a `DEFINE BUCKET {} ... BACKEND \"...\"` clause in {}",
+            name,
+            surql_path.display()
+        );
+    }
+    let new_content = re
+        .replace(&content, |c: &regex::Captures| {
+            format!(r#"{}"{}""#, &c[1], new_backend)
+        })
+        .into_owned();
+    fs::write(&surql_path, new_content)
+        .context(format!("Failed to write {:?}", surql_path))?;
+
+    println!();
+    println!("  Bucket '{}' backend set to: {}", name, new_backend);
+    println!("  File: {}", surql_path.display());
+    println!();
+    println!("  Note: this applies on the next fresh schema apply. SurrealDB will");
+    println!("  not redefine an already-created bucket (DEFINE BUCKET IF NOT EXISTS),");
+    println!("  and existing in-memory files do not migrate to disk.");
+    println!();
+    println!("  Run `sp00ky` to regenerate, then redeploy or `spky dev --clean-db`.");
     println!();
 
     Ok(())
@@ -649,7 +787,12 @@ mod tests {
 
     #[test]
     fn test_generate_surql_basic() {
-        let result = generate_surql("avatars", "memory", 5242880, &["jpg".to_string(), "png".to_string()]);
+        let result = generate_surql(
+            "avatars",
+            "memory",
+            5242880,
+            &["jpg".to_string(), "png".to_string()],
+        );
         assert!(result.contains("DEFINE BUCKET IF NOT EXISTS avatars BACKEND \"memory\""));
         assert!(result.contains("file::head($file).size <= 5242880"));
         assert!(result.contains("string::ends_with(file::key($file), '.jpg')"));
@@ -671,7 +814,12 @@ mod tests {
             "profile_pictures",
             "memory",
             5242880,
-            &["jpg".to_string(), "jpeg".to_string(), "png".to_string(), "gif".to_string()],
+            &[
+                "jpg".to_string(),
+                "jpeg".to_string(),
+                "png".to_string(),
+                "gif".to_string(),
+            ],
         );
         // Check it matches the structure from profile.surql
         assert!(result.contains("DEFINE BUCKET IF NOT EXISTS profile_pictures BACKEND \"memory\""));
@@ -717,7 +865,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("sp00ky.yml");
 
-        fs::write(&config_path, "mode: cluster\napps:\n  api:\n    type: backend\n").unwrap();
+        fs::write(
+            &config_path,
+            "mode: cluster\napps:\n  api:\n    type: backend\n",
+        )
+        .unwrap();
 
         update_sp00ky_yml(&config_path, "./src/buckets/test.surql").unwrap();
 
@@ -732,11 +884,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("sp00ky.yml");
 
-        fs::write(
-            &config_path,
-            "buckets:\n  - ./src/buckets/test.surql\n",
-        )
-        .unwrap();
+        fs::write(&config_path, "buckets:\n  - ./src/buckets/test.surql\n").unwrap();
 
         let result = update_sp00ky_yml(&config_path, "./src/buckets/test.surql");
         assert!(result.is_err());
@@ -802,5 +950,98 @@ mod tests {
 
         let result = check_duplicate_bucket("new_bucket", &buckets_dir, &config_path);
         assert!(result.is_ok());
+    }
+
+    // ── set_backend / find_bucket_file ───────────────────────────────────
+
+    #[test]
+    fn test_find_bucket_file_by_name() {
+        let dir = TempDir::new().unwrap();
+        let buckets_dir = dir.path().join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        fs::write(
+            buckets_dir.join("avatars.surql"),
+            "DEFINE BUCKET IF NOT EXISTS avatars BACKEND \"memory\";",
+        )
+        .unwrap();
+
+        let found = find_bucket_file("avatars", &buckets_dir).unwrap();
+        assert_eq!(found, buckets_dir.join("avatars.surql"));
+    }
+
+    #[test]
+    fn test_find_bucket_file_missing_errors() {
+        let dir = TempDir::new().unwrap();
+        let buckets_dir = dir.path().join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        assert!(find_bucket_file("nope", &buckets_dir).is_err());
+    }
+
+    #[test]
+    fn test_set_backend_memory_to_persistent() {
+        let dir = TempDir::new().unwrap();
+        let buckets_dir = dir.path().join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        let path = buckets_dir.join("avatars.surql");
+        fs::write(
+            &path,
+            "DEFINE BUCKET IF NOT EXISTS avatars BACKEND \"memory\"\n  PERMISSIONS FULL;\n",
+        )
+        .unwrap();
+
+        set_backend(
+            "avatars".to_string(),
+            Some("persistent".to_string()),
+            buckets_dir.clone(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("BACKEND \"file:/buckets/avatars\""));
+        assert!(!content.contains("BACKEND \"memory\""));
+        // The rest of the statement is untouched.
+        assert!(content.contains("PERMISSIONS FULL;"));
+    }
+
+    #[test]
+    fn test_set_backend_persistent_to_memory() {
+        let dir = TempDir::new().unwrap();
+        let buckets_dir = dir.path().join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        let path = buckets_dir.join("docs.surql");
+        fs::write(
+            &path,
+            "DEFINE BUCKET IF NOT EXISTS docs BACKEND \"file:/buckets/docs\";\n",
+        )
+        .unwrap();
+
+        set_backend(
+            "docs".to_string(),
+            Some("memory".to_string()),
+            buckets_dir.clone(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("BACKEND \"memory\""));
+    }
+
+    #[test]
+    fn test_set_backend_rejects_unknown_target() {
+        let dir = TempDir::new().unwrap();
+        let buckets_dir = dir.path().join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        fs::write(
+            buckets_dir.join("avatars.surql"),
+            "DEFINE BUCKET IF NOT EXISTS avatars BACKEND \"memory\";",
+        )
+        .unwrap();
+
+        let result = set_backend(
+            "avatars".to_string(),
+            Some("s3".to_string()),
+            buckets_dir,
+        );
+        assert!(result.is_err());
     }
 }

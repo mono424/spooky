@@ -67,7 +67,6 @@ pub fn extract_schema_from_db(client: &SurrealClient) -> Result<String> {
     Ok(statements.join("\n"))
 }
 
-
 fn find_free_port() -> Result<u16> {
     let listener =
         TcpListener::bind("127.0.0.1:0").context("Failed to bind to find a free port")?;
@@ -293,7 +292,10 @@ pub fn normalize_schema_via_ephemeral_db(schema_sql: &str) -> Result<String> {
 
         // Restore any JWT signing key SurrealDB redacted back to the source
         // placeholder, so a generated migration keeps `{{...}}` not `[REDACTED]`.
-        Ok(restore_redacted_keys(&extract_schema_from_db(&client)?, schema_sql))
+        Ok(restore_redacted_keys(
+            &extract_schema_from_db(&client)?,
+            schema_sql,
+        ))
     })();
 
     stop_ephemeral_surreal_docker(&container_name);
@@ -396,10 +398,7 @@ mod tests {
 
     #[test]
     fn test_ensure_semicolon_keeps_existing() {
-        assert_eq!(
-            ensure_semicolon("DEFINE TABLE user;"),
-            "DEFINE TABLE user;"
-        );
+        assert_eq!(ensure_semicolon("DEFINE TABLE user;"), "DEFINE TABLE user;");
     }
 
     #[test]
@@ -423,7 +422,10 @@ mod tests {
         let extracted = "DEFINE ACCESS account ON DATABASE TYPE RECORD SIGNIN (SELECT * FROM user) WITH JWT ALGORITHM EDDSA KEY '{{JWT_PUBLIC_KEY}}' WITH ISSUER KEY '[REDACTED]' DURATION FOR TOKEN 365d;";
         let source = "DEFINE ACCESS account ON DATABASE TYPE RECORD\n  SIGNIN (SELECT * FROM user)\n  WITH JWT ALGORITHM EDDSA KEY '{{JWT_PUBLIC_KEY}}' WITH ISSUER KEY '{{JWT_PRIVATE_KEY}}'\n  DURATION FOR TOKEN 365d;";
         let out = restore_redacted_keys(extracted, source);
-        assert!(out.contains("ISSUER KEY '{{JWT_PRIVATE_KEY}}'"), "got: {out}");
+        assert!(
+            out.contains("ISSUER KEY '{{JWT_PRIVATE_KEY}}'"),
+            "got: {out}"
+        );
         assert!(!out.contains("[REDACTED]"), "got: {out}");
     }
 
@@ -445,7 +447,8 @@ mod tests {
 
     #[test]
     fn test_restore_redacted_keys_ignores_comment_prose() {
-        let extracted = "DEFINE ACCESS account ON DATABASE TYPE RECORD WITH ISSUER KEY '[REDACTED]';";
+        let extracted =
+            "DEFINE ACCESS account ON DATABASE TYPE RECORD WITH ISSUER KEY '[REDACTED]';";
         // A comment mentions "ISSUER KEY" in prose before the real clause; the
         // real signing literal must still be the one that's restored.
         let source = "-- KEY = public (verify); ISSUER KEY = the private signing key\nDEFINE ACCESS account ON DATABASE TYPE RECORD WITH ISSUER KEY '{{JWT_PRIVATE_KEY}}';";
@@ -459,7 +462,8 @@ mod tests {
         // No matching access in source → can't restore; leave the value as-is
         // rather than guess (the diff/remove path handles a vanished access).
         let extracted = "DEFINE ACCESS other ON DATABASE TYPE RECORD WITH ISSUER KEY '[REDACTED]';";
-        let source = "DEFINE ACCESS account ON DATABASE TYPE RECORD WITH ISSUER KEY '{{JWT_PRIVATE_KEY}}';";
+        let source =
+            "DEFINE ACCESS account ON DATABASE TYPE RECORD WITH ISSUER KEY '{{JWT_PRIVATE_KEY}}';";
         let out = restore_redacted_keys(extracted, source);
         assert!(out.contains("[REDACTED]"), "got: {out}");
     }

@@ -145,10 +145,7 @@ fn load_user_id(client: &SurrealClient, who: &str) -> Result<String> {
             .and_then(Value::as_str)
             .map(|s| s.to_string())
             .ok_or_else(|| anyhow!("User '{}' returned unexpected shape", who)),
-        other => Err(anyhow!(
-            "User lookup returned unexpected value: {}",
-            other
-        )),
+        other => Err(anyhow!("User lookup returned unexpected value: {}", other)),
     }
 }
 
@@ -333,8 +330,7 @@ fn set_rule(
     conn: ConnectionArgs,
     config: Option<PathBuf>,
 ) -> Result<()> {
-    let provided =
-        for_user.is_some() as u8 + rollout.is_some() as u8 + sql.is_some() as u8;
+    let provided = for_user.is_some() as u8 + rollout.is_some() as u8 + sql.is_some() as u8;
     if provided != 1 {
         bail!("Pass exactly one of --for-user / --rollout / --sql");
     }
@@ -491,10 +487,12 @@ fn confirm_apply(n: usize) -> Result<bool> {
             n
         );
     }
-    Ok(inquire::Confirm::new(&format!("Apply to all {} user(s)?", n))
-        .with_default(false)
-        .prompt()
-        .unwrap_or(false))
+    Ok(
+        inquire::Confirm::new(&format!("Apply to all {} user(s)?", n))
+            .with_default(false)
+            .prompt()
+            .unwrap_or(false),
+    )
 }
 
 fn unset_rule(
@@ -553,12 +551,7 @@ fn unset_rule(
     Ok(())
 }
 
-fn eval(
-    key: String,
-    as_user: String,
-    conn: ConnectionArgs,
-    config: Option<PathBuf>,
-) -> Result<()> {
+fn eval(key: String, as_user: String, conn: ConnectionArgs, config: Option<PathBuf>) -> Result<()> {
     let client = client_from(conn, config)?;
     let flag = load_flag(&client, &key)?;
     let user_id = load_user_id(&client, &as_user)?;
@@ -882,13 +875,22 @@ mod tests {
         let mut rules: Vec<Value> = vec![];
         upsert_rollout(&mut rules, "on", 100);
         let flag = json!({ "key": "k", "enabled": true, "default_variant": "off", "rules": rules.clone() });
-        assert_eq!(evaluate_one(&flag, "user:anyone").0, "on", "100% must match everyone");
+        assert_eq!(
+            evaluate_one(&flag, "user:anyone").0,
+            "on",
+            "100% must match everyone"
+        );
 
         // Re-upsert lowers it to 0 in place (no duplicate rule).
         upsert_rollout(&mut rules, "on", 0);
         assert_eq!(rules.len(), 1, "rollout re-upsert must update in place");
-        let flag0 = json!({ "key": "k", "enabled": true, "default_variant": "off", "rules": rules });
-        assert_eq!(evaluate_one(&flag0, "user:anyone").0, "off", "0% must match no one");
+        let flag0 =
+            json!({ "key": "k", "enabled": true, "default_variant": "off", "rules": rules });
+        assert_eq!(
+            evaluate_one(&flag0, "user:anyone").0,
+            "off",
+            "0% must match no one"
+        );
     }
 
     #[test]
@@ -907,10 +909,7 @@ mod tests {
     #[test]
     fn extract_user_ids_handles_value_and_object_rows() {
         // `SELECT VALUE id` -> strings; `SELECT id` -> { id }.
-        let rows = vec![
-            json!("user:a"),
-            json!({ "id": "user:b", "age": 30 }),
-        ];
+        let rows = vec![json!("user:a"), json!({ "id": "user:b", "age": 30 })];
         let (ids, skipped) = extract_user_ids(rows);
         assert_eq!(ids, vec!["user:a", "user:b"]);
         assert_eq!(skipped, 0);

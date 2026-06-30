@@ -7,7 +7,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::backend::{self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, DeployMode, HostingMode, ResolvedSurrealDb, ResolvedVersions, RuntimeSource, Sp00kyConfig, DEFAULT_CONFIG_PATH};
+use crate::backend::{
+    self, BackendDevConfig, BackendDevTypedConfig, DeployEnv, DeployMode, HostingMode,
+    ResolvedSurrealDb, ResolvedVersions, RuntimeSource, Sp00kyConfig, DEFAULT_CONFIG_PATH,
+};
 use crate::migrate;
 use crate::port_check;
 use crate::schema_builder::{self, SchemaBuilderConfig};
@@ -36,9 +39,10 @@ const INFRA_SERVICES_SURREALISM: &[&str] = &["surrealdb"];
 /// or `http://localhost:{port}` for locally hosted instances.
 pub(crate) fn surreal_connection_url(resolved: &ResolvedSurrealDb, local_port: u16) -> String {
     match &resolved.hosting {
-        HostingMode::External => resolved.endpoint.clone().unwrap_or_else(|| {
-            format!("http://localhost:{}", local_port)
-        }),
+        HostingMode::External => resolved
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| format!("http://localhost:{}", local_port)),
         HostingMode::Cloud => format!("http://localhost:{}", local_port),
     }
 }
@@ -62,7 +66,10 @@ fn collect_dev_ports(
     }
 
     let mut collect_app = |label: &str, name: &str, dev: &Option<BackendDevConfig>| {
-        if let Some(BackendDevConfig::Typed(BackendDevTypedConfig::Docker { port: Some(p), .. })) = dev {
+        if let Some(BackendDevConfig::Typed(BackendDevTypedConfig::Docker {
+            port: Some(p), ..
+        })) = dev
+        {
             match port_check::parse_docker_host_port(p) {
                 Some(host) => out.push((host, format!("{}:{}", label, name))),
                 None => eprintln!(
@@ -101,7 +108,13 @@ fn collect_dev_ports(
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
-pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, clean: bool, clean_db: bool) -> Result<()> {
+pub fn run(
+    skip_migrations: bool,
+    auto_apply_migrations: bool,
+    fix_checksums: bool,
+    clean: bool,
+    clean_db: bool,
+) -> Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
     ctrlc::set_handler(move || {
@@ -129,10 +142,7 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
 
     // Pre-flight port check: bail before touching docker or local state if
     // any port we're about to bind is already taken.
-    port_check::ensure_ports_free(
-        collect_dev_ports(&config, &mode, &resolved_surreal),
-        PREFIX,
-    )?;
+    port_check::ensure_ports_free(collect_dev_ports(&config, &mode, &resolved_surreal), PREFIX)?;
 
     // `--clean-db` implies `--clean`: wiping the DB while keeping SSP/
     // scheduler caches would leave them rebootstrapping into stale state.
@@ -149,6 +159,9 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
             // Best-effort: ignored if the container doesn't exist.
             let _ = docker(&["rm", "-f", SURREAL_CONTAINER]);
             subs.push("surrealdb_data");
+            // Persistent bucket files live on a sibling volume; a full DB reset
+            // clears them too (a plain `--clean` preserves both).
+            subs.push("bucket_data");
         }
 
         for sub in subs {
@@ -161,9 +174,15 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
         }
 
         if !clean_db {
-            println!("{} --clean: SurrealDB volume preserved (pass --clean-db for a full reset)", PREFIX);
+            println!(
+                "{} --clean: SurrealDB volume preserved (pass --clean-db for a full reset)",
+                PREFIX
+            );
         } else {
-            println!("{} --clean-db: SurrealDB volume wiped — starting from an empty database", PREFIX);
+            println!(
+                "{} --clean-db: SurrealDB volume wiped — starting from an empty database",
+                PREFIX
+            );
         }
     }
 
@@ -172,7 +191,10 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
         println!("{} Checking for schema drift...", PREFIX);
         if let Err(e) = check_schema_drift(&config) {
             eprintln!("{} Warning: Schema drift check failed: {:#}", PREFIX, e);
-            eprintln!("{} Continuing without drift check. Run `sp00ky migrate create` to check manually.", PREFIX);
+            eprintln!(
+                "{} Continuing without drift check. Run `sp00ky migrate create` to check manually.",
+                PREFIX
+            );
         }
     }
 
@@ -189,10 +211,33 @@ pub fn run(skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bo
                 PREFIX, compose_file
             );
         }
-        run_compose_mode(&compose_file, &mode, &config, &resolved_surreal, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
+        run_compose_mode(
+            &compose_file,
+            &mode,
+            &config,
+            &resolved_surreal,
+            &stop,
+            skip_migrations,
+            auto_apply_migrations,
+            fix_checksums,
+            migrations_path,
+        )
     } else {
-        println!("{} No compose file found — using direct Docker mode", PREFIX);
-        run_direct_mode(&mode, &versions, &config, &resolved_surreal, &stop, skip_migrations, auto_apply_migrations, fix_checksums, migrations_path)
+        println!(
+            "{} No compose file found — using direct Docker mode",
+            PREFIX
+        );
+        run_direct_mode(
+            &mode,
+            &versions,
+            &config,
+            &resolved_surreal,
+            &stop,
+            skip_migrations,
+            auto_apply_migrations,
+            fix_checksums,
+            migrations_path,
+        )
     }
 }
 
@@ -213,7 +258,11 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
     let config_path = Path::new(DEFAULT_CONFIG_PATH);
     let builder_config = SchemaBuilderConfig {
         input_path: schema_path.clone(),
-        config_path: if config_path.exists() { Some(config_path.to_path_buf()) } else { None },
+        config_path: if config_path.exists() {
+            Some(config_path.to_path_buf())
+        } else {
+            None
+        },
         mode: config.mode.clone().unwrap_or(DeployMode::Singlenode),
         endpoint: None,
         secret: None,
@@ -224,11 +273,9 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
         .context("Failed to build schema from source files")?;
 
     // Extract old (from migrations) and new (from source) schemas via ephemeral DB
-    let (old_schema, new_schema) = schema_extract::extract_old_and_new_schemas(
-        migrations_dir,
-        &new_schema_sql,
-    )
-    .context("Failed to extract schemas for drift comparison")?;
+    let (old_schema, new_schema) =
+        schema_extract::extract_old_and_new_schemas(migrations_dir, &new_schema_sql)
+            .context("Failed to extract schemas for drift comparison")?;
 
     // Diff
     let diff = schema_diff::diff_schemas(&old_schema, &new_schema);
@@ -258,17 +305,10 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
     }
 
     // Interactive prompt
-    let options = vec![
-        "Generate migration",
-        "Continue anyway",
-        "Abort",
-    ];
-    let choice = inquire::Select::new(
-        "Schema drift detected. What would you like to do?",
-        options,
-    )
-    .prompt()
-    .unwrap_or("Abort");
+    let options = vec!["Generate migration", "Continue anyway", "Abort"];
+    let choice = inquire::Select::new("Schema drift detected. What would you like to do?", options)
+        .prompt()
+        .unwrap_or("Abort");
 
     match choice {
         "Generate migration" => {
@@ -276,16 +316,13 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
                 .prompt()
                 .context("Failed to read migration name")?;
 
-            migrate::create(
-                migrations_dir,
-                &name,
-                None,
-                Some(&builder_config),
-                None,
-            )
-            .context("Failed to create migration")?;
+            migrate::create(migrations_dir, &name, None, Some(&builder_config), None)
+                .context("Failed to create migration")?;
 
-            println!("{} Migration created. It will be applied in the next step.", PREFIX);
+            println!(
+                "{} Migration created. It will be applied in the next step.",
+                PREFIX
+            );
         }
         "Continue anyway" => {
             println!(
@@ -316,7 +353,10 @@ struct RuntimeUrls {
 
 impl RuntimeUrls {
     fn new(ssp_local: bool, scheduler_local: bool) -> Self {
-        Self { ssp_local, scheduler_local }
+        Self {
+            ssp_local,
+            scheduler_local,
+        }
     }
 
     fn ssp_db_url(&self) -> String {
@@ -378,7 +418,17 @@ impl RuntimeUrls {
     }
 }
 
-fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00kyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
+fn run_direct_mode(
+    mode: &DeployMode,
+    versions: &ResolvedVersions,
+    config: &Sp00kyConfig,
+    resolved_surreal: &ResolvedSurrealDb,
+    stop: &Arc<AtomicBool>,
+    skip_migrations: bool,
+    auto_apply_migrations: bool,
+    fix_checksums: bool,
+    migrations_path: &str,
+) -> Result<()> {
     let surreal_image = versions.surrealdb_image();
     // Networking matrix between SSP and scheduler shifts based on whether
     // each runs in a container or on the host. RuntimeUrls collapses that
@@ -409,26 +459,69 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
         let surreal_user_env = format!("SURREAL_USER={}", resolved_surreal.username);
         let surreal_pass_env = format!("SURREAL_PASS={}", resolved_surreal.password);
+        let surreal_port_pub = format!("{}:8000", SURREAL_PORT);
 
-        docker(&[
-            "run", "-d",
-            "--name", SURREAL_CONTAINER,
-            "--network", NETWORK_NAME,
-            "--network-alias", "surrealdb",
-            "-p", &format!("{}:8000", SURREAL_PORT),
-            "-v", &surreal_data_mount,
-            "-e", &surreal_user_env,
-            "-e", &surreal_pass_env,
-            "-e", "SURREAL_LOG=info",
-            "-e", "SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files",
-            &surreal_image,
-            "start",
-            "--bind", "0.0.0.0:8000",
-            "--allow-all",
-            "--user", &resolved_surreal.username,
-            "--pass", &resolved_surreal.password,
-            "surrealkv:/data",
-        ])?;
+        let mut surreal_args: Vec<String> = vec![
+            "run".into(),
+            "-d".into(),
+            "--name".into(),
+            SURREAL_CONTAINER.into(),
+            "--network".into(),
+            NETWORK_NAME.into(),
+            "--network-alias".into(),
+            "surrealdb".into(),
+            "-p".into(),
+            surreal_port_pub,
+            "-v".into(),
+            surreal_data_mount,
+        ];
+
+        // Mount the persistent bucket-storage volume when configured. Buckets
+        // with a file backend (file:/buckets/<name>) resolve under this mount.
+        // SurrealDB also gates file backends behind a folder allowlist —
+        // `--allow-all` does NOT cover it, so the mount path must be added to
+        // SURREAL_BUCKET_FOLDER_ALLOWLIST or every put fails "File access denied".
+        if config.bucket_storage_gb().is_some() {
+            let bucket_data_dir = std::env::current_dir()
+                .context("Failed to get current directory")?
+                .join(".sp00ky/bucket_data");
+            std::fs::create_dir_all(&bucket_data_dir).ok();
+            surreal_args.push("-v".into());
+            surreal_args.push(format!(
+                "{}:{}",
+                bucket_data_dir.display(),
+                crate::backend::BUCKET_VOLUME_PATH
+            ));
+            surreal_args.push("-e".into());
+            surreal_args.push(format!(
+                "SURREAL_BUCKET_FOLDER_ALLOWLIST={}",
+                crate::backend::BUCKET_VOLUME_PATH
+            ));
+        }
+
+        surreal_args.extend([
+            "-e".into(),
+            surreal_user_env,
+            "-e".into(),
+            surreal_pass_env,
+            "-e".into(),
+            "SURREAL_LOG=info".into(),
+            "-e".into(),
+            "SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files".into(),
+            surreal_image.clone(),
+            "start".into(),
+            "--bind".into(),
+            "0.0.0.0:8000".into(),
+            "--allow-all".into(),
+            "--user".into(),
+            resolved_surreal.username.clone(),
+            "--pass".into(),
+            resolved_surreal.password.clone(),
+            "surrealkv:/data".into(),
+        ]);
+
+        let surreal_args_ref: Vec<&str> = surreal_args.iter().map(|s| s.as_str()).collect();
+        docker(&surreal_args_ref)?;
 
         // Phase 3: Wait for health
         println!("{} Phase 3: Waiting for SurrealDB health...", PREFIX);
@@ -440,7 +533,10 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
             "SurrealDB",
         )?;
     } else {
-        println!("{} Phase 2: Using external SurrealDB at {}", PREFIX, surreal_url);
+        println!(
+            "{} Phase 2: Using external SurrealDB at {}",
+            PREFIX, surreal_url
+        );
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -469,10 +565,19 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
     // Phase 4: Apply migrations
     if skip_migrations {
-        println!("{} Phase 4: Skipping migrations (--skip-migrations).", PREFIX);
+        println!(
+            "{} Phase 4: Skipping migrations (--skip-migrations).",
+            PREFIX
+        );
     } else {
         println!("{} Phase 4: Applying migrations...", PREFIX);
-        apply_migrations(&surreal_url, auto_apply_migrations, fix_checksums, migrations_path, resolved_surreal)?;
+        apply_migrations(
+            &surreal_url,
+            auto_apply_migrations,
+            fix_checksums,
+            migrations_path,
+            resolved_surreal,
+        )?;
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -517,10 +622,13 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
         let kind = match &versions.scheduler {
             RuntimeSource::Image(_) => LaunchKind::Docker {
-                image: versions.scheduler_image()
+                image: versions
+                    .scheduler_image()
                     .expect("scheduler_image is Some when RuntimeSource::Image"),
             },
-            RuntimeSource::LocalBinary(path) => LaunchKind::Host { binary: path.clone() },
+            RuntimeSource::LocalBinary(path) => LaunchKind::Host {
+                binary: path.clone(),
+            },
         };
         let spec = SchedulerLaunchSpec {
             kind,
@@ -543,7 +651,10 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         // wrong list_refs. Container liveness is only meaningful in docker mode;
         // a host process streams its own stdio and has no container to inspect.
         let check_container = spec.kind_is_docker();
-        println!("{} Waiting for scheduler to clone replica from SurrealDB...", PREFIX);
+        println!(
+            "{} Waiting for scheduler to clone replica from SurrealDB...",
+            PREFIX
+        );
         wait_for_health_with_container(
             &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
             HEALTH_MAX_RETRIES,
@@ -578,9 +689,13 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
 
     let ssp_kind = match &versions.ssp {
         RuntimeSource::Image(_) => LaunchKind::Docker {
-            image: versions.ssp_image().expect("ssp_image is Some when RuntimeSource::Image"),
+            image: versions
+                .ssp_image()
+                .expect("ssp_image is Some when RuntimeSource::Image"),
         },
-        RuntimeSource::LocalBinary(path) => LaunchKind::Host { binary: path.clone() },
+        RuntimeSource::LocalBinary(path) => LaunchKind::Host {
+            binary: path.clone(),
+        },
     };
     let ssp_spec = SspLaunchSpec {
         kind: ssp_kind,
@@ -594,7 +709,12 @@ fn run_direct_mode(mode: &DeployMode, versions: &ResolvedVersions, config: &Sp00
         db_pass: resolved_surreal.password.clone(),
         job_config: job_config_json,
         ref_mode: config.resolved_ref_mode().as_str().to_string(),
-        anon_live: if config.resolved_anonymous_live_queries() { "1" } else { "0" }.to_string(),
+        anon_live: if config.resolved_anonymous_live_queries() {
+            "1"
+        } else {
+            "0"
+        }
+        .to_string(),
         cluster: *mode == DeployMode::Cluster,
         scheduler_url: urls.ssp_scheduler_url(),
         advertise: urls.ssp_advertise(),
@@ -712,7 +832,17 @@ fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
 
 // ── Compose mode ────────────────────────────────────────────────────────────
 
-fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig, resolved_surreal: &ResolvedSurrealDb, stop: &Arc<AtomicBool>, skip_migrations: bool, auto_apply_migrations: bool, fix_checksums: bool, migrations_path: &str) -> Result<()> {
+fn run_compose_mode(
+    compose_file: &str,
+    mode: &DeployMode,
+    config: &Sp00kyConfig,
+    resolved_surreal: &ResolvedSurrealDb,
+    stop: &Arc<AtomicBool>,
+    skip_migrations: bool,
+    auto_apply_migrations: bool,
+    fix_checksums: bool,
+    migrations_path: &str,
+) -> Result<()> {
     let use_local_surreal = resolved_surreal.hosting != HostingMode::External;
     let surreal_url = surreal_connection_url(resolved_surreal, SURREAL_PORT);
 
@@ -726,7 +856,11 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
     let infra_services: Vec<&str> = if use_local_surreal {
         infra_services.to_vec()
     } else {
-        infra_services.iter().copied().filter(|s| *s != "surrealdb").collect()
+        infra_services
+            .iter()
+            .copied()
+            .filter(|s| *s != "surrealdb")
+            .collect()
     };
 
     if !infra_services.is_empty() {
@@ -736,14 +870,22 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
             infra_services.join(", ")
         );
         let mut args = vec![
-            "compose", "-f", compose_file, "up", "-d", "--remove-orphans",
+            "compose",
+            "-f",
+            compose_file,
+            "up",
+            "-d",
+            "--remove-orphans",
         ];
         for svc in &infra_services {
             args.push(svc);
         }
         docker(&args)?;
     } else {
-        println!("\n{} Phase 1: Using external SurrealDB, skipping local infrastructure.", PREFIX);
+        println!(
+            "\n{} Phase 1: Using external SurrealDB, skipping local infrastructure.",
+            PREFIX
+        );
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -762,7 +904,10 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
             false,
         )?;
     } else {
-        println!("\n{} Phase 2: Using external SurrealDB at {}", PREFIX, surreal_url);
+        println!(
+            "\n{} Phase 2: Using external SurrealDB at {}",
+            PREFIX, surreal_url
+        );
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -771,10 +916,19 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
 
     // Phase 3: Apply migrations
     if skip_migrations {
-        println!("\n{} Phase 3: Skipping migrations (--skip-migrations).", PREFIX);
+        println!(
+            "\n{} Phase 3: Skipping migrations (--skip-migrations).",
+            PREFIX
+        );
     } else {
         println!("\n{} Phase 3: Applying migrations...", PREFIX);
-        apply_migrations(&surreal_url, auto_apply_migrations, fix_checksums, migrations_path, resolved_surreal)?;
+        apply_migrations(
+            &surreal_url,
+            auto_apply_migrations,
+            fix_checksums,
+            migrations_path,
+            resolved_surreal,
+        )?;
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -812,7 +966,14 @@ fn run_compose_mode(compose_file: &str, mode: &DeployMode, config: &Sp00kyConfig
     let docker_devs = spawn_docker_app_devs(config, &project_dir, resolved_surreal, mode);
 
     let status = Command::new("docker")
-        .args(["compose", "-f", compose_file, "up", "--build", "--remove-orphans"])
+        .args([
+            "compose",
+            "-f",
+            compose_file,
+            "up",
+            "--build",
+            "--remove-orphans",
+        ])
         .status()
         .context("Failed to run docker compose up")?;
 
@@ -876,7 +1037,11 @@ fn wait_for_health_with_container(
             if !is_container_running(name) {
                 // Print last logs to help diagnose
                 let _ = print_container_logs(name, 20);
-                bail!("{} container '{}' exited unexpectedly. Check logs above.", service_name, name);
+                bail!(
+                    "{} container '{}' exited unexpectedly. Check logs above.",
+                    service_name,
+                    name
+                );
             }
         }
 
@@ -902,7 +1067,8 @@ fn wait_for_health_with_container(
 
     bail!(
         "{} did not become ready after {} attempts",
-        service_name, max_retries
+        service_name,
+        max_retries
     );
 }
 
@@ -923,7 +1089,12 @@ fn container_exit_code(name: &str) -> Option<i32> {
         .args(["inspect", "-f", "{{.State.ExitCode}}", name])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i32>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<i32>()
+                .ok()
+        })
 }
 
 /// Print the last N lines of a container's logs
@@ -949,12 +1120,21 @@ fn print_container_logs(name: &str, tail: u32) -> Result<()> {
 
 // ── Migration helper ────────────────────────────────────────────────────────
 
-fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, migrations_path: &str, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
+fn apply_migrations(
+    surreal_url: &str,
+    auto_apply: bool,
+    fix_checksums: bool,
+    migrations_path: &str,
+    resolved_surreal: &ResolvedSurrealDb,
+) -> Result<()> {
     use crate::migration::{self, MigrationState};
 
     let migrations_dir = Path::new(migrations_path);
     if !migrations_dir.exists() {
-        println!("{} No {}/ directory found, skipping.", PREFIX, migrations_path);
+        println!(
+            "{} No {}/ directory found, skipping.",
+            PREFIX, migrations_path
+        );
         return Ok(());
     }
 
@@ -985,7 +1165,10 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
     // Fix checksums first if requested
     if fix_checksums {
         if let Err(e) = engine.fix(true) {
-            eprintln!("{} \x1b[33mWARNING: checksum fix failed: {:#}\x1b[0m", PREFIX, e);
+            eprintln!(
+                "{} \x1b[33mWARNING: checksum fix failed: {:#}\x1b[0m",
+                PREFIX, e
+            );
         }
     }
 
@@ -993,7 +1176,10 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
     let statuses = match engine.status() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("{} \x1b[31mFailed to check migration status: {:#}\x1b[0m", PREFIX, e);
+            eprintln!(
+                "{} \x1b[31mFailed to check migration status: {:#}\x1b[0m",
+                PREFIX, e
+            );
             return Ok(());
         }
     };
@@ -1002,11 +1188,17 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
     for info in &statuses {
         if info.state == MigrationState::Drift {
             let detail = info.detail.as_deref().unwrap_or("");
-            println!("{} \x1b[33mWARNING: Drift on {}_{}: {}\x1b[0m", PREFIX, info.id, info.name, detail);
+            println!(
+                "{} \x1b[33mWARNING: Drift on {}_{}: {}\x1b[0m",
+                PREFIX, info.id, info.name, detail
+            );
         }
     }
 
-    let pending: Vec<_> = statuses.iter().filter(|s| s.state == MigrationState::Pending).collect();
+    let pending: Vec<_> = statuses
+        .iter()
+        .filter(|s| s.state == MigrationState::Pending)
+        .collect();
 
     if pending.is_empty() {
         println!("{} No pending migrations.", PREFIX);
@@ -1029,7 +1221,10 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
             "Quit",
         ];
         let choice = inquire::Select::new(
-            &format!("{} pending migration(s) found. What would you like to do?", pending.len()),
+            &format!(
+                "{} pending migration(s) found. What would you like to do?",
+                pending.len()
+            ),
             options,
         )
         .prompt()
@@ -1060,7 +1255,10 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
             );
 
             if auto_apply || !std::io::stdin().is_terminal() {
-                println!("{} Auto-resetting database and retrying migrations.", PREFIX);
+                println!(
+                    "{} Auto-resetting database and retrying migrations.",
+                    PREFIX
+                );
                 client.reset_database()?;
                 engine.apply().map(|_| ())
             } else {
@@ -1069,12 +1267,10 @@ fn apply_migrations(surreal_url: &str, auto_apply: bool, fix_checksums: bool, mi
                     "Skip migrations (continue without applying)",
                     "Quit",
                 ];
-                let choice = inquire::Select::new(
-                    "Migration failed. What would you like to do?",
-                    options,
-                )
-                .prompt()
-                .unwrap_or("Quit");
+                let choice =
+                    inquire::Select::new("Migration failed. What would you like to do?", options)
+                        .prompt()
+                        .unwrap_or("Quit");
 
                 match choice {
                     "Reset database and retry" => {
@@ -1117,7 +1313,12 @@ fn surreal_to_target_endpoint(mode: &DeployMode, versions: &ResolvedVersions) ->
 /// Apply the remote functions with Docker-internal endpoints so that
 /// SurrealDB (running inside the Docker network) can reach the SSP/scheduler
 /// via container names instead of `localhost`.
-fn apply_remote_functions(surreal_url: &str, mode: &DeployMode, versions: &ResolvedVersions, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
+fn apply_remote_functions(
+    surreal_url: &str,
+    mode: &DeployMode,
+    versions: &ResolvedVersions,
+    resolved_surreal: &ResolvedSurrealDb,
+) -> Result<()> {
     let endpoint = surreal_to_target_endpoint(mode, versions);
     let secret = "mysecret";
 
@@ -1131,7 +1332,9 @@ fn apply_remote_functions(surreal_url: &str, mode: &DeployMode, versions: &Resol
         "root",
     );
 
-    client.execute(&functions_sql).context("Failed to apply remote functions")?;
+    client
+        .execute(&functions_sql)
+        .context("Failed to apply remote functions")?;
     println!("{} Remote functions applied → {}", PREFIX, endpoint);
     Ok(())
 }
@@ -1175,11 +1378,23 @@ impl LogTailGuard {
     fn poll(&mut self) -> Liveness {
         match self.0 {
             Some(ref mut child) => match child.try_wait() {
-                Ok(None) => Liveness { alive: true, exit_code: None },
-                Ok(Some(status)) => Liveness { alive: false, exit_code: status.code() },
-                Err(_) => Liveness { alive: false, exit_code: None },
+                Ok(None) => Liveness {
+                    alive: true,
+                    exit_code: None,
+                },
+                Ok(Some(status)) => Liveness {
+                    alive: false,
+                    exit_code: status.code(),
+                },
+                Err(_) => Liveness {
+                    alive: false,
+                    exit_code: None,
+                },
             },
-            None => Liveness { alive: false, exit_code: None },
+            None => Liveness {
+                alive: false,
+                exit_code: None,
+            },
         }
     }
 }
@@ -1264,23 +1479,38 @@ fn start_scheduler(spec: &SchedulerLaunchSpec) -> Result<LogTailGuard> {
             let db_user = format!("SPKY_DB_USER={}", spec.db_user);
             let db_pass = format!("SPKY_DB_PASS={}", spec.db_pass);
             docker(&[
-                "run", "-d",
-                "--name", SCHEDULER_CONTAINER,
-                "--network", NETWORK_NAME,
-                "--network-alias", "scheduler",
-                "-p", &port_mapping,
-                "-v", &data_mount,
-                "-e", &log_env,
-                "-e", &db_url,
-                "-e", &db_ws,
-                "-e", &ns,
-                "-e", &db_name,
-                "-e", &db_user,
-                "-e", &db_pass,
-                "-e", "SPKY_AUTH_SECRET=mysecret",
+                "run",
+                "-d",
+                "--name",
+                SCHEDULER_CONTAINER,
+                "--network",
+                NETWORK_NAME,
+                "--network-alias",
+                "scheduler",
+                "-p",
+                &port_mapping,
+                "-v",
+                &data_mount,
+                "-e",
+                &log_env,
+                "-e",
+                &db_url,
+                "-e",
+                &db_ws,
+                "-e",
+                &ns,
+                "-e",
+                &db_name,
+                "-e",
+                &db_user,
+                "-e",
+                &db_pass,
+                "-e",
+                "SPKY_AUTH_SECRET=mysecret",
                 // Default 300s makes records take 5 minutes to land in the
                 // replica/SSP, unusable in dev.
-                "-e", "SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS=2",
+                "-e",
+                "SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS=2",
                 image,
             ])?;
             Ok(spawn_log_tail(SCHEDULER_CONTAINER, "scheduler"))
@@ -1292,7 +1522,11 @@ fn start_scheduler(spec: &SchedulerLaunchSpec) -> Result<LogTailGuard> {
                     binary.display()
                 );
             }
-            println!("{} Starting scheduler (host process: {})...", PREFIX, binary.display());
+            println!(
+                "{} Starting scheduler (host process: {})...",
+                PREFIX,
+                binary.display()
+            );
             let prefix = format!("{}[scheduler]{}", infra_color("scheduler"), ANSI_RESET);
             let mut cmd = Command::new(binary);
             // The scheduler defaults `replica_db_path: ./data/replica` and
@@ -1336,22 +1570,38 @@ fn start_ssp(spec: &SspLaunchSpec) -> Result<LogTailGuard> {
             let advertise = format!("SPKY_SSP_ADVERTISE_ADDR={}", spec.advertise);
 
             let mut args: Vec<String> = vec![
-                "run".into(), "-d".into(),
-                "--name".into(), SSP_CONTAINER.into(),
-                "--network".into(), NETWORK_NAME.into(),
-                "--network-alias".into(), "ssp".into(),
-                "-p".into(), port_mapping,
-                "-e".into(), log_env,
-                "-e".into(), db_url,
-                "-e".into(), db_ws,
-                "-e".into(), ns,
-                "-e".into(), db_name,
-                "-e".into(), db_user,
-                "-e".into(), db_pass,
-                "-e".into(), "SPKY_AUTH_SECRET=mysecret".into(),
-                "-e".into(), job_config,
-                "-e".into(), ref_mode,
-                "-e".into(), anon_live,
+                "run".into(),
+                "-d".into(),
+                "--name".into(),
+                SSP_CONTAINER.into(),
+                "--network".into(),
+                NETWORK_NAME.into(),
+                "--network-alias".into(),
+                "ssp".into(),
+                "-p".into(),
+                port_mapping,
+                "-e".into(),
+                log_env,
+                "-e".into(),
+                db_url,
+                "-e".into(),
+                db_ws,
+                "-e".into(),
+                ns,
+                "-e".into(),
+                db_name,
+                "-e".into(),
+                db_user,
+                "-e".into(),
+                db_pass,
+                "-e".into(),
+                "SPKY_AUTH_SECRET=mysecret".into(),
+                "-e".into(),
+                job_config,
+                "-e".into(),
+                ref_mode,
+                "-e".into(),
+                anon_live,
             ];
             if spec.cluster {
                 args.push("-e".into());
@@ -1376,7 +1626,11 @@ fn start_ssp(spec: &SspLaunchSpec) -> Result<LogTailGuard> {
                     binary.display()
                 );
             }
-            println!("{} Starting SSP (host process: {})...", PREFIX, binary.display());
+            println!(
+                "{} Starting SSP (host process: {})...",
+                PREFIX,
+                binary.display()
+            );
             let prefix = format!("{}[ssp]{}", infra_color("ssp"), ANSI_RESET);
             let mut cmd = Command::new(binary);
             cmd.current_dir(&spec.data_dir);
@@ -1506,7 +1760,10 @@ impl RestartPolicy {
         // never count toward the crash cap. A small fixed backoff still applies
         // (via `last_restart`, leaving `backoff` at its current value) so a tight
         // resync loop can't spin the CPU, but it can never `GaveUp`.
-        if exit_code.map(|c| INTENTIONAL_EXIT_CODES.contains(&c)).unwrap_or(false) {
+        if exit_code
+            .map(|c| INTENTIONAL_EXIT_CODES.contains(&c))
+            .unwrap_or(false)
+        {
             self.intentional_restarts += 1;
             self.last_restart = Some(now);
             return SupervisorAction::RestartIntentional;
@@ -1546,9 +1803,15 @@ impl SupervisedService {
             // Docker: the guard tails logs; real liveness is the container.
             Box::new(move |_guard| {
                 if is_container_running(container) {
-                    Liveness { alive: true, exit_code: None }
+                    Liveness {
+                        alive: true,
+                        exit_code: None,
+                    }
                 } else {
-                    Liveness { alive: false, exit_code: container_exit_code(container) }
+                    Liveness {
+                        alive: false,
+                        exit_code: container_exit_code(container),
+                    }
                 }
             })
         } else {
@@ -1632,7 +1895,10 @@ mod supervisor_tests {
         let mut p = RestartPolicy::new(base);
 
         // Crash at t=10 → immediate restart, backoff doubles to 2s.
-        assert_eq!(p.tick(at(base, 10), false, Some(1)), SupervisorAction::Restart);
+        assert_eq!(
+            p.tick(at(base, 10), false, Some(1)),
+            SupervisorAction::Restart
+        );
         assert_eq!(p.consecutive_restarts, 1);
         assert_eq!(p.backoff, Duration::from_secs(2));
 
@@ -1640,7 +1906,10 @@ mod supervisor_tests {
         assert_eq!(p.tick(at(base, 11), true, None), SupervisorAction::None);
 
         // Still up past the reset window → backoff + counter cleared.
-        assert_eq!(p.tick(at(base, 11 + 61), true, None), SupervisorAction::None);
+        assert_eq!(
+            p.tick(at(base, 11 + 61), true, None),
+            SupervisorAction::None
+        );
         assert_eq!(p.backoff, RESTART_BACKOFF_INITIAL);
         assert_eq!(p.consecutive_restarts, 0);
     }
@@ -1658,7 +1927,10 @@ mod supervisor_tests {
         assert_eq!(p.tick(at(base, 1), false, Some(1)), SupervisorAction::Wait);
 
         // 2s later, gate elapsed → restart again, backoff now 4s.
-        assert_eq!(p.tick(at(base, 2), false, Some(1)), SupervisorAction::Restart);
+        assert_eq!(
+            p.tick(at(base, 2), false, Some(1)),
+            SupervisorAction::Restart
+        );
         assert_eq!(p.backoff, Duration::from_secs(4));
     }
 
@@ -1684,7 +1956,10 @@ mod supervisor_tests {
         assert!(p.gave_up);
 
         // Once given up, it stays given up and issues no further restarts.
-        assert_eq!(p.tick(at(base, t + 1), false, Some(1)), SupervisorAction::None);
+        assert_eq!(
+            p.tick(at(base, t + 1), false, Some(1)),
+            SupervisorAction::None
+        );
     }
 
     #[test]
@@ -1707,7 +1982,10 @@ mod supervisor_tests {
             t += 1;
         }
         assert!(!p.gave_up);
-        assert_eq!(p.consecutive_restarts, 0, "intentional exits don't touch the crash counter");
+        assert_eq!(
+            p.consecutive_restarts, 0,
+            "intentional exits don't touch the crash counter"
+        );
         assert_eq!(p.intentional_restarts, restarts);
     }
 
@@ -1716,7 +1994,10 @@ mod supervisor_tests {
         // 3 = scheduler dropped us; same intentional treatment as 4.
         let base = Instant::now();
         let mut p = RestartPolicy::new(base);
-        assert_eq!(p.tick(base, false, Some(3)), SupervisorAction::RestartIntentional);
+        assert_eq!(
+            p.tick(base, false, Some(3)),
+            SupervisorAction::RestartIntentional
+        );
         assert_eq!(p.consecutive_restarts, 0);
     }
 
@@ -1735,7 +2016,10 @@ mod supervisor_tests {
         let base = Instant::now();
         let mut p = RestartPolicy::new(base);
 
-        assert_eq!(p.tick(at(base, 1), false, Some(4)), SupervisorAction::RestartIntentional);
+        assert_eq!(
+            p.tick(at(base, 1), false, Some(4)),
+            SupervisorAction::RestartIntentional
+        );
         assert_eq!(p.intentional_restarts, 1);
         // Comes up and stays up past the reset window → counter cleared.
         assert_eq!(p.tick(at(base, 2), true, None), SupervisorAction::None);
@@ -1766,7 +2050,9 @@ fn build_job_config_json(config: &Sp00kyConfig) -> String {
         };
         let auth_token = app.auth.as_ref().and_then(|a| a.token.clone());
         let timeout = app.deploy.as_ref().and_then(|d| d.timeout);
-        let timeout_overridable = app.deploy.as_ref()
+        let timeout_overridable = app
+            .deploy
+            .as_ref()
             .and_then(|d| d.timeout_overridable)
             .unwrap_or(false);
 
@@ -1783,11 +2069,20 @@ fn build_job_config_json(config: &Sp00kyConfig) -> String {
 }
 
 /// Build the auto-injected SPKY_* environment variables for dev mode.
-fn build_spky_dev_vars(resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<(String, String)> {
+fn build_spky_dev_vars(
+    resolved_surreal: &ResolvedSurrealDb,
+    mode: &DeployMode,
+) -> Vec<(String, String)> {
     let mut vars = vec![
         ("SPKY_ENV".into(), "dev".into()),
-        ("SPKY_DB_URL".into(), format!("http://localhost:{}", SURREAL_PORT)),
-        ("SPKY_DB_WS".into(), format!("ws://localhost:{}", SURREAL_PORT)),
+        (
+            "SPKY_DB_URL".into(),
+            format!("http://localhost:{}", SURREAL_PORT),
+        ),
+        (
+            "SPKY_DB_WS".into(),
+            format!("ws://localhost:{}", SURREAL_PORT),
+        ),
         ("SPKY_DB_NS".into(), resolved_surreal.namespace.clone()),
         ("SPKY_DB_NAME".into(), resolved_surreal.database.clone()),
         ("SPKY_DB_USER".into(), resolved_surreal.username.clone()),
@@ -1795,13 +2090,19 @@ fn build_spky_dev_vars(resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) 
         ("SPKY_SSP_ADDR".into(), format!("localhost:{}", SSP_PORT)),
     ];
     if *mode == DeployMode::Cluster {
-        vars.push(("SPKY_SCHEDULER_URL".into(), format!("http://localhost:{}", SCHEDULER_PORT)));
+        vars.push((
+            "SPKY_SCHEDULER_URL".into(),
+            format!("http://localhost:{}", SCHEDULER_PORT),
+        ));
     }
     vars
 }
 
 /// Merge SPKY auto-injected vars with user-provided vars. User vars take precedence.
-fn merge_spky_with_user_env(spky_vars: &[(String, String)], user_vars: Vec<(String, String)>) -> Vec<(String, String)> {
+fn merge_spky_with_user_env(
+    spky_vars: &[(String, String)],
+    user_vars: Vec<(String, String)>,
+) -> Vec<(String, String)> {
     let mut merged = std::collections::BTreeMap::new();
     // SPKY vars first (base)
     for (k, v) in spky_vars {
@@ -1828,14 +2129,16 @@ const APP_COLOR: &str = "\x1b[97m"; // bright white
 fn spawn_pnpm_dev_app(script: &str, envs: Vec<(String, String)>) -> LogTailGuard {
     let prefix = format!("{}[app]{}", APP_COLOR, ANSI_RESET);
     println!("{} Starting: pnpm {}", prefix, script);
-    spawn_prefixed(
-        Command::new("pnpm").args([script]).envs(envs),
-        &prefix,
-    )
+    spawn_prefixed(Command::new("pnpm").args([script]).envs(envs), &prefix)
 }
 
 /// Start the frontend app dev server from the apps config.
-fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> LogTailGuard {
+fn spawn_frontend_dev(
+    config: &Sp00kyConfig,
+    project_dir: &Path,
+    resolved_surreal: &ResolvedSurrealDb,
+    mode: &DeployMode,
+) -> LogTailGuard {
     if let Some((name, frontend)) = config.frontend().filter(|(_, fe)| fe.runs_in_dev()) {
         warn_frontend_vault_no_whitelist(name, &frontend.env);
         let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
@@ -1848,7 +2151,10 @@ fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path, resolved_surrea
                 BackendDevConfig::Command(cmd) => {
                     println!("{} Starting: {}", prefix, cmd);
                     return spawn_prefixed(
-                        Command::new("sh").args(["-c", cmd.as_str()]).current_dir(project_dir).envs(envs),
+                        Command::new("sh")
+                            .args(["-c", cmd.as_str()])
+                            .current_dir(project_dir)
+                            .envs(envs),
                         &prefix,
                     );
                 }
@@ -1856,20 +2162,37 @@ fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path, resolved_surrea
                     let cwd = resolve_workdir(project_dir, workdir.as_deref());
                     println!("{} Starting: pnpm run {}", prefix, script);
                     return spawn_prefixed(
-                        Command::new("pnpm").args(["run", script]).current_dir(cwd).envs(envs),
+                        Command::new("pnpm")
+                            .args(["run", script])
+                            .current_dir(cwd)
+                            .envs(envs),
                         &prefix,
                     );
                 }
-                BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, port }) => {
+                BackendDevConfig::Typed(BackendDevTypedConfig::Docker {
+                    file,
+                    workdir,
+                    port,
+                }) => {
                     let cwd = resolve_workdir(project_dir, workdir.as_deref());
                     println!("{} Building: docker build -f {}", prefix, file);
-                    return spawn_docker_dev(file, port.as_deref(), &envs, &cwd, "frontend", &prefix);
+                    return spawn_docker_dev(
+                        file,
+                        port.as_deref(),
+                        &envs,
+                        &cwd,
+                        "frontend",
+                        &prefix,
+                    );
                 }
                 BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir }) => {
                     let cwd = resolve_workdir(project_dir, workdir.as_deref());
                     println!("{} Starting: uv run {}", prefix, script);
                     return spawn_prefixed(
-                        Command::new("uv").args(["run", script]).current_dir(cwd).envs(envs),
+                        Command::new("uv")
+                            .args(["run", script])
+                            .current_dir(cwd)
+                            .envs(envs),
                         &prefix,
                     );
                 }
@@ -1884,12 +2207,20 @@ fn spawn_frontend_dev(config: &Sp00kyConfig, project_dir: &Path, resolved_surrea
 
 /// Apply the internal Sp00ky schema (meta tables + per-table events) so that
 /// record versioning and DBSP ingest work after migrations are applied.
-fn apply_internal_sp00ky_schema(surreal_url: &str, mode: &DeployMode, versions: &ResolvedVersions, resolved_surreal: &ResolvedSurrealDb) -> Result<()> {
+fn apply_internal_sp00ky_schema(
+    surreal_url: &str,
+    mode: &DeployMode,
+    versions: &ResolvedVersions,
+    resolved_surreal: &ResolvedSurrealDb,
+) -> Result<()> {
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
     let resolved = config.resolved_schema();
 
     if !resolved.schema.exists() {
-        println!("{} No schema file found at {:?}, skipping internal schema.", PREFIX, resolved.schema);
+        println!(
+            "{} No schema file found at {:?}, skipping internal schema.",
+            PREFIX, resolved.schema
+        );
         return Ok(());
     }
 
@@ -1925,20 +2256,25 @@ fn apply_internal_sp00ky_schema(surreal_url: &str, mode: &DeployMode, versions: 
 
 /// ANSI color codes cycled across backends for distinguishable output.
 const BACKEND_COLORS: &[&str] = &[
-    "\x1b[36m",  // cyan
-    "\x1b[33m",  // yellow
-    "\x1b[35m",  // magenta
-    "\x1b[32m",  // green
-    "\x1b[34m",  // blue
-    "\x1b[91m",  // bright red
-    "\x1b[96m",  // bright cyan
-    "\x1b[93m",  // bright yellow
-    "\x1b[95m",  // bright magenta
-    "\x1b[92m",  // bright green
+    "\x1b[36m", // cyan
+    "\x1b[33m", // yellow
+    "\x1b[35m", // magenta
+    "\x1b[32m", // green
+    "\x1b[34m", // blue
+    "\x1b[91m", // bright red
+    "\x1b[96m", // bright cyan
+    "\x1b[93m", // bright yellow
+    "\x1b[95m", // bright magenta
+    "\x1b[92m", // bright green
 ];
 const ANSI_RESET: &str = "\x1b[0m";
 
-fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<LogTailGuard> {
+fn spawn_backend_dev_commands(
+    config: &Sp00kyConfig,
+    project_dir: &Path,
+    resolved_surreal: &ResolvedSurrealDb,
+    mode: &DeployMode,
+) -> Vec<LogTailGuard> {
     let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
     let mut guards = Vec::new();
     let mut color_idx = 0;
@@ -1959,7 +2295,10 @@ fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolve
             BackendDevConfig::Command(cmd) => {
                 println!("{} Starting: {}", prefix, cmd);
                 guards.push(spawn_prefixed(
-                    Command::new("sh").args(["-c", cmd]).current_dir(project_dir).envs(envs),
+                    Command::new("sh")
+                        .args(["-c", cmd])
+                        .current_dir(project_dir)
+                        .envs(envs),
                     &prefix,
                 ));
             }
@@ -1967,20 +2306,37 @@ fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolve
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
                 println!("{} Starting: pnpm run {}", prefix, script);
                 guards.push(spawn_prefixed(
-                    Command::new("pnpm").args(["run", script]).current_dir(cwd).envs(envs),
+                    Command::new("pnpm")
+                        .args(["run", script])
+                        .current_dir(cwd)
+                        .envs(envs),
                     &prefix,
                 ));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, port }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Docker {
+                file,
+                workdir,
+                port,
+            }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
                 println!("{} Building: docker build -f {}", prefix, file);
-                guards.push(spawn_docker_dev(file, port.as_deref(), &envs, &cwd, name, &prefix));
+                guards.push(spawn_docker_dev(
+                    file,
+                    port.as_deref(),
+                    &envs,
+                    &cwd,
+                    name,
+                    &prefix,
+                ));
             }
             BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
                 println!("{} Starting: uv run {}", prefix, script);
                 guards.push(spawn_prefixed(
-                    Command::new("uv").args(["run", script]).current_dir(cwd).envs(envs),
+                    Command::new("uv")
+                        .args(["run", script])
+                        .current_dir(cwd)
+                        .envs(envs),
                     &prefix,
                 ));
             }
@@ -1995,15 +2351,22 @@ fn spawn_backend_dev_commands(config: &Sp00kyConfig, project_dir: &Path, resolve
 /// SIGKILLs the `docker run` client on Ctrl-C, but that neither stops the
 /// container nor triggers `--rm`; teardown of these containers happens in
 /// `cleanup_direct`, which sweeps every `sp00ky-dev-*` container.
-fn spawn_docker_app_devs(config: &Sp00kyConfig, project_dir: &Path, resolved_surreal: &ResolvedSurrealDb, mode: &DeployMode) -> Vec<LogTailGuard> {
+fn spawn_docker_app_devs(
+    config: &Sp00kyConfig,
+    project_dir: &Path,
+    resolved_surreal: &ResolvedSurrealDb,
+    mode: &DeployMode,
+) -> Vec<LogTailGuard> {
     use std::collections::BTreeMap;
     let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
     let mut guards = Vec::new();
     let mut color_idx = 0;
 
     // Dev-runnable docker apps, started in `dependsOn` order (validated acyclic).
-    let apps: BTreeMap<&str, &backend::AppConfig> =
-        config.docker_apps().filter(|(_, a)| a.runs_in_dev()).collect();
+    let apps: BTreeMap<&str, &backend::AppConfig> = config
+        .docker_apps()
+        .filter(|(_, a)| a.runs_in_dev())
+        .collect();
 
     for name in topo_order_docker(&apps) {
         let app = apps[name];
@@ -2033,10 +2396,14 @@ fn spawn_docker_app_devs(config: &Sp00kyConfig, project_dir: &Path, resolved_sur
         // Build the `docker run` argv (owned strings; passed as -e so they reach
         // the container, not the docker process).
         let mut args: Vec<String> = vec![
-            "run".into(), "--rm".into(),
-            "--name".into(), container.clone(),
-            "--network".into(), NETWORK_NAME.into(),
-            "--network-alias".into(), name.to_string(),
+            "run".into(),
+            "--rm".into(),
+            "--name".into(),
+            container.clone(),
+            "--network".into(),
+            NETWORK_NAME.into(),
+            "--network-alias".into(),
+            name.to_string(),
         ];
         for p in &app.ports {
             args.push("-p".into());
@@ -2059,11 +2426,13 @@ fn spawn_docker_app_devs(config: &Sp00kyConfig, project_dir: &Path, resolved_sur
             args.push(a.clone());
         }
 
-        println!("{} Starting: docker run {} {}", prefix, image, app.args.join(" "));
-        guards.push(spawn_prefixed(
-            Command::new("docker").args(&args),
-            &prefix,
-        ));
+        println!(
+            "{} Starting: docker run {} {}",
+            prefix,
+            image,
+            app.args.join(" ")
+        );
+        guards.push(spawn_prefixed(Command::new("docker").args(&args), &prefix));
     }
     guards
 }
@@ -2089,8 +2458,11 @@ fn topo_order_docker<'a>(
             }
         }
     }
-    let mut q: VecDeque<&str> =
-        indegree.iter().filter(|(_, d)| **d == 0).map(|(n, _)| *n).collect();
+    let mut q: VecDeque<&str> = indegree
+        .iter()
+        .filter(|(_, d)| **d == 0)
+        .map(|(n, _)| *n)
+        .collect();
     let mut order = Vec::new();
     while let Some(n) = q.pop_front() {
         order.push(n);
@@ -2200,19 +2572,21 @@ fn resolve_env_source(source: &backend::EnvSource, project_dir: &Path) -> Vec<(S
             }
             envs
         }
-        backend::EnvSource::Map(map) => {
-            map.iter()
-                .map(|(k, v)| {
-                    let val = match v {
-                        serde_yaml::Value::String(s) => s.clone(),
-                        serde_yaml::Value::Number(n) => n.to_string(),
-                        serde_yaml::Value::Bool(b) => b.to_string(),
-                        other => serde_yaml::to_string(other).unwrap_or_default().trim().to_string(),
-                    };
-                    (k.clone(), val)
-                })
-                .collect()
-        }
+        backend::EnvSource::Map(map) => map
+            .iter()
+            .map(|(k, v)| {
+                let val = match v {
+                    serde_yaml::Value::String(s) => s.clone(),
+                    serde_yaml::Value::Number(n) => n.to_string(),
+                    serde_yaml::Value::Bool(b) => b.to_string(),
+                    other => serde_yaml::to_string(other)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                };
+                (k.clone(), val)
+            })
+            .collect(),
     }
 }
 
@@ -2233,7 +2607,10 @@ fn resolve_env_entry(entry: &backend::EnvEntry, project_dir: &Path) -> Vec<(Stri
 }
 
 /// Resolve the full EnvConfig for dev mode, merging sources in order.
-pub fn resolve_env_for_dev(env: &Option<backend::EnvConfig>, project_dir: &Path) -> Vec<(String, String)> {
+pub fn resolve_env_for_dev(
+    env: &Option<backend::EnvConfig>,
+    project_dir: &Path,
+) -> Vec<(String, String)> {
     let env = match env {
         Some(e) => e,
         None => return Vec::new(),
@@ -2249,12 +2626,10 @@ pub fn resolve_env_for_dev(env: &Option<backend::EnvConfig>, project_dir: &Path)
             }
             merged.into_iter().collect()
         }
-        backend::EnvConfig::PerEnvironment { dev, .. } => {
-            match dev {
-                Some(entry) => resolve_env_entry(entry, project_dir),
-                None => Vec::new(),
-            }
-        }
+        backend::EnvConfig::PerEnvironment { dev, .. } => match dev {
+            Some(entry) => resolve_env_entry(entry, project_dir),
+            None => Vec::new(),
+        },
     }
 }
 
@@ -2300,7 +2675,14 @@ fn spawn_prefixed(cmd: &mut Command, prefix: &str) -> LogTailGuard {
     }
 }
 
-fn spawn_docker_dev(file: &str, port: Option<&str>, envs: &[(String, String)], cwd: &Path, name: &str, prefix: &str) -> LogTailGuard {
+fn spawn_docker_dev(
+    file: &str,
+    port: Option<&str>,
+    envs: &[(String, String)],
+    cwd: &Path,
+    name: &str,
+    prefix: &str,
+) -> LogTailGuard {
     let tag = format!("sp00ky-dev-{}", name);
     let container_name = format!("sp00ky-dev-app-{}", name);
 
@@ -2321,7 +2703,10 @@ fn spawn_docker_dev(file: &str, port: Option<&str>, envs: &[(String, String)], c
                 eprintln!("{} {}", prefix, line);
             }
             if !output.status.success() {
-                eprintln!("{} Warning: docker build exited with {}", prefix, output.status);
+                eprintln!(
+                    "{} Warning: docker build exited with {}",
+                    prefix, output.status
+                );
                 return LogTailGuard(None);
             }
         }
@@ -2332,13 +2717,18 @@ fn spawn_docker_dev(file: &str, port: Option<&str>, envs: &[(String, String)], c
     }
 
     // Remove any stale container with the same name
-    let _ = Command::new("docker").args(["rm", "-f", &container_name]).output();
+    let _ = Command::new("docker")
+        .args(["rm", "-f", &container_name])
+        .output();
 
     // Run the container
     let mut args = vec![
-        "run".to_string(), "--rm".to_string(),
-        "--name".to_string(), container_name,
-        "--network".to_string(), NETWORK_NAME.to_string(),
+        "run".to_string(),
+        "--rm".to_string(),
+        "--name".to_string(),
+        container_name,
+        "--network".to_string(),
+        NETWORK_NAME.to_string(),
     ];
 
     if let Some(p) = port {
@@ -2354,21 +2744,19 @@ fn spawn_docker_dev(file: &str, port: Option<&str>, envs: &[(String, String)], c
 
     args.push(tag);
 
-    spawn_prefixed(
-        Command::new("docker").args(&args).current_dir(cwd),
-        prefix,
-    )
+    spawn_prefixed(Command::new("docker").args(&args).current_dir(cwd), prefix)
 }
 
 /// Fixed colors for infrastructure services.
 const INFRA_COLORS: &[(&str, &str)] = &[
-    ("surrealdb",  "\x1b[38;5;208m"), // orange
-    ("ssp",        "\x1b[38;5;75m"),  // light blue
-    ("scheduler",  "\x1b[38;5;213m"), // pink
+    ("surrealdb", "\x1b[38;5;208m"), // orange
+    ("ssp", "\x1b[38;5;75m"),        // light blue
+    ("scheduler", "\x1b[38;5;213m"), // pink
 ];
 
 fn infra_color(label: &str) -> &'static str {
-    INFRA_COLORS.iter()
+    INFRA_COLORS
+        .iter()
         .find(|(name, _)| *name == label)
         .map(|(_, color)| *color)
         .unwrap_or("\x1b[37m")

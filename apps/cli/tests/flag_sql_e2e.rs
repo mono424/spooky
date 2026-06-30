@@ -104,8 +104,20 @@ fn flag_set_sql_assigns_matched_users() {
     remove_container(); // clear any stale container from a previous run
     let started = Command::new("docker")
         .args([
-            "run", "-d", "--name", NAME, "-p", &format!("{PORT}:8000"), IMAGE, "start", "--user",
-            "root", "--pass", "root", "--allow-all", "memory",
+            "run",
+            "-d",
+            "--name",
+            NAME,
+            "-p",
+            &format!("{PORT}:8000"),
+            IMAGE,
+            "start",
+            "--user",
+            "root",
+            "--pass",
+            "root",
+            "--allow-all",
+            "memory",
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -125,13 +137,19 @@ fn flag_set_sql_assigns_matched_users() {
     }
 
     // Seed: 3 adults (age > 18) and 2 non-adults.
-    sql("CREATE user:adult1 SET age = 25; CREATE user:adult2 SET age = 40; \
+    sql(
+        "CREATE user:adult1 SET age = 25; CREATE user:adult2 SET age = 40; \
          CREATE user:adult3 SET age = 19; CREATE user:kid1 SET age = 10; \
-         CREATE user:kid2 SET age = 18;");
+         CREATE user:kid2 SET age = 18;",
+    );
 
     // Create the flag (materializes every user to the default 'off').
     let out = spky(&["flag", "create", "demo"]);
-    assert!(out.status.success(), "flag create failed: {}", combined(&out));
+    assert!(
+        out.status.success(),
+        "flag create failed: {}",
+        combined(&out)
+    );
 
     // Assign by SQL: the preview must report the matched count, then apply.
     let out = spky(&[
@@ -144,7 +162,11 @@ fn flag_set_sql_assigns_matched_users() {
         "SELECT id FROM user WHERE age > 18",
         "--yes",
     ]);
-    assert!(out.status.success(), "flag set --sql failed: {}", combined(&out));
+    assert!(
+        out.status.success(),
+        "flag set --sql failed: {}",
+        combined(&out)
+    );
     assert!(
         combined(&out).contains("Matched 3 user(s)"),
         "expected a 3-user preview, got: {}",
@@ -152,10 +174,8 @@ fn flag_set_sql_assigns_matched_users() {
     );
 
     // The three adults are 'on'; the two kids are not.
-    let on = sql(
-        "SELECT VALUE user FROM _00_user_feature \
-         WHERE key = 'demo' AND variant = 'on' ORDER BY user;",
-    );
+    let on = sql("SELECT VALUE user FROM _00_user_feature \
+         WHERE key = 'demo' AND variant = 'on' ORDER BY user;");
     for u in ["user:adult1", "user:adult2", "user:adult3"] {
         assert!(on.contains(u), "expected {u} to be 'on': {on}");
     }
@@ -164,10 +184,8 @@ fn flag_set_sql_assigns_matched_users() {
     }
 
     // The two kids remain 'off'.
-    let off = sql(
-        "SELECT VALUE user FROM _00_user_feature \
-         WHERE key = 'demo' AND variant = 'off' ORDER BY user;",
-    );
+    let off = sql("SELECT VALUE user FROM _00_user_feature \
+         WHERE key = 'demo' AND variant = 'off' ORDER BY user;");
     for u in ["user:kid1", "user:kid2"] {
         assert!(off.contains(u), "expected {u} to be 'off': {off}");
     }
@@ -175,8 +193,14 @@ fn flag_set_sql_assigns_matched_users() {
     // The assignment is stored as a durable allowlist rule (so it survives the
     // re-materialization that other rule changes trigger), not a one-shot write.
     let rule = sql("SELECT VALUE rules FROM _00_feature_flag WHERE key = 'demo';");
-    assert!(rule.contains(r#""kind":"allowlist""#), "rule not an allowlist: {rule}");
-    assert!(rule.contains(r#""variant":"on""#), "rule variant wrong: {rule}");
+    assert!(
+        rule.contains(r#""kind":"allowlist""#),
+        "rule not an allowlist: {rule}"
+    );
+    assert!(
+        rule.contains(r#""variant":"on""#),
+        "rule variant wrong: {rule}"
+    );
     for u in ["user:adult1", "user:adult2", "user:adult3"] {
         assert!(rule.contains(u), "rule missing {u}: {rule}");
     }
@@ -217,7 +241,14 @@ fn flag_set_sql_assigns_matched_users() {
 
     // Non-SELECT input is rejected before anything runs.
     let out = spky(&[
-        "flag", "set", "demo", "--variant", "on", "--sql", "DELETE user", "--yes",
+        "flag",
+        "set",
+        "demo",
+        "--variant",
+        "on",
+        "--sql",
+        "DELETE user",
+        "--yes",
     ]);
     assert!(
         combined(&out).contains("must be a SELECT"),

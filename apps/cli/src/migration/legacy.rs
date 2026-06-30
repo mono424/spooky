@@ -65,9 +65,7 @@ impl MigrationEngine for LegacyEngine {
             // path so unresolved `{{KEY}}` placeholders error loudly — even if the
             // vault load returned an empty set — instead of writing a literal
             // `{{...}}` (e.g. a broken JWT signing key).
-            Some(secrets) => {
-                migrate::apply_with_secrets(&client, &self.migrations_dir, secrets)
-            }
+            Some(secrets) => migrate::apply_with_secrets(&client, &self.migrations_dir, secrets),
             // No injection (ephemeral schema-diff replay): apply verbatim, leaving
             // `{{...}}` literal so the placeholder never reads as schema drift.
             None => migrate::apply(&client, &self.migrations_dir),

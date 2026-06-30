@@ -15,7 +15,12 @@ const OPTIMISTIC_MUTATION: &str = include_str!("../templates/cookbook/optimistic
 const CRDT_TEXT_FIELD: &str = include_str!("../templates/cookbook/crdt-text-field.tsx");
 
 /// Render a recipe and either print to stdout or write to `out`.
-pub fn run(recipe: &str, table: Option<&str>, field: Option<&str>, out: Option<&Path>) -> Result<()> {
+pub fn run(
+    recipe: &str,
+    table: Option<&str>,
+    field: Option<&str>,
+    out: Option<&Path>,
+) -> Result<()> {
     if recipe == "list" || recipe == "index" {
         print_or_write(INDEX_MD, out)?;
         return Ok(());
@@ -31,9 +36,8 @@ pub fn run(recipe: &str, table: Option<&str>, field: Option<&str>, out: Option<&
         ),
     };
 
-    let table = table.ok_or_else(|| {
-        anyhow::anyhow!("recipe `{}` requires --table <name>", recipe)
-    })?;
+    let table =
+        table.ok_or_else(|| anyhow::anyhow!("recipe `{}` requires --table <name>", recipe))?;
 
     if recipe == "crdt-text-field" && field.is_none() {
         bail!("recipe `crdt-text-field` requires --field <name>");

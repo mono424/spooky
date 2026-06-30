@@ -45,7 +45,12 @@ pub struct Check {
 
 impl Check {
     fn pass(name: &'static str, detail: impl Into<Option<String>>) -> Self {
-        Self { name, severity: Severity::Pass, fix: None, detail: detail.into() }
+        Self {
+            name,
+            severity: Severity::Pass,
+            fix: None,
+            detail: detail.into(),
+        }
     }
     fn fail(name: &'static str, fix: impl Into<String>, detail: impl Into<String>) -> Self {
         Self {
@@ -166,10 +171,7 @@ fn check_schema_source(cfg: &Sp00kyConfig, project_dir: &Path) -> Check {
     let resolved = crate::backend::ResolvedSchema::from_config(&cfg.schema);
     let schema_path = project_dir.join(&resolved.schema);
     if schema_path.exists() {
-        Check::pass(
-            "schema-source",
-            Some(format!("{}", schema_path.display())),
-        )
+        Check::pass("schema-source", Some(format!("{}", schema_path.display())))
     } else {
         Check::fail(
             "schema-source",
@@ -238,12 +240,7 @@ fn check_migrations_dir(cfg: &Sp00kyConfig, project_dir: &Path) -> Check {
         let count = fs::read_dir(&path)
             .map(|d| {
                 d.filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .map(|x| x == "surql")
-                            .unwrap_or(false)
-                    })
+                    .filter(|e| e.path().extension().map(|x| x == "surql").unwrap_or(false))
                     .count()
             })
             .unwrap_or(0);
@@ -288,7 +285,9 @@ fn newest_surql_mtime(dir: &Path) -> Option<SystemTime> {
 }
 
 fn walk(dir: &Path, visit: &mut dyn FnMut(&Path)) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -320,8 +319,14 @@ fn print_human(checks: &[Check], ok: bool) {
         }
     }
     println!();
-    let fails = checks.iter().filter(|c| c.severity == Severity::Fail).count();
-    let warns = checks.iter().filter(|c| c.severity == Severity::Warn).count();
+    let fails = checks
+        .iter()
+        .filter(|c| c.severity == Severity::Fail)
+        .count();
+    let warns = checks
+        .iter()
+        .filter(|c| c.severity == Severity::Warn)
+        .count();
     if ok && warns == 0 {
         println!("{} OK", PREFIX);
     } else if fails > 0 {

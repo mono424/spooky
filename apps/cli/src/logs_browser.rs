@@ -237,7 +237,9 @@ impl App {
         if self.loading_history || self.no_more_older {
             return;
         }
-        let Some(current_oldest) = self.oldest_loaded else { return; };
+        let Some(current_oldest) = self.oldest_loaded else {
+            return;
+        };
         // Ask for the hour before the oldest line we currently have. If the
         // server returns nothing, we just stop paginating older.
         let next_since = current_oldest - chrono::Duration::hours(1);
@@ -290,18 +292,12 @@ impl App {
                     let current_offset = self.list_state.offset();
                     entries.sort_by_key(|e| e.ts().unwrap_or_else(Utc::now));
                     if let Some(first) = entries.first().and_then(|e| e.ts()) {
-                        self.oldest_loaded = Some(
-                            self.oldest_loaded
-                                .map(|o| o.min(first))
-                                .unwrap_or(first),
-                        );
+                        self.oldest_loaded =
+                            Some(self.oldest_loaded.map(|o| o.min(first)).unwrap_or(first));
                     }
                     if let Some(last) = entries.last().and_then(|e| e.ts()) {
-                        self.newest_loaded = Some(
-                            self.newest_loaded
-                                .map(|n| n.max(last))
-                                .unwrap_or(last),
-                        );
+                        self.newest_loaded =
+                            Some(self.newest_loaded.map(|n| n.max(last)).unwrap_or(last));
                     }
                     let grew_by = entries.len();
                     for e in entries.into_iter().rev() {
@@ -325,9 +321,8 @@ impl App {
                     let was_at_bottom = self.is_at_bottom();
                     for e in entries {
                         if let Some(ts) = e.ts() {
-                            self.newest_loaded = Some(
-                                self.newest_loaded.map(|n| n.max(ts)).unwrap_or(ts),
-                            );
+                            self.newest_loaded =
+                                Some(self.newest_loaded.map(|n| n.max(ts)).unwrap_or(ts));
                             if self.oldest_loaded.is_none() {
                                 self.oldest_loaded = Some(ts);
                             }
@@ -502,14 +497,18 @@ impl App {
         if self.no_more_older {
             return;
         }
-        let Some(selected) = self.list_state.selected() else { return; };
+        let Some(selected) = self.list_state.selected() else {
+            return;
+        };
         if selected < SCROLL_BACK_THRESHOLD {
             self.start_scroll_back_fetch();
         }
     }
 
     fn jump_to_match(&mut self, direction: isize) {
-        let Some(re) = self.search_regex.clone() else { return; };
+        let Some(re) = self.search_regex.clone() else {
+            return;
+        };
         if self.entries.is_empty() {
             return;
         }
@@ -570,11 +569,7 @@ impl App {
             _ => "all".to_string(),
         };
         let range = match self.state.window_until {
-            Some(u) => format!(
-                "{} → {}",
-                short_ts(self.state.window_since),
-                short_ts(u)
-            ),
+            Some(u) => format!("{} → {}", short_ts(self.state.window_since), short_ts(u)),
             None => format!("{} → now", short_ts(self.state.window_since)),
         };
         let search = match (&self.search_regex, &self.search_error) {
@@ -638,12 +633,11 @@ impl App {
             .map(|e| ListItem::new(format_entry_line(e, self.search_regex.as_ref())))
             .collect();
 
-        let list = List::new(items)
-            .highlight_style(
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            );
+        let list = List::new(items).highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
 
         frame.render_stateful_widget(list, area, &mut self.list_state);
     }
@@ -868,20 +862,28 @@ fn spawn_follow_stream(
                     std::mem::take(&mut *b)
                 };
                 if !drained.is_empty() {
-                    if flush_tx.send(FetchMsg::Appended { entries: drained }).is_err() {
+                    if flush_tx
+                        .send(FetchMsg::Appended { entries: drained })
+                        .is_err()
+                    {
                         break;
                     }
                 }
             }
         });
 
-        let result = stream_entries(&url, &auth, |entry| {
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                return StreamAction::Stop;
-            }
-            buffer.lock().unwrap().push(entry);
-            StreamAction::Continue
-        }, None);
+        let result = stream_entries(
+            &url,
+            &auth,
+            |entry| {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return StreamAction::Stop;
+                }
+                buffer.lock().unwrap().push(entry);
+                StreamAction::Continue
+            },
+            None,
+        );
 
         cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = flusher.join();
@@ -944,7 +946,10 @@ where
             Ok(l) => l,
             Err(e) => return Err(format!("read error: {}", e)),
         };
-        if let Some(data) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+        if let Some(data) = line
+            .strip_prefix("data: ")
+            .or_else(|| line.strip_prefix("data:"))
+        {
             if let Some(entry) = crate::cloud::parse_log_line(data) {
                 last_entry = Instant::now();
                 match on_entry(entry) {
@@ -1001,7 +1006,13 @@ fn build_logs_url(
 
     let qs: Vec<String> = params
         .iter()
-        .map(|(k, v)| format!("{}={}", crate::cloud::urlencode(k), crate::cloud::urlencode(v)))
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                crate::cloud::urlencode(k),
+                crate::cloud::urlencode(v)
+            )
+        })
         .collect();
 
     if qs.is_empty() {
@@ -1040,4 +1051,3 @@ pub fn launch(
     })
     .context("interactive log browser failed")
 }
-

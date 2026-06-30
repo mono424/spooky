@@ -57,13 +57,7 @@ pub struct SurrealClient {
 }
 
 impl SurrealClient {
-    pub fn new(
-        url: &str,
-        namespace: &str,
-        database: &str,
-        username: &str,
-        password: &str,
-    ) -> Self {
+    pub fn new(url: &str, namespace: &str, database: &str, username: &str, password: &str) -> Self {
         let credentials = format!("{}:{}", username, password);
         let auth_header = format!(
             "Basic {}",
@@ -105,9 +99,7 @@ fn send_raw_sql_unchecked(
 ) -> Result<Vec<SurrealResponse>> {
     // Bound every call: a connect timeout plus an overall request deadline so a
     // stalled response surfaces as an error instead of blocking forever.
-    let agent = ureq::builder()
-        .timeout_connect(CONNECT_TIMEOUT)
-        .build();
+    let agent = ureq::builder().timeout_connect(CONNECT_TIMEOUT).build();
     let mut req = agent
         .post(url)
         .timeout(request_timeout())
@@ -293,9 +285,9 @@ impl MigrationDB for SurrealClient {
     }
 
     fn get_applied_migrations(&self) -> Result<Vec<AppliedMigration>> {
-        let responses = match self
-            .execute("SELECT version, name, applied_at, checksum FROM _00_migrations ORDER BY version ASC;")
-        {
+        let responses = match self.execute(
+            "SELECT version, name, applied_at, checksum FROM _00_migrations ORDER BY version ASC;",
+        ) {
             Ok(r) => r,
             Err(e) => {
                 // SurrealDB 3.x returns error for non-existent tables — treat as empty
@@ -324,8 +316,7 @@ impl MigrationDB for SurrealClient {
             "CREATE _00_migrations SET version = '{}', name = '{}', checksum = '{}';",
             version, name, checksum
         );
-        self.execute(&query)
-            .context("Failed to record migration")?;
+        self.execute(&query).context("Failed to record migration")?;
         Ok(())
     }
 
@@ -359,13 +350,7 @@ mod tests {
 
     #[test]
     fn test_new_encodes_special_chars_in_credentials() {
-        let client = SurrealClient::new(
-            "http://localhost:8000",
-            "ns",
-            "db",
-            "admin",
-            "p@ss:w0rd!",
-        );
+        let client = SurrealClient::new("http://localhost:8000", "ns", "db", "admin", "p@ss:w0rd!");
         let expected = format!(
             "Basic {}",
             base64::engine::general_purpose::STANDARD.encode("admin:p@ss:w0rd!")
@@ -375,37 +360,19 @@ mod tests {
 
     #[test]
     fn test_new_trims_trailing_slash_from_url() {
-        let client = SurrealClient::new(
-            "http://localhost:8000/",
-            "ns",
-            "db",
-            "root",
-            "root",
-        );
+        let client = SurrealClient::new("http://localhost:8000/", "ns", "db", "root", "root");
         assert_eq!(client.url, "http://localhost:8000");
     }
 
     #[test]
     fn test_new_trims_multiple_trailing_slashes() {
-        let client = SurrealClient::new(
-            "http://localhost:8000///",
-            "ns",
-            "db",
-            "root",
-            "root",
-        );
+        let client = SurrealClient::new("http://localhost:8000///", "ns", "db", "root", "root");
         assert_eq!(client.url, "http://localhost:8000");
     }
 
     #[test]
     fn test_new_preserves_url_without_trailing_slash() {
-        let client = SurrealClient::new(
-            "http://localhost:8000",
-            "ns",
-            "db",
-            "root",
-            "root",
-        );
+        let client = SurrealClient::new("http://localhost:8000", "ns", "db", "root", "root");
         assert_eq!(client.url, "http://localhost:8000");
     }
 

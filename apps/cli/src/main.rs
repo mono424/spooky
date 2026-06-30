@@ -871,13 +871,31 @@ enum BucketCommands {
         #[arg(long)]
         extensions: Option<String>,
 
-        /// Storage backend
-        #[arg(long, default_value = "memory")]
-        backend: String,
+        /// Storage backend (default: persistent file backend when
+        /// deployment.storage.sizeGB is set, otherwise "memory")
+        #[arg(long)]
+        backend: Option<String>,
 
         /// Enable per-user path isolation
         #[arg(long)]
         path_prefix_auth: Option<bool>,
+
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+
+        /// Directory for bucket .surql files
+        #[arg(long)]
+        buckets_dir: Option<PathBuf>,
+    },
+    /// Switch a bucket's storage backend (memory | persistent)
+    Backend {
+        /// Bucket name (snake_case)
+        name: String,
+
+        /// Target backend: memory | persistent (prompted if omitted)
+        #[arg(value_parser = ["memory", "persistent"])]
+        target: Option<String>,
 
         /// Path to sp00ky.yml config file
         #[arg(long)]
@@ -1173,7 +1191,10 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
         if !nosync.is_empty() {
             if let Some(target) = define_target_table(trimmed) {
                 if nosync.contains(target.as_str()) {
-                    println!("  → Removing @nosync table target '{}' from client schema", target);
+                    println!(
+                        "  → Removing @nosync table target '{}' from client schema",
+                        target
+                    );
                     while i < lines.len() {
                         if let Some(idx) = lines[i].find(';') {
                             let after_semicolon = &lines[i][idx + 1..];
@@ -1270,12 +1291,18 @@ fn make_field_nullable(line: &str) -> String {
         // `TYPE bool DEFAULT false PERMISSIONS ...` would stop at PERMISSIONS
         // and pull `DEFAULT false` into the type, yielding the invalid
         // `option<bool DEFAULT false>`.
-        let type_end = [" ASSERT ", " VALUE ", " PERMISSIONS ", " DEFAULT ", " READONLY "]
-            .iter()
-            .filter_map(|kw| after_type.find(kw))
-            .chain(after_type.find(';'))
-            .min()
-            .unwrap_or(after_type.len());
+        let type_end = [
+            " ASSERT ",
+            " VALUE ",
+            " PERMISSIONS ",
+            " DEFAULT ",
+            " READONLY ",
+        ]
+        .iter()
+        .filter_map(|kw| after_type.find(kw))
+        .chain(after_type.find(';'))
+        .min()
+        .unwrap_or(after_type.len());
 
         let type_str = after_type[..type_end].trim();
         let rest = &after_type[type_end..];
@@ -1525,12 +1552,11 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             );
 
             if !yes && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                let confirmed = inquire::Confirm::new(
-                    "Apply pending migrations to this PRODUCTION database?",
-                )
-                .with_default(false)
-                .prompt()
-                .unwrap_or(false);
+                let confirmed =
+                    inquire::Confirm::new("Apply pending migrations to this PRODUCTION database?")
+                        .with_default(false)
+                        .prompt()
+                        .unwrap_or(false);
                 if !confirmed {
                     println!("Aborted.");
                     return Ok(());
@@ -1717,6 +1743,7 @@ fn handle_bucket(action: BucketCommands) -> Result<()> {
             let sp00ky_config = backend::load_config(&resolved_config);
             let resolved_buckets =
                 buckets_dir.unwrap_or(sp00ky_config.resolved_schema().buckets_dir);
+            let storage_enabled = sp00ky_config.bucket_storage_gb().is_some();
 
             bucket::add(
                 name,
@@ -1724,10 +1751,24 @@ fn handle_bucket(action: BucketCommands) -> Result<()> {
                 max_size,
                 extensions,
                 backend,
+                storage_enabled,
                 path_prefix_auth,
                 resolved_config,
                 resolved_buckets,
             )
+        }
+        BucketCommands::Backend {
+            name,
+            target,
+            config,
+            buckets_dir,
+        } => {
+            let resolved_config = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+            let sp00ky_config = backend::load_config(&resolved_config);
+            let resolved_buckets =
+                buckets_dir.unwrap_or(sp00ky_config.resolved_schema().buckets_dir);
+
+            bucket::set_backend(name, target, resolved_buckets)
         }
     }
 }
@@ -2354,7 +2395,13 @@ fn nearest_dart_package(start: &Path) -> Option<PathBuf> {
 /// regardless of the command's working directory.
 fn run_spooky_gen_dart(input: &Path, output: &Path, workdir: Option<&Path>) -> Result<()> {
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
-    let abs = |p: &Path| if p.is_absolute() { p.to_path_buf() } else { cwd.join(p) };
+    let abs = |p: &Path| {
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            cwd.join(p)
+        }
+    };
     let input_abs = abs(input);
     let output_abs = abs(output);
 
@@ -2366,11 +2413,13 @@ fn run_spooky_gen_dart(input: &Path, output: &Path, workdir: Option<&Path>) -> R
     // from the output file to the nearest pubspec.yaml.
     let workdir_abs = match workdir {
         Some(w) => abs(w),
-        None => nearest_dart_package(&output_abs).with_context(|| format!(
-            "Could not find a pubspec.yaml above '{}' for the Dart generator; \
+        None => nearest_dart_package(&output_abs).with_context(|| {
+            format!(
+                "Could not find a pubspec.yaml above '{}' for the Dart generator; \
              set `workdir` on this clientTypes entry to a Dart package that depends on spooky_core",
-            output.display()
-        ))?,
+                output.display()
+            )
+        })?,
     };
 
     let status = std::process::Command::new("dart")
@@ -2496,7 +2545,8 @@ fn moved_cloud_hint(rest: &[String]) -> ! {
         "billing" => trim(format!("billing {}", tail.replace("change-plan", "plan"))),
         "link" => trim(format!(
             "link {}",
-            tail.replace("setup", "connect").replace("unlink", "disconnect")
+            tail.replace("setup", "connect")
+                .replace("unlink", "disconnect")
         )),
         "env" => trim(format!(
             "env {}",
@@ -2542,7 +2592,13 @@ fn main() -> Result<()> {
             fix_checksums,
             clean,
             clean_db,
-        }) => dev::run(skip_migrations, apply_migrations, fix_checksums, clean, clean_db),
+        }) => dev::run(
+            skip_migrations,
+            apply_migrations,
+            fix_checksums,
+            clean,
+            clean_db,
+        ),
         Some(Commands::Generate { args: gen }) => run_generate(gen),
         Some(Commands::Migrate { action }) => handle_migrate(action),
         Some(Commands::Bucket { action }) => handle_bucket(action),
