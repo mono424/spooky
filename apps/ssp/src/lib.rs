@@ -989,7 +989,10 @@ async fn shutdown_signal(
 fn bootstrap_page_query(table: &str, page_size: usize, after_id: Option<&str>) -> String {
     match after_id {
         None => format!("SELECT * FROM {table} ORDER BY id LIMIT {page_size}"),
-        Some(id) => format!("SELECT * FROM {table} WHERE id > {id} ORDER BY id LIMIT {page_size}"),
+        Some(id) => {
+            let raw = id.strip_prefix(&format!("{table}:")).unwrap_or(id);
+            format!("SELECT * FROM {table} WHERE id > type::record('{table}', '{raw}') ORDER BY id LIMIT {page_size}")
+        }
     }
 }
 
@@ -1008,7 +1011,7 @@ mod bootstrap_pagination_tests {
         let next = bootstrap_page_query("game", 200, Some("game:abc"));
         assert_eq!(
             next,
-            "SELECT * FROM game WHERE id > game:abc ORDER BY id LIMIT 200"
+            "SELECT * FROM game WHERE id > type::record('game', 'abc') ORDER BY id LIMIT 200"
         );
 
         // Neither page may fall back to offset pagination.

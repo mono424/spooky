@@ -65,7 +65,10 @@ fn json_kind(v: &Value) -> &'static str {
 fn keyset_page_query(table: &str, page_size: usize, after_id: Option<&str>) -> String {
     match after_id {
         None => format!("SELECT * FROM {table} ORDER BY id LIMIT {page_size}"),
-        Some(id) => format!("SELECT * FROM {table} WHERE id > {id} ORDER BY id LIMIT {page_size}"),
+        Some(id) => {
+            let raw = id.strip_prefix(&format!("{table}:")).unwrap_or(id);
+            format!("SELECT * FROM {table} WHERE id > type::record('{table}', '{raw}') ORDER BY id LIMIT {page_size}")
+        }
     }
 }
 
@@ -953,7 +956,7 @@ mod tests {
         let next = keyset_page_query("game", 200, Some("game:abc"));
         assert_eq!(
             next,
-            "SELECT * FROM game WHERE id > game:abc ORDER BY id LIMIT 200"
+            "SELECT * FROM game WHERE id > type::record('game', 'abc') ORDER BY id LIMIT 200"
         );
 
         assert!(!first.contains("START") && !next.contains("START"));
