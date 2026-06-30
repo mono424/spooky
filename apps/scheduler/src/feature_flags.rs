@@ -112,8 +112,8 @@ pub async fn tick(db: &Surreal<Client>) -> Result<()> {
             let result = match payload {
                 Some(payload) => {
                     db.query(format!(
-                        "UPSERT _00_user_feature WHERE user = {uid} AND key = $key \
-                         SET user = {uid}, key = $key, variant = $variant, payload = $payload;",
+                        "UPSERT _00_user_feature SET user = {uid}, key = $key, variant = $variant, payload = $payload \
+                         WHERE user = {uid} AND key = $key;",
                         uid = user_id
                     ))
                     .bind(("key", key.clone()))
@@ -123,8 +123,8 @@ pub async fn tick(db: &Surreal<Client>) -> Result<()> {
                 }
                 None => {
                     db.query(format!(
-                        "UPSERT _00_user_feature WHERE user = {uid} AND key = $key \
-                         SET user = {uid}, key = $key, variant = $variant;",
+                        "UPSERT _00_user_feature SET user = {uid}, key = $key, variant = $variant \
+                         WHERE user = {uid} AND key = $key;",
                         uid = user_id
                     ))
                     .bind(("key", key.clone()))
