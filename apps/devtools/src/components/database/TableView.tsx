@@ -1,13 +1,30 @@
 import { For, Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { useDevTools } from '../../context/DevToolsContext';
 import { escapeHtml } from '../../utils/html';
-import { Cell, type EditingCell } from './Cell';
+import { Cell } from './Cell';
 
 function getRecordId(row: Record<string, unknown>): string | null {
   if (!row.id) return null;
   if (typeof row.id === 'string') return row.id;
   if (typeof row.id === 'object' && row.id !== null) return row.id.toString();
   return String(row.id);
+}
+
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="12" height="12" rx="2" ry="2"></rect>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <polyline points="20 6 9 17 4 12"></polyline>
+    </svg>
+  );
 }
 
 interface TableViewProps {
@@ -18,17 +35,30 @@ interface TableViewProps {
 }
 
 export function TableView(props: TableViewProps) {
-  const { selectedTable, setSelectedTable, runQuery, updateTableRow, deleteTableRow } =
-    useDevTools();
+  const { selectedTable, setSelectedTable, runQuery } = useDevTools();
   // Filter and source are now props
 
-  // Track editing by Record ID and Column instead of Index
-  const [editingCell, setEditingCell] = createSignal<EditingCell | null>(null);
+  // Row inspected in the bottom JSON pane
+  const [inspectedRow, setInspectedRow] = createSignal<Record<string, unknown> | null>(null);
+  const [copied, setCopied] = createSignal(false);
+
+  const copyInspected = async () => {
+    const row = inspectedRow();
+    if (!row) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(row, null, 2));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error('[TableView] Copy failed:', err);
+    }
+  };
 
   // Fetch table data when a table is selected or source changes
   createEffect(() => {
     const table = selectedTable();
     const currentSource = props.source;
+    setInspectedRow(null); // close the JSON pane when the table/source changes
     if (table && runQuery) {
       // Construct query: SELECT * FROM table LIMIT 20
       setLoading(true);
@@ -143,145 +173,51 @@ export function TableView(props: TableViewProps) {
     return finalCols;
   });
 
-  const handleStartEdit = (recordId: string, column: string) => {
-    setEditingCell({ recordId, column });
-  };
-
-  const handleCellUpdate = (row: Record<string, unknown>, column: string, newValue: unknown) => {
-    const editing = editingCell();
-    if (!editing) return;
-
-    const recordId = getRecordId(row);
-    if (!recordId) {
-      console.error('Cannot update row: no id found');
-      setEditingCell(null);
-      return;
-    }
-
-    const tableName = selectedTable();
-    if (!tableName) {
-      setEditingCell(null);
-      return;
-    }
-
-    const originalValue = row[column];
-    const originalValueStr =
-      originalValue !== undefined && originalValue !== null
-        ? typeof originalValue === 'object'
-          ? JSON.stringify(originalValue)
-          : String(originalValue)
-        : '';
-
-    const newValueStr =
-      newValue !== undefined && newValue !== null
-        ? typeof newValue === 'object'
-          ? JSON.stringify(newValue)
-          : String(newValue)
-        : '';
-
-    if (newValueStr === originalValueStr) {
-      setEditingCell(null);
-      return;
-    }
-
-    updateTableRow(tableName, recordId, { [column]: newValue });
-    setEditingCell(null);
-
-    // Refresh data after update
-    const table = selectedTable();
-    const currentSource = props.source;
-    if (table && runQuery) {
-      runQuery(`SELECT * FROM ${table} LIMIT 20`, currentSource)
-        .then((res: any) => {
-          // Re-use logic or simple set for now, ideally refactor the resolver function
-          if (Array.isArray(res)) {
-            if (res.length > 0 && res[0] && typeof res[0] === 'object' && 'result' in res[0]) {
-              const queryResult = res[0].result;
-              setData(Array.isArray(queryResult) ? queryResult : []);
-            } else {
-              setData(res);
-            }
-          }
-          return undefined;
-        })
-        .catch(console.error);
-    }
-  };
-
-  const handleDeleteRow = (row: Record<string, unknown>) => {
-    const recordId = getRecordId(row);
-    if (!recordId) return;
-    const tableName = selectedTable();
-    if (!tableName) return;
-    deleteTableRow(tableName, recordId);
-    // Refresh data after delete
-    const table = selectedTable();
-    const currentSource = props.source;
-    if (table && runQuery) {
-      runQuery(`SELECT * FROM ${table} LIMIT 20`, currentSource)
-        .then((res: any) => {
-          if (Array.isArray(res)) {
-            if (res.length > 0 && res[0] && typeof res[0] === 'object' && 'result' in res[0]) {
-              const queryResult = res[0].result;
-              setData(Array.isArray(queryResult) ? queryResult : []);
-            } else {
-              setData(res);
-            }
-          }
-          return undefined;
-        })
-        .catch(console.error);
-    }
-  };
-
   return (
     <div class="database-data">
+      <div class="data-header">
+        <span class="data-header-title" title={selectedTable() ?? undefined}>
+          {selectedTable() ?? 'No table selected'}
+        </span>
+        <Show when={selectedTable() && !loading()}>
+          <span class="data-header-count">
+            {tableData().length} {tableData().length === 1 ? 'row' : 'rows'}
+          </span>
+        </Show>
+      </div>
       <div class="table-data">
         <Show
           when={selectedTable()}
           fallback={<div class="empty-state">Select a table to view data</div>}
         >
-          <Show
-            when={!loading() && tableData() && tableData()!.length >= 0} // oxlint-disable-line no-non-null-assertion
-            fallback={
-              loading() ? (
-                <div class="empty-state">Loading...</div>
-              ) : (
-                <div class="empty-state">No data in table "{selectedTable()}"</div>
-              )
-            }
-          >
-            <table class="data-table">
+          <Show when={!loading()} fallback={<div class="empty-state">Loading...</div>}>
+            {/* Only render the table when there are rows. Otherwise the <thead>
+                would paint a lone actions-column strip (the "weird bar") when
+                the table has no rows / no known fields, so show the empty state
+                instead. */}
+            <Show
+              when={tableData().length > 0}
+              fallback={<div class="empty-state">No data in table "{selectedTable()}"</div>}
+            >
+              <table class="data-table">
               <thead>
                 <tr>
                   <For each={columns()}>{(column) => <th>{escapeHtml(column)}</th>}</For>
-                  <th class="delete-column">Actions</th>
+                  <th class="actions-column"></th>
                 </tr>
               </thead>
               <tbody>
                 <For each={tableData()}>
                   {(row) => {
-                    const recordId = getRecordId(row);
-                    const editing = editingCell();
-
-                    const isEditingCell = (column: string) =>
-                      editing !== null &&
-                      recordId !== null &&
-                      editing.recordId === recordId &&
-                      editing.column === column;
-
                     return (
-                      <tr>
+                      <tr
+                        classList={{ 'row-inspected': inspectedRow() === row }}
+                        onClick={() => setInspectedRow(row)}
+                      >
                         <For each={columns()}>
                           {(column) => (
                             <Cell
                               value={row[column]}
-                              column={column}
-                              recordId={recordId || ''}
-                              isEditing={isEditingCell(column)}
-                              onStartEdit={(col) => recordId && handleStartEdit(recordId, col)}
-                              onUpdate={(newValue) => handleCellUpdate(row, column, newValue)}
-                              onCancel={() => setEditingCell(null)}
                               onIdClick={(id) => {
                                 const parts = id.split(':');
                                 const table = parts[0];
@@ -295,13 +231,17 @@ export function TableView(props: TableViewProps) {
                             />
                           )}
                         </For>
-                        <td class="delete-cell">
+                        <td class="actions-cell">
                           <button
-                            class="delete-btn"
-                            onClick={() => handleDeleteRow(row)}
-                            title="Delete row"
+                            class="row-view-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setInspectedRow(row);
+                            }}
+                            title="View row JSON"
+                            aria-label="View row JSON"
                           >
-                            ×
+                            {'{ }'}
                           </button>
                         </td>
                       </tr>
@@ -310,9 +250,41 @@ export function TableView(props: TableViewProps) {
                 </For>
               </tbody>
             </table>
+            </Show>
           </Show>
         </Show>
       </div>
+
+      <Show when={inspectedRow()}>
+        <div class="row-pane">
+          <div class="row-pane-head">
+            <span class="row-pane-title" title={getRecordId(inspectedRow()!) ?? undefined}>
+              {getRecordId(inspectedRow()!) ?? 'Row'}
+            </span>
+            <div class="row-pane-actions">
+              <button
+                class="icon-btn"
+                onClick={copyInspected}
+                title={copied() ? 'Copied' : 'Copy JSON'}
+                aria-label="Copy JSON"
+              >
+                <Show when={copied()} fallback={<CopyIcon />}>
+                  <CheckIcon />
+                </Show>
+              </button>
+              <button
+                class="icon-btn"
+                title="Close"
+                aria-label="Close"
+                onClick={() => setInspectedRow(null)}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+          <pre class="row-pane-json">{JSON.stringify(inspectedRow(), null, 2)}</pre>
+        </div>
+      </Show>
     </div>
   );
 }

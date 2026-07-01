@@ -10,6 +10,15 @@ export interface UseSyncStatus {
   isHealthy: Accessor<boolean>;
   /** `true` once sync has failed for a sustained run — drive a banner off this. */
   isDegraded: Accessor<boolean>;
+  /** `true` once at least one sync round has succeeded this session. */
+  everConnected: Accessor<boolean>;
+  /**
+   * `true` only for a real lost connection: degraded AFTER a first successful
+   * sync. Stays `false` during the initial "connecting" phase (degraded but
+   * never reached the server yet), so an indicator can show nothing until the
+   * app has actually connected once.
+   */
+  isOffline: Accessor<boolean>;
 }
 
 /**
@@ -35,5 +44,7 @@ export function useSyncStatus(): UseSyncStatus {
     status: () => health().status,
     isHealthy: () => health().status === 'healthy',
     isDegraded: () => health().status === 'degraded',
+    everConnected: () => health().everConnected,
+    isOffline: () => health().status === 'degraded' && health().everConnected,
   };
 }

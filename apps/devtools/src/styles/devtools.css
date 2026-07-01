@@ -202,8 +202,12 @@ body {
   align-items: center;
   gap: var(--sys-spacing-1);
   margin-left: auto;
-  flex-grow: 1;
+  /* Keep intrinsic width so the tab-overflow measurement is accurate, and never
+     let the action buttons shrink/wrap. */
+  flex: none;
+  white-space: nowrap;
   justify-content: flex-end;
+  padding-right: var(--sys-spacing-1);
 }
 
 .toolbar-spacer {
@@ -277,13 +281,23 @@ body {
 /* Tabs */
 .tabs {
   display: flex;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  /* Not clipped: the JS overflow logic keeps tabs within width, and the »
+     dropdown must be able to paint below the bar. Body has overflow:hidden,
+     so any 1-frame pre-measurement overflow is clipped at the viewport. */
+  overflow: visible;
   background: var(--sys-color-surface);
   border-bottom: 1px solid var(--sys-color-divider);
   flex-shrink: 0;
+  position: relative;
+  z-index: 5;
 }
 
 .tab-btn {
   position: relative;
+  flex: none;
+  white-space: nowrap;
   padding: var(--sys-spacing-1) var(--sys-spacing-2);
   background: transparent;
   color: var(--sys-color-on-surface-subtle);
@@ -298,6 +312,106 @@ body {
     color var(--sys-transition-fast),
     background-color var(--sys-transition-fast);
   user-select: none;
+}
+
+/* Icon action buttons (Refresh / Clear) — square, glyph-only */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  color: var(--sys-color-on-surface-subtle);
+  border: none;
+  border-radius: var(--sys-radius-sm);
+  cursor: pointer;
+  transition:
+    color var(--sys-transition-fast),
+    background-color var(--sys-transition-fast);
+}
+.icon-btn:hover {
+  background: var(--sys-color-state-hover);
+  color: var(--sys-color-on-surface);
+}
+.icon-btn:active {
+  background: var(--sys-color-state-pressed);
+}
+.icon-btn:focus-visible {
+  outline: 1px solid var(--sys-color-primary);
+  outline-offset: -1px;
+}
+
+/* Tab overflow (») — collapses tabs that don't fit into a popup menu */
+.tab-overflow {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  flex: none;
+}
+.tab-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  padding: 0;
+  background: transparent;
+  color: var(--sys-color-on-surface-subtle);
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition:
+    color var(--sys-transition-fast),
+    background-color var(--sys-transition-fast);
+}
+.tab-overflow-btn:hover,
+.tab-overflow-btn.open {
+  background: var(--sys-color-state-hover);
+  color: var(--sys-color-on-surface);
+}
+.tab-overflow-btn:focus-visible {
+  outline: 1px solid var(--sys-color-primary);
+  outline-offset: -2px;
+}
+.tab-overflow-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  min-width: 128px;
+  margin-top: 2px;
+  padding: var(--sys-spacing-1);
+  background: var(--sys-color-surface-container);
+  border: 1px solid var(--sys-color-divider);
+  border-radius: var(--sys-radius-md);
+  box-shadow: var(--sys-shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tab-overflow-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  background: transparent;
+  color: var(--sys-color-on-surface);
+  border: none;
+  border-radius: var(--sys-radius-sm);
+  cursor: pointer;
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  line-height: var(--sys-typescale-label-line-height);
+  white-space: nowrap;
+}
+.tab-overflow-item:hover {
+  background: var(--sys-color-state-hover);
+}
+.tab-overflow-item.active {
+  color: var(--sys-color-primary-bright);
+  background: var(--sys-color-primary-container);
 }
 
 .tab-btn:hover {
@@ -479,20 +593,61 @@ body {
   color: var(--sys-color-primary);
 }
 
+/* Shared filter input (Database / Queries / Timing) */
+.dt-filter-input {
+  padding: 0 8px;
+  height: 18px;
+  background: var(--sys-color-surface-container-highest, #3d3d3d);
+  border: 1px solid var(--sys-color-outline-variant, #555);
+  color: var(--sys-color-on-surface, #fff);
+  border-radius: 9px;
+  font-family: var(--sys-typescale-body-font);
+  font-size: 11px;
+  line-height: 14px;
+  outline: none;
+}
+.dt-filter-input::placeholder {
+  color: var(--sys-color-on-surface-subtle);
+}
+.dt-filter-input:focus {
+  border-color: var(--sys-color-primary);
+}
+
 /* Queries tab */
 .queries-container {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 280px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
+/* Narrow docks: shrink the list column so the detail keeps usable width */
+@media (max-width: 640px) {
+  .queries-container {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+}
+@media (max-width: 480px) {
+  .queries-container {
+    grid-template-columns: 148px minmax(0, 1fr);
+  }
+}
 
 .queries-list {
+  min-width: 0;
   border-right: 1px solid var(--sys-color-divider);
   overflow: hidden;
   background: var(--sys-color-surface);
   display: flex;
   flex-direction: column;
+}
+
+.queries-filter {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--sys-color-divider);
+  background: var(--sys-color-surface);
+}
+.queries-filter .dt-filter-input {
+  width: 100%;
 }
 
 .queries-list-content {
@@ -627,6 +782,8 @@ body {
 }
 
 .query-detail {
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--sys-color-cdt-base-container);
   padding: 8px;
@@ -860,13 +1017,22 @@ body {
 }
 
 .database-header {
-  padding: 0;
+  padding: 0 4px 0 0;
   border-bottom: 1px solid var(--sys-color-divider);
   background: var(--sys-color-surface-container);
   min-height: 24px;
   display: flex;
-  align-items: stretch;
-  overflow-x: auto;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.database-header-toggle {
+  width: 20px;
+  height: 18px;
+  flex: none;
+}
+.database-header-toggle.active {
+  color: var(--sys-color-primary);
 }
 
 .database-header h2 {
@@ -905,6 +1071,7 @@ body {
   min-height: 20px;
   display: flex;
   align-items: center;
+  gap: 6px;
   cursor: pointer;
   border: 2px solid transparent;
   transition: background-color var(--sys-transition-fast);
@@ -913,10 +1080,30 @@ body {
   font-weight: var(--sys-typescale-body-weight);
   color: var(--sys-color-on-surface);
   list-style: none;
-  text-overflow: ellipsis;
   white-space: nowrap;
   overflow: hidden;
   background: transparent;
+}
+.table-item-icon {
+  flex: none;
+  color: var(--sys-color-on-surface-subtle);
+  opacity: 0.75;
+}
+.table-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.table-item-hidden {
+  flex: none;
+  color: var(--sys-color-on-surface-subtle);
+  opacity: 0.6;
+}
+.table-item.selected .table-item-icon {
+  color: var(--sys-color-primary);
+  opacity: 1;
 }
 
 .table-item:hover:not(.selected) {
@@ -937,13 +1124,47 @@ body {
 
 .database-data {
   overflow: hidden;
+  min-height: 0;
   background: var(--sys-color-cdt-base-container);
   display: flex;
   flex-direction: column;
 }
 
+/* Data-panel header. Fixed height (matches the left TABLES header) so the
+   layout does not jump between the nothing-selected, empty, and populated
+   states. */
+.data-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--sys-color-divider);
+  background: var(--sys-color-surface-container);
+  flex: none;
+}
+
+.data-header-title {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  color: var(--sys-color-on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.data-header-count {
+  font-family: var(--sys-typescale-label-font);
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+  white-space: nowrap;
+  flex: none;
+}
+
 .table-data {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 0;
   background: var(--sys-color-surface);
@@ -951,15 +1172,16 @@ body {
 }
 
 .data-table {
-  width: 100%;
   border-collapse: collapse;
   font-family: var(--sys-typescale-monospace-font);
   font-size: var(--sys-typescale-monospace-size);
   line-height: var(--sys-typescale-monospace-line-height);
-  table-layout: fixed; /* Fixed layout helps with overflow */
+  /* Auto layout + max-content lets columns size to content (capped per-cell)
+     and the table grow past the container so `.table-data` scrolls sideways. */
+  table-layout: auto;
   display: table !important;
-  border-collapse: collapse !important;
-  width: 100% !important;
+  width: max-content !important;
+  min-width: 100%;
 }
 
 .data-table thead {
@@ -990,24 +1212,28 @@ body {
 
 .data-table th {
   background: var(--sys-color-surface-container);
-  padding: 4px 8px;
+  padding: 4px 10px;
   text-align: left;
   font-family: var(--sys-typescale-label-font);
   font-size: var(--sys-typescale-label-size);
   font-weight: var(--sys-typescale-label-weight);
   color: var(--sys-color-on-surface);
   border-bottom: 1px solid var(--sys-color-divider);
+  border-right: 1px solid var(--sys-color-outline-variant);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 400px;
+  min-width: 150px;
+  max-width: 420px;
 }
 
 .data-table td {
-  padding: 2px 8px;
+  padding: 2px 10px;
   border-bottom: 1px solid var(--sys-color-outline-variant);
+  border-right: 1px solid var(--sys-color-outline-variant);
   color: var(--sys-color-on-surface);
-  max-width: 400px;
+  min-width: 150px;
+  max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1022,73 +1248,137 @@ body {
   border-bottom: none;
 }
 
-/* Editable cells */
-.editable-cell {
-  cursor: pointer;
+/* Read-only data cells */
+.data-cell {
   position: relative;
-  transition: background-color var(--sys-transition-fast);
-  user-select: none;
+  user-select: text;
 }
 
-.editable-cell:not(.readonly):hover {
+/* Record-ID cells are clickable links into their table */
+.data-cell.link {
+  cursor: pointer;
+  color: var(--sys-color-on-surface-variant);
+}
+
+.data-cell.link:hover {
   background: var(--sys-color-state-hover) !important;
+  text-decoration: underline;
 }
 
-.editable-cell:not(.readonly):active {
-  background: var(--sys-color-state-pressed) !important;
-}
-
-.editable-cell.readonly {
-  cursor: default;
-  opacity: 0.7;
-  user-select: text;
-}
-
-.editable-cell.editing {
-  padding: 0;
-  background: var(--sys-color-surface-container) !important;
-  cursor: text;
-}
-
-.cell-input {
-  width: 100%;
-  min-width: 100px;
-  height: 100%;
-  min-height: 20px;
-  padding: 2px 8px;
-  border: none;
-  background: var(--sys-color-surface-container);
-  color: var(--sys-color-on-surface);
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: var(--sys-typescale-monospace-size);
-  line-height: var(--sys-typescale-monospace-line-height);
-  outline: 2px solid var(--sys-color-primary);
-  outline-offset: -2px;
-  box-sizing: border-box;
-  user-select: text;
-}
-
-.cell-input:focus {
-  outline: 2px solid var(--sys-color-primary-bright);
-  background: var(--sys-color-surface-container-high);
-}
-
-/* Delete button column and cell */
-.delete-column {
-  width: 60px;
+/* Actions column and cell, pinned to the right, narrow, above h-scroll.
+   `text-overflow: clip` + tight padding stop the base td ellipsis (…) from
+   painting stray dots next to the button when the button nears the cell edge. */
+.actions-column {
+  width: 40px;
+  min-width: 40px !important;
+  max-width: 40px !important;
+  padding: 4px !important;
   text-align: center;
+  text-overflow: clip;
+  overflow: hidden;
   background: var(--sys-color-surface-container);
+  position: sticky;
+  right: 0;
+  z-index: 11;
 }
 
-.delete-cell {
-  width: 60px;
+.actions-cell {
+  width: 40px;
+  min-width: 40px !important;
+  max-width: 40px !important;
+  padding: 2px 4px !important;
   text-align: center;
+  text-overflow: clip;
+  overflow: hidden;
+  white-space: nowrap;
   background: var(--sys-color-surface);
   border-left: 1px solid var(--sys-color-divider);
+  position: sticky;
+  right: 0;
+  z-index: 1;
 }
 
-.data-table tbody tr:hover .delete-cell {
+.data-table tbody tr:hover .actions-cell {
   background: var(--sys-color-state-hover-on-subtle) !important;
+}
+
+/* View-row (JSON) button, always visible as a bordered chip (not hover-only) */
+.row-view-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--sys-color-outline);
+  background: var(--sys-color-surface-container-high);
+  color: var(--sys-color-on-surface);
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: var(--sys-radius-sm);
+  transition:
+    background-color var(--sys-transition-fast),
+    color var(--sys-transition-fast),
+    border-color var(--sys-transition-fast);
+}
+.row-view-btn:hover {
+  background: var(--sys-color-primary);
+  color: var(--sys-color-on-primary);
+  border-color: var(--sys-color-primary);
+}
+.data-table tbody tr.row-inspected {
+  background: var(--sys-color-primary-container) !important;
+}
+.data-table tbody tr.row-inspected .actions-cell {
+  background: var(--sys-color-primary-container) !important;
+}
+
+/* Bottom JSON row-inspector pane */
+.row-pane {
+  flex: none;
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--sys-color-divider);
+  background: var(--sys-color-cdt-base-container);
+}
+.row-pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--sys-color-outline-variant);
+  background: var(--sys-color-surface);
+  flex: none;
+}
+.row-pane-title {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  color: var(--sys-color-on-surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.row-pane-json {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--sys-color-on-surface);
+  white-space: pre;
+  tab-size: 2;
 }
 
 .delete-btn {
@@ -1722,13 +2012,15 @@ body {
 }
 
 .query-item {
-  padding: 7px 10px 7px 11px;
+  padding: 5px 10px 5px 9px;
   border: 0;
   border-left: 2px solid transparent;
   border-bottom: 1px solid var(--sys-color-outline-variant);
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
 }
 .query-item:hover:not(.selected) {
   background: var(--sys-color-state-hover) !important;
@@ -1739,24 +2031,28 @@ body {
   border-left-color: var(--sys-color-primary);
 }
 
-.query-item-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.query-item .query-hash {
+/* Query text is the primary content; the #hash is secondary */
+.query-item .query-preview {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
   font-family: var(--sys-typescale-monospace-font);
   font-size: 11px;
   color: var(--sys-color-on-surface);
-  letter-spacing: -0.1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.query-item .query-preview {
-  margin: 0;
-  font-size: 11px;
+.query-item .query-hash {
+  flex: none;
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 10px;
   color: var(--sys-color-on-surface-subtle);
+  letter-spacing: -0.1px;
+  opacity: 0.75;
 }
 .query-item .query-meta {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1764,6 +2060,7 @@ body {
   font-family: var(--sys-typescale-monospace-font);
   font-size: 10px;
   color: var(--sys-color-on-surface-subtle);
+  white-space: nowrap;
 }
 .query-meta-sep {
   opacity: 0.5;
@@ -1792,6 +2089,21 @@ body {
   font-weight: 600;
   letter-spacing: -0.2px;
   color: var(--sys-color-on-surface);
+}
+.detail-query {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detail-hash {
+  flex: none;
+  margin-left: 10px;
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+  color: var(--sys-color-on-surface-subtle);
+  opacity: 0.75;
 }
 
 /* Key/value metadata grid */
@@ -1850,6 +2162,45 @@ body {
   word-break: break-word;
   max-height: 280px;
   overflow: auto;
+}
+
+/* In-panel detail tabs (Overview / Query / Variables / Data / Timing) */
+.detail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0 0 14px;
+  border-bottom: 1px solid var(--sys-color-divider);
+}
+.detail-tab {
+  padding: 5px 9px;
+  background: transparent;
+  color: var(--sys-color-on-surface-subtle);
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  font-weight: var(--sys-typescale-label-weight);
+  line-height: var(--sys-typescale-label-line-height);
+  transition:
+    color var(--sys-transition-fast),
+    border-color var(--sys-transition-fast);
+}
+.detail-tab:hover {
+  color: var(--sys-color-on-surface);
+}
+.detail-tab.active {
+  color: var(--sys-color-primary-bright);
+  border-bottom-color: var(--sys-color-primary);
+}
+.detail-body {
+  min-width: 0;
+}
+/* First block in the Data tab shouldn't add extra top margin */
+.detail-body > .detail-block:first-child {
+  margin-top: 0;
 }
 
 /* ============================================================
@@ -1938,51 +2289,49 @@ body {
   opacity: 0.7;
 }
 
+/* Bottom stats — aligned label + dot-separated key/value line (no chips) */
 .tb-meta {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
+  flex-direction: column;
+  gap: 4px;
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid var(--sys-color-outline-variant);
 }
-.tb-meta-group {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
+.tb-stat {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  column-gap: 10px;
+  align-items: baseline;
 }
-.tb-meta-group + .tb-meta-group {
-  margin-left: auto;
-}
-.tb-meta-title {
+.tb-stat-label {
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--sys-color-on-surface-subtle);
-  margin-right: 2px;
 }
-.tb-chip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
+.tb-stat-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 16px;
+  min-width: 0;
   font-size: 10px;
   color: var(--sys-color-on-surface-subtle);
-  background: var(--sys-color-state-hover);
-  border-radius: var(--sys-radius-sm);
-  padding: 2px 7px;
 }
-.tb-chip-v {
+.tb-stat-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.tb-stat-item b {
   font-family: var(--sys-typescale-monospace-font);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   color: var(--sys-color-on-surface);
 }
-.tb-chip--err {
-  color: var(--sys-color-error);
-  background: rgba(244, 67, 54, 0.1);
-}
-.tb-chip--err .tb-chip-v {
+.tb-stat-item--err,
+.tb-stat-item--err b {
   color: var(--sys-color-error);
 }
 
@@ -2011,6 +2360,11 @@ body {
 .tt-hint {
   font-size: 10px;
   color: var(--sys-color-on-surface-subtle);
+}
+.tt-filter {
+  margin-left: auto;
+  width: 170px;
+  align-self: center;
 }
 .tt-table {
   flex: 1;

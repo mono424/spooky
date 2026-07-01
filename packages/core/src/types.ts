@@ -193,6 +193,13 @@ export interface SyncHealth {
   kind?: 'network' | 'application';
   /** Message of the most recent failure (only set while `degraded`). */
   error?: string;
+  /**
+   * `true` once at least one sync round has succeeded this session. Lets a UI
+   * distinguish a first-time "connecting" phase (never reached the server yet,
+   * so a cold-start failure run is expected) from a real lost connection after
+   * a working session. Never resets back to `false` once set.
+   */
+  everConnected: boolean;
 }
 
 export type QueryHash = string;

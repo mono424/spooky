@@ -113,4 +113,37 @@ describe('sync health via idle poll', () => {
     await poll();
     expect(sync.syncHealth.status).toBe('healthy');
   });
+
+  it('leaves everConnected false through a cold-start failure run', async () => {
+    const { sync, refetch, poll } = makeSync(['h1']);
+    expect(sync.syncHealth.everConnected).toBe(false);
+
+    // Server never reached: 3 failed cycles degrade, but this is the initial
+    // "connecting" phase, not a lost connection — everConnected stays false.
+    refetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
+    await poll();
+    await poll();
+    await poll();
+    expect(sync.syncHealth.status).toBe('degraded');
+    expect(sync.syncHealth.everConnected).toBe(false);
+  });
+
+  it('latches everConnected on the first success and keeps it through a later degrade', async () => {
+    const { sync, refetch, poll } = makeSync(['h1']);
+
+    // First successful round reaches the server: connecting phase is over.
+    refetch.mockResolvedValue(true);
+    await poll();
+    expect(sync.syncHealth.status).toBe('healthy');
+    expect(sync.syncHealth.everConnected).toBe(true);
+
+    // Connection later drops: degraded now reflects a REAL lost connection.
+    refetch.mockReset();
+    refetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
+    await poll();
+    await poll();
+    await poll();
+    expect(sync.syncHealth.status).toBe('degraded');
+    expect(sync.syncHealth.everConnected).toBe(true);
+  });
 });

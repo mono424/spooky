@@ -30,6 +30,7 @@ function score(t: QueryTimings | undefined, key: SortKey): number {
 export function TimingTab() {
   const { state, setActiveTab, setSelectedQueryHash } = useDevTools();
   const [sortKey, setSortKey] = createSignal<SortKey>('total');
+  const [filter, setFilter] = createSignal('');
 
   // Clicking a row's #hash jumps to the Queries tab with that query selected
   // (QueriesTab scrolls it into view + opens its detail panel).
@@ -38,9 +39,19 @@ export function TimingTab() {
     setActiveTab('queries');
   };
 
+  const matchesFilter = (q: { query?: string; queryHash: number }): boolean => {
+    const term = filter().trim().toLowerCase();
+    if (!term) return true;
+    return (
+      (q.query ?? '').toLowerCase().includes(term) ||
+      String(q.queryHash).includes(term)
+    );
+  };
+
   const rows = createMemo(() =>
     state.activeQueries
       .filter((q) => q.timings)
+      .filter(matchesFilter)
       .toSorted((a, b) => score(b.timings, sortKey()) - score(a.timings, sortKey()))
   );
   const maxTotal = createMemo(() =>
@@ -52,11 +63,24 @@ export function TimingTab() {
       <div class="tt-bar">
         <h2 class="tt-title">Query timings</h2>
         <span class="tt-hint">slowest first · click a column to sort</span>
+        <input
+          class="dt-filter-input tt-filter"
+          type="text"
+          placeholder="Filter queries…"
+          value={filter()}
+          onInput={(e) => setFilter(e.currentTarget.value)}
+        />
       </div>
 
       <Show
         when={rows().length > 0}
-        fallback={<div class="empty-state">No active queries with timing data yet</div>}
+        fallback={
+          <div class="empty-state">
+            {filter().trim()
+              ? 'No queries match the filter'
+              : 'No active queries with timing data yet'}
+          </div>
+        }
       >
         <div class="tt-table" role="table">
           <div class="tt-row tt-row--head" role="row">

@@ -70,7 +70,7 @@ function entityFacts(e: BackendEntity): { label: string; value: string }[] {
 }
 
 export function VersionsTab() {
-  const { state, refreshVersions } = useDevTools();
+  const { state } = useDevTools();
 
   const entities = (): BackendEntity[] => state.versions.entities ?? [];
 
@@ -119,11 +119,6 @@ export function VersionsTab() {
     <div class="mcp-container">
       <div class="mcp-header">
         <h2>Versions</h2>
-        <div class="mcp-header-controls">
-          <button class="btn" onClick={() => refreshVersions()}>
-            Refresh
-          </button>
-        </div>
       </div>
 
       <div class="versions-table">

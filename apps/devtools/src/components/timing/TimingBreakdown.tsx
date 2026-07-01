@@ -61,32 +61,40 @@ export function TimingBreakdown(props: { timings: QueryTimings }) {
       </For>
 
       <div class="tb-meta">
-        <div class="tb-meta-group">
-          <span class="tb-meta-title">registration</span>
-          <For
-            each={
-              [
-                ['parse', reg().parseMs],
-                ['plan', reg().planMs],
-                ['snapshot', reg().snapshotMs],
-                ['wall', reg().wallMs],
-              ] as const
-            }
-          >
-            {([k, ms]) => (
-              <span class="tb-chip">
-                {k} <span class="tb-chip-v">{formatMs(ms)}</span>
-              </span>
-            )}
-          </For>
+        <div class="tb-stat">
+          <span class="tb-stat-label">registration</span>
+          <div class="tb-stat-items">
+            <For
+              each={
+                [
+                  ['parse', reg().parseMs],
+                  ['plan', reg().planMs],
+                  ['snapshot', reg().snapshotMs],
+                  ['wall', reg().wallMs],
+                ] as const
+              }
+            >
+              {([k, ms]) => (
+                <span class="tb-stat-item">
+                  {k}
+                  <b>{formatMs(ms)}</b>
+                </span>
+              )}
+            </For>
+          </div>
         </div>
-        <div class="tb-meta-group">
-          <span class="tb-chip">
-            updates <span class="tb-chip-v">{t().updateCount}</span>
-          </span>
-          <span class="tb-chip" classList={{ 'tb-chip--err': t().errorCount > 0 }}>
-            errors <span class="tb-chip-v">{t().errorCount}</span>
-          </span>
+        <div class="tb-stat">
+          <span class="tb-stat-label">totals</span>
+          <div class="tb-stat-items">
+            <span class="tb-stat-item">
+              updates
+              <b>{t().updateCount}</b>
+            </span>
+            <span class="tb-stat-item" classList={{ 'tb-stat-item--err': t().errorCount > 0 }}>
+              errors
+              <b>{t().errorCount}</b>
+            </span>
+          </div>
         </div>
       </div>
     </div>

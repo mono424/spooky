@@ -15,17 +15,26 @@ let bridgeReconnectDelay = 1000;
 const BRIDGE_MAX_RECONNECT_DELAY = 30000;
 let mcpEnabled = false;
 
+// Stop retrying (and spamming the console with native "WebSocket connection
+// failed" errors) once the MCP bridge has proven unreachable. Retrying resumes
+// on an explicit re-enable or when a panel reopens.
+let bridgeAttempts = 0;
+let bridgeGaveUp = false;
+const BRIDGE_MAX_ATTEMPTS = 4;
+
 // Track tabs that have Sp00ky detected
 const sp00kyTabs = new Map<number, { url?: string; title?: string }>();
 
 function connectToBridge() {
-  if (!mcpEnabled) return;
+  if (!mcpEnabled || bridgeGaveUp) return;
   if (bridgeSocket && bridgeSocket.readyState === WebSocket.OPEN) return;
+
+  bridgeAttempts++;
 
   try {
     bridgeSocket = new WebSocket(`ws://127.0.0.1:${BRIDGE_PORT}`);
   } catch (err) {
-    console.warn('[DevTools Bridge] Failed to create WebSocket:', err);
+    console.debug('[DevTools Bridge] Failed to create WebSocket:', err);
     scheduleBridgeReconnect();
     return;
   }
@@ -33,6 +42,8 @@ function connectToBridge() {
   bridgeSocket.addEventListener('open', () => {
     console.log('[DevTools Bridge] Connected to MCP bridge');
     bridgeReconnectDelay = 1000; // Reset backoff
+    bridgeAttempts = 0;
+    bridgeGaveUp = false;
 
     // Report connected tabs
     reportTabsToBridge();
@@ -49,21 +60,31 @@ function connectToBridge() {
   });
 
   bridgeSocket.addEventListener('close', () => {
-    console.log('[DevTools Bridge] Disconnected from MCP bridge');
+    console.debug('[DevTools Bridge] Disconnected from MCP bridge');
     bridgeSocket = null;
     broadcastMcpStatus();
     scheduleBridgeReconnect();
   });
 
-  bridgeSocket.addEventListener('error', (err) => {
-    console.warn('[DevTools Bridge] WebSocket error:', err);
-    // onclose will fire after this, triggering reconnect
+  bridgeSocket.addEventListener('error', () => {
+    // The native "WebSocket connection failed" is already logged by the browser;
+    // don't add to the noise. onclose fires next and drives the reconnect.
   });
 }
 
 function scheduleBridgeReconnect() {
   if (!mcpEnabled) return;
   if (bridgeReconnectTimer) return;
+  if (bridgeAttempts >= BRIDGE_MAX_ATTEMPTS) {
+    if (!bridgeGaveUp) {
+      bridgeGaveUp = true;
+      console.info(
+        `[DevTools Bridge] MCP bridge unreachable on ws://127.0.0.1:${BRIDGE_PORT} after ${BRIDGE_MAX_ATTEMPTS} attempts — pausing retries. Start the devtools-mcp server, then re-toggle MCP (or reopen the panel) to retry.`
+      );
+      broadcastMcpStatus();
+    }
+    return;
+  }
   bridgeReconnectTimer = setTimeout(() => {
     bridgeReconnectTimer = null;
     bridgeReconnectDelay = Math.min(bridgeReconnectDelay * 1.5, BRIDGE_MAX_RECONNECT_DELAY);
@@ -81,6 +102,8 @@ function disconnectFromBridge() {
     bridgeSocket = null;
   }
   bridgeReconnectDelay = 1000;
+  bridgeAttempts = 0;
+  bridgeGaveUp = false;
   broadcastMcpStatus();
 }
 
@@ -88,9 +111,20 @@ function setMcpEnabled(enabled: boolean) {
   mcpEnabled = enabled;
   chrome.storage.local.set({ mcpEnabled: enabled });
   if (enabled) {
+    bridgeAttempts = 0;
+    bridgeGaveUp = false;
     connectToBridge();
   } else {
     disconnectFromBridge();
+  }
+}
+
+/** Resume connecting after a give-up (e.g. panel reopened / status requested). */
+function retryBridgeIfGaveUp() {
+  if (mcpEnabled && bridgeGaveUp && (!bridgeSocket || bridgeSocket.readyState !== WebSocket.OPEN)) {
+    bridgeAttempts = 0;
+    bridgeGaveUp = false;
+    connectToBridge();
   }
 }
 
@@ -234,8 +268,10 @@ chrome.runtime.onConnect.addListener((port) => {
       }
     }
 
-    // Handle MCP status request from panel
+    // Handle MCP status request from panel — a fresh panel is a good moment to
+    // resume retrying if we'd previously given up.
     if (message.type === 'GET_MCP_STATUS') {
+      retryBridgeIfGaveUp();
       port.postMessage(getMcpStatus());
       return;
     }

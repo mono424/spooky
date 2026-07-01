@@ -117,3 +117,20 @@ DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLE
 -- snapshot directly; `@crdt @cursor` fields hold an
 -- `option<object> FLEXIBLE` of shape `{ state, cursors }` (rewritten
 -- by the schema-builder). Same shape on client and server.
+
+-- ==================================================
+-- SPOOKY USER FEATURE (per-user materialized flag assignments)
+--
+-- Server-materialized, root-only writes (see meta_tables_remote.surql for the
+-- scoped `select WHERE user = $auth.id` rule). Synced DOWN read-only so the
+-- feature-flag resolver can run its one shared live query
+-- (`SELECT key, variant, payload FROM _00_user_feature`) on the client. This
+-- table MUST be declared here, or the synced rows have no local table to land
+-- in and every flag silently falls back to its default (a flag gated fail-open
+-- then shows for everyone). SCHEMALESS so a synced row is never dropped on a
+-- field/type mismatch; the local cache is single-user, so permissions are
+-- WHERE true (the codegen rewrites them anyway).
+-- ==================================================
+
+DEFINE TABLE _00_user_feature SCHEMALESS
+    PERMISSIONS FOR select, create, update, delete WHERE true;

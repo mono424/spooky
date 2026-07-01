@@ -1,12 +1,41 @@
-import { createSignal } from 'solid-js';
+import { createSignal, createEffect } from 'solid-js';
 import { TableList } from './TableList';
 import { TableView } from './TableView';
 import { Toast } from '../ui/Toast';
+import { getPref, setPref } from '../../utils/prefs';
+import { useDevTools } from '../../context/DevToolsContext';
 
 export function DatabaseTab() {
+  const { state, fetchTables, isSp00kyAvailable } = useDevTools();
   const [filter, setFilter] = createSignal('');
   const [source, setSource] = createSignal<'local' | 'remote'>('local'); // Default to local
   const [error, setError] = createSignal<string | null>(null);
+  // Internal `_00_*` sync tables are hidden by default; the toggle persists.
+  const [showInternal, setShowInternalSig] = createSignal(
+    getPref('database.showInternalTables', false)
+  );
+  const setShowInternal = (v: boolean) => {
+    setShowInternalSig(v);
+    setPref('database.showInternalTables', v);
+  };
+
+  // Enumerate the tables for whichever source is selected (one guarded
+  // `INFO FOR DB` per source). Re-runs on source switch so Remote shows remote
+  // tables (not the local-only `_00_*`) and vice-versa.
+  //
+  // Gate on `isSp00kyAvailable()`: on first open the panel mounts before the
+  // page's Sp00ky connection is detected, so an early `INFO FOR DB` times out
+  // silently and the list stays empty until a reload. Tracking availability
+  // makes this effect re-run once detection completes, so the tables show up
+  // without a manual reload.
+  createEffect(() => {
+    if (!isSp00kyAvailable()) return;
+    void fetchTables?.(source());
+  });
+
+  // The list shown depends on the source: backend push covers local; remote is
+  // enumerated on demand.
+  const tables = () => (source() === 'local' ? state.database.tables : state.database.remoteTables ?? []);
 
   const handleError = (msg: string) => {
     setError(msg);
@@ -31,30 +60,12 @@ export function DatabaseTab() {
         }}
       >
         <input
+          class="dt-filter-input"
           type="text"
           placeholder="Filter..."
           value={filter()}
           onInput={(e) => setFilter(e.currentTarget.value)}
-          style={{
-            flex: '1',
-            padding: '0 8px',
-            height: '18px',
-            background: 'var(--sys-color-surface-container-highest, #3d3d3d)',
-            border: '1px solid var(--sys-color-outline-variant, #555)',
-            color: 'var(--sys-color-on-surface, #fff)',
-            'border-radius': '9px',
-            'font-family':
-              "var(--sys-typescale-body-font, '.SFNSDisplay-Regular', 'Helvetica Neue', 'Lucida Grande', sans-serif)",
-            'font-size': '11px',
-            'line-height': '14px',
-            outline: 'none',
-          }}
-          onFocus={(e) =>
-            (e.currentTarget.style.border = '1px solid var(--sys-color-primary, #1a73e8)')
-          }
-          onBlur={(e) =>
-            (e.currentTarget.style.border = '1px solid var(--sys-color-outline-variant, #555)')
-          }
+          style={{ flex: '1' }}
         />
         <select
           value={source()}
@@ -76,7 +87,11 @@ export function DatabaseTab() {
         </select>
       </div>
       <div class="database-container">
-        <TableList />
+        <TableList
+          tables={tables()}
+          showInternal={showInternal()}
+          onToggleInternal={setShowInternal}
+        />
         <TableView
           filter={filter()}
           setFilter={setFilter}

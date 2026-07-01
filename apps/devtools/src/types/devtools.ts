@@ -105,6 +105,8 @@ export interface ActiveQuery {
   lastUpdate: number;
   updateCount: number;
   dataSize?: number;
+  /** Query cache Time-To-Live (e.g. '10m'), if known. */
+  ttl?: string;
   query?: string;
   variables?: Record<string, unknown>;
   listenerCount?: number;
@@ -130,6 +132,8 @@ export interface AuthState {
 
 export interface DatabaseState {
   tables: string[];
+  /** Tables that exist on the remote DB (enumerated on demand). */
+  remoteTables?: string[];
   tableData: Record<string, Record<string, unknown>[]>;
   schema?: Record<string, string[]>; // table -> column names
 }

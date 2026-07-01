@@ -49,6 +49,13 @@ export class DevToolsService implements StreamUpdateReceiver {
   // (the on-demand GET_STATE pull) still works before the push channel turns on.
   private enabled = false;
 
+  // Full local table list (incl. internal `_00_*`), enumerated from the local DB
+  // via our own reliable `service.query` — the DevTools panel's page-eval query
+  // bridge is unreliable under load, so the panel relies on this instead.
+  private localTables: string[] = [];
+  private localTablesFetching = false;
+  private localTablesAt = 0;
+
   constructor(
     private databaseService: LocalDatabaseService,
     private remoteDatabaseService: RemoteDatabaseService,
@@ -130,6 +137,7 @@ export class DevToolsService implements StreamUpdateReceiver {
             : new Date(q.config.lastActiveAt || Date.now()).getTime(),
         lastUpdate: Date.now(),
         updateCount: q.updateCount,
+        ttl: q.config.ttl,
         query: q.config.surql,
         variables: q.config.params || {},
         dataSize: q.records?.length || 0,
@@ -230,7 +238,50 @@ export class DevToolsService implements StreamUpdateReceiver {
     if (this.eventsHistory.length > 100) this.eventsHistory.shift();
   }
 
+  /** Unwrap a SurrealDB `INFO FOR DB` result to its `{ tables, ... }` object. */
+  private unwrapInfo(res: any): any {
+    if (!Array.isArray(res) || !res[0]) return null;
+    const first = res[0];
+    if (first && typeof first === 'object' && 'result' in first) return first.result;
+    if (Array.isArray(first)) return first[0];
+    return first;
+  }
+
+  /**
+   * Refresh the cached full local-table list from `INFO FOR DB`. Fire-and-forget
+   * and throttled — called from getState() so the panel gets every table
+   * (including internal `_00_*`) without running its own (flaky) queries.
+   */
+  private refreshLocalTables(): void {
+    if (this.localTablesFetching) return;
+    const now = Date.now();
+    if (now - this.localTablesAt < 3000) return;
+    this.localTablesFetching = true;
+    void this.databaseService
+      .query<any>('INFO FOR DB')
+      .then((res) => {
+        const info = this.unwrapInfo(res);
+        this.localTablesAt = Date.now();
+        if (info && info.tables) {
+          const names = Object.keys(info.tables);
+          const changed =
+            names.length !== this.localTables.length ||
+            names.some((n, i) => n !== this.localTables[i]);
+          this.localTables = names;
+          if (changed) this.notifyDevTools();
+        }
+      })
+      .catch(() => {
+        // Ignore — fall back to the declared app schema below.
+      })
+      .finally(() => {
+        this.localTablesFetching = false;
+      });
+  }
+
   private getState() {
+    // Keep the full local-table list fresh (throttled, non-blocking).
+    this.refreshLocalTables();
     return this.serializeForDevTools({
       eventsHistory: [...this.eventsHistory],
       activeQueries: Object.fromEntries(this.getActiveQueries()),
@@ -249,7 +300,11 @@ export class DevToolsService implements StreamUpdateReceiver {
         entities: this.backendInfo.entities,
       },
       database: {
-        tables: this.schema.tables.map((t) => t.name),
+        // Prefer the live local-table list (includes internal `_00_*`); fall
+        // back to the declared app schema until the first enumeration lands.
+        tables: this.localTables.length
+          ? this.localTables
+          : this.schema.tables.map((t) => t.name),
         tableData: {},
       },
     });

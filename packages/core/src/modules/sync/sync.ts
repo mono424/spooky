@@ -168,6 +168,10 @@ export class Sp00kySync<S extends SchemaStructure> {
   private syncHealthStatus: SyncHealthStatus = 'healthy';
   private lastSyncErrorKind: 'network' | 'application' | undefined;
   private lastSyncErrorMessage: string | undefined;
+  // Latched `true` on the first successful sync round; never reset. Lets a UI
+  // tell a cold-start "connecting" phase (never reached the server) apart from
+  // a real lost connection after a working session.
+  private hasSyncedOnce = false;
 
   // Self-heal: while degraded, re-drive sync on an exponential backoff so the
   // app recovers on its own — even when the socket never actually dropped (in
@@ -186,6 +190,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       consecutiveFailures: this.consecutiveSyncFailures,
       kind: this.syncHealthStatus === 'degraded' ? this.lastSyncErrorKind : undefined,
       error: this.syncHealthStatus === 'degraded' ? this.lastSyncErrorMessage : undefined,
+      everConnected: this.hasSyncedOnce,
     };
   }
 
@@ -216,6 +221,9 @@ export class Sp00kySync<S extends SchemaStructure> {
   private recordSyncOutcome(ok: boolean, error?: unknown): void {
     if (this.degradeAfterFailures <= 0) return;
     if (ok) {
+      // Latch first-ever success so a UI can drop the connecting phase. Set
+      // before the early return so a clean cold start (0 prior failures) counts.
+      this.hasSyncedOnce = true;
       if (this.consecutiveSyncFailures === 0) return;
       this.consecutiveSyncFailures = 0;
       if (this.syncHealthStatus !== 'healthy') {

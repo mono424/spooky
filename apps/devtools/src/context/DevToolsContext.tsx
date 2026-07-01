@@ -3,7 +3,6 @@ import {
   useContext,
   createSignal,
   onMount,
-  createEffect,
   type ParentComponent,
 } from 'solid-js';
 import { createStore } from 'solid-js/store';
@@ -46,6 +45,14 @@ interface DevToolsContextValue {
   deleteTableRow: (tableName: string, recordId: string) => void;
   runQuery?: (query: string, target: 'local' | 'remote') => Promise<any>;
   fetchSchema?: () => Promise<void>;
+  fetchTables?: (target?: 'local' | 'remote') => Promise<void>;
+}
+
+/** Union of two table-name lists, preserving `a`'s order then appending new `b`. */
+function unionTables(a: string[], b: string[]): string[] {
+  const seen = new Set(a);
+  const extra = b.filter((t) => !seen.has(t));
+  return extra.length === 0 ? a : [...a, ...extra];
 }
 
 const DevToolsContext = createContext<DevToolsContextValue>();
@@ -63,13 +70,14 @@ export const DevToolsProvider: ParentComponent = (props) => {
     },
     database: {
       tables: [],
+      remoteTables: [],
       tableData: {},
     },
     versions: DEFAULT_VERSIONS,
   });
 
   // UI state
-  const [activeTab, setActiveTab] = createSignal<TabType>('events');
+  const [activeTab, setActiveTab] = createSignal<TabType>('queries');
   const [selectedQueryHash, setSelectedQueryHash] = createSignal<number | null>(null);
   const [selectedTable, setSelectedTable] = createSignal<string | null>(null);
   const [isSp00kyAvailable, setIsSp00kyAvailable] = createSignal(false);
@@ -90,6 +98,12 @@ export const DevToolsProvider: ParentComponent = (props) => {
   });
 
   const hostPage = useRunInHostPage();
+
+  // In-flight guards for the panel's own optional schema queries (kept for
+  // manual/debug use). The table list itself comes from the backend now.
+  let tablesInFlight = false;
+  let remoteTablesInFlight = false;
+  let schemaInFlight = false;
 
   /**
    * Handle messages from background script
@@ -215,9 +229,13 @@ export const DevToolsProvider: ParentComponent = (props) => {
       setState('auth', frontendState.auth);
     }
 
-    // Update database tables list
+    // Merge (union) the backend table list with what we already have. Newer core
+    // enumerates every local table (incl. internal `_00_*`); older core sends
+    // only app tables. Merging means the panel's own `fetchTables()` result
+    // (which always sees `_00_*`) isn't clobbered by a subsequent backend push.
     if (frontendState.database?.tables) {
-      setState('database', 'tables', frontendState.database.tables);
+      const incoming = frontendState.database.tables;
+      setState('database', 'tables', (prev) => unionTables(incoming, prev));
     }
 
     // Update component versions
@@ -271,6 +289,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function refresh() {
     checkSp00ky();
+    // The single top-right Refresh also re-runs backend version discovery so the
+    // Versions tab no longer needs its own (removed) button.
+    refreshVersions();
+    // Note: the table list refreshes via the backend's getState() (checkSp00ky
+    // above), so we don't run the panel's own (unreliable) schema queries here.
     const currentTable = selectedTable();
     if (currentTable) {
       fetchTableData(currentTable);
@@ -380,16 +403,6 @@ export const DevToolsProvider: ParentComponent = (props) => {
     };
   });
 
-  // Fetch schema when Sp00ky becomes available
-  createEffect(() => {
-    if (isSp00kyAvailable()) {
-      // Delay slightly to ensure everything is settled
-      setTimeout(() => {
-        fetchSchema();
-      }, 500);
-    }
-  });
-
   const runQuery = (query: string, target: 'local' | 'remote') => {
     return new Promise<{ success: boolean; data: any; error?: string }>((resolve, reject) => {
       const requestId = Math.random().toString(36).substring(7);
@@ -447,15 +460,35 @@ export const DevToolsProvider: ParentComponent = (props) => {
     });
   };
 
-  const fetchSchema = async () => {
+  /**
+   * Cheap: fetch just the table list via a single `INFO FOR DB`. Safe to call
+   * often (Refresh, Database tab open, "show internal" toggle) — guarded so
+   * overlapping calls don't pile up on the query channel.
+   */
+  const fetchTables = async (target: 'local' | 'remote' = 'local') => {
+    if (target === 'local' ? tablesInFlight : remoteTablesInFlight) return;
+    if (target === 'local') tablesInFlight = true;
+    else remoteTablesInFlight = true;
+
+    // Remote enumeration can be denied (the session has no permission to run
+    // `INFO FOR DB` remotely) or simply unreachable. When it fails, mirror the
+    // local table list into `remoteTables` so the Remote picker still shows
+    // something instead of an empty list.
+    const fallbackRemoteToLocal = () => {
+      if (target !== 'remote') return;
+      console.warn(
+        '[DevToolsContext] Remote table enumeration failed; falling back to local tables'
+      );
+      setState('database', 'remoteTables', state.database.tables);
+    };
+
     try {
-      console.log('[DevToolsContext] Fetching DB Schema...');
-      // 1. Get Tables via INFO FOR DB
-      const infoRes = await runQuery('INFO FOR DB', 'local');
+      const infoRes = await runQuery('INFO FOR DB', target);
 
       // Handle SurrealDB response format: [{ status: 'OK', result: { tables: ... } }] or [[{ tables: ... }]]
       if (!Array.isArray(infoRes) || !infoRes[0]) {
         console.warn('[DevToolsContext] INFO FOR DB failed or invalid format', infoRes);
+        fallbackRemoteToLocal();
         return;
       }
 
@@ -470,48 +503,81 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
       if (!info || !info.tables) {
         console.warn('[DevToolsContext] No tables found in INFO FOR DB result', info);
+        fallbackRemoteToLocal();
         return;
       }
 
       const tables = Object.keys(info.tables);
-      // Update tables list immediately
-      setState('database', 'tables', tables);
+      if (target === 'remote') {
+        // Remote isn't pushed by the backend, so this fetch is the source of
+        // truth — replace (don't union) so nonexistent tables don't linger.
+        setState('database', 'remoteTables', tables);
+      } else {
+        // Merge so a later backend push (which may omit `_00_*`) can't drop them.
+        setState('database', 'tables', (prev) => unionTables(prev, tables));
+      }
+    } catch (e) {
+      console.error(`[DevToolsContext] fetchTables(${target}) failed:`, e);
+      fallbackRemoteToLocal();
+    } finally {
+      if (target === 'local') tablesInFlight = false;
+      else remoteTablesInFlight = false;
+    }
+  };
+
+  /**
+   * Full schema: table list + per-table field lists (`INFO FOR TABLE`). This is
+   * the heavy one (a query per table) — run once when Sp00ky becomes available,
+   * NOT on every UI interaction. Guarded against overlapping runs.
+   */
+  const fetchSchema = async () => {
+    if (schemaInFlight) return;
+    schemaInFlight = true;
+    try {
+      console.log('[DevToolsContext] Fetching DB Schema...');
+      await fetchTables();
+      const tables = state.database.tables;
 
       const schema: Record<string, string[]> = {};
 
-      // 2. For each table, get columns via INFO FOR TABLE
-      // Run in parallel
-      await Promise.all(
-        tables.map(async (table) => {
-          try {
-            const tableRes = await runQuery(`INFO FOR TABLE ${table}`, 'local');
+      // For each table, get columns via INFO FOR TABLE. Batched so we don't fire
+      // dozens of concurrent queries at the single WASM connection.
+      const BATCH = 4;
+      for (let i = 0; i < tables.length; i += BATCH) {
+        await Promise.all(
+          tables.slice(i, i + BATCH).map(async (table) => {
+            try {
+              const tableRes = await runQuery(`INFO FOR TABLE ${table}`, 'local');
 
-            if (Array.isArray(tableRes) && tableRes[0]) {
-              // Normalize nested vs wrapped
-              const tableInfo =
-                'result' in tableRes[0]
-                  ? tableRes[0].result
-                  : Array.isArray(tableRes[0])
-                    ? tableRes[0][0]
-                    : tableRes[0];
+              if (Array.isArray(tableRes) && tableRes[0]) {
+                // Normalize nested vs wrapped
+                const tableInfo =
+                  'result' in tableRes[0]
+                    ? tableRes[0].result
+                    : Array.isArray(tableRes[0])
+                      ? tableRes[0][0]
+                      : tableRes[0];
 
-              if (tableInfo && tableInfo.fields) {
-                schema[table] = Object.keys(tableInfo.fields);
-              } else {
-                schema[table] = []; // No explicit fields
+                if (tableInfo && tableInfo.fields) {
+                  schema[table] = Object.keys(tableInfo.fields);
+                } else {
+                  schema[table] = []; // No explicit fields
+                }
               }
+            } catch (e) {
+              console.error(`[DevToolsContext] Failed to fetch info for table ${table}`, e);
+              schema[table] = [];
             }
-          } catch (e) {
-            console.error(`[DevToolsContext] Failed to fetch info for table ${table}`, e);
-            schema[table] = [];
-          }
-        })
-      );
+          })
+        );
+      }
 
       console.log('[DevToolsContext] Schema fetched:', schema);
       setState('database', 'schema', schema);
     } catch (e) {
       console.error('[DevToolsContext] fetchSchema failed:', e);
+    } finally {
+      schemaInFlight = false;
     }
   };
 
@@ -538,6 +604,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
     deleteTableRow,
     runQuery: runQuery as any, // Cast to match interface if needed
     fetchSchema,
+    fetchTables,
   };
 
   return <DevToolsContext.Provider value={contextValue}>{props.children}</DevToolsContext.Provider>;
