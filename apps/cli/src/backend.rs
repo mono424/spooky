@@ -1561,6 +1561,19 @@ impl BackendProcessor {
             if app.scope == AppScope::DevOnly {
                 continue;
             }
+            // A backend with no `method` is a direct-HTTP service (e.g. the
+            // stream-relay: clients fetch it directly, it is not outbox-driven).
+            // It is still deployed - the deploy manifest treats `method` as
+            // optional (see cloud.rs) - but it carries no outbox schema / client
+            // routes to apply, so skip schema processing. Mirrors
+            // AppConfig::validate, which does not require a method.
+            if app.method.is_none() {
+                println!(
+                    "Skipping backend '{}' schema (no method; direct-HTTP/deploy-only backend)",
+                    name
+                );
+                continue;
+            }
             self.process_backend(name, app, base_dir)?;
         }
 
