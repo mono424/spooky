@@ -485,20 +485,62 @@ export class Sp00kySync<S extends SchemaStructure> {
    * One poll cycle: refetch `_00_list_ref` for every active query. Returns
    * whether ANY query's remoteArray actually changed — the scheduler uses this
    * to drive the adaptive idle backoff.
+   *
+   * Also the ONLY health signal that runs while the page is idle. Sync health is
+   * otherwise activity-driven (mutations/registrations via the scheduler,
+   * reconnect re-registration, self-heal), so on a quiet page a stale `degraded`
+   * would linger until the next mutation and a genuine idle drop would be
+   * invisible. We fold the cycle's aggregate reachability into `recordSyncOutcome`
+   * so idle health self-recovers (and self-degrades) with no user action. A clean
+   * cycle is idempotent when already healthy (`recordSyncOutcome` early-returns at
+   * `consecutiveSyncFailures === 0`), so a healthy idle page pays nothing.
    */
   private async pollListRefForActiveQueries(): Promise<boolean> {
     const hashes = this.dataModule.getActiveQueryHashes();
-    if (hashes.length === 0) return false;
+    if (hashes.length === 0) {
+      // No active queries to piggyback on, but health still needs a heartbeat —
+      // probe connectivity directly so an idle page with no live queries doesn't
+      // go blind. Cheap, and gated by the same adaptive backoff (≤5s idle cap).
+      try {
+        await this.remote.query('RETURN true');
+        this.recordSyncOutcome(true);
+      } catch (err) {
+        this.recordSyncOutcome(false, err);
+      }
+      return false;
+    }
     let anyChanged = false;
+    // `reached` = the server answered at least once this cycle (a success, or an
+    // *application* error, which still proves reachability). `firstNetworkErr`
+    // holds the first network-classified failure. A cycle that only produced
+    // network errors reports the outcome as a down round; a mixed/app cycle counts
+    // as reached; an all-application cycle reports nothing (that's a query-shape
+    // fault owned by the registration path, not a reachability signal).
+    let reached = false;
+    let firstNetworkErr: unknown;
     for (const hash of hashes) {
       try {
         if (await this.refetchListRefForQuery(hash)) anyChanged = true;
+        reached = true;
       } catch (err) {
+        if (classifySyncError(err) === 'network') {
+          if (firstNetworkErr === undefined) firstNetworkErr = err;
+        } else {
+          reached = true;
+        }
         this.logger.debug(
           { err: (err as Error)?.message ?? err, hash, Category: 'sp00ky-client::Sp00kySync::pollListRefForActiveQueries' },
           'Per-query list_ref poll failed'
         );
       }
+    }
+    // Call the private outcome recorder directly rather than routing through the
+    // scheduler — the scheduler only reports on rounds that drained ≥1 queue item
+    // (`processedAny`), and this isn't a queue round.
+    if (reached) {
+      this.recordSyncOutcome(true);
+    } else if (firstNetworkErr !== undefined) {
+      this.recordSyncOutcome(false, firstNetworkErr);
     }
     return anyChanged;
   }
