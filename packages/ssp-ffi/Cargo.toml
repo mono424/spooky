@@ -1,6 +1,6 @@
 [package]
 name = "ssp-ffi"
-version = "0.0.1-canary.102"
+version = "0.0.1-canary.103"
 edition = "2021"
 description = "C ABI (Dart FFI) bindings for ssp"
 license = "MIT"
