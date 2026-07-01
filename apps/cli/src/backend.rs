@@ -1992,25 +1992,38 @@ apps:
         );
     }
 
-    /// The skip is scoped to devOnly only: a normal (deployed) backend missing
-    /// `method` must still error, so the check isn't silently dropped for everyone.
+    /// A `type: backend` with no `method` is a direct-HTTP / deploy-only service
+    /// (e.g. the stream-relay: clients fetch it directly, it is not outbox-driven).
+    /// process() must SKIP it, not error, since it carries no outbox schema to
+    /// apply; the deploy path still ships it. Previously this was asserted to
+    /// error; direct-HTTP backends are now supported.
     #[test]
-    fn non_devonly_backend_without_method_still_errors() {
+    fn backend_without_method_is_skipped_as_deploy_only() {
         let yaml = "\
 slug: t
 surrealdb:
   namespace: main
   database: main
 apps:
-  foo:
+  relaylike:
     type: backend
+    spec: ./relay-openapi.yml
+    deploy:
+      dockerfile: ./Dockerfile
+      context: .
+      port: 3670
 ";
         let (_dir, path) = write_config(yaml);
         let mut p = BackendProcessor::new();
         let r = p.process(&path);
         assert!(
-            r.is_err(),
-            "non-devOnly backend without method must still error"
+            r.is_ok(),
+            "method-less (direct-HTTP) backend should be skipped, got: {:?}",
+            r.err()
+        );
+        assert!(
+            !p.schema_appends.contains("relaylike"),
+            "skipped direct-HTTP backend must not contribute schema"
         );
     }
 }
