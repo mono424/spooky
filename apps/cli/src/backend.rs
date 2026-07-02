@@ -1263,8 +1263,20 @@ pub enum BackendDevTypedConfig {
         file: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
+        /// Single published port (host:container). Kept for back-compat; for
+        /// more than one use `ports`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<String>,
+        /// Additional published ports (host:container), e.g. a REST + a gRPC
+        /// port. Merged with `port`. Lets a backend that listens on two ports
+        /// (like a relay with WS + gRPC) run through the native docker method.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ports: Option<Vec<String>>,
+        /// docker `--platform` for build + run, e.g. `linux/arm64` to run the
+        /// image's toolchain natively on Apple Silicon instead of emulating the
+        /// deploy (amd64) arch under QEMU.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        platform: Option<String>,
     },
     #[serde(rename = "uv")]
     Uv {

@@ -67,15 +67,17 @@ fn collect_dev_ports(
 
     let mut collect_app = |label: &str, name: &str, dev: &Option<BackendDevConfig>| {
         if let Some(BackendDevConfig::Typed(BackendDevTypedConfig::Docker {
-            port: Some(p), ..
+            port, ports, ..
         })) = dev
         {
-            match port_check::parse_docker_host_port(p) {
-                Some(host) => out.push((host, format!("{}:{}", label, name))),
-                None => eprintln!(
-                    "{} Warning: could not parse docker port spec '{}' for {} '{}', skipping pre-check for it",
-                    PREFIX, p, label, name
-                ),
+            for p in merge_docker_ports(port.as_deref(), ports.as_deref()) {
+                match port_check::parse_docker_host_port(&p) {
+                    Some(host) => out.push((host, format!("{}:{}", label, name))),
+                    None => eprintln!(
+                        "{} Warning: could not parse docker port spec '{}' for {} '{}', skipping pre-check for it",
+                        PREFIX, p, label, name
+                    ),
+                }
             }
         }
     };
@@ -1882,6 +1884,31 @@ impl SupervisedService {
 }
 
 #[cfg(test)]
+mod docker_port_tests {
+    use super::*;
+
+    #[test]
+    fn merges_single_port_and_array() {
+        // A relay listening on WS + gRPC publishes both host ports.
+        let merged = merge_docker_ports(
+            Some("3670:3670"),
+            Some(&["3671:3671".to_string()]),
+        );
+        assert_eq!(merged, vec!["3670:3670".to_string(), "3671:3671".to_string()]);
+    }
+
+    #[test]
+    fn handles_only_ports_array_or_only_single() {
+        assert_eq!(
+            merge_docker_ports(None, Some(&["3670:3670".into(), "3671:3671".into()])),
+            vec!["3670:3670".to_string(), "3671:3671".to_string()]
+        );
+        assert_eq!(merge_docker_ports(Some("80:80"), None), vec!["80:80".to_string()]);
+        assert!(merge_docker_ports(None, None).is_empty());
+    }
+}
+
+#[cfg(test)]
 mod supervisor_tests {
     use super::*;
 
@@ -2173,12 +2200,16 @@ fn spawn_frontend_dev(
                     file,
                     workdir,
                     port,
+                    ports,
+                    platform,
                 }) => {
                     let cwd = resolve_workdir(project_dir, workdir.as_deref());
+                    let all_ports = merge_docker_ports(port.as_deref(), ports.as_deref());
                     println!("{} Building: docker build -f {}", prefix, file);
                     return spawn_docker_dev(
                         file,
-                        port.as_deref(),
+                        &all_ports,
+                        platform.as_deref(),
                         &envs,
                         &cwd,
                         "frontend",
@@ -2317,12 +2348,16 @@ fn spawn_backend_dev_commands(
                 file,
                 workdir,
                 port,
+                ports,
+                platform,
             }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
+                let all_ports = merge_docker_ports(port.as_deref(), ports.as_deref());
                 println!("{} Building: docker build -f {}", prefix, file);
                 guards.push(spawn_docker_dev(
                     file,
-                    port.as_deref(),
+                    &all_ports,
+                    platform.as_deref(),
                     &envs,
                     &cwd,
                     name,
@@ -2680,9 +2715,23 @@ fn spawn_prefixed(cmd: &mut Command, prefix: &str) -> LogTailGuard {
     }
 }
 
+/// Merge the single `port` field and the `ports` array into one host:container
+/// list, so a backend that listens on more than one port can be published.
+fn merge_docker_ports(port: Option<&str>, ports: Option<&[String]>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(p) = port {
+        out.push(p.to_string());
+    }
+    if let Some(ps) = ports {
+        out.extend(ps.iter().cloned());
+    }
+    out
+}
+
 fn spawn_docker_dev(
     file: &str,
-    port: Option<&str>,
+    ports: &[String],
+    platform: Option<&str>,
     envs: &[(String, String)],
     cwd: &Path,
     name: &str,
@@ -2691,9 +2740,17 @@ fn spawn_docker_dev(
     let tag = format!("sp00ky-dev-{}", name);
     let container_name = format!("sp00ky-dev-app-{}", name);
 
-    // Build the image (blocking, with prefixed output)
+    // Build the image (blocking, with prefixed output). `--platform` (when set)
+    // builds for the host arch so the image's toolchain runs natively instead
+    // of under QEMU emulation of the deploy arch.
+    let mut build_args: Vec<String> = vec!["build".into()];
+    if let Some(p) = platform {
+        build_args.push("--platform".into());
+        build_args.push(p.to_string());
+    }
+    build_args.extend(["-f".into(), file.to_string(), "-t".into(), tag.clone(), ".".into()]);
     let build_result = Command::new("docker")
-        .args(["build", "-f", file, "-t", &tag, "."])
+        .args(&build_args)
         .current_dir(cwd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -2736,9 +2793,16 @@ fn spawn_docker_dev(
         NETWORK_NAME.to_string(),
     ];
 
-    if let Some(p) = port {
-        args.push("-p".to_string());
+    if let Some(p) = platform {
+        args.push("--platform".to_string());
         args.push(p.to_string());
+    }
+
+    // Publish every requested host:container port (a backend may listen on
+    // more than one, e.g. REST + gRPC).
+    for p in ports {
+        args.push("-p".to_string());
+        args.push(p.clone());
     }
 
     // Pass resolved env vars as -e flags
