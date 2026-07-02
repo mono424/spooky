@@ -1228,6 +1228,11 @@ fn resolve_deploy_env_source(
                 format!("{}={}", k, val)
             })
             .collect(),
+        // Scoped list item ({ dev, cloud }): a deploy resolves the cloud side.
+        backend::EnvSource::PerEnvironment { cloud, .. } => match cloud {
+            Some(entry) => resolve_deploy_env_entry(entry, config_dir, client, pid),
+            None => Vec::new(),
+        },
     }
 }
 
@@ -1534,6 +1539,7 @@ fn build_backend_manifest(
         "port": port,
         "ports": deploy.ports,
         "expose": deploy.expose,
+        "grpc_port": deploy.grpc_port,
         "resources": {
             "vcpus": resources.vcpus,
             "memory_mb": resources.memory,
@@ -1937,6 +1943,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                             context: None,
                             port: Some(port),
                             ports: None,
+                            grpc_port: None,
                             resources: None,
                             expose: false,
                             healthcheck: None,
@@ -2059,6 +2066,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                 context: None,
                 port: Some(port),
                 ports: None,
+                grpc_port: None,
                 resources: None,
                 expose: false,
                 healthcheck: None,

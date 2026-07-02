@@ -2587,6 +2587,11 @@ fn resolve_env_source(source: &backend::EnvSource, project_dir: &Path) -> Vec<(S
                 (k.clone(), val)
             })
             .collect(),
+        // Scoped list item: dev mode resolves the dev side only.
+        backend::EnvSource::PerEnvironment { dev, .. } => match dev {
+            Some(entry) => resolve_env_entry(entry, project_dir),
+            None => Vec::new(),
+        },
     }
 }
 

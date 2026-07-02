@@ -488,6 +488,15 @@ pub enum EnvSource {
     Map(BTreeMap<String, serde_yaml::Value>),
     /// Vault with a whitelist of variable names, e.g. `{ vault: [DB_URL, API_KEY] }`
     Vault(Vec<String>),
+    /// Per-environment split INSIDE a source list, e.g.
+    /// `env: [ { dev: {...}, cloud: {...} }, { cloud: { vault: [...] } } ]`.
+    /// Without this variant such a map fell into `Map` and was stringified
+    /// into literal `dev=...` / `cloud=...` env entries, which is how a CLI
+    /// deploy shipped a backend with no real env (and no vault secrets).
+    PerEnvironment {
+        dev: Option<Box<EnvEntry>>,
+        cloud: Option<Box<EnvEntry>>,
+    },
 }
 
 impl Serialize for EnvSource {
@@ -502,6 +511,17 @@ impl Serialize for EnvSource {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;
                 map.serialize_entry("vault", keys)?;
+                map.end()
+            }
+            EnvSource::PerEnvironment { dev, cloud } => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(None)?;
+                if let Some(d) = dev {
+                    map.serialize_entry("dev", d)?;
+                }
+                if let Some(c) = cloud {
+                    map.serialize_entry("cloud", c)?;
+                }
                 map.end()
             }
         }
@@ -528,6 +548,30 @@ impl<'de> Deserialize<'de> for EnvSource {
                             return Ok(EnvSource::Vault(keys));
                         }
                     }
+                }
+                // Per-environment split ({ dev, cloud } only keys) — the same
+                // rule as EnvConfig's top-level detection, applied to list
+                // items so `env: [ {dev:…, cloud:…}, {cloud: {vault: […]}} ]`
+                // resolves per environment instead of degrading to Map.
+                let keys: Vec<&str> = m.keys().filter_map(|k| k.as_str()).collect();
+                let is_per_env =
+                    !keys.is_empty() && keys.iter().all(|k| *k == "dev" || *k == "cloud");
+                if is_per_env {
+                    let side =
+                        |name: &str| -> std::result::Result<Option<Box<EnvEntry>>, D::Error> {
+                            let key = serde_yaml::Value::String(name.into());
+                            m.get(&key)
+                                .map(|v| {
+                                    serde_yaml::from_value::<EnvEntry>(v.clone())
+                                        .map(Box::new)
+                                        .map_err(serde::de::Error::custom)
+                                })
+                                .transpose()
+                        };
+                    return Ok(EnvSource::PerEnvironment {
+                        dev: side("dev")?,
+                        cloud: side("cloud")?,
+                    });
                 }
                 // Otherwise it's an inline key-value map
                 let map = m
@@ -1246,6 +1290,11 @@ pub struct AppDeployConfig {
     /// Additional published ports for apps requiring multiple ports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ports: Option<Vec<String>>,
+    /// Second container port carrying gRPC, exposed by the cloud via a
+    /// dedicated h2c Traefik router at `<slug>-<name>-grpc.<domain>` (backend
+    /// only). Keep in sync with spooky-cloud's linking builder schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_port: Option<u16>,
     /// Resource allocation for the VM
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<BackendDeployResources>,
@@ -2072,5 +2121,81 @@ DEFINE BUCKET docs BACKEND "file:/buckets/docs";
 
         let no_deploy: Sp00kyConfig = serde_yaml::from_str("slug: t\n").unwrap();
         assert_eq!(no_deploy.bucket_storage_gb(), None);
+    }
+}
+
+#[cfg(test)]
+mod env_source_tests {
+    use super::*;
+
+    /// The exact shape whitepawn's relay uses: a source LIST whose first item
+    /// is a { dev, cloud } split and whose second scopes a vault whitelist to
+    /// cloud. Before EnvSource::PerEnvironment existed, both items degraded to
+    /// Map and a CLI deploy shipped literal `dev=...` / `cloud=vault:...` env
+    /// entries (no real vars, no secrets) — the 2026-07-02 staging outage.
+    const SCOPED_LIST_YAML: &str = r#"
+- dev:
+    PORT: "3670"
+    RELAY_PUBLIC_URL: "ws://localhost:3670"
+  cloud:
+    PORT: "3670"
+    RELAY_PUBLIC_URL: "wss://relay.example.com"
+- cloud:
+    vault:
+      - SPKY_JWT_PUBLIC_KEY
+      - LIVEKIT_SECRET
+"#;
+
+    #[test]
+    fn scoped_list_items_parse_per_environment() {
+        let cfg: EnvConfig = serde_yaml::from_str(SCOPED_LIST_YAML).expect("parse");
+        let EnvConfig::List(sources) = cfg else {
+            panic!("expected List");
+        };
+        assert_eq!(sources.len(), 2);
+        match &sources[0] {
+            EnvSource::PerEnvironment { dev, cloud } => {
+                assert!(dev.is_some() && cloud.is_some());
+            }
+            other => panic!("first item should be PerEnvironment, got {other:?}"),
+        }
+        match &sources[1] {
+            EnvSource::PerEnvironment { dev, cloud } => {
+                assert!(dev.is_none());
+                match cloud.as_deref() {
+                    Some(EnvEntry::Source(EnvSource::Vault(keys))) => {
+                        assert_eq!(keys, &["SPKY_JWT_PUBLIC_KEY", "LIVEKIT_SECRET"]);
+                    }
+                    other => panic!("cloud side should be a vault whitelist, got {other:?}"),
+                }
+            }
+            other => panic!("second item should be PerEnvironment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_inline_map_is_untouched() {
+        let cfg: EnvConfig =
+            serde_yaml::from_str("- PORT: \"1234\"\n  MODE: \"x\"\n").expect("parse");
+        let EnvConfig::List(sources) = cfg else {
+            panic!("expected List");
+        };
+        match &sources[0] {
+            EnvSource::Map(m) => assert_eq!(m.len(), 2),
+            other => panic!("expected Map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deploy_config_parses_grpc_port() {
+        let d: AppDeployConfig = serde_yaml::from_str(
+            "dockerfile: Dockerfile\nport: 3670\ngrpc_port: 3671\nexpose: true\n",
+        )
+        .expect("parse");
+        assert_eq!(d.grpc_port, Some(3671));
+        // Absent stays None (and is skipped on serialize).
+        let d2: AppDeployConfig =
+            serde_yaml::from_str("dockerfile: Dockerfile\nport: 8080\n").expect("parse");
+        assert_eq!(d2.grpc_port, None);
     }
 }
