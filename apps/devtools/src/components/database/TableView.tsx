@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, on } from 'solid-js';
 import { useDevTools } from '../../context/DevToolsContext';
 import { escapeHtml } from '../../utils/html';
 import { Cell } from './Cell';
@@ -46,6 +46,52 @@ function RefreshIcon() {
   );
 }
 
+function ChevronLeftIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <polyline points="15 18 9 12 15 6"></polyline>
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  );
+}
+
+const PAGE_SIZES = [10, 20, 50, 100];
+
+/**
+ * SurrealDB can return different formats depending on version and transport:
+ * [{ status: 'OK', result: [...] }], [[...]], a bare array of records, or a
+ * single { result: ... } object. Normalize all of them to a plain array.
+ */
+function unwrapQueryResult(result: unknown): unknown[] {
+  if (Array.isArray(result)) {
+    if (
+      result.length > 0 &&
+      result[0] &&
+      typeof result[0] === 'object' &&
+      'result' in result[0]
+    ) {
+      const inner = (result[0] as { result: unknown }).result;
+      return Array.isArray(inner) ? inner : [];
+    }
+    if (result.length > 0 && Array.isArray(result[0])) {
+      return result[0];
+    }
+    return result;
+  }
+  if (result && typeof result === 'object' && 'result' in result) {
+    const inner = (result as { result: unknown }).result;
+    return Array.isArray(inner) ? inner : [];
+  }
+  return [];
+}
+
 interface TableViewProps {
   filter: string;
   setFilter: (val: string) => void;
@@ -76,58 +122,35 @@ export function TableView(props: TableViewProps) {
     }
   };
 
-  // Fetch table data when a table is selected, source changes, or refresh clicked
+  const [page, setPage] = createSignal(1);
+  const [limit, setLimit] = createSignal(20);
+  // Total row count in the table (from a separate COUNT query), null while unknown
+  const [total, setTotal] = createSignal<number | null>(null);
+
+  // Back to the first page whenever the table, source, or page size changes
+  createEffect(
+    on([selectedTable, () => props.source, limit], () => setPage(1), { defer: true })
+  );
+
+  // Fetch table data when a table is selected, source/page/limit changes, or refresh clicked
   createEffect(() => {
     const table = selectedTable();
     const currentSource = props.source;
+    const currentLimit = limit();
+    const currentPage = page();
     refreshTick();
     setInspectedRow(null); // close the JSON pane when the table/source changes
     if (table && runQuery) {
-      // Construct query: SELECT * FROM table LIMIT 20
       setLoading(true);
+      const start = (currentPage - 1) * currentLimit;
       console.log('[TableView] Triggering query for table:', table, 'Source:', currentSource);
-      runQuery(`SELECT * FROM ${table} LIMIT 20`, currentSource)
+      const dataPromise = runQuery(
+        `SELECT * FROM ${table} LIMIT ${currentLimit} START ${start}`,
+        currentSource
+      )
         .then((result: any) => {
           console.log('[TableView] Query result:', result);
-          if (Array.isArray(result)) {
-            // Unwrap SurrealDB result format [{ status: 'OK', result: [...] }]
-            // SurrealDB can return different formats depending on version and transport.
-            // Case 1: Wrapped in result object, single statement
-            if (
-              result.length > 0 &&
-              result[0] &&
-              typeof result[0] === 'object' &&
-              'result' in result[0]
-            ) {
-              const queryResult = result[0].result;
-              setData(Array.isArray(queryResult) ? queryResult : []);
-            }
-            // Case 2: Legacy/Flattened [[...]] (Double array)
-            else if (result.length > 0 && Array.isArray(result[0])) {
-              setData(result[0]);
-            }
-            // Case 3: Array of records directly (already unwrapped or different driver)
-            else if (result.length > 0) {
-              setData(result);
-            }
-            // Case 4: Empty array -> Empty table
-            else if (result.length === 0) {
-              setData([]);
-            } else {
-              // Fallback
-              console.warn('[TableView] Unexpected result format', result);
-              setData([]);
-            }
-          } else {
-            console.warn('[TableView] Result is not an array', result);
-            // If result is { result: ... } (single object, not array of results)
-            if (result && typeof result === 'object' && 'result' in result) {
-              const queryResult = result.result;
-              setData(Array.isArray(queryResult) ? queryResult : []);
-            } else {
-              setData([]);
-            }
-          }
+          setData(unwrapQueryResult(result) as Record<string, unknown>[]);
           return undefined;
         })
         .catch((err) => {
@@ -143,13 +166,41 @@ export function TableView(props: TableViewProps) {
           }
           props.onError?.(msg);
           setData([]);
+        });
+      const countPromise = runQuery(`SELECT count() FROM ${table} GROUP ALL`, currentSource)
+        .then((result: any) => {
+          const rows = unwrapQueryResult(result) as Array<{ count?: unknown }>;
+          const count = rows[0]?.count;
+          setTotal(typeof count === 'number' ? count : null);
+          return undefined;
         })
-        .finally(() => setLoading(false));
+        .catch((err) => {
+          console.error('[TableView] Count Query Error:', err);
+          setTotal(null);
+        });
+      Promise.allSettled([dataPromise, countPromise]).then(() => setLoading(false));
     }
   });
 
   const [data, setData] = createSignal<Record<string, unknown>[]>([]);
   const [loading, setLoading] = createSignal(false);
+
+  const totalPages = createMemo(() => {
+    const t = total();
+    if (t === null) return null;
+    return Math.max(1, Math.ceil(t / limit()));
+  });
+
+  // Clamp the page if the table shrank underneath us (e.g. rows deleted, then refresh)
+  createEffect(() => {
+    const pages = totalPages();
+    if (pages !== null && page() > pages) setPage(pages);
+  });
+
+  const pageOptions = createMemo(() => {
+    const count = totalPages() ?? page();
+    return Array.from({ length: count }, (_, i) => i + 1);
+  });
 
   const tableData = createMemo(() => {
     let currentData = data();
@@ -310,10 +361,62 @@ export function TableView(props: TableViewProps) {
           <option value="local">Local</option>
           <option value="remote">Remote</option>
         </select>
-        <Show when={selectedTable() && !loading()}>
-          <span class="db-toolbar-count">
-            {tableData().length} {tableData().length === 1 ? 'row' : 'rows'}
-          </span>
+        <Show when={selectedTable()}>
+          <div class="db-toolbar-right">
+            <select
+              class="db-source-select"
+              title="Rows per page"
+              aria-label="Rows per page"
+              value={String(limit())}
+              onChange={(e) => setLimit(Number(e.currentTarget.value))}
+            >
+              <For each={PAGE_SIZES}>
+                {(size) => <option value={String(size)}>{size} / page</option>}
+              </For>
+            </select>
+            <div class="db-toolbar-sep" />
+            <button
+              class="icon-btn"
+              title="Previous page"
+              aria-label="Previous page"
+              disabled={page() <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              <ChevronLeftIcon />
+            </button>
+            <select
+              class="db-source-select"
+              title="Page"
+              aria-label="Page"
+              value={String(page())}
+              onChange={(e) => setPage(Number(e.currentTarget.value))}
+            >
+              <For each={pageOptions()}>{(n) => <option value={String(n)}>{n}</option>}</For>
+            </select>
+            <span class="db-toolbar-pages">/ {totalPages() ?? '?'}</span>
+            <button
+              class="icon-btn"
+              title="Next page"
+              aria-label="Next page"
+              disabled={totalPages() !== null && page() >= totalPages()!}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              <ChevronRightIcon />
+            </button>
+            <div class="db-toolbar-sep" />
+            <Show when={!loading()}>
+              <span class="db-toolbar-count">
+                <Show
+                  when={total() !== null}
+                  fallback={`${tableData().length} ${tableData().length === 1 ? 'row' : 'rows'}`}
+                >
+                  <Show when={props.filter} fallback={`${total()} ${total() === 1 ? 'item' : 'items'}`}>
+                    {tableData().length} of {total()} items
+                  </Show>
+                </Show>
+              </span>
+            </Show>
+          </div>
         </Show>
       </div>
     </div>

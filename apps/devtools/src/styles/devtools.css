@@ -1231,9 +1231,32 @@ body {
   background: var(--sys-color-surface-container-high, #3d3d3d);
   color: var(--sys-color-on-surface, #fff);
 }
-.db-toolbar-count {
+.db-toolbar-right {
   margin-left: auto;
-  padding-left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.db-toolbar-right .icon-btn {
+  width: 20px;
+  height: 18px;
+}
+.db-toolbar-right .icon-btn:disabled {
+  color: var(--sys-color-outline-variant);
+  background: transparent;
+  cursor: default;
+}
+.db-toolbar-pages {
+  font-family: var(--sys-typescale-label-font);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sys-color-on-surface-subtle);
+  white-space: nowrap;
+  flex: none;
+}
+.db-toolbar-count {
+  padding-left: 2px;
   font-family: var(--sys-typescale-label-font);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
