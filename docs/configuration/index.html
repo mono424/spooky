@@ -411,6 +411,15 @@ export const db = new SyncedDb<typeof schema>(dbConfig);"> <svg class="copy-icon
 <li><code>&#39;indexeddb&#39;</code> (default): Persistent local storage in the browser</li>
 <li><code>&#39;memory&#39;</code>: Transient in-memory storage (clears on page reload)</li>
 </ul>
+<p>With <code>&#39;indexeddb&#39;</code>, the local store is <strong>bucketed per user</strong>: each account
+gets its own IndexedDB database (<code>sp00ky-&lt;userId&gt;</code>, with a shared
+<code>sp00ky-anon</code> bucket for signed-out sessions), and the client switches
+buckets automatically on sign-in/sign-out. Cached rows, query state, and the
+offline mutation outbox never leak between accounts on a shared device, and
+a user’s un-pushed offline mutations resume the next time they sign in. See
+<a href="/docs/architecture#per-user-local-buckets">Architecture → Per-User Local Buckets</a>.
+With <code>&#39;memory&#39;</code>, an auth change resets the store instead (same isolation,
+no persistence).</p>
 <h4 id="loglevel"><code>logLevel</code></h4>
 <p>Controls the verbosity of logging output:</p>
 <ul>
@@ -422,12 +431,17 @@ export const db = new SyncedDb<typeof schema>(dbConfig);"> <svg class="copy-icon
 <li><code>&#39;fatal&#39;</code>: Fatal errors that stop execution</li>
 </ul>
 <h4 id="persistenceclient"><code>persistenceClient</code></h4>
-<p>Determines where metadata like query states are persisted:</p>
+<p>Determines where small metadata values (the auth token, the stream
+processor’s persisted state) are stored:</p>
 <ul>
-<li><code>&#39;surrealdb&#39;</code> (default): Store in the local SurrealDB instance</li>
-<li><code>&#39;localstorage&#39;</code>: Use browser localStorage</li>
+<li><code>&#39;localstorage&#39;</code> (default): Use browser localStorage</li>
+<li><code>&#39;surrealdb&#39;</code>: Store in the local SurrealDB instance (inside the current
+user’s local bucket)</li>
 <li>Custom implementation of <code>PersistenceClient</code> interface</li>
 </ul>
+<p>Note: the boot-time bucket hint (<code>sp00ky:last_bucket</code>) is always written to
+plain localStorage regardless of this setting — the client needs it to pick
+the right per-user bucket before any bucket is open.</p>
 <h4 id="streamdebouncetime"><code>streamDebounceTime</code></h4>
 <p>Window (ms) the client-side Stream Processor uses to coalesce DBSP
 stream updates <strong>per query</strong> before they fan out to <code>useQuery</code>
