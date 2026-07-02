@@ -185,9 +185,46 @@ fn parse_leaf_predicate(input: &str) -> IResult<&str, Value> {
 
 fn parse_term(input: &str) -> IResult<&str, Value> {
     alt((
+        // `<path> IN (SELECT VALUE <col|link.field> FROM <table> [WHERE ...])`
+        // must be tried before the parenthesised-expression and leaf branches:
+        // it starts with an identifier like the leaf, but the `IN (SELECT ...`
+        // tail is what distinguishes it. On any mismatch it backtracks cleanly.
+        parse_in_subquery_leaf,
         delimited(ws(char('(')), parse_or_expression, ws(char(')'))),
         parse_leaf_predicate,
     ))(input)
+}
+
+/// Parse `<path> IN ( SELECT VALUE <proj> FROM <table> [WHERE <pred>] )`.
+///
+/// Emits an `in_subquery` marker node (not a `Predicate` — it lowers to a
+/// `SemiJoin`, an operator, in [`lower_where_to_plan`]). `proj` is either a bare
+/// column (single-hop: `owner`) or a `<link>.<field>` record-link traversal
+/// (two-hop: `broadcast.owner`), handled in [`semijoin_for_subquery`].
+fn parse_in_subquery_leaf(input: &str) -> IResult<&str, Value> {
+    let (input, left) = ws(parse_identifier)(input)?;
+    // SurrealDB canonicalises `IN` to `INSIDE` in stored permission text, so
+    // accept both. INSIDE is tried first: it is the longer keyword, and matching
+    // `IN` first would leave a dangling `SIDE` and fail the `(`.
+    let (input, _) = ws(alt((tag_no_case("INSIDE"), tag_no_case("IN"))))(input)?;
+    let (input, _) = ws(char('('))(input)?;
+    let (input, _) = ws(tag_no_case("SELECT"))(input)?;
+    let (input, _) = ws(tag_no_case("VALUE"))(input)?;
+    let (input, proj) = ws(parse_identifier)(input)?;
+    let (input, _) = ws(tag_no_case("FROM"))(input)?;
+    let (input, table) = ws(parse_identifier)(input)?;
+    let (input, where_logic) = opt(ws(parse_where_logic))(input)?;
+    let (input, _) = ws(char(')'))(input)?;
+    Ok((
+        input,
+        json!({
+            "type": "in_subquery",
+            "left": left,
+            "proj": proj,
+            "table": table,
+            "where": where_logic,
+        }),
+    ))
 }
 
 fn parse_and_expression(input: &str) -> IResult<&str, Value> {
@@ -349,7 +386,13 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
     let mut current_op = json!({ "op": "scan", "table": table });
 
     if let Some(logic) = where_logic {
-        current_op = wrap_conditions(current_op, logic);
+        if where_contains_subquery(&logic) {
+            // A WHERE with an `IN (subquery)` term can't be a flat Filter — it
+            // lowers to SemiJoin / Union / Distinct operators.
+            current_op = lower_where_to_plan(&current_op, &logic);
+        } else {
+            current_op = wrap_conditions(current_op, logic);
+        }
     }
 
     // Projections
@@ -376,6 +419,118 @@ fn parse_full_query(input: &str) -> IResult<&str, Value> {
     }
 
     Ok((input, current_op))
+}
+
+/// True if `expr` contains an `in_subquery` marker anywhere in its AND/OR tree.
+fn where_contains_subquery(expr: &Value) -> bool {
+    match expr.get("type").and_then(|t| t.as_str()) {
+        Some("in_subquery") => true,
+        Some("and") | Some("or") => expr
+            .get("predicates")
+            .and_then(|p| p.as_array())
+            .map(|list| list.iter().any(where_contains_subquery))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Lower a WHERE expression that contains `IN (subquery)` term(s) into an
+/// operator plan (JSON) over `scan` that yields the outer table's allowed keys.
+///
+/// - `OR`  → `Distinct(Union(branch_plans...))` (Union merges Z-sets over the
+///   same outer scan; Distinct clamps duplicate keys to weight 1).
+/// - `AND` → apply the pure-predicate conjuncts as one `Filter` on the outer
+///   scan, then thread each `IN (subquery)` conjunct as a `SemiJoin` on top.
+/// - a bare `in_subquery` → a single `SemiJoin` (see [`semijoin_for_subquery`]).
+/// - anything else (a plain predicate) → `Filter(scan, predicate)`.
+fn lower_where_to_plan(scan: &Value, expr: &Value) -> Value {
+    match expr.get("type").and_then(|t| t.as_str()) {
+        Some("or") => {
+            let branches = expr
+                .get("predicates")
+                .and_then(|p| p.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let mut plans = branches.iter().map(|b| lower_where_to_plan(scan, b));
+            let first = plans.next().unwrap_or_else(|| scan.clone());
+            let unioned = plans.fold(first, |acc, p| {
+                json!({ "op": "union", "left": acc, "right": p })
+            });
+            json!({ "op": "distinct", "input": unioned })
+        }
+        Some("and") => {
+            let list = expr
+                .get("predicates")
+                .and_then(|p| p.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let (subs, preds): (Vec<Value>, Vec<Value>) =
+                list.into_iter().partition(where_contains_subquery);
+            let mut base = scan.clone();
+            if !preds.is_empty() {
+                let pred = if preds.len() == 1 {
+                    preds[0].clone()
+                } else {
+                    json!({ "type": "and", "predicates": preds })
+                };
+                base = json!({ "op": "filter", "predicate": pred, "input": base });
+            }
+            for sub in subs {
+                base = semijoin_for_subquery(&base, &sub);
+            }
+            base
+        }
+        Some("in_subquery") => semijoin_for_subquery(scan, expr),
+        _ => json!({ "op": "filter", "predicate": expr.clone(), "input": scan.clone() }),
+    }
+}
+
+/// Build the `SemiJoin` plan for one `IN (subquery)` term whose left is `base`.
+///
+/// Single-hop (`proj = "owner"`):
+///   `SemiJoin(base, Filter(Scan{table}, where), on: <left> = owner)`
+///
+/// Two-hop (`proj = "broadcast.owner"`): the projected value lives on the record
+/// linked from `table.<link>`, which the runtime can't dereference across rows.
+/// So we first resolve the linked rows with an inner semi-join, then match on
+/// the target field:
+///   inner  = SemiJoin(Scan{link}, Filter(Scan{table}, where), on: id = <link>)
+///   result = SemiJoin(base, inner, on: <left> = <field>)
+/// The link's target table is taken to be the link field's name (the schema
+/// convention here: `broadcast_share.broadcast` is `record<broadcast>`).
+fn semijoin_for_subquery(base: &Value, sub: &Value) -> Value {
+    let left = sub.get("left").and_then(|v| v.as_str()).unwrap_or("id");
+    let proj = sub.get("proj").and_then(|v| v.as_str()).unwrap_or("id");
+    let table = sub.get("table").and_then(|v| v.as_str()).unwrap_or("");
+    let where_logic = sub.get("where").filter(|w| !w.is_null());
+
+    let mut inner_scan = json!({ "op": "scan", "table": table });
+    if let Some(w) = where_logic {
+        inner_scan = json!({ "op": "filter", "predicate": w.clone(), "input": inner_scan });
+    }
+
+    match proj.split_once('.') {
+        Some((link, field)) => {
+            let inner = json!({
+                "op": "semijoin",
+                "left": { "op": "scan", "table": link },
+                "right": inner_scan,
+                "on": { "left_field": "id", "right_field": link },
+            });
+            json!({
+                "op": "semijoin",
+                "left": base.clone(),
+                "right": inner,
+                "on": { "left_field": left, "right_field": field },
+            })
+        }
+        None => json!({
+            "op": "semijoin",
+            "left": base.clone(),
+            "right": inner_scan,
+            "on": { "left_field": left, "right_field": proj },
+        }),
+    }
 }
 
 fn wrap_conditions(input_op: Value, predicate: Value) -> Value {

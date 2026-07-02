@@ -20,8 +20,21 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 use crate::converter;
-use crate::operator::plan::{OperatorPlan, Projection};
+use crate::operator::plan::{JoinCondition, OperatorPlan, Projection};
 use crate::operator::predicate::Predicate;
+use crate::types::Path;
+
+/// The result of lowering a table's SELECT permission. A permission that is a
+/// flat boolean over the scanned table is a [`Predicate`] (AND-folded into the
+/// existing Filter). One that references another table via `IN (subquery)`
+/// lowers to a whole [`OperatorPlan`] over `Scan{table}` (SemiJoin / Union /
+/// Distinct) that yields the allowed keys; it's composed with the view by a
+/// `SemiJoin(view, perm, on: id = id)` — i.e. keep view rows whose id the
+/// permission also admits.
+enum PermInjection {
+    Pred(Predicate),
+    Plan(OperatorPlan),
+}
 
 /// Walk `plan` and inject each scanned table's permission predicate. Errors
 /// abort registration; partial injection is never visible.
@@ -41,23 +54,36 @@ fn inject_node(
     match plan {
         OperatorPlan::Scan { table } => {
             let table_name = table.clone();
-            let Some(injected) = build_predicate(&table_name, perms, params)? else {
+            let Some(injected) = build_injection(&table_name, perms, params)? else {
                 return Ok(());
             };
             let scan = OperatorPlan::Scan { table: table_name };
-            *plan = OperatorPlan::Filter {
-                input: Box::new(scan),
-                predicate: injected,
+            *plan = match injected {
+                PermInjection::Pred(predicate) => OperatorPlan::Filter {
+                    input: Box::new(scan),
+                    predicate,
+                },
+                PermInjection::Plan(perm) => intersect_with_permission(scan, perm),
             };
         }
         OperatorPlan::Filter { input, predicate } => {
             if let OperatorPlan::Scan { table } = input.as_ref() {
                 let table_name = table.clone();
-                let Some(injected) = build_predicate(&table_name, perms, params)? else {
+                let Some(injected) = build_injection(&table_name, perms, params)? else {
                     return Ok(());
                 };
-                let original = std::mem::replace(predicate, Predicate::True);
-                *predicate = and_predicates(original, injected);
+                match injected {
+                    PermInjection::Pred(p) => {
+                        let original = std::mem::replace(predicate, Predicate::True);
+                        *predicate = and_predicates(original, p);
+                    }
+                    PermInjection::Plan(perm) => {
+                        // Keep the view's own Filter{Scan} as the semi-join left,
+                        // so both the view predicate AND the permission apply.
+                        let view = std::mem::replace(plan, OperatorPlan::Scan { table: table_name });
+                        *plan = intersect_with_permission(view, perm);
+                    }
+                }
                 return Ok(());
             }
             inject_node(input, perms, params)?;
@@ -89,11 +115,24 @@ fn inject_node(
 /// needed) or for `_00_*` meta tables that the SSP accesses directly. Returns
 /// `Err` for default-deny, unsupported constructs, missing `$auth`, or
 /// converter parse failures.
-fn build_predicate(
+/// Compose a permission subplan with the view: keep view rows whose `id` the
+/// permission also admits.
+fn intersect_with_permission(view: OperatorPlan, perm: OperatorPlan) -> OperatorPlan {
+    OperatorPlan::SemiJoin {
+        left: Box::new(view),
+        right: Box::new(perm),
+        on: JoinCondition {
+            left_field: Path::new("id"),
+            right_field: Path::new("id"),
+        },
+    }
+}
+
+fn build_injection(
     table: &str,
     perms: &HashMap<String, String>,
     params: Option<&Value>,
-) -> Result<Option<Predicate>> {
+) -> Result<Option<PermInjection>> {
     let raw = match perms.get(table) {
         Some(t) => t.trim(),
         None => {
@@ -134,12 +173,17 @@ fn build_predicate(
     })?;
 
     match parsed {
-        OperatorPlan::Filter { input, predicate } => match *input {
-            OperatorPlan::Scan { .. } => Ok(Some(predicate)),
-            _ => Err(anyhow!(
-                "permission for `{table}` produced a non-flat plan (likely identifier-vs-identifier comparison)"
-            )),
-        },
+        OperatorPlan::Filter { input, predicate } if matches!(*input, OperatorPlan::Scan { .. }) => {
+            Ok(Some(PermInjection::Pred(predicate)))
+        }
+        // An `IN (subquery)` permission lowers to a SemiJoin / Union / Distinct
+        // subplan over `Scan{table}` — compose it whole (see PermInjection).
+        plan @ (OperatorPlan::SemiJoin { .. }
+        | OperatorPlan::Union { .. }
+        | OperatorPlan::Distinct { .. }) => Ok(Some(PermInjection::Plan(plan))),
+        OperatorPlan::Filter { .. } => Err(anyhow!(
+            "permission for `{table}` produced a non-flat plan (likely identifier-vs-identifier comparison)"
+        )),
         _ => Err(anyhow!(
             "permission for `{table}` produced a non-filter plan (likely a join or subquery)"
         )),
@@ -158,12 +202,10 @@ fn params_have_auth(params: Option<&Value>) -> bool {
 /// because SurrealDB doesn't care about keyword case.
 fn unsupported_construct(raw: &str) -> Option<&'static str> {
     let lower = raw.to_lowercase();
-    const NEEDLES: &[&str] = &[
-        "in (select",
-        "exists (select",
-        "(select value",
-        "$parent",
-    ];
+    // `IN (SELECT VALUE ...)` is now supported (lowered to a SemiJoin by the
+    // converter), so it is no longer denylisted. EXISTS-subqueries and $parent
+    // correlation are still unsupported.
+    const NEEDLES: &[&str] = &["exists (select", "$parent"];
     for needle in NEEDLES {
         if lower.contains(needle) {
             return Some(needle);
@@ -263,17 +305,136 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_subquery_errors() {
+    fn exists_subquery_still_unsupported() {
+        let mut plan = OperatorPlan::Scan {
+            table: "thread".into(),
+        };
+        let perms = perms_with(&[("thread", "EXISTS (SELECT VALUE in FROM collaborates_on)")]);
+        let params = json!({"auth": {"id": "user:a"}});
+        let err = inject_permissions(&mut plan, &perms, Some(&params)).unwrap_err();
+        assert!(err.to_string().contains("unsupported construct"));
+    }
+
+    #[test]
+    fn single_hop_in_subquery_injects_semijoin() {
+        // `owner IN (SELECT VALUE owner FROM broadcast WHERE share_visibility = 'public')`
+        // over a plain scan → SemiJoin(Scan{thread}, Filter(Scan{broadcast}, ...)).
         let mut plan = OperatorPlan::Scan {
             table: "thread".into(),
         };
         let perms = perms_with(&[(
             "thread",
-            "$auth.id IN (SELECT VALUE in FROM collaborates_on)",
+            "owner IN (SELECT VALUE owner FROM broadcast WHERE share_visibility = 'public')",
+        )]);
+        inject_permissions(&mut plan, &perms, None).unwrap();
+        // Root is the id=id intersection wrapper: SemiJoin(view, perm).
+        match plan {
+            OperatorPlan::SemiJoin { left, right, on } => {
+                assert!(matches!(*left, OperatorPlan::Scan { .. }), "left is the view scan");
+                assert_eq!(on.left_field.segments(), &["id".to_string()]);
+                assert_eq!(on.right_field.segments(), &["id".to_string()]);
+                // right is the permission plan: SemiJoin(Scan{thread}, Filter(Scan{broadcast})).
+                match *right {
+                    OperatorPlan::SemiJoin { right: perm_right, on: perm_on, .. } => {
+                        assert_eq!(perm_on.left_field.segments(), &["owner".to_string()]);
+                        assert_eq!(perm_on.right_field.segments(), &["owner".to_string()]);
+                        match *perm_right {
+                            OperatorPlan::Filter { input, .. } => {
+                                assert!(matches!(*input, OperatorPlan::Scan { table } if table == "broadcast"));
+                            }
+                            other => panic!("expected Filter(Scan broadcast), got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected permission SemiJoin, got {:?}", other),
+                }
+            }
+            other => panic!("expected SemiJoin at root, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn inside_canonical_form_is_supported() {
+        // SurrealDB stores `IN` as `INSIDE`; the injector must handle both.
+        let mut plan = OperatorPlan::Scan {
+            table: "thread".into(),
+        };
+        let perms = perms_with(&[(
+            "thread",
+            "owner INSIDE (SELECT VALUE owner FROM broadcast WHERE share_visibility = 'public')",
+        )]);
+        inject_permissions(&mut plan, &perms, None).unwrap();
+        assert!(matches!(plan, OperatorPlan::SemiJoin { .. }), "INSIDE lowered to SemiJoin");
+    }
+
+    #[test]
+    fn two_hop_in_subquery_injects_nested_semijoin() {
+        // `owner IN (SELECT VALUE broadcast.owner FROM broadcast_share WHERE ...)`
+        // → SemiJoin(view, SemiJoin(Scan{broadcast}, Filter(Scan{broadcast_share})))
+        let mut plan = OperatorPlan::Scan {
+            table: "stream_presence".into(),
+        };
+        let perms = perms_with(&[(
+            "stream_presence",
+            "owner IN (SELECT VALUE broadcast.owner FROM broadcast_share WHERE user = $auth.id AND role = 'admin')",
         )]);
         let params = json!({"auth": {"id": "user:a"}});
-        let err = inject_permissions(&mut plan, &perms, Some(&params)).unwrap_err();
-        assert!(err.to_string().contains("unsupported construct"));
+        inject_permissions(&mut plan, &perms, Some(&params)).unwrap();
+        // Root: id=id intersection wrapper. right = permission plan
+        // SemiJoin(Scan{stream_presence}, inner, on owner=owner), where inner
+        // resolves admin-shared broadcasts.
+        match plan {
+            OperatorPlan::SemiJoin { right, on, .. } => {
+                assert_eq!(on.left_field.segments(), &["id".to_string()]);
+                assert_eq!(on.right_field.segments(), &["id".to_string()]);
+                match *right {
+                    OperatorPlan::SemiJoin { right: perm_right, on: perm_on, .. } => {
+                        assert_eq!(perm_on.left_field.segments(), &["owner".to_string()]);
+                        assert_eq!(perm_on.right_field.segments(), &["owner".to_string()]);
+                        // inner: SemiJoin(Scan{broadcast}, Filter(Scan{broadcast_share}), on id=broadcast)
+                        match *perm_right {
+                            OperatorPlan::SemiJoin { left, on: inner_on, .. } => {
+                                assert!(matches!(*left, OperatorPlan::Scan { table } if table == "broadcast"));
+                                assert_eq!(inner_on.left_field.segments(), &["id".to_string()]);
+                                assert_eq!(inner_on.right_field.segments(), &["broadcast".to_string()]);
+                            }
+                            other => panic!("expected inner SemiJoin, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected permission SemiJoin, got {:?}", other),
+                }
+            }
+            other => panic!("expected SemiJoin at root, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn full_stream_presence_permission_injects_distinct_union() {
+        // The real schema permission: owner OR public OR admin. The whole thing
+        // must compose without error into SemiJoin(view, Distinct(Union(...))).
+        let mut plan = OperatorPlan::Filter {
+            input: Box::new(OperatorPlan::Scan {
+                table: "stream_presence".into(),
+            }),
+            predicate: Predicate::Eq {
+                field: Path::new("owner"),
+                value: json!({"$param": "owner"}),
+            },
+        };
+        let perms = perms_with(&[(
+            "stream_presence",
+            "( $access = \"account\" AND owner = $auth.id ) OR owner IN (SELECT VALUE owner FROM broadcast WHERE share_visibility = 'public') OR ( $access = \"account\" AND owner IN (SELECT VALUE broadcast.owner FROM broadcast_share WHERE user = $auth.id AND role = 'admin') )",
+        )]);
+        let params = json!({"auth": {"id": "user:a"}, "access": "account", "owner": "user:a"});
+        inject_permissions(&mut plan, &perms, Some(&params)).unwrap();
+        match plan {
+            OperatorPlan::SemiJoin { left, right, on } => {
+                assert!(matches!(*left, OperatorPlan::Filter { .. }), "view filter kept as left");
+                assert_eq!(on.left_field.segments(), &["id".to_string()]);
+                assert_eq!(on.right_field.segments(), &["id".to_string()]);
+                assert!(matches!(*right, OperatorPlan::Distinct { .. }), "permission is Distinct(Union(...))");
+            }
+            other => panic!("expected SemiJoin at root, got {:?}", other),
+        }
     }
 
     #[test]
