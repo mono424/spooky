@@ -129,6 +129,37 @@ impl super::Operator for AntiJoin {
         self.right_state.clear();
         self.prev_output.clear();
     }
+
+    fn evaluate_key(
+        &self,
+        key: &str,
+        input_evals: &[bool],
+        store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        if !input_evals.first().copied().unwrap_or(false) {
+            return false;
+        }
+        // Witness-check this row's join field against the integrated
+        // right-side state (up to date: step() ran for every node before
+        // the membership re-evaluation pass calls evaluate_key). Anti-join
+        // admits the key iff NO witness exists; a missing left field counts
+        // as anti, mirroring anti_join().
+        let Some(l_val) = store.get_row_by_key(key) else {
+            return false;
+        };
+        let Some(l_field) = resolve_field(Some(l_val), &self.condition.left_field) else {
+            return true;
+        };
+        !self.right_state.iter().any(|(r_key, &w)| {
+            w > 0
+                && store
+                    .get_row_by_key(r_key)
+                    .and_then(|r_val| resolve_field(Some(r_val), &self.condition.right_field))
+                    .map(|r_field| compare_values(Some(l_field), Some(r_field)) == Ordering::Equal)
+                    .unwrap_or(false)
+        })
+    }
 }
 
 #[cfg(test)]

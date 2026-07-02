@@ -2,7 +2,7 @@ use crate::algebra::{ZSet, ZSetOps};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::{compare_values, hash_value, resolve_field};
 use crate::operator::plan::JoinCondition;
-use crate::types::Sp00kyValue;
+use crate::types::{Path, Sp00kyValue};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -130,6 +130,46 @@ impl super::Operator for SemiJoin {
         self.left_state.clear();
         self.right_state.clear();
         self.prev_output.clear();
+    }
+
+    fn evaluate_key(
+        &self,
+        key: &str,
+        input_evals: &[bool],
+        store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> bool {
+        if !input_evals.first().copied().unwrap_or(false) {
+            return false;
+        }
+        // `id = id` is the permission intersection wrapper
+        // (`SemiJoin(view, perm)`): the right side shares the left key
+        // space, so the freshly recomputed input eval is authoritative.
+        // right_state would be stale for weight-0 content updates.
+        if self.condition.left_field == Path::new("id")
+            && self.condition.right_field == Path::new("id")
+        {
+            return input_evals.get(1).copied().unwrap_or(false);
+        }
+        // Lowered IN-subquery: the right side is a different key space,
+        // so its input eval is meaningless for `key`. Witness-check this
+        // row's join field against the integrated right-side state
+        // (up to date: step() ran for every node before the membership
+        // re-evaluation pass calls evaluate_key).
+        let Some(l_val) = store.get_row_by_key(key) else {
+            return false;
+        };
+        let Some(l_field) = resolve_field(Some(l_val), &self.condition.left_field) else {
+            return false;
+        };
+        self.right_state.iter().any(|(r_key, &w)| {
+            w > 0
+                && store
+                    .get_row_by_key(r_key)
+                    .and_then(|r_val| resolve_field(Some(r_val), &self.condition.right_field))
+                    .map(|r_field| compare_values(Some(l_field), Some(r_field)) == Ordering::Equal)
+                    .unwrap_or(false)
+        })
     }
 }
 
@@ -275,6 +315,60 @@ mod tests {
         let dr2 = zset(&[("collab:2", 1)]);
         let r2 = sj.step(&[&dl_empty, &dr2], &store, None);
         assert!(r2.is_empty());
+    }
+
+    #[test]
+    fn evaluate_key_requires_left_and_witness() {
+        let store = setup_store();
+        let mut sj = SemiJoin::new(cond());
+
+        // Prime state: threads:1 has a collab witness, threads:2 doesn't.
+        let dl = zset(&[("threads:1", 1), ("threads:2", 1)]);
+        let dr = zset(&[("collab:1", 1)]);
+        let _ = sj.step(&[&dl, &dr], &store, None);
+
+        // Left admitted + witness present → true. input_evals[1] is the
+        // right branch's (meaningless, cross-key-space) eval and must be
+        // ignored for a non-id=id condition.
+        assert!(sj.evaluate_key("threads:1", &[true, false], &store, None));
+        // Left admitted, no witness → false.
+        assert!(!sj.evaluate_key("threads:2", &[true, false], &store, None));
+        // Left not admitted → false even with a witness.
+        assert!(!sj.evaluate_key("threads:1", &[false, false], &store, None));
+    }
+
+    #[test]
+    fn evaluate_key_ignores_retracted_witness() {
+        let store = setup_store();
+        let mut sj = SemiJoin::new(cond());
+
+        let dl = zset(&[("threads:1", 1)]);
+        let dr = zset(&[("collab:1", 1)]);
+        let _ = sj.step(&[&dl, &dr], &store, None);
+
+        // Retract the witness; the integrated right state drops to 0.
+        let dl_empty: ZSet = HashMap::new();
+        let dr_retract = zset(&[("collab:1", -1)]);
+        let _ = sj.step(&[&dl_empty, &dr_retract], &store, None);
+
+        assert!(!sj.evaluate_key("threads:1", &[true, false], &store, None));
+    }
+
+    #[test]
+    fn evaluate_key_id_id_wrapper_delegates_to_fresh_input_eval() {
+        // The permission intersection wrapper joins on id = id: both sides
+        // share the key space, so evaluate_key must use the freshly
+        // recomputed right input eval instead of the (stale for weight-0
+        // updates) integrated right state.
+        let store = setup_store();
+        let sj = SemiJoin::new(JoinCondition {
+            left_field: Path::new("id"),
+            right_field: Path::new("id"),
+        });
+
+        assert!(sj.evaluate_key("threads:1", &[true, true], &store, None));
+        assert!(!sj.evaluate_key("threads:1", &[true, false], &store, None));
+        assert!(!sj.evaluate_key("threads:1", &[false, true], &store, None));
     }
 
     #[test]

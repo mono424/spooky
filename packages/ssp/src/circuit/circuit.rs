@@ -1465,6 +1465,157 @@ mod tests {
         );
     }
 
+    /// The whitepawn `stream_presence` permission: owner OR public-broadcast OR
+    /// admin-share, the last two as IN-subqueries that lower to SemiJoins.
+    const STREAM_PRESENCE_PERM: &str = "( $access = \"account\" AND owner = $auth.id ) OR owner IN (SELECT VALUE owner FROM broadcast WHERE share_visibility = 'public') OR ( $access = \"account\" AND owner IN (SELECT VALUE broadcast.owner FROM broadcast_share WHERE user = $auth.id AND role = 'admin') )";
+
+    /// `SELECT * FROM stream_presence WHERE owner = $owner` with the real
+    /// permission injected: `SemiJoin(view, Distinct(Union(...)), on id=id)`.
+    fn stream_presence_query(id: &str, params: &serde_json::Value) -> QueryPlan {
+        use crate::operator::predicate::Predicate;
+        use crate::permission_inject::inject_permissions;
+
+        let mut root = OperatorPlan::Filter {
+            input: Box::new(OperatorPlan::Scan {
+                table: "stream_presence".into(),
+            }),
+            predicate: Predicate::Eq {
+                field: Path::new("owner"),
+                value: json!({"$param": "owner"}),
+            },
+        };
+        let mut perms = HashMap::new();
+        perms.insert("stream_presence".to_string(), STREAM_PRESENCE_PERM.to_string());
+        inject_permissions(&mut root, &perms, Some(params)).unwrap();
+        QueryPlan {
+            id: id.to_string(),
+            root,
+        }
+    }
+
+    #[test]
+    fn content_update_survives_semijoin_permission_view() {
+        // Regression for the stream_presence live-query outage: the relay
+        // keep-alive UPSERTs an existing row (Operation::Update, weight 0).
+        // The membership re-evaluation pass walks the DAG with evaluate_key;
+        // before SemiJoin implemented it, the permission-composed root
+        // returned false and the pass synthesized a REMOVAL of the cached
+        // row - the dashboard showed the device once, then it vanished on
+        // the first keep-alive.
+        let params = json!({"auth": {"id": "user:a"}, "access": "account", "owner": "user:a"});
+        let mut circuit = Circuit::new();
+        circuit.load(vec![Record::new(
+            "stream_presence",
+            "stream_presence:a",
+            json!({"id": "stream_presence:a", "owner": "user:a", "online": true, "fen": "start"}),
+        )]);
+
+        let initial = circuit
+            .add_query(stream_presence_query("q1", &params), Some(params), None)
+            .expect("owner sees their device at registration");
+        assert!(initial.additions.contains(&"stream_presence:a".to_string()));
+
+        // Relay keep-alive: same row, new content.
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::update(
+                "stream_presence",
+                "stream_presence:a",
+                json!({"id": "stream_presence:a", "owner": "user:a", "online": true, "fen": "e2e4"}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1, "keep-alive should reach the view");
+        let d = &deltas[0];
+        assert!(
+            d.removals.is_empty(),
+            "keep-alive must not evict the row; got removals={:?}",
+            d.removals
+        );
+        assert!(
+            d.updates.contains(&"stream_presence:a".to_string()),
+            "keep-alive must surface as a content update; got updates={:?}",
+            d.updates
+        );
+    }
+
+    #[test]
+    fn content_update_survives_semijoin_witness_branch() {
+        // Same regression through the public-broadcast OR branch: the viewer
+        // is NOT the owner, so admission comes from the inner SemiJoin's
+        // witness check against its integrated broadcast state (a different
+        // key space, where the fresh input eval is meaningless).
+        let params = json!({"auth": {"id": "user:viewer"}, "access": "account", "owner": "user:b"});
+        let mut circuit = Circuit::new();
+        circuit.load(vec![
+            Record::new(
+                "stream_presence",
+                "stream_presence:b",
+                json!({"id": "stream_presence:b", "owner": "user:b", "online": true, "fen": "start"}),
+            ),
+            Record::new(
+                "broadcast",
+                "broadcast:b",
+                json!({"id": "broadcast:b", "owner": "user:b", "share_visibility": "public"}),
+            ),
+        ]);
+
+        let initial = circuit
+            .add_query(stream_presence_query("q1", &params), Some(params), None)
+            .expect("public broadcast admits the viewer at registration");
+        assert!(initial.additions.contains(&"stream_presence:b".to_string()));
+
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::update(
+                "stream_presence",
+                "stream_presence:b",
+                json!({"id": "stream_presence:b", "owner": "user:b", "online": true, "fen": "e2e4"}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        let d = &deltas[0];
+        assert!(
+            d.removals.is_empty(),
+            "public viewer must keep the row on keep-alive; got removals={:?}",
+            d.removals
+        );
+        assert!(d.updates.contains(&"stream_presence:b".to_string()));
+    }
+
+    #[test]
+    fn content_update_membership_transition_through_semijoin() {
+        // evaluate_key must still detect real transitions: the row's owner
+        // changes away from the querying user (and has no witness), so the
+        // permission now rejects it and the pass must synthesize a removal.
+        let params = json!({"auth": {"id": "user:a"}, "access": "account", "owner": "user:a"});
+        let mut circuit = Circuit::new();
+        circuit.load(vec![Record::new(
+            "stream_presence",
+            "stream_presence:a",
+            json!({"id": "stream_presence:a", "owner": "user:a", "online": true}),
+        )]);
+
+        circuit
+            .add_query(stream_presence_query("q1", &params), Some(params), None)
+            .expect("row visible at registration");
+
+        let deltas = circuit.step(ChangeSet {
+            changes: vec![Change::update(
+                "stream_presence",
+                "stream_presence:a",
+                json!({"id": "stream_presence:a", "owner": "user:other", "online": true}),
+            )],
+        });
+
+        assert_eq!(deltas.len(), 1);
+        assert!(
+            deltas[0].removals.contains(&"stream_presence:a".to_string()),
+            "owner change must surface as a removal; got removals={:?}, updates={:?}",
+            deltas[0].removals,
+            deltas[0].updates
+        );
+    }
+
     #[test]
     fn content_update_no_match_change_still_emits_update() {
         // Companion guard: when an in-cache row's content changes but
