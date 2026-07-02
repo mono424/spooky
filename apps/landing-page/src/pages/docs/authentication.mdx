@@ -42,6 +42,21 @@ username: 'new_user',
 password: 'secure_password'
 });`;
 
+export const codePerm = `-- A live stream's presence row is readable by its owner, by anyone when the
+-- broadcast is public, and by collaborators the owner shared it with as admin.
+DEFINE TABLE stream_presence SCHEMAFULL
+  PERMISSIONS
+    FOR select WHERE
+      -- 1. the owner reads their own rows (flat comparison)
+      ( $access = "account" AND owner = $auth.id )
+      -- 2. anyone reads a publicly shared broadcast's rows (relational subquery)
+      OR owner IN (SELECT VALUE owner FROM broadcast WHERE share_visibility = 'public')
+      -- 3. an admin collaborator reads them (subquery over a record link)
+      OR ( $access = "account" AND owner IN (
+             SELECT VALUE broadcast.owner FROM broadcast_share
+             WHERE user = $auth.id AND role = 'admin') )
+    FOR create, update, delete WHERE false;`;
+
 export const code2 = `await db.auth.signOut();`;
 
 export const code1 = `import { createSignal, onCleanup } from 'solid-js';
@@ -128,6 +143,50 @@ shared anonymous bucket), so:
 Nothing to configure — this is the default behavior with
 `database.store: 'indexeddb'`. Details in
 [Architecture → Per-User Local Buckets](/docs/architecture#per-user-local-buckets).
+
+## Row-Level Permissions in Live Queries
+
+A table's `PERMISSIONS FOR select` clause is more than a server-side gate: Sp00ky
+compiles it into a row filter that is injected into **every live query** on that
+table, enforced identically by the server SSP and the in-browser WASM processor.
+A client never registers a query that could return rows its permission forbids,
+and the filter is re-evaluated incrementally as data changes.
+
+### Supported expressions
+
+- Field comparisons: `=`, `!=`, `<`, `<=`, `>`, `>=`, and string prefix matches.
+- Boolean composition with `AND` and `OR`.
+- The `$auth` and `$access` parameters (e.g. `owner = $auth.id`,
+  `$access = "account"`).
+- **Relational membership** via `IN (SELECT VALUE <field> FROM <table> WHERE …)`.
+  The inner `WHERE` may itself reference `$auth`. This lowers to an incremental
+  semi-join, so when the referenced table changes (a broadcast is made public, a
+  share is revoked) the affected live queries update on their own — no refetch.
+- A subquery that projects a **record-link field** (`SELECT VALUE link.field`)
+  resolves the link with a nested join, so two-hop rules like "rows whose owner
+  is the owner of a broadcast shared with me" work.
+
+<CodeBlock
+  code={codePerm}
+  lang="sql"
+/>
+
+<Note>
+  All three branches above are enforced on the client too. A viewer only ever
+  syncs the presence rows they are actually allowed to see; making a broadcast
+  private retracts its rows from every unrelated viewer's live query.
+</Note>
+
+### Not supported
+
+<Warning title="Unsupported permission constructs">
+  `EXISTS (SELECT …)` and `$parent` correlation inside a permission clause are
+  not representable in the live-query engine and are rejected at registration
+  time with the offending table named. Rewrite `EXISTS` as an `IN (SELECT VALUE …)`
+  membership check. A table whose permission fails to compile is never synced
+  (fail-closed), so a client can never receive rows an unrepresentable rule was
+  meant to guard.
+</Warning>
 
 ## Third-Party Providers
 
