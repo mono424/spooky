@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sp00ky.cloud/schema/sp00ky.schema.json",
   "title": "sp00ky.yml",
-  "description": "Configuration file for Sp00ky — an offline-first, real-time sync framework built on SurrealDB.",
+  "description": "Configuration file for Sp00ky \u2014 an offline-first, real-time sync framework built on SurrealDB.",
   "type": "object",
   "properties": {
     "slug": {
@@ -13,7 +13,11 @@
     "mode": {
       "type": "string",
       "description": "Deployment mode.",
-      "enum": ["singlenode", "cluster", "surrealism"],
+      "enum": [
+        "singlenode",
+        "cluster",
+        "surrealism"
+      ],
       "default": "singlenode"
     },
     "surrealdb": {
@@ -39,8 +43,12 @@
           "type": "object",
           "description": "Individual versions for SSP and Scheduler (applies to all envs). Each is an image tag or a `{ path }` to a host-built binary.",
           "properties": {
-            "ssp":       { "$ref": "#/$defs/serviceVersion" },
-            "scheduler": { "$ref": "#/$defs/serviceVersion" }
+            "ssp": {
+              "$ref": "#/$defs/serviceVersion"
+            },
+            "scheduler": {
+              "$ref": "#/$defs/serviceVersion"
+            }
           },
           "additionalProperties": false
         },
@@ -48,8 +56,12 @@
           "type": "object",
           "description": "Per-environment versions. Currently only `dev` is consumed; `cloud` is reserved.",
           "properties": {
-            "dev":   { "$ref": "#/$defs/versionSpec" },
-            "cloud": { "$ref": "#/$defs/versionSpec" }
+            "dev": {
+              "$ref": "#/$defs/versionSpec"
+            },
+            "cloud": {
+              "$ref": "#/$defs/versionSpec"
+            }
           },
           "additionalProperties": false,
           "minProperties": 1
@@ -57,7 +69,7 @@
       ]
     },
     "logLevel": {
-      "description": "`RUST_LOG` directive applied to the Scheduler and SSP containers (both `spky dev` and `spky cloud deploy`). A plain string applies everywhere (e.g. `trace`, `info,ssp=debug`). A `{dev, cloud}` map sets per-environment levels. Unset → defaults to `info`.",
+      "description": "`RUST_LOG` directive applied to the Scheduler and SSP containers (both `spky dev` and `spky cloud deploy`). A plain string applies everywhere (e.g. `trace`, `info,ssp=debug`). A `{dev, cloud}` map sets per-environment levels. Unset \u2192 defaults to `info`.",
       "oneOf": [
         {
           "type": "string",
@@ -67,8 +79,14 @@
           "type": "object",
           "description": "Per-environment log level. `dev` is consumed by `spky dev`; `cloud` is sent to the cloud control plane on every deploy.",
           "properties": {
-            "dev":   { "type": "string", "description": "RUST_LOG directive used for local `spky dev` containers." },
-            "cloud": { "type": "string", "description": "RUST_LOG directive applied to the remote scheduler/SSP after `spky cloud deploy`." }
+            "dev": {
+              "type": "string",
+              "description": "RUST_LOG directive used for local `spky dev` containers."
+            },
+            "cloud": {
+              "type": "string",
+              "description": "RUST_LOG directive applied to the remote scheduler/SSP after `spky cloud deploy`."
+            }
           },
           "additionalProperties": false,
           "minProperties": 1
@@ -133,12 +151,17 @@
     "cloudApi": {
       "type": "string",
       "description": "Override the Sp00ky Cloud API endpoint (e.g. for staging).",
-      "examples": ["https://api-staging.sp00ky.cloud"]
+      "examples": [
+        "https://api-staging.sp00ky.cloud"
+      ]
     },
     "refMode": {
       "type": "string",
       "description": "Storage layout for the SSP's internal `_00_list_ref` table. 'dedicated' (default) gives each authenticated user their own `_00_list_ref_user_<id>` table; 'single' keeps the legacy shared `_00_list_ref`. Dedicated works around a SurrealDB v3 LIVE-permission gap on permission-gated tables.",
-      "enum": ["single", "dedicated"],
+      "enum": [
+        "single",
+        "dedicated"
+      ],
       "default": "dedicated"
     },
     "anonymousLiveQueries": {
@@ -152,12 +175,18 @@
     "versionSpec": {
       "description": "A version tag (string) or `{ssp, scheduler}` object. Used inside per-environment version splits.",
       "oneOf": [
-        { "type": "string" },
+        {
+          "type": "string"
+        },
         {
           "type": "object",
           "properties": {
-            "ssp":       { "$ref": "#/$defs/serviceVersion" },
-            "scheduler": { "$ref": "#/$defs/serviceVersion" }
+            "ssp": {
+              "$ref": "#/$defs/serviceVersion"
+            },
+            "scheduler": {
+              "$ref": "#/$defs/serviceVersion"
+            }
           },
           "additionalProperties": false
         }
@@ -173,7 +202,9 @@
         {
           "type": "object",
           "description": "Run a host-built binary instead of a published image.",
-          "required": ["path"],
+          "required": [
+            "path"
+          ],
           "properties": {
             "path": {
               "type": "string",
@@ -206,13 +237,18 @@
         "hosting": {
           "type": "string",
           "description": "Whether SurrealDB is hosted on Sp00ky Cloud or externally.",
-          "enum": ["cloud", "external"],
+          "enum": [
+            "cloud",
+            "external"
+          ],
           "default": "cloud"
         },
         "endpoint": {
           "type": "string",
           "description": "SurrealDB endpoint URL. Required when hosting is \"external\".",
-          "examples": ["https://api.example.com"]
+          "examples": [
+            "https://api.example.com"
+          ]
         },
         "username": {
           "type": "string",
@@ -226,49 +262,78 @@
         }
       },
       "if": {
-        "properties": { "hosting": { "const": "external" } },
-        "required": ["hosting"]
+        "properties": {
+          "hosting": {
+            "const": "external"
+          }
+        },
+        "required": [
+          "hosting"
+        ]
       },
       "then": {
-        "required": ["endpoint"]
+        "required": [
+          "endpoint"
+        ]
       },
       "additionalProperties": false
     },
     "appConfig": {
       "type": "object",
       "description": "Configuration for a single application (backend or frontend).",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
         "type": {
           "type": "string",
           "description": "App type: backend, frontend, or docker (runs a prebuilt image).",
-          "enum": ["backend", "frontend", "docker"]
+          "enum": [
+            "backend",
+            "frontend",
+            "docker"
+          ]
         },
         "scope": {
           "type": "string",
           "description": "Where this app runs. 'all' (default): started by `spky dev` AND deployed to cloud. 'devOnly': local-only process started by `spky dev`, never deployed (no spec/method/deploy required). 'cloudOnly': deployed but skipped by `spky dev`.",
-          "enum": ["all", "devOnly", "cloudOnly"],
+          "enum": [
+            "all",
+            "devOnly",
+            "cloudOnly"
+          ],
           "default": "all"
         },
         "image": {
           "type": "string",
           "description": "Prebuilt docker image to run (required for type: docker), e.g. 'livekit/livekit-server:latest'.",
-          "examples": ["livekit/livekit-server:latest"]
+          "examples": [
+            "livekit/livekit-server:latest"
+          ]
         },
         "ports": {
           "type": "array",
-          "description": "Published ports for a type: docker app. Each entry is a bare port (7880 → 7880:7880), a host:container map ('3000:8080'), optionally with a protocol ('7882/udp').",
-          "items": { "type": ["string", "integer"] }
+          "description": "Published ports for a type: docker app. Each entry is a bare port (7880 \u2192 7880:7880), a host:container map ('3000:8080'), optionally with a protocol ('7882/udp').",
+          "items": {
+            "type": [
+              "string",
+              "integer"
+            ]
+          }
         },
         "args": {
           "type": "array",
           "description": "Args appended after the image (the container command) for a type: docker app, e.g. ['--dev', '--bind', '0.0.0.0'] or ['go', 'run', '.'].",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "volumes": {
           "type": "array",
           "description": "Bind/volume mounts for a type: docker app (docker run -v), e.g. ['/var/run/docker.sock:/var/run/docker.sock', '${PROJECT_DIR}/../..:/src', 'cache:/go']. ${PROJECT_DIR} (the absolute dir of sp00ky.yml) is expanded in the host portion (and in env values).",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "workdir": {
           "type": "string",
@@ -277,7 +342,9 @@
         "dependsOn": {
           "type": "array",
           "description": "Names of other type: docker apps that must be ready before this one starts. `spky dev` starts apps in dependency order; an unknown name, a self-dependency, or a cycle is rejected at config load.",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "healthcheck": {
           "type": "string",
@@ -286,7 +353,10 @@
         "hosting": {
           "type": "string",
           "description": "Whether this backend is deployed to Sp00ky Cloud or self-hosted.",
-          "enum": ["cloud", "external"],
+          "enum": [
+            "cloud",
+            "external"
+          ],
           "default": "cloud"
         },
         "spec": {
@@ -296,7 +366,9 @@
         "baseUrl": {
           "type": "string",
           "description": "Base URL of the backend service (required when hosting is \"external\").",
-          "examples": ["https://api.example.com"]
+          "examples": [
+            "https://api.example.com"
+          ]
         },
         "auth": {
           "$ref": "#/$defs/authConfig"
@@ -317,19 +389,34 @@
       "allOf": [
         {
           "if": {
-            "properties": { "type": { "const": "backend" } }
+            "properties": {
+              "type": {
+                "const": "backend"
+              }
+            }
           },
           "then": {
-            "required": ["spec", "method"]
+            "required": [
+              "spec",
+              "method"
+            ]
           }
         },
         {
           "if": {
-            "properties": { "hosting": { "const": "external" } },
-            "required": ["hosting"]
+            "properties": {
+              "hosting": {
+                "const": "external"
+              }
+            },
+            "required": [
+              "hosting"
+            ]
           },
           "then": {
-            "required": ["baseUrl"]
+            "required": [
+              "baseUrl"
+            ]
           }
         }
       ],
@@ -338,12 +425,16 @@
     "authConfig": {
       "type": "object",
       "description": "Authentication configuration for a backend service.",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "properties": {
         "type": {
           "type": "string",
           "description": "Authentication type.",
-          "enum": ["token"]
+          "enum": [
+            "token"
+          ]
         },
         "token": {
           "type": "string",
@@ -355,12 +446,17 @@
     "backendMethod": {
       "type": "object",
       "description": "Defines how the backend is triggered.",
-      "required": ["type", "schema"],
+      "required": [
+        "type",
+        "schema"
+      ],
       "properties": {
         "type": {
           "type": "string",
           "description": "Method type for calling the backend.",
-          "enum": ["outbox"]
+          "enum": [
+            "outbox"
+          ]
         },
         "table": {
           "type": "string",
@@ -383,11 +479,19 @@
         {
           "type": "object",
           "description": "Typed dev server configuration.",
-          "required": ["type"],
+          "required": [
+            "type"
+          ],
           "oneOf": [
-            { "$ref": "#/$defs/devConfigNpm" },
-            { "$ref": "#/$defs/devConfigDocker" },
-            { "$ref": "#/$defs/devConfigUv" }
+            {
+              "$ref": "#/$defs/devConfigNpm"
+            },
+            {
+              "$ref": "#/$defs/devConfigDocker"
+            },
+            {
+              "$ref": "#/$defs/devConfigUv"
+            }
           ]
         }
       ]
@@ -395,9 +499,15 @@
     "devConfigNpm": {
       "type": "object",
       "description": "Run an npm/pnpm script as the dev server.",
-      "required": ["type", "script"],
+      "required": [
+        "type",
+        "script"
+      ],
       "properties": {
-        "type": { "type": "string", "const": "npm" },
+        "type": {
+          "type": "string",
+          "const": "npm"
+        },
         "script": {
           "type": "string",
           "description": "npm script name to run (e.g. \"dev\")."
@@ -412,9 +522,15 @@
     "devConfigDocker": {
       "type": "object",
       "description": "Build and run a Dockerfile as the dev server.",
-      "required": ["type", "file"],
+      "required": [
+        "type",
+        "file"
+      ],
       "properties": {
-        "type": { "type": "string", "const": "docker" },
+        "type": {
+          "type": "string",
+          "const": "docker"
+        },
         "file": {
           "type": "string",
           "description": "Dockerfile to build."
@@ -426,6 +542,17 @@
         "port": {
           "type": "string",
           "description": "Port mapping (e.g. \"3000:3000\")."
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional port mappings (host:container) for apps that listen on more than one port, e.g. REST + gRPC. Merged with `port`."
+        },
+        "platform": {
+          "type": "string",
+          "description": "docker --platform for build + run, e.g. \"linux/arm64\" to build/run natively instead of emulating the deploy arch."
         }
       },
       "additionalProperties": false
@@ -433,9 +560,15 @@
     "devConfigUv": {
       "type": "object",
       "description": "Run a Python script via uv as the dev server.",
-      "required": ["type", "script"],
+      "required": [
+        "type",
+        "script"
+      ],
       "properties": {
-        "type": { "type": "string", "const": "uv" },
+        "type": {
+          "type": "string",
+          "const": "uv"
+        },
         "script": {
           "type": "string",
           "description": "Python script to run via `uv run` (e.g. \"server.py\")."
@@ -468,7 +601,9 @@
         "ports": {
           "type": "array",
           "description": "Additional published ports (e.g. ['3670:3670', '7882:7882/udp']). Used for apps requiring multiple ports. The primary 'port' is still required for Traefik routing.",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "expose": {
           "type": "boolean",
@@ -498,7 +633,7 @@
       "additionalProperties": false
     },
     "envConfig": {
-      "description": "Environment variable configuration. Supports multiple forms:\n- \"vault\" — fetch all vars from encrypted vault\n- { vault: [KEY1, KEY2] } — fetch only whitelisted vars from vault\n- \"path/to/file\" — load from dotenv file\n- { KEY: \"val\" } — inline key-value map\n- { dev: <source>, cloud: <source> } — per-environment split\n- [<source>, ...] — array of sources, merged in order (later overrides earlier)",
+      "description": "Environment variable configuration. Supports multiple forms:\n- \"vault\" \u2014 fetch all vars from encrypted vault\n- { vault: [KEY1, KEY2] } \u2014 fetch only whitelisted vars from vault\n- \"path/to/file\" \u2014 load from dotenv file\n- { KEY: \"val\" } \u2014 inline key-value map\n- { dev: <source>, cloud: <source> } \u2014 per-environment split\n- [<source>, ...] \u2014 array of sources, merged in order (later overrides earlier)",
       "oneOf": [
         {
           "type": "string",
@@ -558,12 +693,18 @@
     "clientTypeConfig": {
       "type": "object",
       "description": "Generated client type configuration.",
-      "required": ["format", "output"],
+      "required": [
+        "format",
+        "output"
+      ],
       "properties": {
         "format": {
           "type": "string",
           "description": "Output format. 'typescript' uses the built-in generator; 'dart' runs spooky_core's rich generator (`dart run spooky_core:spooky_gen`) from `workdir`.",
-          "enum": ["typescript", "dart"]
+          "enum": [
+            "typescript",
+            "dart"
+          ]
         },
         "output": {
           "type": "string",
@@ -571,7 +712,7 @@
         },
         "workdir": {
           "type": "string",
-          "description": "For format: dart — optional override for the directory (relative to sp00ky.yml) to run the Dart generator from. Must be a Dart package that depends on spooky_core. By default it's auto-derived from `output`'s nearest ancestor pubspec.yaml. Ignored for TypeScript."
+          "description": "For format: dart \u2014 optional override for the directory (relative to sp00ky.yml) to run the Dart generator from. Must be a Dart package that depends on spooky_core. By default it's auto-derived from `output`'s nearest ancestor pubspec.yaml. Ignored for TypeScript."
         }
       },
       "additionalProperties": false
@@ -628,7 +769,9 @@
         "bucketUrl": {
           "type": "string",
           "description": "External S3-compatible bucket URL. If set, MinIO is skipped.",
-          "examples": ["https://api.example.com"]
+          "examples": [
+            "https://api.example.com"
+          ]
         },
         "credentialsEnvFile": {
           "type": "string",
