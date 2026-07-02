@@ -75,6 +75,16 @@ export class StreamProcessorService {
   // rejecting `$auth`-gated tables; the predicate just degrades to its public
   // branch. Set via `setSessionAuth` on every auth state change.
   private sessionAuth: { authId: string; access: string } = { authId: '', access: '' };
+  // Persisted-state key suffix (the local bucket id) so each user's circuit
+  // snapshot lands in their own key. Only matters for localStorage-backed
+  // persistence — the surrealdb persistence client already writes into the
+  // per-user bucket itself.
+  private stateKeySuffix = '';
+  // Bumped by `reset()`. A `saveState` captured before a reset must not persist
+  // the OLD processor's circuit (holding the previous user's rows) after the
+  // switch — the fire-and-forget calls in `ingest`/`flushCoalescing` can land
+  // late.
+  private stateGeneration = 0;
 
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
@@ -226,10 +236,42 @@ export class StreamProcessorService {
     }
   }
 
+  /** Route the persisted circuit snapshot to a per-bucket key. */
+  setStateKeySuffix(bucketId: string) {
+    this.stateKeySuffix = bucketId;
+  }
+
+  private stateKey(): string {
+    return this.stateKeySuffix
+      ? `_00_stream_processor_state:${this.stateKeySuffix}`
+      : '_00_stream_processor_state';
+  }
+
+  /**
+   * Drop the current WASM processor and start a fresh, empty circuit. Used on
+   * local-bucket switches: the old circuit holds the previous user's rows AND
+   * views registered with the previous `$auth` context, so neither may survive.
+   * Deliberately does NOT `loadState()` — a persisted snapshot references views
+   * under a dead sessionId salt; the DataModule rebind re-registers every live
+   * view against this fresh processor. Caller must re-seed `setPermissions`
+   * afterwards (a fresh circuit default-denies every table).
+   */
+  async reset(): Promise<void> {
+    if (!this.isInitialized) return;
+    this.stateGeneration++;
+    this.batching = false;
+    this.batchBuffer.clear();
+    this.processor = new Sp00kyProcessor() as unknown as WasmProcessor;
+    this.logger.info(
+      { Category: 'sp00ky-client::StreamProcessorService::reset' },
+      'Stream processor reset (fresh circuit)'
+    );
+  }
+
   async loadState() {
     if (!this.processor) return;
     try {
-      const result = await this.persistenceClient.get('_00_stream_processor_state');
+      const result = await this.persistenceClient.get(this.stateKey());
 
       // Check if we have a valid result from the query
       if (
@@ -319,12 +361,16 @@ export class StreamProcessorService {
 
   async saveState() {
     if (!this.processor) return;
+    const generation = this.stateGeneration;
     try {
       // Assuming processor has a save_state method that returns the state string/bytes
       if (typeof this.processor.save_state === 'function') {
         const state = this.processor.save_state();
+        // A reset raced this snapshot — persisting it would write the previous
+        // user's circuit into the new bucket's key. Drop it.
+        if (generation !== this.stateGeneration) return;
         if (state) {
-          await this.persistenceClient.set('_00_stream_processor_state', state);
+          await this.persistenceClient.set(this.stateKey(), state);
           this.logger.trace(
             { Category: 'sp00ky-client::StreamProcessorService::saveState' },
             'State saved'

@@ -94,6 +94,13 @@
   --sys-transition-fast: 100ms cubic-bezier(0.4, 0, 0.2, 1);
   --sys-transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
   --sys-transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* JSON syntax-highlight tokens (Chrome/VS Code dark palette) */
+  --dt-json-key: #9cdcfe;
+  --dt-json-string: #ce9178;
+  --dt-json-number: #b5cea8;
+  --dt-json-boolean: #569cd6;
+  --dt-json-null: #569cd6;
 }
 
 /* Light theme overrides */
@@ -145,6 +152,13 @@
   --sys-color-text-primary: #1f1f1f;
   --sys-color-text-secondary: #5f5f5f;
   --sys-color-text-disabled: #9e9e9e;
+
+  /* JSON syntax-highlight tokens (light palette) */
+  --dt-json-key: #0451a5;
+  --dt-json-string: #a31515;
+  --dt-json-number: #098658;
+  --dt-json-boolean: #0000ff;
+  --dt-json-null: #0000ff;
 }
 
 * {
@@ -278,11 +292,12 @@ body {
   background: var(--sys-color-error);
 }
 
-/* Tabs */
+/* Tabs — Chrome main-tab metrics: 27px bar, 12px text, 0 10px padding */
 .tabs {
   display: flex;
   align-items: stretch;
   flex-wrap: nowrap;
+  height: 27px;
   /* Not clipped: the JS overflow logic keeps tabs within width, and the »
      dropdown must be able to paint below the bar. Body has overflow:hidden,
      so any 1-frame pre-measurement overflow is clipped at the viewport. */
@@ -297,17 +312,19 @@ body {
 .tab-btn {
   position: relative;
   flex: none;
+  display: inline-flex;
+  align-items: center;
   white-space: nowrap;
-  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  padding: 0 10px;
   background: transparent;
   color: var(--sys-color-on-surface-subtle);
   border: none;
   border-bottom: 2px solid transparent;
   cursor: pointer;
   font-family: var(--sys-typescale-label-font);
-  font-size: var(--sys-typescale-label-size);
+  font-size: 12px;
   font-weight: var(--sys-typescale-label-weight);
-  line-height: var(--sys-typescale-label-line-height);
+  line-height: 25px;
   transition:
     color var(--sys-transition-fast),
     background-color var(--sys-transition-fast);
@@ -613,107 +630,226 @@ body {
   border-color: var(--sys-color-primary);
 }
 
-/* Queries tab */
+/* ============================================================
+   Queries tab — Chrome network-tab style
+   (timeline strip / toolbar / table + detail / status bar)
+   ============================================================ */
 .queries-container {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100%;
   overflow: hidden;
 }
-/* Narrow docks: shrink the list column so the detail keeps usable width */
-@media (max-width: 640px) {
-  .queries-container {
-    grid-template-columns: 200px minmax(0, 1fr);
-  }
-}
-@media (max-width: 480px) {
-  .queries-container {
-    grid-template-columns: 148px minmax(0, 1fr);
-  }
-}
 
-.queries-list {
-  min-width: 0;
-  border-right: 1px solid var(--sys-color-divider);
-  overflow: hidden;
-  background: var(--sys-color-surface);
-  display: flex;
-  flex-direction: column;
-}
-
-.queries-filter {
-  padding: 5px 8px;
-  border-bottom: 1px solid var(--sys-color-divider);
-  background: var(--sys-color-surface);
-}
-.queries-filter .dt-filter-input {
-  width: 100%;
-}
-
-.queries-list-content {
+.queries-body {
   flex: 1;
-  overflow-y: auto;
-  padding: 0;
-  margin: 0;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.queries-header {
-  padding: 6px 8px;
+/* Timeline overview strip (top) */
+.query-timeline {
+  flex: none;
+  position: relative;
+  height: 52px;
   border-bottom: 1px solid var(--sys-color-divider);
   background: var(--sys-color-surface);
-  min-height: 24px;
+  overflow: hidden;
+}
+.qtl-empty {
   display: flex;
+  height: 100%;
   align-items: center;
+  justify-content: center;
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 10px;
 }
-
-.queries-header h2 {
-  font-family: var(--sys-typescale-label-font);
-  font-size: var(--sys-typescale-label-size);
-  font-weight: var(--sys-typescale-label-weight);
-  line-height: var(--sys-typescale-label-line-height);
-  color: var(--sys-color-on-surface);
-  margin: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+.qtl-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px solid var(--sys-color-outline-variant);
+  opacity: 0.6;
+  pointer-events: none;
 }
-
-.query-item {
-  padding: 4px 8px;
+.qtl-tick-label {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 9px;
+  color: var(--sys-color-on-surface-subtle);
+  white-space: nowrap;
+}
+.qtl-mark {
+  position: absolute;
+  top: 18px;
+  bottom: 4px;
+  width: 3px;
+  margin-left: -1px;
+  border-radius: 1px;
   cursor: pointer;
-  border: 2px solid transparent;
-  transition: background-color var(--sys-transition-fast);
-  list-style: none;
-  background: transparent;
+}
+.qtl-mark.registered {
+  background: var(--sys-color-primary);
+}
+.qtl-mark.updated {
+  top: 26px;
+  background: var(--sys-color-state-on, #4caf50);
+  opacity: 0.75;
+}
+.qtl-mark:hover {
+  opacity: 1;
+  width: 5px;
+  margin-left: -2px;
+}
+.qtl-mark.selected {
+  opacity: 1;
+  box-shadow: 0 0 0 1px var(--sys-color-on-surface);
 }
 
-.query-item:hover:not(.selected) {
-  background: var(--sys-color-state-hover-on-subtle) !important;
+/* Query table: full-width columns; collapses to a name-only column when a
+   query is selected (Chrome network-tab behavior) */
+.qt-table-wrap {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: var(--sys-color-surface);
 }
-
-.query-item.selected {
-  background: var(--sys-color-tonal-container, rgba(79, 195, 247, 0.2)) !important;
+.qt-table-wrap.collapsed {
+  flex: 0 0 260px;
+  border-right: 1px solid var(--sys-color-divider);
 }
-
-.query-item.selected:hover {
-  background: var(--sys-color-tonal-container, rgba(79, 195, 247, 0.2)) !important;
+@media (max-width: 640px) {
+  .qt-table-wrap.collapsed {
+    flex-basis: 180px;
+  }
 }
-
-.query-item:focus {
-  outline: 0;
+.qt-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
 }
-
-.query-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: var(--sys-spacing-1);
-}
-
-.query-hash {
+.qt-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 8px;
+  text-align: left;
   font-family: var(--sys-typescale-label-font);
-  font-size: var(--sys-typescale-label-size);
-  font-weight: var(--sys-typescale-label-weight);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--sys-color-on-surface-subtle);
+  background: var(--sys-color-surface-container-low, var(--sys-color-surface));
+  border-bottom: 1px solid var(--sys-color-divider);
+  border-right: 1px solid var(--sys-color-outline-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qt-table th:last-child {
+  border-right: none;
+}
+.qt-table th.qt-col-query {
+  width: 40%;
+}
+.qt-table-wrap.collapsed .qt-table th.qt-col-query {
+  width: auto;
+}
+.qt-table td {
+  padding: 3px 8px;
+  font-size: 11px;
   color: var(--sys-color-on-surface);
+  border-bottom: 1px solid var(--sys-color-outline-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qt-table .qt-num {
+  text-align: right;
+  font-family: var(--sys-typescale-monospace-font);
+  font-variant-numeric: tabular-nums;
+}
+.qt-table .qt-time {
+  font-family: var(--sys-typescale-monospace-font);
+  font-variant-numeric: tabular-nums;
+  color: var(--sys-color-on-surface-variant);
+}
+.qt-query-text {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: 11px;
+}
+.qt-table tbody tr {
+  cursor: pointer;
+}
+.qt-table tbody tr:hover:not(.selected) {
+  background: var(--sys-color-state-hover);
+}
+.qt-table tbody tr.selected {
+  background: var(--sys-color-primary-container);
+}
+.qt-table tbody tr.selected td:first-child {
+  box-shadow: inset 2px 0 0 var(--sys-color-primary);
+}
+
+/* Status bar (bottom), Chrome-style aggregate stats */
+.queries-statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 10px;
+  min-height: 20px;
+  border-top: 1px solid var(--sys-color-divider);
+  background: var(--sys-color-surface);
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.statusbar-sep {
+  width: 1px;
+  height: 10px;
+  background: var(--sys-color-outline-variant);
+}
+/* Compact inline filter, Chrome-toolbar style (lives in the status bar) */
+.statusbar-filter {
+  flex: none;
+  width: 110px;
+  height: 14px;
+  font-size: 10px;
+  line-height: 12px;
+  border-radius: 7px;
+  transition: width var(--sys-transition-fast);
+}
+.statusbar-filter:focus {
+  width: 180px;
+}
+
+/* Close (✕) button, first in the detail-tabs row (Chrome-style) */
+.detail-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0 4px 0 2px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.detail-close:hover {
+  color: var(--sys-color-on-surface);
+  background: var(--sys-color-state-hover);
 }
 
 .query-status {
@@ -781,74 +917,14 @@ body {
   overflow-y: auto;
 }
 
+/* Chrome-native layout: fixed tab strip on top, scrollable section body */
 .query-detail {
+  flex: 1;
   min-width: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--sys-color-cdt-base-container);
-  padding: 8px;
-}
-
-.query-detail:empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.query-detail:empty::before {
-  content: 'Select a query to view details';
-  color: var(--sys-color-on-surface-subtle);
-  font-size: var(--sys-typescale-label-size);
-}
-
-.detail-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-bottom: 8px;
-  margin-bottom: 8px;
-  border-bottom: 1px solid var(--sys-color-divider);
-}
-
-.detail-header h3 {
-  font-family: var(--sys-typescale-title-font);
-  font-size: var(--sys-typescale-title-size);
-  font-weight: var(--sys-typescale-title-weight);
-  line-height: var(--sys-typescale-title-line-height);
-  color: var(--sys-color-primary-bright);
-  margin: 0;
-}
-
-.detail-section {
-  margin-bottom: 12px;
-}
-
-.detail-label {
-  font-family: var(--sys-typescale-label-font);
-  font-size: 10px;
-  font-weight: var(--sys-typescale-label-weight);
-  color: var(--sys-color-on-surface-subtle);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 4px;
-}
-
-.detail-value {
-  font-family: var(--sys-typescale-body-font);
-  font-size: var(--sys-typescale-body-size);
-  color: var(--sys-color-on-surface);
-  line-height: var(--sys-typescale-body-line-height);
-}
-
-.detail-value.mono {
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: var(--sys-typescale-monospace-size);
-  color: var(--sys-color-primary);
-}
-
-.detail-value.text-muted {
-  color: var(--sys-color-on-surface-subtle);
-  font-style: italic;
 }
 
 /* Query Graph Styles */
@@ -1049,23 +1125,6 @@ body {
   align-items: center;
 }
 
-.table-header-cell {
-  font-family: var(--sys-typescale-label-font);
-  font-size: var(--sys-typescale-label-size);
-  font-weight: var(--sys-typescale-label-weight);
-  color: var(--sys-color-on-surface);
-  padding: 4px 8px;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  min-width: 0;
-  max-width: 400px;
-}
-
 .table-item {
   padding: 2px 8px;
   min-height: 20px;
@@ -1073,7 +1132,7 @@ body {
   align-items: center;
   gap: 6px;
   cursor: pointer;
-  border: 2px solid transparent;
+  border: none;
   transition: background-color var(--sys-transition-fast);
   font-family: var(--sys-typescale-body-font);
   font-size: var(--sys-typescale-body-size);
@@ -1130,33 +1189,54 @@ body {
   flex-direction: column;
 }
 
-/* Data-panel header. Fixed height (matches the left TABLES header) so the
-   layout does not jump between the nothing-selected, empty, and populated
-   states. */
-.data-header {
+/* Chrome-style data-panel bottom bar: refresh | filter | source · row count */
+.db-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   min-height: 24px;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--sys-color-divider);
-  background: var(--sys-color-surface-container);
+  padding: 0 10px 0 6px;
+  border-top: 1px solid var(--sys-color-divider);
+  background: var(--sys-color-surface);
   flex: none;
-}
-
-.data-header-title {
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: 11px;
-  color: var(--sys-color-on-surface);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-
-.data-header-count {
+.db-toolbar-sep {
+  flex: none;
+  width: 1px;
+  height: 12px;
+  background: var(--sys-color-outline-variant);
+}
+.db-toolbar-filter {
+  flex: none;
+  width: 140px;
+  transition: width var(--sys-transition-fast);
+}
+.db-toolbar-filter:focus {
+  width: 220px;
+}
+.db-source-select {
+  flex: none;
+  height: 18px;
+  background: transparent;
+  border: 1px solid var(--sys-color-outline-variant, #555);
+  color: var(--sys-color-on-surface, #fff);
+  border-radius: 9px;
+  font-size: 11px;
+  padding: 0 4px;
+  outline: none;
+  cursor: pointer;
+}
+.db-source-select option {
+  background: var(--sys-color-surface-container-high, #3d3d3d);
+  color: var(--sys-color-on-surface, #fff);
+}
+.db-toolbar-count {
+  margin-left: auto;
+  padding-left: 8px;
   font-family: var(--sys-typescale-label-font);
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
   color: var(--sys-color-on-surface-subtle);
   white-space: nowrap;
   flex: none;
@@ -1200,7 +1280,6 @@ body {
 .data-table tr {
   display: table-row !important;
   width: 100% !important;
-  border-bottom: 1px solid var(--sys-color-divider);
 }
 
 .data-table td,
@@ -1211,28 +1290,29 @@ body {
 }
 
 .data-table th {
-  background: var(--sys-color-surface-container);
-  padding: 4px 10px;
+  background: var(--sys-color-surface-container-low, var(--sys-color-surface));
+  padding: 3px 8px;
   text-align: left;
   font-family: var(--sys-typescale-label-font);
-  font-size: var(--sys-typescale-label-size);
-  font-weight: var(--sys-typescale-label-weight);
-  color: var(--sys-color-on-surface);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--sys-color-on-surface-subtle);
   border-bottom: 1px solid var(--sys-color-divider);
   border-right: 1px solid var(--sys-color-outline-variant);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 150px;
+  min-width: 60px;
   max-width: 420px;
 }
 
 .data-table td {
-  padding: 2px 10px;
-  border-bottom: 1px solid var(--sys-color-outline-variant);
+  padding: 1px 8px;
+  height: 19px;
   border-right: 1px solid var(--sys-color-outline-variant);
   color: var(--sys-color-on-surface);
-  min-width: 150px;
+  min-width: 60px;
   max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1240,12 +1320,14 @@ body {
   vertical-align: top;
 }
 
-.data-table tbody tr:hover {
-  background: var(--sys-color-state-hover-on-subtle) !important;
+/* Chrome data-grid zebra striping; hairline row borders come from the stripe
+   contrast instead of per-row borders */
+.data-table tbody tr:nth-child(even):not(.row-inspected) {
+  background: var(--sys-color-surface-container-low, rgba(255, 255, 255, 0.03));
 }
 
-.data-table tbody tr:last-child td {
-  border-bottom: none;
+.data-table tbody tr:hover:not(.row-inspected) {
+  background: var(--sys-color-state-hover-on-subtle) !important;
 }
 
 /* Read-only data cells */
@@ -1265,81 +1347,19 @@ body {
   text-decoration: underline;
 }
 
-/* Actions column and cell, pinned to the right, narrow, above h-scroll.
-   `text-overflow: clip` + tight padding stop the base td ellipsis (…) from
-   painting stray dots next to the button when the button nears the cell edge. */
-.actions-column {
-  width: 40px;
-  min-width: 40px !important;
-  max-width: 40px !important;
-  padding: 4px !important;
-  text-align: center;
-  text-overflow: clip;
-  overflow: hidden;
-  background: var(--sys-color-surface-container);
-  position: sticky;
-  right: 0;
-  z-index: 11;
-}
-
-.actions-cell {
-  width: 40px;
-  min-width: 40px !important;
-  max-width: 40px !important;
-  padding: 2px 4px !important;
-  text-align: center;
-  text-overflow: clip;
-  overflow: hidden;
-  white-space: nowrap;
-  background: var(--sys-color-surface);
-  border-left: 1px solid var(--sys-color-divider);
-  position: sticky;
-  right: 0;
-  z-index: 1;
-}
-
-.data-table tbody tr:hover .actions-cell {
-  background: var(--sys-color-state-hover-on-subtle) !important;
-}
-
-/* View-row (JSON) button, always visible as a bordered chip (not hover-only) */
-.row-view-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 20px;
-  padding: 0;
-  border: 1px solid var(--sys-color-outline);
-  background: var(--sys-color-surface-container-high);
-  color: var(--sys-color-on-surface);
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-  border-radius: var(--sys-radius-sm);
-  transition:
-    background-color var(--sys-transition-fast),
-    color var(--sys-transition-fast),
-    border-color var(--sys-transition-fast);
-}
-.row-view-btn:hover {
-  background: var(--sys-color-primary);
-  color: var(--sys-color-on-primary);
-  border-color: var(--sys-color-primary);
-}
 .data-table tbody tr.row-inspected {
   background: var(--sys-color-primary-container) !important;
 }
-.data-table tbody tr.row-inspected .actions-cell {
-  background: var(--sys-color-primary-container) !important;
+.data-table tbody tr {
+  cursor: pointer;
 }
 
-/* Bottom JSON row-inspector pane */
+/* Bottom JSON row-inspector pane (Chrome preview-pane style) */
 .row-pane {
   flex: none;
-  max-height: 45%;
+  height: 40%;
+  min-height: 90px;
+  max-height: 55%;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--sys-color-divider);
@@ -1350,15 +1370,16 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--sys-color-outline-variant);
+  min-height: 26px;
+  padding: 0 4px 0 8px;
+  border-bottom: 1px solid var(--sys-color-divider);
   background: var(--sys-color-surface);
   flex: none;
 }
 .row-pane-title {
   font-family: var(--sys-typescale-monospace-font);
   font-size: 11px;
-  color: var(--sys-color-on-surface);
+  color: var(--sys-color-on-surface-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1366,19 +1387,45 @@ body {
 .row-pane-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   flex: none;
 }
+.row-pane-actions .icon-btn {
+  border-radius: 50%;
+}
 .row-pane-json {
+  flex: 1;
+  min-height: 0;
   margin: 0;
-  padding: 10px 12px;
+  padding: 8px 12px;
   overflow: auto;
-  font-family: var(--sys-typescale-monospace-font);
   font-size: 11px;
-  line-height: 16px;
-  color: var(--sys-color-on-surface);
+  line-height: 17px;
   white-space: pre;
   tab-size: 2;
+}
+
+/* Syntax-highlighted JSON (JsonView) */
+.json-view {
+  margin: 0;
+  font-family: var(--sys-typescale-monospace-font);
+  color: var(--sys-color-on-surface);
+}
+.json-view .json-key {
+  color: var(--dt-json-key);
+}
+.json-view .json-string {
+  color: var(--dt-json-string);
+}
+.json-view .json-number {
+  color: var(--dt-json-number);
+}
+.json-view .json-boolean {
+  color: var(--dt-json-boolean);
+}
+.json-view .json-null {
+  color: var(--dt-json-null);
+  font-style: italic;
 }
 
 .delete-btn {
@@ -1996,82 +2043,9 @@ body {
 }
 
 /* ============================================================
-   Queries list — refined rows
+   Query detail — Chrome-devtools-native look:
+   fixed tab strip, collapsible ▼ sections, key: value rows
    ============================================================ */
-.queries-header {
-  justify-content: space-between;
-}
-.queries-count {
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: 10px;
-  color: var(--sys-color-on-surface-subtle);
-  background: var(--sys-color-state-hover);
-  border-radius: 999px;
-  padding: 0 7px;
-  line-height: 16px;
-}
-
-.query-item {
-  padding: 5px 10px 5px 9px;
-  border: 0;
-  border-left: 2px solid transparent;
-  border-bottom: 1px solid var(--sys-color-outline-variant);
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  min-height: 26px;
-}
-.query-item:hover:not(.selected) {
-  background: var(--sys-color-state-hover) !important;
-}
-.query-item.selected,
-.query-item.selected:hover {
-  background: var(--sys-color-primary-container) !important;
-  border-left-color: var(--sys-color-primary);
-}
-
-/* Query text is the primary content; the #hash is secondary */
-.query-item .query-preview {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: 11px;
-  color: var(--sys-color-on-surface);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.query-item .query-hash {
-  flex: none;
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: 10px;
-  color: var(--sys-color-on-surface-subtle);
-  letter-spacing: -0.1px;
-  opacity: 0.75;
-}
-.query-item .query-meta {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: 10px;
-  color: var(--sys-color-on-surface-subtle);
-  white-space: nowrap;
-}
-.query-meta-sep {
-  opacity: 0.5;
-}
-
-/* ============================================================
-   Query detail — header, key/value grid, blocks, code
-   ============================================================ */
-.query-detail {
-  padding: 14px 16px 24px;
-}
 .detail-empty {
   display: flex;
   height: 100%;
@@ -2080,74 +2054,142 @@ body {
   color: var(--sys-color-on-surface-subtle);
   font-size: 12px;
 }
-.detail-header {
+
+/* Tab strip (✕ | Overview | Query | …) — fixed at the top of the panel */
+.detail-tabs {
+  flex: none;
+  display: flex;
   align-items: center;
+  gap: 0;
+  min-height: 27px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--sys-color-divider);
+  background: var(--sys-color-surface);
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.detail-header h3 {
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: 13px;
+.detail-tab {
+  flex: none;
+  padding: 0 10px;
+  height: 26px;
+  background: transparent;
+  color: var(--sys-color-on-surface-subtle);
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  font-family: var(--sys-typescale-label-font);
+  font-size: 12px;
+  font-weight: var(--sys-typescale-label-weight);
+  line-height: 24px;
+  white-space: nowrap;
+  transition:
+    color var(--sys-transition-fast),
+    border-color var(--sys-transition-fast);
+}
+.detail-tab:hover {
+  color: var(--sys-color-on-surface);
+  background: var(--sys-color-state-hover);
+}
+.detail-tab.active {
+  color: var(--sys-color-primary-bright);
+  border-bottom-color: var(--sys-color-primary);
+}
+
+/* Scrollable content below the tab strip */
+.detail-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Collapsible ▼ sections (native <details>/<summary>) */
+.detail-section {
+  border-bottom: 1px solid var(--sys-color-divider);
+}
+.detail-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  font-family: var(--sys-typescale-label-font);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: -0.2px;
   color: var(--sys-color-on-surface);
 }
-.detail-query {
-  flex: 1;
+.detail-section-title::-webkit-details-marker {
+  display: none;
+}
+.detail-section-title::before {
+  content: '';
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--sys-color-on-surface-subtle);
+  transform: rotate(-90deg);
+  transition: transform var(--sys-transition-fast);
+}
+.detail-section[open] > .detail-section-title::before {
+  transform: rotate(0deg);
+}
+.detail-section-title:hover {
+  background: var(--sys-color-state-hover);
+}
+.detail-section-body {
+  padding: 2px 8px 8px 22px;
+}
+
+/* Key/value rows: `Key:  value`, left-aligned like Chrome's Headers pane */
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 12px;
+  row-gap: 0;
+}
+.kv-row {
+  display: contents;
+}
+.kv-row:hover > .kv-k,
+.kv-row:hover > .kv-v {
+  background: var(--sys-color-state-hover);
+}
+.kv-k {
+  font-size: 11px;
+  color: var(--sys-color-on-surface-subtle);
+  padding: 3px 0 3px 2px;
+  white-space: nowrap;
+}
+.kv-k::after {
+  content: ':';
+}
+.kv-v {
+  font-size: 11px;
+  color: var(--sys-color-on-surface);
+  padding: 3px 2px 3px 0;
+  text-align: left;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.detail-hash {
-  flex: none;
-  margin-left: 10px;
-  font-family: var(--sys-typescale-monospace-font);
-  font-size: 11px;
-  color: var(--sys-color-on-surface-subtle);
-  opacity: 0.75;
-}
-
-/* Key/value metadata grid */
-.kv {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  column-gap: 20px;
-  row-gap: 2px;
-  margin-bottom: 18px;
-}
-.kv-row {
-  display: contents;
-}
-.kv-k {
-  font-size: 11px;
-  color: var(--sys-color-on-surface-subtle);
-  padding: 3px 0;
-}
-.kv-v {
-  font-size: 11px;
-  color: var(--sys-color-on-surface);
-  padding: 3px 0;
-  text-align: right;
-}
 .kv-v.mono {
   font-family: var(--sys-typescale-monospace-font);
   font-variant-numeric: tabular-nums;
+}
+.kv-v.kv-wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .kv-rel {
   color: var(--sys-color-on-surface-subtle);
 }
 
-/* Collapsible-feeling content blocks */
-.detail-block {
-  margin-top: 16px;
-}
-.detail-block-title {
-  margin: 0 0 7px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: var(--sys-color-on-surface-subtle);
-}
 .code-block {
   margin: 0;
   padding: 9px 11px;
@@ -2162,45 +2204,6 @@ body {
   word-break: break-word;
   max-height: 280px;
   overflow: auto;
-}
-
-/* In-panel detail tabs (Overview / Query / Variables / Data / Timing) */
-.detail-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  margin: 0 0 14px;
-  border-bottom: 1px solid var(--sys-color-divider);
-}
-.detail-tab {
-  padding: 5px 9px;
-  background: transparent;
-  color: var(--sys-color-on-surface-subtle);
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  cursor: pointer;
-  font-family: var(--sys-typescale-label-font);
-  font-size: var(--sys-typescale-label-size);
-  font-weight: var(--sys-typescale-label-weight);
-  line-height: var(--sys-typescale-label-line-height);
-  transition:
-    color var(--sys-transition-fast),
-    border-color var(--sys-transition-fast);
-}
-.detail-tab:hover {
-  color: var(--sys-color-on-surface);
-}
-.detail-tab.active {
-  color: var(--sys-color-primary-bright);
-  border-bottom-color: var(--sys-color-primary);
-}
-.detail-body {
-  min-width: 0;
-}
-/* First block in the Data tab shouldn't add extra top margin */
-.detail-body > .detail-block:first-child {
-  margin-top: 0;
 }
 
 /* ============================================================

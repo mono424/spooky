@@ -101,6 +101,10 @@ export class Sp00kySync<S extends SchemaStructure> {
   // LIVE is delivering events and speeds it back up when LIVE quiets.
   private listRefPollTimer: ReturnType<typeof setTimeout> | null = null;
   private listRefPollRunning: boolean = false;
+  // The currently-executing poll tick, if any. `stopListRefPoll` only stops
+  // future ticks; a bucket switch must also AWAIT the in-flight one so its
+  // local writes land in the store it started against.
+  private listRefPollInFlight: Promise<void> | null = null;
   public readonly refSyncIntervalMs: number;
 
   // Consecutive poll cycles that observed NO list_ref change. Drives the
@@ -390,6 +394,47 @@ export class Sp00kySync<S extends SchemaStructure> {
   }
 
   /**
+   * Quiesce all sync activity ahead of a local-bucket switch. After this
+   * resolves, nothing in the sync module writes to the local store: the poll
+   * loop is stopped AND its in-flight tick awaited, LIVE is killed, debounce
+   * timers are cancelled (their outbox rows are already persisted), and the
+   * scheduler has drained its in-flight queue item — including that item's
+   * outbox-row delete, which must land in the OLD bucket. Queued down-events
+   * are dropped (they reference old-bucket query rows; the post-switch rebind
+   * re-enqueues registrations). The old user's un-pushed outbox is deliberately
+   * NOT drained: the remote session already belongs to the next user.
+   */
+  public async prepareBucketSwitch(): Promise<void> {
+    this.stopSelfHeal();
+    this.stopListRefPoll();
+    if (this.listRefPollInFlight) await this.listRefPollInFlight;
+    await this.killRefLiveQuery();
+    this.upQueue.clearDebounceTimers();
+    await this.scheduler.pause();
+    this.downQueue.clear();
+    this.stillRemoteStreaks.clear();
+    this.logger.info(
+      { Category: 'sp00ky-client::Sp00kySync::prepareBucketSwitch' },
+      'Sync quiesced for bucket switch'
+    );
+  }
+
+  /**
+   * Resume syncing against the freshly-opened bucket: reload the mutation
+   * outbox from ITS `_00_pending_mutations` (the new user's own un-pushed
+   * offline work) and restart the scheduler. LIVE + the list_ref poll restart
+   * via the `setCurrentUserId` call that follows in the auth listener.
+   */
+  public async completeBucketSwitch(): Promise<void> {
+    await this.upQueue.loadFromDatabase();
+    this.scheduler.resume();
+    this.logger.info(
+      { Category: 'sp00ky-client::Sp00kySync::completeBucketSwitch' },
+      'Sync resumed after bucket switch'
+    );
+  }
+
+  /**
    * Push the authenticated user's record id from the parent client's
    * auth subscription. Tears down the existing `_00_list_ref` LIVE (if
    * any) and re-registers it under the new user's dedicated table so
@@ -461,9 +506,14 @@ export class Sp00kySync<S extends SchemaStructure> {
       this.listRefPollTimer = setTimeout(async () => {
         if (!this.listRefPollRunning) return;
         let changed = false;
-        try {
+        const tick = (async () => {
           changed = await this.pollListRefForActiveQueries();
+        })();
+        this.listRefPollInFlight = tick.catch(() => {});
+        try {
+          await tick;
         } finally {
+          this.listRefPollInFlight = null;
           if (!this.listRefPollRunning) return;
           // Reset the idle streak on any observed change so the poll snaps
           // back to the fast base cadence; otherwise grow it so a quiet page
@@ -1037,7 +1087,7 @@ export class Sp00kySync<S extends SchemaStructure> {
 
     const fetching = diff.added.length + diff.updated.length > 0;
     if (fetching) {
-      this.dataModule.setQueryStatus(hash, 'fetching');
+      this.dataModule.beginFetching(hash);
     }
     try {
       const { remoteFetchMs, stillRemoteIds } = await this.syncEngine.syncRecords(diff);
@@ -1079,7 +1129,18 @@ export class Sp00kySync<S extends SchemaStructure> {
       }
     } finally {
       if (fetching) {
-        this.dataModule.setQueryStatus(hash, 'idle');
+        // Land the coalesced result BEFORE flipping to idle: the final stream
+        // update sits on a debounce timer, and an `idle` that races ahead of it
+        // would let consumers treat a partially-filled window as authoritative.
+        try {
+          await this.dataModule.flushPendingStreamUpdate(hash);
+        } catch (err) {
+          this.logger.warn(
+            { err, hash, Category: 'sp00ky-client::Sp00kySync::runSyncForQuery' },
+            'Failed to flush pending stream update before idle'
+          );
+        }
+        this.dataModule.endFetching(hash);
       }
     }
   }
@@ -1114,6 +1175,12 @@ export class Sp00kySync<S extends SchemaStructure> {
   }
 
   private async registerQuery(queryHash: string) {
+    // Hold `fetching` across the WHOLE registration (remote view creation +
+    // initial sync + post-sync notify). A query is born `fetching` in
+    // createNewQuery; this refcounted cycle is what resolves it to `idle` — so
+    // consumers (e.g. useQuery's `isSettled`) never see an idle query whose
+    // window is still empty/partially materialized.
+    this.dataModule.beginFetching(queryHash);
     try {
       this.logger.debug(
         { queryHash, Category: 'sp00ky-client::Sp00kySync::registerQuery' },
@@ -1121,8 +1188,10 @@ export class Sp00kySync<S extends SchemaStructure> {
       );
       await this.createRemoteQuery(queryHash);
       await this.syncQuery(queryHash);
-      // Always notify after sync completes — handles empty result sets
-      // where no stream updates fire but the UI needs to stop loading
+      // Land any still-debounced stream result, then always notify — handles
+      // empty result sets where no stream updates fire but the UI needs to
+      // stop loading.
+      await this.dataModule.flushPendingStreamUpdate(queryHash);
       await this.dataModule.notifyQuerySynced(queryHash);
     } catch (e) {
       this.logger.error(
@@ -1130,6 +1199,8 @@ export class Sp00kySync<S extends SchemaStructure> {
         'registerQuery error'
       );
       throw e;
+    } finally {
+      this.dataModule.endFetching(queryHash);
     }
   }
 

@@ -105,6 +105,20 @@ export class UpQueue {
     this.debouncedMutations.set(key, { timer, firstBeforeRecord });
   }
 
+  /**
+   * Cancel all pending debounce timers WITHOUT enqueueing their events. Used
+   * on local-bucket switches: the mutation's `_00_pending_mutations` row was
+   * already persisted at mutation time, so dropping the in-memory push only
+   * defers it to that bucket's next `loadFromDatabase` — it must NOT be pushed
+   * now, the remote session already belongs to the next user.
+   */
+  clearDebounceTimers(): void {
+    for (const { timer } of this.debouncedMutations.values()) {
+      clearTimeout(timer);
+    }
+    this.debouncedMutations.clear();
+  }
+
   async next(fn: (event: UpEvent) => Promise<void>, onRollback?: RollbackCallback): Promise<void> {
     const event = this.queue.shift();
     if (event) {

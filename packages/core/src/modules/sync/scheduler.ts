@@ -9,6 +9,8 @@ import { SyncQueueEventTypes } from './events/index';
 export class SyncScheduler {
   private isSyncingUp: boolean = false;
   private isSyncingDown: boolean = false;
+  private paused: boolean = false;
+  private pauseWaiters: Array<() => void> = [];
 
   constructor(
     private upQueue: UpQueue,
@@ -50,14 +52,39 @@ export class SyncScheduler {
   }
 
   /**
+   * Suspend syncing for a local-bucket switch. Refuses new rounds and resolves
+   * once any in-flight round has finished — the pause point is BETWEEN queue
+   * items, never between an item's remote push and its outbox-row delete, so a
+   * processed mutation's `DELETE _00_pending_mutations` always lands in the
+   * store it was read from.
+   */
+  pause(): Promise<void> {
+    this.paused = true;
+    if (!this.isSyncingUp && !this.isSyncingDown) return Promise.resolve();
+    return new Promise<void>((resolve) => this.pauseWaiters.push(resolve));
+  }
+
+  resume(): void {
+    this.paused = false;
+    void this.syncUp();
+  }
+
+  private maybeResolvePause() {
+    if (!this.paused || this.isSyncingUp || this.isSyncingDown) return;
+    const waiters = this.pauseWaiters;
+    this.pauseWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  /**
    * Process upload queue
    */
   async syncUp() {
-    if (this.isSyncingUp) return;
+    if (this.isSyncingUp || this.paused) return;
     this.isSyncingUp = true;
     let processedAny = false;
     try {
-      while (this.upQueue.size > 0) {
+      while (this.upQueue.size > 0 && !this.paused) {
         await this.upQueue.next(this.onProcessUp, this.onRollback);
         processedAny = true;
       }
@@ -77,6 +104,7 @@ export class SyncScheduler {
       );
     } finally {
       this.isSyncingUp = false;
+      this.maybeResolvePause();
       void this.syncDown();
     }
   }
@@ -85,13 +113,13 @@ export class SyncScheduler {
    * Process download queue
    */
   async syncDown() {
-    if (this.isSyncingDown) return;
+    if (this.isSyncingDown || this.paused) return;
     if (this.upQueue.size > 0) return;
 
     this.isSyncingDown = true;
     let processedAny = false;
     try {
-      while (this.downQueue.size > 0) {
+      while (this.downQueue.size > 0 && !this.paused) {
         if (this.upQueue.size > 0) break;
         await this.downQueue.next(this.onProcessDown);
         processedAny = true;
@@ -112,6 +140,7 @@ export class SyncScheduler {
       );
     } finally {
       this.isSyncingDown = false;
+      this.maybeResolvePause();
     }
   }
 

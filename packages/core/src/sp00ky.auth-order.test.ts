@@ -62,4 +62,31 @@ describe('Sp00kyClient.auth.subscribe ordering invariant', () => {
       ).toBeLessThan(firstAwaitIdx);
     }
   });
+
+  it('writes the boot-bucket hint synchronously and switches buckets before sync.setCurrentUserId', () => {
+    const match = source.match(
+      /this\.auth\.subscribe\(\s*async\s*\(\s*userId\s*[^)]*\)\s*=>\s*\{([\s\S]*?)\n {6}\}\s*\)/
+    );
+    expect(match).not.toBeNull();
+    const stripped = match![1]
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n');
+
+    const hintIdx = stripped.indexOf('writeBootBucketHint(');
+    const bucketIdx = stripped.indexOf('this.ensureLocalBucket(userId)');
+    const syncUserIdx = stripped.indexOf('this.sync.setCurrentUserId(userId)');
+    const firstAwaitIdx = stripped.search(/\bawait\b/);
+
+    // The hint must be written before the first await: a reload landing
+    // mid-switch has to boot straight into the target bucket.
+    expect(hintIdx, 'writeBootBucketHint must appear in the auth.subscribe body').toBeGreaterThanOrEqual(0);
+    expect(hintIdx, 'writeBootBucketHint must run before the first await').toBeLessThan(firstAwaitIdx);
+
+    // The bucket switch must complete before the sync module re-registers
+    // LIVE/poll for the new user — those immediately write to the local store.
+    expect(bucketIdx, 'ensureLocalBucket must appear in the auth.subscribe body').toBeGreaterThanOrEqual(0);
+    expect(syncUserIdx, 'sync.setCurrentUserId must appear in the auth.subscribe body').toBeGreaterThanOrEqual(0);
+    expect(bucketIdx, 'ensureLocalBucket must run before sync.setCurrentUserId').toBeLessThan(syncUserIdx);
+  });
 });

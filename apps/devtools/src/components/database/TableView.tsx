@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { useDevTools } from '../../context/DevToolsContext';
 import { escapeHtml } from '../../utils/html';
 import { Cell } from './Cell';
+import { JsonView } from '../ui/JsonView';
 
 function getRecordId(row: Record<string, unknown>): string | null {
   if (!row.id) return null;
@@ -27,10 +28,29 @@ function CheckIcon() {
   );
 }
 
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+      <line x1="6" y1="6" x2="18" y2="18"></line>
+      <line x1="18" y1="6" x2="6" y2="18"></line>
+    </svg>
+  );
+}
+
+/** Chrome-style circular refresh arrow. */
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+      <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
+    </svg>
+  );
+}
+
 interface TableViewProps {
   filter: string;
   setFilter: (val: string) => void;
   source: 'local' | 'remote';
+  setSource: (val: 'local' | 'remote') => void;
   onError?: (msg: string) => void;
 }
 
@@ -41,6 +61,8 @@ export function TableView(props: TableViewProps) {
   // Row inspected in the bottom JSON pane
   const [inspectedRow, setInspectedRow] = createSignal<Record<string, unknown> | null>(null);
   const [copied, setCopied] = createSignal(false);
+  // Bumped by the toolbar refresh button to re-run the fetch effect.
+  const [refreshTick, setRefreshTick] = createSignal(0);
 
   const copyInspected = async () => {
     const row = inspectedRow();
@@ -54,10 +76,11 @@ export function TableView(props: TableViewProps) {
     }
   };
 
-  // Fetch table data when a table is selected or source changes
+  // Fetch table data when a table is selected, source changes, or refresh clicked
   createEffect(() => {
     const table = selectedTable();
     const currentSource = props.source;
+    refreshTick();
     setInspectedRow(null); // close the JSON pane when the table/source changes
     if (table && runQuery) {
       // Construct query: SELECT * FROM table LIMIT 20
@@ -175,16 +198,6 @@ export function TableView(props: TableViewProps) {
 
   return (
     <div class="database-data">
-      <div class="data-header">
-        <span class="data-header-title" title={selectedTable() ?? undefined}>
-          {selectedTable() ?? 'No table selected'}
-        </span>
-        <Show when={selectedTable() && !loading()}>
-          <span class="data-header-count">
-            {tableData().length} {tableData().length === 1 ? 'row' : 'rows'}
-          </span>
-        </Show>
-      </div>
       <div class="table-data">
         <Show
           when={selectedTable()}
@@ -203,7 +216,6 @@ export function TableView(props: TableViewProps) {
               <thead>
                 <tr>
                   <For each={columns()}>{(column) => <th>{escapeHtml(column)}</th>}</For>
-                  <th class="actions-column"></th>
                 </tr>
               </thead>
               <tbody>
@@ -231,19 +243,6 @@ export function TableView(props: TableViewProps) {
                             />
                           )}
                         </For>
-                        <td class="actions-cell">
-                          <button
-                            class="row-view-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setInspectedRow(row);
-                            }}
-                            title="View row JSON"
-                            aria-label="View row JSON"
-                          >
-                            {'{ }'}
-                          </button>
-                        </td>
                       </tr>
                     );
                   }}
@@ -278,13 +277,45 @@ export function TableView(props: TableViewProps) {
                 aria-label="Close"
                 onClick={() => setInspectedRow(null)}
               >
-                ×
+                <CloseIcon />
               </button>
             </div>
           </div>
-          <pre class="row-pane-json">{JSON.stringify(inspectedRow(), null, 2)}</pre>
+          <JsonView class="row-pane-json" value={inspectedRow()} />
         </div>
       </Show>
+
+      <div class="db-toolbar">
+        <button
+          class="icon-btn"
+          title="Refresh"
+          aria-label="Refresh"
+          onClick={() => setRefreshTick((t) => t + 1)}
+        >
+          <RefreshIcon />
+        </button>
+        <div class="db-toolbar-sep" />
+        <input
+          class="dt-filter-input db-toolbar-filter"
+          type="text"
+          placeholder="Filter"
+          value={props.filter}
+          onInput={(e) => props.setFilter(e.currentTarget.value)}
+        />
+        <select
+          class="db-source-select"
+          value={props.source}
+          onChange={(e) => props.setSource(e.currentTarget.value as 'local' | 'remote')}
+        >
+          <option value="local">Local</option>
+          <option value="remote">Remote</option>
+        </select>
+        <Show when={selectedTable() && !loading()}>
+          <span class="db-toolbar-count">
+            {tableData().length} {tableData().length === 1 ? 'row' : 'rows'}
+          </span>
+        </Show>
+      </div>
     </div>
   );
 }

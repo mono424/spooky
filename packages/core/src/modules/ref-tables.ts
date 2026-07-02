@@ -10,6 +10,8 @@
 // already reads it from `SPKY_SSP_REF_MODE`; add a matching codegen
 // export then.
 
+import { cyrb53 } from '@spooky-sync/query-builder';
+
 export type RefMode = 'single' | 'dedicated';
 
 /**
@@ -51,6 +53,23 @@ export function sanitizeUserId(userId: unknown): string | null {
   if (raw.length === 0) return null;
   if (!/^[A-Za-z0-9_]+$/.test(raw)) return null;
   return raw;
+}
+
+/**
+ * Resolve the LOCAL storage bucket id for a user. Every user gets their own
+ * IndexedDB-backed local store (`indxdb://sp00ky-<bucketId>`) so cached rows,
+ * query state, and the mutation outbox never leak across accounts on a shared
+ * device. Signed-out sessions share the `anon` bucket.
+ *
+ * An id that fails sanitization still gets a DETERMINISTIC per-user bucket
+ * (cyrb53 hex of the raw id) — falling back to `anon` here would put an
+ * authenticated user in the shared bucket and recreate the cross-user leak.
+ */
+export function bucketIdForUser(userId: unknown): string {
+  if (userId === null || userId === undefined || userId === ANON_USER_ID) return ANON_USER_ID;
+  const uid = sanitizeUserId(userId);
+  if (uid) return uid;
+  return `u${cyrb53(String(userId)).toString(16)}`;
 }
 
 /**

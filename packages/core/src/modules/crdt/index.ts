@@ -147,9 +147,14 @@ export class CrdtManager {
     );
   }
 
-  closeAll(): void {
+  /**
+   * Close every open field + table LIVE. Fields flush a final remote push by
+   * default; pass `{ flush: false }` on a bucket switch, where that flush
+   * would push the previous user's snapshot under the next user's session.
+   */
+  closeAll(options: { flush?: boolean } = {}): void {
     for (const [_, field] of this.fields) {
-      field.stopSync();
+      field.stopSync(options);
     }
     this.fields.clear();
     for (const table of Array.from(this.liveByTable.keys())) {

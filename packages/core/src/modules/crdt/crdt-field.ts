@@ -124,10 +124,17 @@ export class CrdtField {
     });
   }
 
-  stopSync(): void {
+  /**
+   * Stop syncing this field. Flushes one final remote push by default so the
+   * last keystrokes aren't lost. Pass `{ flush: false }` on a bucket switch —
+   * the remote session already belongs to the NEXT user, and pushing this
+   * (previous user's) snapshot under it would clobber the record remotely.
+   */
+  stopSync(options: { flush?: boolean } = {}): void {
+    const flush = options.flush ?? true;
     if (this.unsubscribe) { this.unsubscribe(); this.unsubscribe = null; }
     if (this.pushTimer) { clearTimeout(this.pushTimer); this.pushTimer = null; }
-    if (this.remote && this.recordId) { void this.pushToRemote(); }
+    if (flush && this.remote && this.recordId) { void this.pushToRemote(); }
   }
 
   importRemote(state: Uint8Array): void {

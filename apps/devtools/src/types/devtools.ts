@@ -121,6 +121,14 @@ export interface ActiveQuery {
   timings?: QueryTimings;
 }
 
+// A single point on the Queries-tab timeline strip. Accumulated panel-side
+// (the backend only reports the latest `lastUpdate` per query, not a history).
+export interface QueryMark {
+  queryHash: number;
+  timestamp: number;
+  kind: 'registered' | 'updated';
+}
+
 export interface AuthState {
   isAuthenticated: boolean;
   user: {

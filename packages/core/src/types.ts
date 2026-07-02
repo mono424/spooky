@@ -255,10 +255,13 @@ export type QueryConfigRecord = QueryConfig & { id: string };
 
 /**
  * Runtime fetch status of a live query.
- * - `idle`: not currently fetching missing records.
- * - `fetching`: the sync engine is fetching/ingesting missing records for this
- *   query. UI notifications are coalesced so the result lands as a single
- *   update once fetching completes.
+ * - `idle`: registered, initial sync completed, and not currently fetching
+ *   missing records — the materialized rows are authoritative (a windowed
+ *   query's short result really is the end of the list).
+ * - `fetching`: the query is registering (a query is born `fetching` until its
+ *   initial remote sync completes) or the sync engine is fetching/ingesting
+ *   missing records for it. Any pending debounced result is flushed BEFORE the
+ *   flip back to `idle`, so idle status never races ahead of the rows.
  */
 export type QueryStatus = 'idle' | 'fetching';
 
@@ -273,12 +276,20 @@ export interface QueryState {
   /** Set once `applyHydration` has run for this query, so the cold instant-hydrate
    * path fires at most once per query (see DataModule.isCold/applyHydration). */
   hydrated?: boolean;
+  /** Set once `notifyQuerySynced` has emitted for this registration lifetime.
+   * Ephemeral (unlike the persisted `updateCount`), so a re-registered query
+   * always emits at least once even when its records are unchanged — otherwise
+   * an empty re-registered window would never notify and stay "loading". */
+  syncNotified?: boolean;
   /** Timer for TTL expiration. */
   ttlTimer: NodeJS.Timeout | null;
   /** TTL duration in milliseconds. */
   ttlDurationMs: number;
   /** Number of times the query has been updated. */
   updateCount: number;
+  /** Timestamp (ms) of the last user-visible update, or null before the first
+   * one. Surfaced to DevTools as `lastUpdate` — must NOT be stamped on read. */
+  lastUpdatedAt: number | null;
   /**
    * Rolling window of the most recent materialization-step latencies (ms).
    * Capped at MATERIALIZATION_SAMPLE_WINDOW; used to recompute p55/p90/p99

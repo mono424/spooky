@@ -124,6 +124,10 @@ export class DevToolsService implements StreamUpdateReceiver {
     const queries = this.dataManager.getActiveQueries();
     queries.forEach((q) => {
       const queryHash = this.hashString(encodeRecordId(q.config.id));
+      const createdAt =
+        q.config.lastActiveAt instanceof Date
+          ? q.config.lastActiveAt.getTime()
+          : new Date(q.config.lastActiveAt || Date.now()).getTime();
       result.set(queryHash, {
         queryHash,
         status: 'active',
@@ -131,11 +135,10 @@ export class DevToolsService implements StreamUpdateReceiver {
         // registration flag above. `fetchStatus` is 'idle' | 'fetching'.
         fetchStatus: q.status,
         isFetching: q.status === 'fetching',
-        createdAt:
-          q.config.lastActiveAt instanceof Date
-            ? q.config.lastActiveAt.getTime()
-            : new Date(q.config.lastActiveAt || Date.now()).getTime(),
-        lastUpdate: Date.now(),
+        createdAt,
+        // Real last-update time; before the first update it equals createdAt.
+        // (Previously Date.now(), which reset the column on every state push.)
+        lastUpdate: q.lastUpdatedAt ?? createdAt,
         updateCount: q.updateCount,
         ttl: q.config.ttl,
         query: q.config.surql,

@@ -42,63 +42,21 @@ export function DatabaseTab() {
   };
 
   return (
-    <div style={{ display: 'flex', 'flex-direction': 'column', height: '100%', width: '100%' }}>
+    <div class="database-container">
       {/* oxlint-disable-next-line no-non-null-assertion */}
       {error() && <Toast message={error()!} type="error" onDismiss={() => setError(null)} />}
-      <div
-        class="table-controls"
-        style={{
-          height: '25px',
-          padding: '0 8px',
-          'border-bottom': '1px solid var(--sys-color-divider)',
-          display: 'flex',
-          'align-items': 'center',
-          gap: '8px',
-          'box-sizing': 'border-box',
-          'flex-shrink': 0,
-          background: 'var(--sys-color-surface)',
-        }}
-      >
-        <input
-          class="dt-filter-input"
-          type="text"
-          placeholder="Filter..."
-          value={filter()}
-          onInput={(e) => setFilter(e.currentTarget.value)}
-          style={{ flex: '1' }}
-        />
-        <select
-          value={source()}
-          onChange={(e) => setSource(e.currentTarget.value as 'local' | 'remote')}
-          style={{
-            height: '18px',
-            background: 'transparent',
-            border: '1px solid var(--sys-color-outline-variant, #555)',
-            color: 'var(--sys-color-on-surface, #fff)',
-            'border-radius': '9px',
-            'font-size': '11px',
-            padding: '0 8px',
-            outline: 'none',
-            cursor: 'pointer',
-          }}
-        >
-          <option value="local">Local</option>
-          <option value="remote">Remote</option>
-        </select>
-      </div>
-      <div class="database-container">
-        <TableList
-          tables={tables()}
-          showInternal={showInternal()}
-          onToggleInternal={setShowInternal}
-        />
-        <TableView
-          filter={filter()}
-          setFilter={setFilter}
-          source={source()}
-          onError={handleError}
-        />
-      </div>
+      <TableList
+        tables={tables()}
+        showInternal={showInternal()}
+        onToggleInternal={setShowInternal}
+      />
+      <TableView
+        filter={filter()}
+        setFilter={setFilter}
+        source={source()}
+        setSource={setSource}
+        onError={handleError}
+      />
     </div>
   );
 }

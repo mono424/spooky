@@ -71,7 +71,7 @@ export class LocalMigrator {
           { Category: 'sp00ky-client::LocalMigrator::provision' },
           `[Provisioning] (${i + 1}/${statements.length}) Executing: ${statement.substring(0, 50)}...`
         );
-        await this.localDb.query(statement);
+        await this.localDb.queryUngated(statement);
         this.logger.info(
           { Category: 'sp00ky-client::LocalMigrator::provision' },
           `[Provisioning] (${i + 1}/${statements.length}) Done`
@@ -90,7 +90,7 @@ export class LocalMigrator {
 
   private async isSchemaUpToDate(hash: string): Promise<boolean> {
     try {
-      const [lastSchemaRecord] = await this.localDb.query<any>(
+      const [lastSchemaRecord] = await this.localDb.queryUngated<any>(
         `SELECT hash, created_at FROM ONLY _00_schema ORDER BY created_at DESC LIMIT 1;`
       );
       return lastSchemaRecord?.hash === hash;
@@ -101,13 +101,13 @@ export class LocalMigrator {
 
   private async recreateDatabase(database: string) {
     try {
-      await this.localDb.query(`DEFINE DATABASE _00_temp;`);
+      await this.localDb.queryUngated(`DEFINE DATABASE _00_temp;`);
     } catch (_e) {
       // Ignore if exists
     }
 
     try {
-      await this.localDb.query(`
+      await this.localDb.queryUngated(`
         USE DB _00_temp;
         REMOVE DATABASE ${database};
       `);
@@ -115,7 +115,7 @@ export class LocalMigrator {
       // Ignore error if database doesn't exist
     }
 
-    await this.localDb.query(`
+    await this.localDb.queryUngated(`
       DEFINE DATABASE ${database};
       USE DB ${database};
     `);
@@ -195,7 +195,7 @@ export class LocalMigrator {
   }
 
   private async createHashRecord(hash: string) {
-    await this.localDb.query(
+    await this.localDb.queryUngated(
       `UPSERT _00_schema SET hash = $hash, created_at = time::now() WHERE hash = $hash;`,
       { hash }
     );

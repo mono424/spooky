@@ -12,6 +12,7 @@ import {
   type BackendDevToolsState,
   type TabType,
   type ChromeMessage,
+  type QueryMark,
 } from '../types/devtools';
 import { useChromeConnection } from '../hooks/useChromeConnection';
 import { useRunInHostPage } from '../hooks/useRunInHostPage';
@@ -27,6 +28,7 @@ interface DevToolsContextValue {
   // State
   state: DevToolsState;
   activeTab: () => TabType;
+  queryMarks: () => QueryMark[];
   selectedQueryHash: () => number | null;
   selectedTable: () => string | null;
   isSp00kyAvailable: () => boolean;
@@ -78,6 +80,13 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
   // UI state
   const [activeTab, setActiveTab] = createSignal<TabType>('queries');
+  // Timeline marks for the Queries tab. Accumulated here (not in the backend)
+  // by diffing each activeQueries snapshot — the backend only carries the
+  // latest lastUpdate per query and its event history is capped at 100.
+  const [queryMarks, setQueryMarks] = createSignal<QueryMark[]>([]);
+  // queryHash -> last seen `lastUpdate`; non-reactive on purpose.
+  const seenQueryUpdates = new Map<number, number>();
+  const MAX_QUERY_MARKS = 2000;
   const [selectedQueryHash, setSelectedQueryHash] = createSignal<number | null>(null);
   const [selectedTable, setSelectedTable] = createSignal<string | null>(null);
   const [isSp00kyAvailable, setIsSp00kyAvailable] = createSignal(false);
@@ -187,6 +196,10 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
       case 'PAGE_RELOADED':
         console.log('[DevTools] Page reloaded, checking for Sp00ky...');
+        // Fresh page → fresh timeline (Chrome network-tab behavior without
+        // "Preserve log").
+        seenQueryUpdates.clear();
+        setQueryMarks([]);
         setTimeout(() => {
           checkSp00ky();
         }, 500);
@@ -222,6 +235,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
     // Update active queries
     if (frontendState.activeQueries) {
       setState('activeQueries', frontendState.activeQueries);
+      recordQueryMarks(frontendState.activeQueries);
     }
 
     // Update auth
@@ -242,6 +256,32 @@ export const DevToolsProvider: ParentComponent = (props) => {
     if (frontendState.versions) {
       setState('versions', frontendState.versions);
     }
+  }
+
+  /**
+   * Diff an activeQueries snapshot against what we've seen and append timeline
+   * marks: a `registered` mark the first time a query appears, an `updated`
+   * mark whenever its lastUpdate advances.
+   */
+  function recordQueryMarks(queries: DevToolsState['activeQueries']) {
+    const fresh: QueryMark[] = [];
+    for (const q of queries) {
+      const seen = seenQueryUpdates.get(q.queryHash);
+      if (seen === undefined) {
+        fresh.push({ queryHash: q.queryHash, timestamp: q.createdAt, kind: 'registered' });
+        if (q.lastUpdate > q.createdAt) {
+          fresh.push({ queryHash: q.queryHash, timestamp: q.lastUpdate, kind: 'updated' });
+        }
+      } else if (q.lastUpdate > seen) {
+        fresh.push({ queryHash: q.queryHash, timestamp: q.lastUpdate, kind: 'updated' });
+      }
+      seenQueryUpdates.set(q.queryHash, q.lastUpdate);
+    }
+    if (fresh.length === 0) return;
+    setQueryMarks((prev) => {
+      const next = [...prev, ...fresh];
+      return next.length > MAX_QUERY_MARKS ? next.slice(next.length - MAX_QUERY_MARKS) : next;
+    });
   }
 
   /**
@@ -588,6 +628,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const contextValue: DevToolsContextValue = {
     state,
     activeTab,
+    queryMarks,
     selectedQueryHash,
     selectedTable,
     isSp00kyAvailable,

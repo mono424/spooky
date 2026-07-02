@@ -42,6 +42,7 @@ import { CrdtManager, CrdtField } from './modules/crdt/index';
 import { FeatureFlagModule, FeatureFlagHandle } from './modules/feature-flag/index';
 import type { FeatureFlagOptions } from './modules/feature-flag/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
+import { ANON_USER_ID, bucketIdForUser } from './modules/ref-tables';
 import { parseParams, encodeRecordId } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
@@ -84,6 +85,33 @@ export class BucketHandle {
     const p = prefix ?? '';
     const [result] = await this.remote.query<[string[]]>(`RETURN f"${this.bucketName}:/${p}".list();`);
     return result;
+  }
+}
+
+/**
+ * Boot hint for which local bucket to open before auth resolves. Written to
+ * PLAIN localStorage (never the configured persistenceClient): the surrealdb
+ * persistence client stores its keys INSIDE a bucket, and the whole point of
+ * the hint is to pick the bucket before any bucket is open. A warm reload of a
+ * signed-in user thus opens their own bucket immediately — zero switches.
+ * Losing the hint is fail-closed: boot lands on the anon bucket and the auth
+ * callback switches to the user's bucket (cache + outbox intact).
+ */
+const LAST_BUCKET_KEY = 'sp00ky:last_bucket';
+
+function readBootBucketHint(): string | null {
+  try {
+    return typeof localStorage !== 'undefined' ? localStorage.getItem(LAST_BUCKET_KEY) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBootBucketHint(bucketId: string): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(LAST_BUCKET_KEY, bucketId);
+  } catch {
+    /* private-mode storage errors: boot just falls back to the anon bucket */
   }
 }
 
@@ -344,9 +372,12 @@ export class Sp00kyClient<S extends SchemaStructure> {
       'Sp00kyClient initialization started'
     );
     try {
-      await this.local.connect();
+      // Open the bucket the last session used (per-user local stores). If auth
+      // resolves to a different user below, the auth callback switches buckets.
+      const bootBucket = readBootBucketHint() ?? ANON_USER_ID;
+      await this.local.connect(bootBucket);
       this.logger.debug(
-        { Category: 'sp00ky-client::Sp00kyClient::init' },
+        { bootBucket, Category: 'sp00ky-client::Sp00kyClient::init' },
         'Local database connected'
       );
 
@@ -359,6 +390,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
         'Remote database connected'
       );
 
+      this.streamProcessor.setStateKeySuffix(bootBucket);
       await this.streamProcessor.init();
       // Seed table `select` permissions from the schema before any query is
       // registered — otherwise the SSP default-denies every non-`_00_` table.
@@ -414,6 +446,13 @@ export class Sp00kyClient<S extends SchemaStructure> {
           this.auth.currentUser?.id ? encodeRecordId(this.auth.currentUser.id) : null,
           this.auth.access
         );
+        // Record the target bucket synchronously (still before the first
+        // `await`) so a reload mid-switch boots straight into the right store.
+        writeBootBucketHint(bucketIdForUser(userId));
+        // FIRST await: swap the local store to this user's bucket. Serialized
+        // + latest-target-wins internally; no-op when the bucket already
+        // matches (the boot-hint warm path).
+        await this.ensureLocalBucket(userId);
         const next = await this.fetchSessionId();
         this.dataModule.setSessionId(next);
         this.crdtManager.setSessionId(next);
@@ -447,6 +486,97 @@ export class Sp00kyClient<S extends SchemaStructure> {
       );
       throw e;
     }
+  }
+
+  // Serializes bucket switches from rapid auth flips; `pendingBucketTarget`
+  // makes intermediate targets collapse (A→anon→B never opens the anon bucket).
+  private bucketSwitchChain: Promise<void> = Promise.resolve();
+  private pendingBucketTarget: string | null = null;
+
+  /**
+   * Ensure the local store is this user's bucket, switching if needed. Called
+   * from the auth listener on every auth flip; concurrent calls are chained
+   * and superseded intermediates are skipped (latest target wins).
+   */
+  private ensureLocalBucket(userId: string | null): Promise<void> {
+    const target = bucketIdForUser(userId);
+    this.pendingBucketTarget = target;
+    this.bucketSwitchChain = this.bucketSwitchChain.then(async () => {
+      if (this.pendingBucketTarget !== target) return; // superseded by a newer flip
+      if (this.local.currentBucketId === target) return;
+      await this.doSwitchBucket(target);
+    });
+    // Isolate chain failures per-caller: a failed switch must not poison every
+    // future switch. The caller (auth listener) logs it.
+    const result = this.bucketSwitchChain;
+    this.bucketSwitchChain = this.bucketSwitchChain.catch(() => {});
+    return result;
+  }
+
+  /**
+   * The bucket-switch choreography: drain → swap → rebind.
+   *
+   * Drain: sync quiesced (poll/LIVE stopped, in-flight round awaited so its
+   * outbox delete lands in the OLD bucket, debounce timers cancelled),
+   * DataModule timers cleared, CRDT fields closed WITHOUT their final flush
+   * (the remote session already belongs to the next user).
+   *
+   * Swap: gate closes so any local query issued mid-switch (sibling auth
+   * subscribers, FeatureFlagModule) waits and then runs against the NEW
+   * bucket; store swaps open-new-before-close-old; schema provisions
+   * (no-op for a returning bucket); stale `_00_query` rows are wiped (dead
+   * sessionId-salted hashes with stale arrays — record bodies stay warm);
+   * SSP resets to a fresh circuit with re-seeded permissions.
+   *
+   * Rebind: auth token re-persisted (the surrealdb persistence client wrote it
+   * into the OLD bucket's `_00_kv` before this listener ran), active queries
+   * re-homed keeping their hashes, sync resumed on the new bucket's own
+   * outbox, and every query re-registered remotely to refill from the server.
+   */
+  private async doSwitchBucket(target: string): Promise<void> {
+    this.logger.info(
+      { target, from: this.local.currentBucketId, Category: 'sp00ky-client::Sp00kyClient::doSwitchBucket' },
+      'Switching local bucket'
+    );
+
+    await this.sync.prepareBucketSwitch();
+    this.dataModule.quiesce();
+    this.crdtManager.closeAll({ flush: false });
+
+    const reopen = this.local.beginSwitch();
+    try {
+      await this.local.switchStore(target);
+      await this.migrator.provision(this.config.schemaSurql);
+      await this.local.queryUngated('DELETE _00_query;');
+      this.streamProcessor.setStateKeySuffix(target);
+      await this.streamProcessor.reset();
+      this.streamProcessor.setPermissions(extractSelectPermissions(this.config.schemaSurql));
+      this.cache.clearVersionLookups();
+    } finally {
+      reopen();
+    }
+
+    if (this.auth.token) {
+      try {
+        await this.persistenceClient.set('sp00ky_auth_token', this.auth.token);
+      } catch (e) {
+        this.logger.warn(
+          { error: e, Category: 'sp00ky-client::Sp00kyClient::doSwitchBucket' },
+          'Failed to re-persist auth token into the new bucket'
+        );
+      }
+    }
+
+    const hashes = await this.dataModule.rebindAfterBucketSwitch();
+    await this.sync.completeBucketSwitch();
+    for (const hash of hashes) {
+      this.sync.enqueueDownEvent({ type: 'register', payload: { hash } });
+    }
+
+    this.logger.info(
+      { target, queries: hashes.length, Category: 'sp00ky-client::Sp00kyClient::doSwitchBucket' },
+      'Local bucket switch complete'
+    );
   }
 
   async close() {

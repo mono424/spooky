@@ -7,6 +7,7 @@ import type {
   RoutePayload,
 } from '@spooky-sync/query-builder';
 import type { LocalDatabaseService } from '../../services/database/index';
+import { StaleEpochError } from '../../services/database/index';
 import type { CacheModule, RecordWithId, CacheRecord } from '../cache/index';
 import type { Logger } from '../../services/logger/index';
 import type { StreamUpdate } from '../../services/stream-processor/index';
@@ -72,6 +73,16 @@ export class DataModule<S extends SchemaStructure> {
   private statusSubscriptions: Map<QueryHash, Set<QueryStatusCallback>> = new Map();
   private mutationCallbacks: Set<MutationCallback> = new Set();
   private debounceTimers: Map<QueryHash, NodeJS.Timeout> = new Map();
+  // The update each debounce timer would process on its trailing edge. Kept in a
+  // map (not just the timer closure) so `flushPendingStreamUpdate` can process
+  // it early — the sync engine flushes before flipping a query to `idle`, so
+  // subscribers never observe idle status with stale (partial-window) rows.
+  private pendingStreamUpdates: Map<QueryHash, StreamUpdate> = new Map();
+  // Refcount of in-flight fetch cycles per query (registration + concurrent
+  // poll/LIVE sync rounds can overlap). Status flips to `fetching` on 0→1 and
+  // back to `idle` only on 1→0, so an inner cycle finishing can't emit a
+  // premature idle mid-registration.
+  private fetchDepth: Map<QueryHash, number> = new Map();
   private logger: Logger;
   /**
    * Optional observer notified whenever a query's fetch status changes.
@@ -309,6 +320,31 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   /**
+   * Enter a fetch cycle for a query. Refcounted: registration and concurrent
+   * poll/LIVE sync rounds can overlap on the same hash, and only the OUTERMOST
+   * cycle may flip the status — 0→1 emits `fetching`, and `endFetching`'s 1→0
+   * emits `idle`. Always pair with `endFetching` in a `finally`.
+   */
+  beginFetching(queryHash: string): void {
+    const depth = this.fetchDepth.get(queryHash) ?? 0;
+    this.fetchDepth.set(queryHash, depth + 1);
+    if (depth === 0) {
+      this.setQueryStatus(queryHash, 'fetching');
+    }
+  }
+
+  /** Leave a fetch cycle started with {@link beginFetching}; emits `idle` on the last exit. */
+  endFetching(queryHash: string): void {
+    const depth = this.fetchDepth.get(queryHash) ?? 0;
+    if (depth <= 1) {
+      this.fetchDepth.delete(queryHash);
+      this.setQueryStatus(queryHash, 'idle');
+      return;
+    }
+    this.fetchDepth.set(queryHash, depth - 1);
+  }
+
+  /**
    * Subscribe to mutations (for sync)
    */
   onMutation(callback: MutationCallback): () => void {
@@ -342,6 +378,9 @@ export class DataModule<S extends SchemaStructure> {
         clearTimeout(existing);
         this.debounceTimers.delete(queryHash);
       }
+      // The DELETE update carries the full latest localArray, so the coalesced
+      // CREATE/UPDATE it supersedes is already reflected — drop it.
+      this.pendingStreamUpdates.delete(queryHash);
       await this.processStreamUpdate(update);
       return;
     }
@@ -353,12 +392,33 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     // Set new timer
+    this.pendingStreamUpdates.set(queryHash, update);
     const timer = setTimeout(async () => {
       this.debounceTimers.delete(queryHash);
+      this.pendingStreamUpdates.delete(queryHash);
       await this.processStreamUpdate(update);
     }, this.streamDebounceTime);
 
     this.debounceTimers.set(queryHash, timer);
+  }
+
+  /**
+   * Process a query's pending (debounced) stream update NOW instead of on the
+   * trailing edge. Called by the sync engine before it flips a query back to
+   * `idle`, so the status change never races ahead of the rows it fetched.
+   * No-op when nothing is pending. The pending entry is removed before the
+   * await so a concurrently-firing timer can't process it twice.
+   */
+  async flushPendingStreamUpdate(queryHash: string): Promise<void> {
+    const timer = this.debounceTimers.get(queryHash);
+    if (timer) {
+      clearTimeout(timer);
+      this.debounceTimers.delete(queryHash);
+    }
+    const pending = this.pendingStreamUpdates.get(queryHash);
+    if (!pending) return;
+    this.pendingStreamUpdates.delete(queryHash);
+    await this.processStreamUpdate(pending);
   }
 
   // Materialize a query's result rows from the local DB. For a windowed query
@@ -430,6 +490,11 @@ export class DataModule<S extends SchemaStructure> {
       this.recordPhase(queryState, 'sspTransform', update.transformMs);
     const percentiles = this.computeMaterializationPercentiles(queryState.materializationSamples);
 
+    // Fence against bucket switches: this update's `localArray` came from the
+    // pre-switch SSP circuit; applying it after a switch would show (and
+    // persist) the previous user's ids in the new bucket.
+    const epoch = this.local.epoch;
+
     try {
       // Materialize the query's rows. For a windowed (offset) query, re-running
       // the original surql would re-apply `START n` against the shared local DB
@@ -438,6 +503,7 @@ export class DataModule<S extends SchemaStructure> {
       // original ORDER BY for stable display order. Non-offset queries keep the
       // normal re-query path.
       const newRecords = await this.materializeRecords(queryState, localArray);
+      if (epoch !== this.local.epoch) return;
       queryState.config.localArray = localArray;
 
       const prevJson = JSON.stringify(queryState.records);
@@ -450,6 +516,7 @@ export class DataModule<S extends SchemaStructure> {
       // every observed engine step.
       if (recordsChanged) {
         queryState.updateCount++;
+        queryState.lastUpdatedAt = Date.now();
       }
 
       await this.local.query(
@@ -473,7 +540,8 @@ export class DataModule<S extends SchemaStructure> {
           materializationP55: percentiles.p55,
           materializationP90: percentiles.p90,
           materializationP99: percentiles.p99,
-        }
+        },
+        { epoch }
       );
 
       if (!recordsChanged) {
@@ -501,6 +569,13 @@ export class DataModule<S extends SchemaStructure> {
         'Query updated from stream'
       );
     } catch (err) {
+      if (err instanceof StaleEpochError) {
+        this.logger.debug(
+          { queryHash, Category: 'sp00ky-client::DataModule::onStreamUpdate' },
+          'Dropped stream update from before a bucket switch'
+        );
+        return;
+      }
       queryState.errorCount++;
       this.logger.error(
         { err, queryHash, Category: 'sp00ky-client::DataModule::onStreamUpdate' },
@@ -750,6 +825,8 @@ export class DataModule<S extends SchemaStructure> {
       clearTimeout(debounce);
       this.debounceTimers.delete(hash);
     }
+    this.pendingStreamUpdates.delete(hash);
+    this.fetchDepth.delete(hash);
     this.cache.unregisterQuery(hash);
     this.activeQueries.delete(hash);
     this.subscriptions.delete(hash);
@@ -782,11 +859,21 @@ export class DataModule<S extends SchemaStructure> {
       );
       return;
     }
+    const epoch = this.local.epoch;
     queryState.config.localArray = localArray;
-    await this.local.query(surql.seal(surql.updateSet('id', ['localArray'])), {
-      id: queryState.config.id,
-      localArray,
-    });
+    try {
+      await this.local.query(
+        surql.seal(surql.updateSet('id', ['localArray'])),
+        {
+          id: queryState.config.id,
+          localArray,
+        },
+        { epoch }
+      );
+    } catch (err) {
+      if (err instanceof StaleEpochError) return;
+      throw err;
+    }
   }
 
   async updateQueryRemoteArray(hash: string, remoteArray: RecordVersionArray): Promise<void> {
@@ -798,11 +885,124 @@ export class DataModule<S extends SchemaStructure> {
       );
       return;
     }
+    const epoch = this.local.epoch;
     queryState.config.remoteArray = remoteArray;
-    await this.local.query(surql.seal(surql.updateSet('id', ['remoteArray'])), {
-      id: queryState.config.id,
-      remoteArray,
-    });
+    try {
+      await this.local.query(
+        surql.seal(surql.updateSet('id', ['remoteArray'])),
+        {
+          id: queryState.config.id,
+          remoteArray,
+        },
+        { epoch }
+      );
+    } catch (err) {
+      if (err instanceof StaleEpochError) return;
+      throw err;
+    }
+  }
+
+  /**
+   * Cancel every armed timer ahead of a local-bucket switch: stream-update
+   * debounce timers (their pending updates carry the OLD bucket's id-sets) and
+   * per-query TTL heartbeats (they'd refresh the previous user's remote
+   * `_00_query` rows under the new session). The rebind re-arms heartbeats.
+   */
+  quiesce(): void {
+    for (const timer of this.debounceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.debounceTimers.clear();
+    this.pendingStreamUpdates.clear();
+    this.fetchDepth.clear();
+    for (const queryState of this.activeQueries.values()) {
+      if (queryState.ttlTimer) {
+        clearTimeout(queryState.ttlTimer);
+        queryState.ttlTimer = null;
+      }
+    }
+  }
+
+  /**
+   * Re-home every active query in a freshly-opened bucket, KEEPING its hash —
+   * `useQuery` subscriptions are keyed by hash and don't re-register on auth
+   * changes, so the hooks must stay attached. Per query:
+   *   1. reset the sync arrays + hydration flag and drop the previous user's
+   *      records, notifying subscribers with the new-bucket materialization
+   *      (usually empty) so their rows leave the UI immediately;
+   *   2. recreate the `_00_query` row in the new bucket;
+   *   3. re-register the SSP view on the (fresh, post-reset) processor — this
+   *      also rebinds the view to the NEW `$auth` context;
+   *   4. restart the TTL heartbeat.
+   * Returns the hashes so the caller can enqueue remote re-registration, which
+   * refills records from the server via the normal register→sync→notify path.
+   */
+  async rebindAfterBucketSwitch(): Promise<QueryHash[]> {
+    const hashes: QueryHash[] = [];
+    for (const [hash, queryState] of this.activeQueries.entries()) {
+      const config = queryState.config;
+      config.localArray = [];
+      config.remoteArray = [];
+      config.subqueryRemoteArray = undefined;
+      queryState.hydrated = false;
+      queryState.syncNotified = false;
+      queryState.records = [];
+      // Via setQueryStatus (not a bare assignment) so status observers see the
+      // flip back to a loading state.
+      this.setQueryStatus(hash, 'fetching');
+
+      try {
+        await withRetry(this.logger, () =>
+          this.local.query<[QueryConfigRecord]>(surql.seal(surql.create('id', 'data')), {
+            id: config.id,
+            data: {
+              surql: config.surql,
+              params: config.params,
+              localArray: [],
+              remoteArray: [],
+              lastActiveAt: new Date(),
+              createdAt: new Date(),
+              ttl: config.ttl,
+              tableName: config.tableName,
+              updateCount: queryState.updateCount,
+              rowCount: 0,
+              errorCount: queryState.errorCount,
+            },
+          })
+        );
+
+        const { localArray } = this.cache.registerQuery({
+          queryHash: hash,
+          surql: config.surql,
+          params: config.params,
+          ttl: new Duration(config.ttl),
+          lastActiveAt: new Date(),
+        });
+        config.localArray = localArray;
+        await this.local.query(surql.seal(surql.updateSet('id', ['localArray', 'rowCount'])), {
+          id: config.id,
+          localArray,
+          rowCount: localArray.length,
+        });
+      } catch (err) {
+        this.logger.error(
+          { err, hash, Category: 'sp00ky-client::DataModule::rebindAfterBucketSwitch' },
+          'Failed to rebind query after bucket switch; remote re-registration will retry'
+        );
+      }
+
+      // Notify AFTER the SSP re-registration so a subscriber that re-reads
+      // synchronously sees consistent (empty) state.
+      const subscribers = this.subscriptions.get(hash);
+      if (subscribers) {
+        for (const callback of subscribers) {
+          callback(queryState.records);
+        }
+      }
+      this.startTTLHeartbeat(queryState, hash);
+      hashes.push(hash);
+    }
+    return hashes;
   }
 
   /**
@@ -812,18 +1012,29 @@ export class DataModule<S extends SchemaStructure> {
   async notifyQuerySynced(queryHash: string): Promise<void> {
     const queryState = this.activeQueries.get(queryHash);
     if (!queryState) return;
+    const epoch = this.local.epoch;
 
     // Re-query local DB for latest data (windowed queries materialize from the
     // list_ref window so they resolve even if the in-browser SSP never emits —
     // it can't compute a high offset whose preceding rows aren't resident).
     const newRecords = await this.materializeRecords(queryState);
+    // Bucket switched while we materialized: these rows mix old-bucket reads
+    // with new-bucket state — drop them; the rebind/re-registration re-emits.
+    if (epoch !== this.local.epoch) return;
     const changed = JSON.stringify(queryState.records) !== JSON.stringify(newRecords);
     queryState.records = newRecords;
 
-    // Notify if data changed OR if this is the first sync (updateCount === 0)
-    // The latter handles "query truly has no results" so UI can stop loading
-    if (changed || queryState.updateCount === 0) {
+    // Notify if data changed OR if this registration lifetime hasn't emitted a
+    // post-sync notification yet. The latter handles "query truly has no
+    // results" so the UI can stop loading — gated on the in-memory
+    // `syncNotified` flag rather than `updateCount === 0`, because updateCount
+    // is PERSISTED across deregister/re-register: a re-registered empty window
+    // (updateCount > 0, records unchanged) would otherwise never emit and its
+    // subscribers would show a loading state forever.
+    if (changed || !queryState.syncNotified) {
+      queryState.syncNotified = true;
       queryState.updateCount++;
+      queryState.lastUpdatedAt = Date.now();
       const subscribers = this.subscriptions.get(queryHash);
       if (subscribers) {
         for (const callback of subscribers) {
@@ -1391,10 +1602,15 @@ export class DataModule<S extends SchemaStructure> {
       ttlTimer: null,
       ttlDurationMs: parseDuration(ttl),
       updateCount: persistedUpdateCount,
+      lastUpdatedAt: null,
       materializationSamples: [],
       lastIngestLatencyMs: null,
       errorCount: persistedErrorCount,
-      status: 'idle',
+      // Born `fetching`, not `idle`: every cold registration is followed by a
+      // `register` down-event whose lifecycle (Sp00kySync.registerQuery) resolves
+      // the status to `idle` once the initial sync completed. Starting idle left
+      // a gap where a fresh windowed query looked settled while still empty.
+      status: 'fetching',
       phaseSamples: {},
       phaseLast: {},
       registrationTimings: { parseMs: null, planMs: null, snapshotMs: null, wallMs: null },

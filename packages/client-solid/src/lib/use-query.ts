@@ -52,6 +52,7 @@ export function useQuery<
   error: () => Error | undefined;
   isLoading: () => boolean;
   isFetching: () => boolean;
+  isSettled: () => boolean;
 };
 
 // Overload: explicit db (backward-compatible)
@@ -71,6 +72,7 @@ export function useQuery<
   error: () => Error | undefined;
   isLoading: () => boolean;
   isFetching: () => boolean;
+  isSettled: () => boolean;
 };
 
 // Implementation
@@ -265,10 +267,21 @@ export function useQuery<
     return !isFetched() && error() === undefined;
   };
 
+  // True once the query has delivered a result AND no fetch cycle is in flight
+  // (registration + initial sync included — the core holds `fetching` across
+  // the whole registration and flushes debounced results before flipping back
+  // to idle). While settled, the results are authoritative: a windowed query
+  // returning fewer rows than its LIMIT really is the end of the list, so
+  // virtualized lists may size themselves to it without the scrollbar jumping
+  // when a still-syncing window transiently reports short. Resets to false
+  // whenever the query identity changes.
+  const isSettled = () => isFetched() && !isFetching();
+
   return {
     data,
     error,
     isLoading,
     isFetching,
+    isSettled,
   };
 }

@@ -72,6 +72,12 @@ export class DownQueue {
     });
   }
 
+  /** Drop all queued events (bucket switch: old-bucket register/sync work is
+   *  re-derived after the switch; replaying it would target dead query rows). */
+  clear(): void {
+    this.queue = [];
+  }
+
   async next(fn: (event: DownEvent) => Promise<void>): Promise<void> {
     const event = this.queue.shift();
     if (event) {

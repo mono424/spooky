@@ -1,4 +1,5 @@
 import type { LocalDatabaseService } from '../../services/database/index';
+import { StaleEpochError } from '../../services/database/index';
 import type {
   StreamProcessorService,
   StreamUpdate,
@@ -54,6 +55,12 @@ export class CacheModule implements StreamUpdateReceiver {
     return this.versionLookups[recordId] ?? 0;
   }
 
+  /** Drop the version cache on a bucket switch — a stale version would make
+   *  the sync diff skip fetching a body the new bucket legitimately needs. */
+  public clearVersionLookups(): void {
+    this.versionLookups = {};
+  }
+
   /**
    * Save a single record to local DB and ingest into DBSP
    * Used by mutations (create/update)
@@ -69,6 +76,13 @@ export class CacheModule implements StreamUpdateReceiver {
    */
   async saveBatch(records: CacheRecord[], skipDbInsert: boolean = false): Promise<void> {
     if (records.length === 0) return;
+
+    // Fence against bucket switches: this batch's records were derived from
+    // reads against the CURRENT store/user. If a switch lands while we await
+    // the (gated) local write, the write throws StaleEpochError and the whole
+    // batch — including the SSP ingest — is dropped: the new bucket re-syncs
+    // its own data from the server.
+    const epoch = this.local.epoch;
 
     this.logger.debug(
       {
@@ -116,8 +130,11 @@ export class CacheModule implements StreamUpdateReceiver {
           {} as Record<string, any>
         );
 
-        await this.local.execute(query, params);
+        await this.local.execute(query, params, { epoch });
       }
+
+      // Late fence for the skipDbInsert path (no gated write above to trip on).
+      if (this.local.epoch !== epoch) throw new StaleEpochError();
 
       // 2. Bulk ingest into DBSP (use populatedRecords which has _00_rv set).
       // ingestMany coalesces the per-record stream updates into a single
@@ -135,6 +152,13 @@ export class CacheModule implements StreamUpdateReceiver {
         'Batch saved successfully'
       );
     } catch (err) {
+      if (err instanceof StaleEpochError) {
+        this.logger.debug(
+          { count: records.length, Category: 'sp00ky-client::CacheModule::saveBatch' },
+          'Dropped batch from before a bucket switch'
+        );
+        return;
+      }
       this.logger.error(
         { err, count: records.length, Category: 'sp00ky-client::CacheModule::saveBatch' },
         'Failed to save batch'
@@ -152,11 +176,13 @@ export class CacheModule implements StreamUpdateReceiver {
       'Deleting record'
     );
 
+    const epoch = this.local.epoch;
     try {
       // 1. Delete from local database
       if (!skipDbDelete) {
-        await this.local.query('DELETE $id', { id: parseRecordIdString(id) });
+        await this.local.query('DELETE $id', { id: parseRecordIdString(id) }, { epoch });
       }
+      if (this.local.epoch !== epoch) throw new StaleEpochError();
 
       // 2. Ingest deletion into DBSP (pass record data so predicates can be matched)
       delete this.versionLookups[id];
@@ -167,6 +193,13 @@ export class CacheModule implements StreamUpdateReceiver {
         'Record deleted successfully'
       );
     } catch (err) {
+      if (err instanceof StaleEpochError) {
+        this.logger.debug(
+          { table, id, Category: 'sp00ky-client::CacheModule::delete' },
+          'Dropped delete from before a bucket switch'
+        );
+        return;
+      }
       this.logger.error(
         { err, table, id, Category: 'sp00ky-client::CacheModule::delete' },
         'Failed to delete record'

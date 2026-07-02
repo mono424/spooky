@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { RecordId } from 'surrealdb';
-import { ANON_USER_ID, listRefTableFor, sanitizeUserId } from './ref-tables';
+import { ANON_USER_ID, bucketIdForUser, listRefTableFor, sanitizeUserId } from './ref-tables';
 
 describe('listRefTableFor', () => {
   it('returns global table in single mode regardless of user', () => {
@@ -62,5 +62,30 @@ describe('sanitizeUserId', () => {
     expect(sanitizeUserId(undefined)).toBeNull();
     expect(sanitizeUserId('user:')).toBeNull();
     expect(sanitizeUserId('user:has-dash')).toBeNull();
+  });
+});
+
+describe('bucketIdForUser', () => {
+  it('routes signed-out sessions to the anon bucket', () => {
+    expect(bucketIdForUser(null)).toBe(ANON_USER_ID);
+    expect(bucketIdForUser(undefined)).toBe(ANON_USER_ID);
+    expect(bucketIdForUser(ANON_USER_ID)).toBe(ANON_USER_ID);
+  });
+
+  it('uses the sanitized id for valid users', () => {
+    expect(bucketIdForUser('user:abc123')).toBe('abc123');
+    expect(bucketIdForUser(new RecordId('user', 'xyz'))).toBe('xyz');
+  });
+
+  it('gives unsanitizable ids a deterministic per-user bucket, never anon', () => {
+    const a = bucketIdForUser('user:has-dash');
+    const b = bucketIdForUser('user:has-dash');
+    const c = bucketIdForUser('user:other-dash');
+    // Falling back to the shared anon bucket here would recreate the
+    // cross-user local-cache leak this helper exists to prevent.
+    expect(a).not.toBe(ANON_USER_ID);
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+    expect(a).toMatch(/^u[0-9a-f]+$/);
   });
 });
