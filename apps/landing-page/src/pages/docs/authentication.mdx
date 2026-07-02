@@ -110,6 +110,25 @@ You can subscribe to authentication state changes to update your UI dynamically.
   lang="typescript"
 />
 
+### Local Data Isolation
+
+Every auth change also switches the client's **local storage bucket**. Each
+user has their own IndexedDB store on the device (signed-out sessions use a
+shared anonymous bucket), so:
+
+- After sign-out or an account switch, the previous user's cached rows are
+  no longer readable — live queries emit an empty result immediately and
+  refill from the server for the new session.
+- Signing out does **not** delete the user's bucket: their cache stays warm
+  and any un-pushed offline mutations remain queued in their bucket, resuming
+  automatically the next time they sign in on that device.
+- Mutations made while signed out stay in the anonymous bucket; they are not
+  replayed under a signed-in user's identity.
+
+Nothing to configure — this is the default behavior with
+`database.store: 'indexeddb'`. Details in
+[Architecture → Per-User Local Buckets](/docs/architecture#per-user-local-buckets).
+
 ## Third-Party Providers
 
 ### Clerk

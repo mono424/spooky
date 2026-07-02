@@ -258,6 +258,16 @@ The WebSocket URL for your **SurrealDB** instance (e.g., `ws://localhost:8666/rp
 - `'indexeddb'` (default): Persistent local storage in the browser
 - `'memory'`: Transient in-memory storage (clears on page reload)
 
+With `'indexeddb'`, the local store is **bucketed per user**: each account
+gets its own IndexedDB database (`sp00ky-<userId>`, with a shared
+`sp00ky-anon` bucket for signed-out sessions), and the client switches
+buckets automatically on sign-in/sign-out. Cached rows, query state, and the
+offline mutation outbox never leak between accounts on a shared device, and
+a user's un-pushed offline mutations resume the next time they sign in. See
+[Architecture → Per-User Local Buckets](/docs/architecture#per-user-local-buckets).
+With `'memory'`, an auth change resets the store instead (same isolation,
+no persistence).
+
 #### `logLevel`
 
 Controls the verbosity of logging output:
@@ -271,11 +281,17 @@ Controls the verbosity of logging output:
 
 #### `persistenceClient`
 
-Determines where metadata like query states are persisted:
+Determines where small metadata values (the auth token, the stream
+processor's persisted state) are stored:
 
-- `'surrealdb'` (default): Store in the local SurrealDB instance
-- `'localstorage'`: Use browser localStorage
+- `'localstorage'` (default): Use browser localStorage
+- `'surrealdb'`: Store in the local SurrealDB instance (inside the current
+  user's local bucket)
 - Custom implementation of `PersistenceClient` interface
+
+Note: the boot-time bucket hint (`sp00ky:last_bucket`) is always written to
+plain localStorage regardless of this setting — the client needs it to pick
+the right per-user bucket before any bucket is open.
 
 #### `streamDebounceTime`
 

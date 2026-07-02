@@ -329,6 +329,39 @@ When a `user` record is deleted upstream, the SSP receives the
 `_00_list_ref_user_<id>` table so dedicated schema state doesn't
 accumulate over time.
 
+### Per-User Local Buckets
+
+The client mirrors this per-user isolation on the device. Each user gets
+their own IndexedDB-backed local store — a **bucket** at
+`indxdb://sp00ky-<userId>` — and signed-out sessions share a dedicated
+`sp00ky-anon` bucket. Cached rows, query state (`_00_query`), the offline
+mutation outbox (`_00_pending_mutations`), and the in-browser stream
+processor's persisted circuit are all scoped to the bucket, so one account's
+data is never readable from another account's session on the same browser.
+
+On an auth change (sign-in, sign-out, or account switch) the client swaps
+buckets in place:
+
+1. **Drain** — the sync poll and LIVE subscription stop, the in-flight sync
+   round completes against the old bucket (so a pushed mutation's outbox
+   delete lands where the mutation was read from), and pending debounce/CRDT
+   timers are cancelled *without* flushing — nothing belonging to the previous
+   user is ever pushed under the next user's session.
+2. **Swap** — the new bucket opens on a second connection before the old one
+   closes (a failed open never strands the client), the schema is provisioned
+   if the bucket is fresh, and the in-browser stream processor resets to a
+   fresh circuit under the new `$auth` context.
+3. **Rebind** — active queries keep their hashes (UI subscriptions stay
+   attached), subscribers are immediately notified with the new bucket's
+   (usually empty) result so the previous user's rows leave the screen, and
+   every query re-registers with the server to refill.
+
+The last-used bucket id is remembered in plain `localStorage`
+(`sp00ky:last_bucket`), so a warm reload of a signed-in user boots straight
+into their own bucket with no switch and a warm cache. Un-pushed offline
+mutations stay in their owner's bucket and resume syncing the next time that
+user signs in on the device.
+
 ### Query Registration Flow
 
 ```mermaid
