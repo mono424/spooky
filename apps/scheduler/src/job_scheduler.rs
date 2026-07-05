@@ -426,13 +426,15 @@ async fn recover_table_once(
         pool.all().into_iter().map(|s| s.id.clone()).collect()
     };
 
-    // 1. Pending rows past their delay window and older than the grace period.
-    //    The `created_at + <delay> <= now` gate keeps a job still inside its
-    //    delay window from being recovered early (`delay` is in milliseconds).
+    // 1. Due pending rows older than the grace period. A row is DUE at
+    //    `next_run_at` (recurring schedules) or, absent that, at
+    //    `created_at + <delay>` (one-shot jobs — keeps a delayed job inside its
+    //    delay window from being recovered early). `??` falls back when
+    //    next_run_at/delay are unset (NONE); `delay=0` ⇒ ready.
     let pending_q = format!(
         "SELECT type::string(id) AS id, assignee FROM {table} \
          WHERE status = 'pending' AND updated_at < time::now() - {grace}s \
-         AND created_at + <duration>(string::concat(<string>delay, 'ms')) <= time::now()",
+         AND (next_run_at ?? (created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms')))) <= time::now()",
         grace = JOB_RECOVERY_PENDING_GRACE_SECS,
     );
     let mut resp = db.query(&pending_q).await?;

@@ -91,6 +91,13 @@ pub struct JobEntry {
     pub retry_strategy: String, // "linear" or "exponential"
     pub auth_token: Option<String>,
     pub timeout: Duration,
+    /// True for a recurring schedule row: on completion the runner re-arms
+    /// `next_run_at = now + interval` and returns the row to `pending` instead of
+    /// terminalizing it.
+    pub recurring: bool,
+    /// Interval in milliseconds between recurring runs (measured from completion).
+    /// 0 for one-shot jobs.
+    pub interval_ms: u64,
 }
 
 impl JobEntry {
@@ -123,6 +130,14 @@ impl JobEntry {
                 .to_string(),
             auth_token,
             timeout,
+            recurring: record
+                .get("recurring")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            interval_ms: record
+                .get("interval")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0),
         }
     }
 }

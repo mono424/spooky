@@ -1554,7 +1554,7 @@ async fn load_job_record(state: &AppState, id: &str) -> Result<Option<Value>, su
     };
     let mut resp = state
         .db
-        .query("SELECT status, path, payload, retries, max_retries, retry_strategy, timeout FROM ONLY $id")
+        .query("SELECT status, path, payload, retries, max_retries, retry_strategy, timeout, recurring, interval FROM ONLY $id")
         .bind(("id", rid))
         .await?;
     Ok(resp.take(0).ok().flatten())
@@ -1900,19 +1900,24 @@ async fn recover_job_table<C: Connection>(
     // `type::string(id) AS id` keeps the RecordId out of the JSON projection
     // (deserializing a RecordId into `serde_json::Value` can fail), mirroring
     // `load_job_record`.
+    // `recurring` + `interval` MUST be projected so a recovered recurring job's
+    // JobEntry keeps its schedule flag (otherwise the runner would terminalize it
+    // on success instead of re-arming).
     const FIELDS: &str = "type::string(id) AS id, status, path, payload, retries, \
-                          max_retries, retry_strategy, timeout";
+                          max_retries, retry_strategy, timeout, recurring, interval";
     let mut recovered = 0;
 
-    // 1. Stuck pending rows (pending longer than the grace window). The
-    //    `created_at + <delay> <= now` gate keeps a job that is still inside its
-    //    requested delay window from being re-picked early — `delay` is stored in
-    //    milliseconds, so build a duration from it (`delay=0` ⇒ always ready).
+    // 1. Due pending rows (pending longer than the grace window). Dispatch a row
+    //    once it is DUE: for recurring schedules that is `next_run_at <= now`; for
+    //    one-shot jobs (no next_run_at) it is `created_at + <delay> <= now`, which
+    //    keeps a delayed job inside its delay window from being re-picked early.
+    //    `??` falls back when next_run_at/delay are unset (NONE); `delay=0` ⇒ ready.
     let pending_q = format!(
         "SELECT {FIELDS} FROM {table} \
          WHERE status = 'pending' AND updated_at < time::now() - {grace}s \
-         AND created_at + <duration>(string::concat(<string>delay, 'ms')) <= time::now()",
+         AND {due}",
         grace = JOB_RECOVERY_PENDING_GRACE_SECS,
+        due = job_runner::PENDING_DUE_CLAUSE,
     );
     let mut resp = db
         .query(&pending_q)
@@ -1988,6 +1993,88 @@ async fn enqueue_recovered(
         return false;
     }
     true
+}
+
+/// Handle a client "poke" of a recurring schedule row. A manual refresh bumps
+/// `next_run_at` to now via a client UPDATE, which arrives here as an ingest
+/// UPDATE. If the row is a recurring schedule that is now DUE, enqueue an
+/// immediate run. Guarded by `mark_enqueued` so it can't race the sweep or an
+/// in-flight run. The `next_run_at <= now` check is what distinguishes a poke
+/// (now) from the runner's re-arm (a future time) — without it, every re-arm
+/// would busy-loop the job.
+async fn maybe_enqueue_recurring_poke(
+    state: &AppState,
+    backend_info: &BackendInfo,
+    is_standalone: bool,
+    id: &str,
+    record: &Value,
+) {
+    let recurring = record
+        .get("recurring")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    if !recurring || status != "pending" {
+        return;
+    }
+
+    // Distinguish a poke (next_run_at = now) from the runner's re-arm
+    // (next_run_at = a future time) using the value CARRIED in this event's
+    // record, not a fresh row read: the `_00_job_mutation` event's `http::post`
+    // fires inside the writer's transaction, so reading the row back here can
+    // see the pre-update value (the documented ws-row-cache staleness). Casting
+    // the carried string keeps the comparison on the committed-to-be value and
+    // never busy-loops on re-arm. An empty/absent value means "run now".
+    let next_run_at = record
+        .get("next_run_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let due: bool = if next_run_at.is_empty() {
+        true
+    } else {
+        match state
+            .db
+            .query(job_runner::POKE_DUE_SQL)
+            .bind(("nra", next_run_at.to_string()))
+            .await
+        {
+            Ok(mut resp) => resp
+                .take::<Option<bool>>(0)
+                .ok()
+                .flatten()
+                .unwrap_or(false),
+            Err(e) => {
+                warn!(job_id = %id, error = %e, "Recurring poke due-check failed");
+                return;
+            }
+        }
+    };
+    if !due {
+        return;
+    }
+
+    if !state.job_control.mark_enqueued(id) {
+        // Already queued or in-flight; that run will re-arm the clock on completion.
+        return;
+    }
+    if !is_standalone {
+        if let Err(e) = set_assignee_helper(&state.db, id, &state.ssp_id).await {
+            warn!(job_id = %id, error = %e, "Failed to persist assignee for poked job");
+        }
+    }
+    let timeout_override = record.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let job_entry = JobEntry::from_record(
+        id.to_string(),
+        backend_info.base_url.clone(),
+        backend_info.auth_token.clone(),
+        record,
+        backend_info.effective_timeout(timeout_override),
+    );
+    info!(job_id = %id, "Recurring poke: enqueuing immediate run");
+    if let Err(e) = state.job_queue_tx.send(job_entry).await {
+        state.job_control.clear_enqueued(id);
+        error!(job_id = %id, error = %e, "Failed to enqueue poked job");
+    }
 }
 
 // --- Request Handlers ---
@@ -2200,6 +2287,16 @@ async fn ingest_handler(
                     "Job routing: skipped — no 'status' field in record"
                 );
             }
+        } else if is_assigned && op == Operation::Update {
+            // A recurring schedule's clock was bumped (manual "poke" = run now).
+            maybe_enqueue_recurring_poke(
+                &state,
+                backend_info,
+                is_standalone,
+                &payload.id,
+                &payload.record,
+            )
+            .await;
         } else if !is_assigned {
             debug!(
                 record_id = %payload.id,

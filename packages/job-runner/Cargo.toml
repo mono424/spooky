@@ -14,3 +14,10 @@ serde_yaml = "0.9"
 surrealdb = { version = "3.1.2", features = ["protocol-ws"] }
 tracing = "0.1"
 anyhow = "1"
+
+[dev-dependencies]
+# Embedded in-memory SurrealDB + a mock HTTP backend so the recurring-job tests
+# exercise the real re-arm/dispatch SQL against a real engine, end to end.
+surrealdb = { version = "3.1.2", features = ["kv-mem"] }
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"

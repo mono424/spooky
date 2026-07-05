@@ -425,6 +425,12 @@ export interface RunOptions {
    * delayed the job stays pending (enqueued) and can still be killed.
    */
   delay?: number;
+  /**
+   * Interval in milliseconds for a RECURRING job (see `runRecurring`). When set,
+   * the job re-runs `interval` ms after each run COMPLETES (drift-free from
+   * completion, not wall-clock). Ignored by the plain `run`.
+   */
+  interval?: number;
 }
 
 /**

@@ -320,6 +320,38 @@ SURREAL_URL=https://db.example.com SURREAL_NS=main spky jobs list
 spky jobs list --cloud
 spky jobs --cloud            # dashboard against production`;
 
+export const recurringFieldsCode = `-- Recurring / scheduled jobs: add these optional fields to your job table.
+-- All are option<...> with NO default (an option field carrying BOTH a DEFAULT
+-- and field-level PERMISSIONS breaks client codegen). The runtime treats a
+-- missing value as "not recurring" / delay 0.
+DEFINE FIELD recurring ON TABLE job TYPE option<bool>
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+
+DEFINE FIELD interval ON TABLE job TYPE option<int>
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+
+-- Owner-updatable so a client "poke" (manual refresh) can bump it to now.
+DEFINE FIELD next_run_at ON TABLE job TYPE option<datetime>
+  PERMISSIONS FOR create, select, update WHERE true;`;
+
+export const runRecurringCode = `// Register a recurring job: ONE durable schedule per (assignedTo, path).
+// Runs immediately, then every \`interval\` ms measured from each run's COMPLETION.
+// Idempotent - calling it again for the same (assignedTo, path) does nothing.
+await db.runRecurring(
+  'api',
+  '/syncGames',
+  { connection: connectionId },
+  { assignedTo: connectionId, interval: 5 * 60 * 1000 } // every 5 minutes
+);`;
+
+export const pokeRecurringCode = `// Manual "refresh now": run immediately AND reset the interval clock, so the
+// next automatic run lands one interval after this manual run completes.
+await db.pokeRecurring('api', '/syncGames', { assignedTo: connectionId });`;
+
+export const cancelRecurringCode = `// Stop the schedule (e.g. on disconnect): deletes the schedule row so it is
+// no longer dispatched.
+await db.cancelRecurring('api', '/syncGames', { assignedTo: connectionId });`;
+
 ## Job Table Schema
 
 The job table stores outbox records and tracks their execution status. Here's the required schema:
@@ -399,6 +431,40 @@ While the delay has not elapsed the job is still `pending`, so it can be killed.
 For a purely client-side undo, gate the send on a flag the user can flip during the window — no operator access required:
 
 <CodeBlock code={emailSoftCancelCode} lang="typescript" />
+
+## Recurring & Scheduled Jobs
+
+A recurring job runs on a fixed interval, server-side, even when no client is connected - use it for periodic syncs, polling an upstream API, cache warming, or scheduled cleanup. Unlike `db.run()` (a one-shot job), `db.runRecurring()` creates a single durable **schedule row** that never terminalizes: it cycles `pending -> processing -> pending`, and after each run completes the runner re-arms it to run again one interval later.
+
+### Schema
+
+Add three optional fields to your job table:
+
+<CodeBlock code={recurringFieldsCode} lang="sql" />
+
+### Starting a schedule
+
+<CodeBlock code={runRecurringCode} lang="typescript" />
+
+The interval is measured from **completion**, not wall-clock: the next run is scheduled `interval` ms after the previous run finishes, so runs never overlap and a slow run never stacks up a backlog. `runRecurring` is idempotent and keyed on `(assignedTo, path)` - there is at most one schedule per pair, so calling it on every login/reconnect never creates a second one.
+
+### Refresh now (poke)
+
+<CodeBlock code={pokeRecurringCode} lang="typescript" />
+
+A poke runs the job immediately and resets the clock, so the next automatic run lands one interval after the manual run completes - automatic and manual runs share one clock. It is a no-op if no schedule exists yet.
+
+### Stopping a schedule
+
+<CodeBlock code={cancelRecurringCode} lang="typescript" />
+
+<Note>
+  Recurring jobs are resilient. A run that exhausts its retries does NOT kill the schedule - it re-arms for the next interval, so a transient backend outage can't permanently stop it. And because the row is always `pending` or `processing`, the recovery sweep resumes it after an SSP or scheduler restart.
+</Note>
+
+<Warning>
+  A recurring job never reaches `success`/`failed` - it stays `pending` between runs and flips to `processing` while running. Observe `status = 'processing'` for a live "syncing now" indicator; don't wait for a terminal state.
+</Warning>
 
 ## Querying Job Status
 
