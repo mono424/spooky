@@ -23,6 +23,30 @@
  * shape — such windowed+subquery queries are rare and were already returning 0,
  * so this is no regression.
  */
+import type { QueryPlan } from '@spooky-sync/query-builder';
+
+/**
+ * Plan-level window materialization: restrict a windowed query's base rows to
+ * exactly the SSP-computed id-set, dropping `where`/`limit`/`offset` but keeping
+ * `orderBy`, `select` and `relations`. The engine-neutral counterpart of
+ * {@link buildWindowMaterialization} (which does the same by string surgery for
+ * the raw-SurrealQL path). Returns `null` for non-offset queries so the caller
+ * keeps the normal re-query path.
+ */
+export function buildWindowMaterializationPlan(
+  plan: QueryPlan,
+  ids: unknown[]
+): QueryPlan | null {
+  if (plan.offset === undefined || plan.offset <= 0) return null;
+  return {
+    ...plan,
+    ids,
+    where: undefined,
+    limit: undefined,
+    offset: undefined,
+  };
+}
+
 export function buildWindowMaterialization(
   surql: string,
   idsParam = '__win'

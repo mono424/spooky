@@ -1,6 +1,6 @@
 import type { Logger} from '../logger/index';
 import { createLogger } from '../logger/index';
-import type { LocalDatabaseService } from './local';
+import type { LocalStore } from './cache-engine';
 
 export interface SchemaRecord {
   hash: string;
@@ -19,7 +19,7 @@ export class LocalMigrator {
   private logger: Logger;
 
   constructor(
-    private localDb: LocalDatabaseService,
+    private localDb: LocalStore,
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'LocalMigrator' });

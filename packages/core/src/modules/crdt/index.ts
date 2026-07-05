@@ -1,5 +1,5 @@
 import type { SchemaStructure } from '@spooky-sync/query-builder';
-import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import type { LocalStore, RemoteDatabaseService } from '../../services/database/index';
 import type { Logger } from '../../services/logger/index';
 import type { Uuid } from 'surrealdb';
 import { CrdtField } from './crdt-field';
@@ -40,7 +40,7 @@ export class CrdtManager {
 
   constructor(
     private schema: SchemaStructure,
-    private local: LocalDatabaseService,
+    private local: LocalStore,
     private remote: RemoteDatabaseService,
     logger: Logger,
     private debounceMs: number = 500,

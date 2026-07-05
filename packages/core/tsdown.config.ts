@@ -54,7 +54,16 @@ const versionDefinePlugin = {
 };
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/otel/index.ts'],
+  // `sqlite-worker` is emitted at `dist/sqlite-worker.js` (top level, NOT under
+  // services/database) so the `new URL('./sqlite-worker.js', import.meta.url)`
+  // in `SqliteCacheEngine` — which gets bundled into the flat `dist/index.js` —
+  // resolves correctly. It (and `@sqlite.org/sqlite-wasm`) load lazily in the
+  // Worker; never pulled into the main bundle unless `localEngine: 'sqlite'`.
+  entry: {
+    index: 'src/index.ts',
+    'otel/index': 'src/otel/index.ts',
+    'sqlite-worker': 'src/services/database/sqlite-worker.ts',
+  },
   format: ['esm'],
   dts: true,
   clean: true,

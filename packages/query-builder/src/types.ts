@@ -23,6 +23,79 @@ export interface QueryInfo {
   query: string;
   hash: number;
   vars?: Record<string, unknown>;
+  /**
+   * Engine-neutral description of the same SELECT, used by non-SurrealQL local
+   * cache backends (e.g. SQLite) that cannot parse the `query` string. Only
+   * populated for `SELECT` (undefined for LIVE/UPDATE/DELETE). See `QueryPlan`.
+   */
+  plan?: QueryPlan;
+}
+
+/**
+ * A single WHERE comparison. `value` is the resolved value (string IDs already
+ * converted to `RecordId`); when `paramRef` is set the condition references an
+ * existing query param verbatim (`$name`) instead of an inline value. `swap`
+ * flips the operands (`value op field`), mirroring `ComparisonOp._swap`.
+ */
+export interface WhereComparison {
+  field: string;
+  op: ComparisonOp['_op'];
+  value: unknown;
+  paramRef?: string;
+  swap?: boolean;
+}
+
+/** A parenthesised `(c1 OR c2 …)` group, from a `_or` fragment. */
+export interface WhereOr {
+  or: WhereComparison[];
+}
+
+/**
+ * Engine-neutral WHERE: a top-level conjunction (AND) of comparisons and/or
+ * OR-groups. Mirrors `buildQueryFromOptions`'s condition assembly exactly.
+ */
+export type WhereNode = WhereComparison | WhereOr;
+
+/**
+ * Engine-neutral description of a SELECT query. Backends render it to their own
+ * dialect (SurrealQL, SQLite, …). Relations are resolved by the caller via
+ * level-ordered decomposition rather than nested projection, so `relations`
+ * carries the tree rather than a flattened subquery string.
+ */
+export interface QueryPlan {
+  table: string;
+  /** Projection field names; undefined means all (`*`). */
+  select?: string[];
+  where?: WhereNode[];
+  orderBy?: [field: string, direction: 'asc' | 'desc'][];
+  limit?: number;
+  offset?: number;
+  relations?: RelationPlan[];
+  /**
+   * Window materialization: when set, the base rows are EXACTLY these record
+   * ids (the window the SSP already computed), ignoring `where`/`limit`/
+   * `offset`. `orderBy`, `select` and `relations` still apply. Set by
+   * {@link buildWindowMaterializationPlan}; see `window-query.ts`.
+   */
+  ids?: unknown[];
+}
+
+/**
+ * One `.related()` edge in a {@link QueryPlan}. Correlation:
+ * - `one`  → parent[`foreignKeyField`] = child.id  (attach `bucket[0] ?? null`)
+ * - `many` → child[`foreignKeyField`] = parent.id   (attach `bucket`)
+ * `limit`/`orderBy` are applied PER PARENT during decomposition.
+ */
+export interface RelationPlan {
+  alias: string;
+  table: string;
+  cardinality: 'one' | 'many';
+  foreignKeyField: string;
+  select?: string[];
+  where?: WhereNode[];
+  orderBy?: [field: string, direction: 'asc' | 'desc'][];
+  limit?: number;
+  relations?: RelationPlan[];
 }
 
 export interface RelatedQuery {

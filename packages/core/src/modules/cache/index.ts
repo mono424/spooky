@@ -1,4 +1,4 @@
-import type { LocalDatabaseService } from '../../services/database/index';
+import type { LocalStore } from '../../services/database/index';
 import { StaleEpochError } from '../../services/database/index';
 import type {
   StreamProcessorService,
@@ -24,7 +24,7 @@ export class CacheModule implements StreamUpdateReceiver {
   private versionLookups: Record<string, number> = {};
 
   constructor(
-    private local: LocalDatabaseService,
+    private local: LocalStore,
     private streamProcessor: StreamProcessorService,
     streamUpdateCallback: (update: StreamUpdate) => void,
     logger: Logger

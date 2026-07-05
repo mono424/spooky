@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/core",
-  "version": "0.0.1-canary.108",
+  "version": "0.0.1-canary.109",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -61,6 +61,7 @@
   "dependencies": {
     "@spooky-sync/query-builder": "workspace:*",
     "@spooky-sync/ssp-wasm": "workspace:*",
+    "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "@surrealdb/wasm": "^3.0.3",
     "fast-json-patch": "^3.1.1",
     "loro-crdt": "^1.5.6",

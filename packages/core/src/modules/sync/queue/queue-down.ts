@@ -1,4 +1,4 @@
-import type { LocalDatabaseService } from '../../../services/database/index';
+import type { LocalStore } from '../../../services/database/index';
 import type {
   SyncQueueEventSystem} from '../events/index';
 import {
@@ -47,7 +47,7 @@ export class DownQueue {
   }
 
   constructor(
-    private local: LocalDatabaseService,
+    private local: LocalStore,
     logger: Logger
   ) {
     this._events = createSyncQueueEventSystem();

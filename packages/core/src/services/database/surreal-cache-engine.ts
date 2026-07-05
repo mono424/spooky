@@ -1,0 +1,122 @@
+import type { QueryPlan } from '@spooky-sync/query-builder';
+import { LocalDatabaseService } from './local';
+import { resolveRelations } from './relation-resolver';
+import {
+  renderBaseSelectSurql,
+  renderRelationFetchSurql,
+} from './plan-render';
+import type {
+  EngineTx,
+  Id,
+  LocalCacheEngine,
+  OrderBy,
+  RelationFetch,
+  Row,
+} from './cache-engine';
+import { stableKey } from './relation-resolver';
+import { surql } from '../../utils/surql';
+
+/**
+ * Default local cache backend: the in-browser SurrealDB-WASM store. Implemented
+ * as a subclass of {@link LocalDatabaseService} so it remains a 100% drop-in for
+ * every existing `this.local.query(...)` / `execute` / `switchStore` / `epoch`
+ * call site (zero behavior change), while adding the engine-neutral verb surface
+ * (`select`/`selectByIds`/`getById`/CRUD) used by the pluggable path.
+ *
+ * Relations are resolved with the SAME shared {@link resolveRelations} as the
+ * SQLite backend, so the two engines decompose `.related()` identically.
+ */
+export class SurrealCacheEngine extends LocalDatabaseService implements LocalCacheEngine {
+  /** SurrealDB needs its SurrealQL schema provisioned locally. */
+  readonly usesSurqlSchema = true;
+
+  /** {@link LocalCacheEngine} alias for {@link LocalDatabaseService.switchStore}. */
+  switchBucket(bucketId: string): Promise<void> {
+    return this.switchStore(bucketId);
+  }
+
+  async fetchRelation(req: RelationFetch): Promise<Row[]> {
+    const { sql, vars } = renderRelationFetchSurql(req);
+    const [rows] = await this.query<[Row[]]>(sql, vars);
+    return rows ?? [];
+  }
+
+  async select(plan: QueryPlan, params: Record<string, unknown> = {}): Promise<Row[]> {
+    // Window materialization: base rows are exactly `plan.ids`, ordered.
+    if (plan.ids) {
+      const result = await this.selectByIds(plan.table, plan.ids, {
+        select: plan.select,
+        orderBy: plan.orderBy,
+      });
+      await resolveRelations(result, plan.relations, this);
+      return result;
+    }
+    const { sql, vars } = renderBaseSelectSurql(plan, params);
+    const [rows] = await this.query<[Row[]]>(sql, vars);
+    const result = rows ?? [];
+    await resolveRelations(result, plan.relations, this);
+    return result;
+  }
+
+  async selectByIds(
+    table: string,
+    ids: Id[],
+    opts?: { select?: string[]; orderBy?: OrderBy }
+  ): Promise<Row[]> {
+    if (ids.length === 0) return [];
+    const projection =
+      opts?.select && opts.select.length > 0 ? ['id', ...opts.select].join(', ') : '*';
+    let sql = `SELECT ${projection} FROM $__ids`;
+    if (opts?.orderBy && opts.orderBy.length > 0) {
+      sql += ` ORDER BY ${opts.orderBy.map(([f, d]) => `${f} ${d}`).join(', ')}`;
+    }
+    const [rows] = await this.query<[Row[]]>(`${sql};`, { __ids: ids });
+    const result = rows ?? [];
+    // Preserve caller's id order when no explicit ORDER BY (SurrealDB does not
+    // guarantee `FROM $ids` order).
+    if (!opts?.orderBy || opts.orderBy.length === 0) {
+      const pos = new Map(ids.map((id, i) => [stableKey(id), i]));
+      result.sort(
+        (a, b) => (pos.get(stableKey(a.id)) ?? 0) - (pos.get(stableKey(b.id)) ?? 0)
+      );
+    }
+    return result;
+  }
+
+  async getById(_table: string, id: Id): Promise<Row | null> {
+    const [row] = await this.query<[Row | null]>('SELECT * FROM ONLY $__id;', { __id: id });
+    return row ?? null;
+  }
+
+  async upsert(_table: string, id: Id, data: Row, mode: 'replace' | 'merge'): Promise<void> {
+    const sql = mode === 'merge' ? surql.upsertMerge('__id', '__data') : surql.upsert('__id', '__data');
+    await this.query(surql.seal(sql), { __id: id, __data: data });
+  }
+
+  async patch(_table: string, id: Id, patches: unknown[]): Promise<void> {
+    await this.query(surql.seal('UPDATE ONLY $__id PATCH $__patches'), {
+      __id: id,
+      __patches: patches,
+    });
+  }
+
+  async delete(_table: string, id: Id): Promise<void> {
+    await this.query(surql.seal(surql.delete('__id')), { __id: id });
+  }
+
+  /**
+   * Serialized (not strictly atomic) transaction: verbs run in order on the
+   * same serialized query queue. The SurrealDB-WASM store already funnels every
+   * `query()` through one queue, so these never interleave with other work;
+   * true multi-statement atomicity is not required by the current call sites
+   * (single-record CRDT / mutation writes).
+   */
+  async transaction<T>(fn: (tx: EngineTx) => Promise<T>): Promise<T> {
+    const tx: EngineTx = {
+      upsert: (t, id, data, mode) => this.upsert(t, id, data, mode),
+      patch: (t, id, patches) => this.patch(t, id, patches),
+      delete: (t, id) => this.delete(t, id),
+    };
+    return fn(tx);
+  }
+}

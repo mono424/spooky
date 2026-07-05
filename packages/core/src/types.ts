@@ -1,7 +1,8 @@
-import type { RecordId, SchemaStructure } from '@spooky-sync/query-builder';
+import type { RecordId, SchemaStructure, QueryPlan } from '@spooky-sync/query-builder';
 import type { Level, LoggerOptions } from 'pino';
 import type { PushEventOptions } from './events/index';
 import type { UpEvent } from './modules/sync/index';
+import type { LocalEngineChoice } from './services/database/cache-engine';
 
 export type { Level };
 
@@ -110,6 +111,14 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * Can be a custom implementation, 'surrealdb' (default), or 'localstorage'.
    */
   persistenceClient?: PersistenceClient | 'surrealdb' | 'localstorage';
+  /**
+   * Local cache engine backend. `'surrealdb'` (default) uses the in-browser
+   * SurrealDB-WASM store; `'sqlite'` uses official SQLite-WASM in a Worker with
+   * OPFS persistence; or pass a custom {@link LocalCacheEngine}. The local cache
+   * is a passive queryable store — reactivity is driven by the remote SSP, not
+   * this engine. See `services/database/cache-engine.ts`.
+   */
+  localEngine?: LocalEngineChoice;
   /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel). */
   otelTransmit?: PinoTransmit;
   /**
@@ -229,6 +238,13 @@ export interface QueryConfig {
   id: RecordId<string>;
   /** The SURQL query string. */
   surql: string;
+  /**
+   * Engine-neutral plan for `surql` (in-memory only; not persisted to
+   * `_00_query`). Present when the query came from the query-builder. Non-
+   * SurrealQL local engines (SQLite) materialize via `engine.select(plan)`
+   * instead of re-running `surql`, which they cannot parse.
+   */
+  plan?: QueryPlan;
   /** Parameters used in the query. */
   params: Record<string, any>;
   /** The version array representing the local state of results. */

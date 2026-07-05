@@ -1,5 +1,5 @@
 import { LoroDoc } from 'loro-crdt';
-import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import type { LocalStore, RemoteDatabaseService } from '../../services/database/index';
 import type { Logger } from '../../services/logger/index';
 import { parseRecordIdString } from '../../utils/index';
 
@@ -23,7 +23,7 @@ export function cursorColorFromName(name: string): string {
 export class CrdtField {
   private doc: LoroDoc;
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
-  private local: LocalDatabaseService | null = null;
+  private local: LocalStore | null = null;
   private remote: RemoteDatabaseService | null = null;
   private recordId: string | null = null;
   private sessionId: string = '';
@@ -102,7 +102,7 @@ export class CrdtField {
   }
 
   startSync(
-    local: LocalDatabaseService,
+    local: LocalStore,
     remote: RemoteDatabaseService,
     recordId: string,
     sessionId: string,

@@ -1,13 +1,13 @@
 import type { PersistenceClient } from '../../types';
 import { parseRecordIdString, surql } from '../../utils/index';
 import type { Logger } from 'pino';
-import type { AbstractDatabaseService } from '../database/database';
+import type { LocalStore } from '../database/cache-engine';
 
 export class SurrealDBPersistenceClient implements PersistenceClient {
   private logger: Logger;
 
   constructor(
-    private db: AbstractDatabaseService,
+    private db: LocalStore,
     logger: Logger
   ) {
     this.logger = logger.child({ service: 'PersistenceClient:SurrealDb' });

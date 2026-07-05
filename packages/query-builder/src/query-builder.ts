@@ -8,6 +8,11 @@ import type {
   SchemaAwareQueryModifier,
   SchemaAwareQueryModifierBuilder,
   WhereInput,
+  QueryPlan,
+  RelationPlan,
+  WhereNode,
+  WhereComparison,
+  ComparisonOp,
 } from './types';
 import type {
   TableNames,
@@ -838,7 +843,167 @@ export function buildQueryFromOptions<TModel extends GenericModel, IsOne extends
       0
     ),
     vars: Object.keys(vars).length > 0 ? vars : undefined,
+    // Engine-neutral plan mirrors the SELECT above for non-SurrealQL backends.
+    // Only SELECT carries a plan; the isOne→limit=1 mutation above is already
+    // reflected in `options.limit`, so the plan sees it too.
+    plan: method === 'SELECT' ? buildQueryPlan(tableName, options, schema) : undefined,
   };
+}
+
+/**
+ * Build the engine-neutral {@link QueryPlan} for a SELECT. Mirrors the string
+ * assembly in {@link buildQueryFromOptions} / {@link buildSubquery} exactly so a
+ * non-SurrealQL backend produces results identical to the SurrealQL path.
+ */
+function buildQueryPlan<TModel extends GenericModel, IsOne extends boolean>(
+  tableName: string,
+  options: QueryOptions<TModel, IsOne>,
+  schema: SchemaStructure
+): QueryPlan {
+  const plan: QueryPlan = { table: tableName };
+
+  if (options.select && options.select.length > 0 && !options.select.includes('*')) {
+    plan.select = options.select.filter((f) => f !== '*') as string[];
+  }
+
+  const parsedWhere = options.where
+    ? (parseObjectIdsToRecordId(options.where, tableName) as Record<string, unknown>)
+    : undefined;
+  if (parsedWhere && Object.keys(parsedWhere).length > 0) {
+    const nodes = buildWhereNodes(parsedWhere);
+    if (nodes.length > 0) plan.where = nodes;
+  }
+
+  if (options.orderBy && Object.keys(options.orderBy).length > 0) {
+    plan.orderBy = Object.entries(options.orderBy).map(
+      ([field, direction]) => [field, direction as 'asc' | 'desc']
+    );
+  }
+
+  if (options.limit !== undefined) plan.limit = options.limit;
+  if (options.offset !== undefined) plan.offset = options.offset;
+
+  if (options.related && options.related.length > 0) {
+    plan.relations = options.related.map((rel) => buildRelationPlan(rel, schema));
+  }
+
+  return plan;
+}
+
+/**
+ * Engine-neutral counterpart of {@link buildSubquery}. Resolves the same
+ * cardinality / foreign-key / nested-relation metadata but returns a structured
+ * {@link RelationPlan} instead of a SurrealQL subquery string.
+ */
+function buildRelationPlan(
+  rel: RelatedQuery & { foreignKeyField?: string },
+  schema: SchemaStructure
+): RelationPlan {
+  const { relatedTable, alias, modifier, cardinality } = rel;
+  // Same fallback chain as buildSubquery (`rel.foreignKeyField || alias`); the
+  // top-level foreignKeyField is already reverse-resolved by `.related()`.
+  const foreignKeyField = (rel.foreignKeyField || alias || relatedTable) as string;
+
+  const plan: RelationPlan = {
+    alias: (alias || relatedTable) as string,
+    table: relatedTable,
+    cardinality,
+    foreignKeyField,
+  };
+
+  if (modifier) {
+    const modifierBuilder = new SchemaAwareQueryModifierBuilderImpl(relatedTable, schema);
+    modifier(modifierBuilder as any);
+    const subOptions = modifierBuilder._getOptions();
+
+    if (subOptions.select && subOptions.select.length > 0 && !subOptions.select.includes('*')) {
+      plan.select = subOptions.select.filter((f) => f !== '*') as string[];
+    }
+
+    if (subOptions.where && Object.keys(subOptions.where).length > 0) {
+      const parsedSubWhere = parseObjectIdsToRecordId(subOptions.where, relatedTable) as Record<
+        string,
+        unknown
+      >;
+      const nodes = buildWhereNodes(parsedSubWhere);
+      if (nodes.length > 0) plan.where = nodes;
+    }
+
+    if (subOptions.orderBy && Object.keys(subOptions.orderBy).length > 0) {
+      plan.orderBy = Object.entries(subOptions.orderBy).map(
+        ([field, direction]) => [field, direction as 'asc' | 'desc']
+      );
+    }
+
+    if (subOptions.limit !== undefined) plan.limit = subOptions.limit;
+
+    // Nested relations: re-resolve exactly as buildSubquery does — the child's
+    // foreignKeyField comes from the relatedTable-based lookup, not the reverse
+    // heuristic used for top-level relations.
+    if (subOptions.related && subOptions.related.length > 0) {
+      const resolvedNestedRels = subOptions.related.map((nestedRel) => {
+        const relationship = schema.relationships.find(
+          (r) => r.from === relatedTable && r.field === nestedRel.alias
+        );
+        if (relationship) {
+          const nestedForeignKeyField =
+            relationship.cardinality === 'many' ? relatedTable : (nestedRel.alias as string);
+          return {
+            ...nestedRel,
+            relatedTable: relationship.to,
+            cardinality: relationship.cardinality,
+            foreignKeyField: nestedForeignKeyField,
+          } as RelatedQuery & { foreignKeyField: string };
+        }
+        return nestedRel;
+      });
+      plan.relations = resolvedNestedRels.map((nestedRel) => buildRelationPlan(nestedRel, schema));
+    }
+  }
+
+  // one-to-one gets an implicit per-parent LIMIT 1 (matches buildSubquery).
+  if (cardinality === 'one' && plan.limit === undefined) {
+    plan.limit = 1;
+  }
+
+  return plan;
+}
+
+/**
+ * Convert a parsed WHERE object (string IDs already → RecordId) into the
+ * engine-neutral {@link WhereNode}[] conjunction. Mirrors the `_or` / comparison
+ * / equality handling in {@link buildQueryFromOptions}. A `$`-prefixed `_val`
+ * becomes a `paramRef` (with the leading `$` stripped).
+ */
+function buildWhereNodes(parsedWhere: Record<string, unknown>): WhereNode[] {
+  const toComparison = (field: string, value: unknown): WhereComparison => {
+    if (value && typeof value === 'object' && '_op' in value && '_val' in value) {
+      const { _op, _val, _swap } = value as ComparisonOp;
+      if (typeof _val === 'string' && _val.startsWith('$')) {
+        return { field, op: _op, value: undefined, paramRef: _val.slice(1), swap: _swap };
+      }
+      return { field, op: _op, value: _val, swap: _swap };
+    }
+    return { field, op: '=', value };
+  };
+
+  const nodes: WhereNode[] = [];
+  for (const [key, value] of Object.entries(parsedWhere)) {
+    if (key === '_or' && Array.isArray(value)) {
+      const or: WhereComparison[] = [];
+      for (const branch of value) {
+        if (branch && typeof branch === 'object') {
+          for (const [bField, bVal] of Object.entries(branch as Record<string, unknown>)) {
+            or.push(toComparison(bField, bVal));
+          }
+        }
+      }
+      if (or.length > 0) nodes.push({ or });
+      continue;
+    }
+    nodes.push(toComparison(key, value));
+  }
+  return nodes;
 }
 
 /**

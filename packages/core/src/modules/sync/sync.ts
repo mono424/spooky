@@ -1,4 +1,4 @@
-import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import type { LocalStore, RemoteDatabaseService } from '../../services/database/index';
 import type { RecordVersionArray, RecordVersionDiff, SyncHealth, SyncHealthStatus } from '../../types';
 import { createSyncEventSystem, SyncEventTypes, SyncQueueEventTypes } from './events/index';
 import type { Logger } from '../../services/logger/index';
@@ -332,7 +332,7 @@ export class Sp00kySync<S extends SchemaStructure> {
   }
 
   constructor(
-    private local: LocalDatabaseService,
+    private local: LocalStore,
     private remote: RemoteDatabaseService,
     private cache: CacheModule,
     private dataModule: DataModule<S>,

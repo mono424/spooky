@@ -9,10 +9,11 @@ import type {
   RunOptions,
   SyncHealth} from './types';
 import {
-  LocalDatabaseService,
   LocalMigrator,
   RemoteDatabaseService,
+  createLocalEngine,
 } from './services/database/index';
+import type { LocalStore } from './services/database/index';
 import type { UpEvent } from './modules/sync/index';
 import { Sp00kySync } from './modules/sync/index';
 import type {
@@ -116,7 +117,7 @@ function writeBootBucketHint(bucketId: string): void {
 }
 
 export class Sp00kyClient<S extends SchemaStructure> {
-  private local: LocalDatabaseService;
+  private local: LocalStore;
   private remote: RemoteDatabaseService;
   private persistenceClient: PersistenceClient;
 
@@ -182,7 +183,11 @@ export class Sp00kyClient<S extends SchemaStructure> {
       'Sp00kyClient initialized'
     );
 
-    this.local = new LocalDatabaseService(this.config.database, logger);
+    // The default ('surrealdb') engine is a SurrealCacheEngine — a drop-in
+    // subclass of LocalDatabaseService that adds the engine-neutral verb surface
+    // with zero behavior change. Alternate engines (e.g. 'sqlite') require the
+    // raw-SurrealQL call-site migration before they can back `this.local`.
+    this.local = createLocalEngine(this.config.localEngine, this.config.database, logger);
     this.remote = new RemoteDatabaseService(this.config.database, logger);
 
     if (config.persistenceClient === 'surrealdb') {
@@ -381,8 +386,12 @@ export class Sp00kyClient<S extends SchemaStructure> {
         'Local database connected'
       );
 
-      await this.migrator.provision(this.config.schemaSurql);
-      this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Schema provisioned');
+      // Schemaless local engines (SQLite) create tables lazily and need no
+      // SurrealQL DDL provisioning.
+      if (this.local.usesSurqlSchema) {
+        await this.migrator.provision(this.config.schemaSurql);
+        this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Schema provisioned');
+      }
 
       await this.remote.connect();
       this.logger.debug(
@@ -546,7 +555,9 @@ export class Sp00kyClient<S extends SchemaStructure> {
     const reopen = this.local.beginSwitch();
     try {
       await this.local.switchStore(target);
-      await this.migrator.provision(this.config.schemaSurql);
+      if (this.local.usesSurqlSchema) {
+        await this.migrator.provision(this.config.schemaSurql);
+      }
       await this.local.queryUngated('DELETE _00_query;');
       this.streamProcessor.setStateKeySuffix(target);
       await this.streamProcessor.reset();
@@ -655,7 +666,13 @@ export class Sp00kyClient<S extends SchemaStructure> {
     }
 
     const params = parseParams(tableSchema.columns, q.selectQuery.vars ?? {});
-    const hash = await this.dataModule.query(table, q.selectQuery.query, params, ttl);
+    const hash = await this.dataModule.query(
+      table,
+      q.selectQuery.query,
+      params,
+      ttl,
+      q.selectQuery.plan
+    );
 
     // Instant-hydrate: for a cold query, fetch its rows one-shot from the remote
     // (its own surql, run directly like useRemote) and display them NOW; the full

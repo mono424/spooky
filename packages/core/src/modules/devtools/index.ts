@@ -1,4 +1,4 @@
-import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import type { LocalStore, RemoteDatabaseService } from '../../services/database/index';
 import type { Logger } from '../../services/logger/index';
 import type { SchemaStructure } from '@spooky-sync/query-builder';
 import { RecordId } from 'surrealdb';
@@ -57,7 +57,7 @@ export class DevToolsService implements StreamUpdateReceiver {
   private localTablesAt = 0;
 
   constructor(
-    private databaseService: LocalDatabaseService,
+    private databaseService: LocalStore,
     private remoteDatabaseService: RemoteDatabaseService,
     private logger: Logger,
     private schema: SchemaStructure,

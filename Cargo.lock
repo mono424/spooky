@@ -3358,7 +3358,7 @@ dependencies = [
 
 [[package]]
 name = "job-runner"
-version = "0.0.1-canary.107"
+version = "0.0.1-canary.109"
 dependencies = [
  "anyhow",
  "dashmap 6.1.0",
@@ -6130,7 +6130,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler"
-version = "0.0.1-canary.107"
+version = "0.0.1-canary.109"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6647,7 +6647,7 @@ dependencies = [
 
 [[package]]
 name = "sp00ky-cli"
-version = "0.0.1-canary.107"
+version = "0.0.1-canary.109"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6710,7 +6710,7 @@ dependencies = [
 
 [[package]]
 name = "ssp"
-version = "0.0.1-canary.107"
+version = "0.0.1-canary.109"
 dependencies = [
  "anyhow",
  "blake3",
@@ -6736,7 +6736,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-ffi"
-version = "0.0.1-canary.107"
+version = "0.0.1-canary.109"
 dependencies = [
  "anyhow",
  "libc",
@@ -6747,7 +6747,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-protocol"
-version = "0.0.1-canary.107"
+version = "0.0.1-canary.109"
 dependencies = [
  "blake3",
  "serde",
@@ -6757,7 +6757,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-server"
-version = "0.0.1-canary.107"
+version = "0.0.1-canary.109"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -6791,7 +6791,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-wasm"
-version = "0.0.1-canary.107"
+version = "0.0.1-canary.109"
 dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { LoroDoc } from 'loro-crdt';
 import type { SchemaStructure } from '@spooky-sync/query-builder';
 import { CrdtManager } from './index';
-import type { LocalDatabaseService, RemoteDatabaseService } from '../../services/database/index';
+import type { LocalStore, RemoteDatabaseService } from '../../services/database/index';
 import type { Logger } from '../../services/logger/index';
 
 // Regression test for the offline-reload formatting-loss class of bug.
@@ -89,7 +89,7 @@ describe('CrdtManager.open hydration', () => {
         if (sql.includes('SELECT VALUE body FROM ONLY')) return [null];
         return [];
       }),
-    } satisfies Partial<LocalDatabaseService> as unknown as LocalDatabaseService;
+    } satisfies Partial<LocalStore> as unknown as LocalStore;
 
     const remote = makeRemote({
       selectRow: () => ({ id: 'thread:abc', body: remoteSnapshot }),
@@ -115,7 +115,7 @@ describe('CrdtManager.open hydration', () => {
 
     const local = {
       query: vi.fn().mockImplementation(async () => [null]),
-    } satisfies Partial<LocalDatabaseService> as unknown as LocalDatabaseService;
+    } satisfies Partial<LocalStore> as unknown as LocalStore;
 
     // Cursor-enabled field stores `{ state, cursors }`. The remote row
     // returns this shape; the manager must drill into `.state` for the
@@ -150,7 +150,7 @@ describe('CrdtManager.open hydration', () => {
         if (sql.includes('SELECT VALUE body FROM ONLY')) return [localSnapshot];
         return [];
       }),
-    } satisfies Partial<LocalDatabaseService> as unknown as LocalDatabaseService;
+    } satisfies Partial<LocalStore> as unknown as LocalStore;
 
     const remote = makeRemote({});
 
@@ -187,7 +187,7 @@ describe('CrdtManager.open hydration', () => {
         }
         return [];
       }),
-    } satisfies Partial<LocalDatabaseService> as unknown as LocalDatabaseService;
+    } satisfies Partial<LocalStore> as unknown as LocalStore;
 
     const remote = makeRemote({});
 

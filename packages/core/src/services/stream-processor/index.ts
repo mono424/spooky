@@ -2,7 +2,7 @@
 import init, { Sp00kyProcessor } from '@spooky-sync/ssp-wasm';
 import type { EventDefinition, EventSystem } from '../../events/index';
 import type { Logger } from 'pino';
-import type { LocalDatabaseService } from '../database/index';
+import type { LocalStore } from '../database/index';
 import type { WasmProcessor, WasmStreamUpdate } from './wasm-types';
 import type { Duration } from 'surrealdb';
 import type { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types';
@@ -88,7 +88,7 @@ export class StreamProcessorService {
 
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
-    private db: LocalDatabaseService,
+    private db: LocalStore,
     private persistenceClient: PersistenceClient,
     logger: Logger
   ) {

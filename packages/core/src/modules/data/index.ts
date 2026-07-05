@@ -5,8 +5,9 @@ import type {
   BackendNames,
   BackendRoutes,
   RoutePayload,
+  QueryPlan,
 } from '@spooky-sync/query-builder';
-import type { LocalDatabaseService } from '../../services/database/index';
+import type { LocalStore } from '../../services/database/index';
 import { StaleEpochError } from '../../services/database/index';
 import type { CacheModule, RecordWithId, CacheRecord } from '../cache/index';
 import type { Logger } from '../../services/logger/index';
@@ -42,7 +43,7 @@ import {
 } from '../../utils/index';
 import type { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
 import type { PushEventOptions } from '../../events/index';
-import { buildWindowMaterialization } from './window-query';
+import { buildWindowMaterialization, buildWindowMaterializationPlan } from './window-query';
 
 /** Push a timing sample (ms) into a rolling window, capped at the sample window. */
 function pushSample(samples: number[], ms: number): void {
@@ -124,7 +125,7 @@ export class DataModule<S extends SchemaStructure> {
 
   constructor(
     private cache: CacheModule,
-    private local: LocalDatabaseService,
+    private local: LocalStore,
     private schema: S,
     logger: Logger,
     // Client-side SSP aggregation throttle: coalesces the in-browser
@@ -180,7 +181,8 @@ export class DataModule<S extends SchemaStructure> {
     tableName: T,
     surqlString: string,
     params: Record<string, any>,
-    ttl: QueryTimeToLive
+    ttl: QueryTimeToLive,
+    plan?: QueryPlan
   ): Promise<QueryHash> {
     const hash = await this.calculateHash({ surql: surqlString, params });
     this.logger.debug(
@@ -216,7 +218,7 @@ export class DataModule<S extends SchemaStructure> {
     );
 
     // Create the query and track the pending promise
-    const promise = this.createAndRegisterQuery<T>(hash, recordId, surqlString, params, ttl, tableName);
+    const promise = this.createAndRegisterQuery<T>(hash, recordId, surqlString, params, ttl, tableName, plan);
     this.pendingQueries.set(hash, promise);
     try {
       await promise;
@@ -433,6 +435,7 @@ export class DataModule<S extends SchemaStructure> {
     sspArray?: Array<[string, number]>
   ): Promise<Record<string, any>[]> {
     const t0 = performance.now();
+    const plan = queryState.config.plan;
     const windowMat = buildWindowMaterialization(queryState.config.surql);
     let records: Record<string, any>[];
     if (windowMat) {
@@ -442,11 +445,20 @@ export class DataModule<S extends SchemaStructure> {
         queryState.config.localArray ||
         [];
       const winIds = win.map(([id]) => parseRecordIdString(id));
-      const [rows] = await this.local.query<[Record<string, any>[]]>(windowMat.query, {
-        ...queryState.config.params,
-        __win: winIds,
-      });
-      records = rows || [];
+      if (plan) {
+        // Engine-neutral window materialization: select exactly the id-set,
+        // keeping ORDER BY + relations. Works on any local engine.
+        const winPlan = buildWindowMaterializationPlan(plan, winIds) ?? { ...plan, ids: winIds };
+        records = await this.local.select(winPlan, queryState.config.params);
+      } else {
+        const [rows] = await this.local.query<[Record<string, any>[]]>(windowMat.query, {
+          ...queryState.config.params,
+          __win: winIds,
+        });
+        records = rows || [];
+      }
+    } else if (plan) {
+      records = await this.local.select(plan, queryState.config.params);
     } else {
       const [rows] = await this.local.query<[Record<string, any>[]]>(
         queryState.config.surql,
@@ -1436,7 +1448,8 @@ export class DataModule<S extends SchemaStructure> {
     surqlString: string,
     params: Record<string, any>,
     ttl: QueryTimeToLive,
-    tableName: T
+    tableName: T,
+    plan?: QueryPlan
   ): Promise<QueryHash> {
     const queryState = await this.createNewQuery<T>({
       recordId,
@@ -1444,6 +1457,7 @@ export class DataModule<S extends SchemaStructure> {
       params,
       ttl,
       tableName,
+      plan,
     });
 
     const t0 = performance.now();
@@ -1487,11 +1501,16 @@ export class DataModule<S extends SchemaStructure> {
     if (windowMat && localArray.length > 0) {
       try {
         const winIds = localArray.map(([id]) => parseRecordIdString(id));
-        const [seeded] = await this.local.query<[Record<string, any>[]]>(windowMat.query, {
-          ...params,
-          __win: winIds,
-        });
-        queryState.records = seeded || [];
+        if (plan) {
+          const winPlan = buildWindowMaterializationPlan(plan, winIds) ?? { ...plan, ids: winIds };
+          queryState.records = await this.local.select(winPlan, params);
+        } else {
+          const [seeded] = await this.local.query<[Record<string, any>[]]>(windowMat.query, {
+            ...params,
+            __win: winIds,
+          });
+          queryState.records = seeded || [];
+        }
       } catch (err) {
         this.logger.warn(
           { err, hash, Category: 'sp00ky-client::DataModule::createAndRegisterQuery' },
@@ -1521,12 +1540,14 @@ export class DataModule<S extends SchemaStructure> {
     params,
     ttl,
     tableName,
+    plan,
   }: {
     recordId: RecordId;
     surql: string;
     params: Record<string, any>;
     ttl: QueryTimeToLive;
     tableName: T;
+    plan?: QueryPlan;
   }): Promise<QueryState> {
     const tableSchema = this.schema.tables.find((t) => t.name === tableName);
     if (!tableSchema) {
@@ -1564,6 +1585,9 @@ export class DataModule<S extends SchemaStructure> {
     const config: QueryConfig = {
       ...configRecord,
       id: recordId,
+      // In-memory only — carries the engine-neutral plan so non-SurrealQL local
+      // engines materialize via `select(plan)` instead of parsing `surql`.
+      plan,
       params: parseParams(tableSchema.columns, configRecord.params),
     };
 
@@ -1575,7 +1599,11 @@ export class DataModule<S extends SchemaStructure> {
     // seeded from the SSP `localArray` in `createAndRegisterQuery` instead.
     if (buildWindowMaterialization(surqlString) === null) {
       try {
-        const [result] = await this.local.query<[Record<string, any>[]]>(surqlString, params);
+        // Prefer the engine-neutral plan (required for non-SurrealQL engines);
+        // fall back to running the raw surql on the SurrealDB engine.
+        const result = plan
+          ? await this.local.select(plan, params)
+          : (await this.local.query<[Record<string, any>[]]>(surqlString, params))[0];
         records = result || [];
       } catch (err) {
         this.logger.warn(
