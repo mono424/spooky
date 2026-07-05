@@ -4,17 +4,39 @@ import type { Logger } from '../logger/index';
 import type { Sp00kyConfig } from '../../types';
 import type { SealedQuery } from '../../utils/surql';
 import { resolveRelations, stableKey } from './relation-resolver';
-import { createDatabaseEventSystem, DatabaseEventTypes, type DatabaseEventSystem } from './events/index';
+import {
+  createDatabaseEventSystem,
+  DatabaseEventTypes,
+  type DatabaseEventSystem,
+} from './events/index';
 import { StaleEpochError } from './local';
 import { translateSurql, tableOf, setPath, getPath, type SqlOp } from './surql-translate';
-import type {
-  EngineTx,
-  Id,
-  LocalStore,
-  OrderBy,
-  RelationFetch,
-  Row,
-} from './cache-engine';
+import type { EngineTx, Id, LocalStore, OrderBy, RelationFetch, Row } from './cache-engine';
+
+/**
+ * The statement result a pure-write op contributes to a query's results array.
+ * Single source of truth shared by the per-op path (`execOp`) and the batched
+ * fast path in `query()`, so the two can never diverge: a caller that reads a
+ * statement's output sees the same shape whether or not the transaction took the
+ * batch fast path. In particular `create()` compiles to an all-upsert tx
+ * (`createSet` + `createMutation`) and reads `resultIndex:0` for the new row and
+ * its id — the fast path previously returned empty arrays there, so the row (and
+ * its id) was lost and the reconcile crashed in `encodeRecordId`.
+ *
+ * An upsert echoes the written row (`{...data, id}`) with no read-back — the
+ * full merged row is only materialized for a LET-wrapped upsert (see the 'let'
+ * case). delete/deleteAll yield `[]`; noop yields `null`.
+ */
+export function pureWriteOpResult(op: SqlOp): unknown {
+  switch (op.kind) {
+    case 'upsert':
+      return { ...op.data, id: stableKey(op.id) };
+    case 'noop':
+      return null;
+    default:
+      return [];
+  }
+}
 
 /**
  * Local cache backend on official SQLite-WASM in a dedicated Worker (see
@@ -98,7 +120,10 @@ export class SqliteCacheEngine implements LocalStore {
     // call hung forever — reject them all with a clear error.
     const failAll = (msg: string) => {
       const err = new Error(`SQLite worker crashed: ${msg}`);
-      this.logger.error({ err, Category: 'sp00ky-client::SqliteCacheEngine::worker' }, 'Worker error');
+      this.logger.error(
+        { err, Category: 'sp00ky-client::SqliteCacheEngine::worker' },
+        'Worker error'
+      );
       for (const [, p] of this.pending) p.reject(err);
       this.pending.clear();
     };
@@ -333,9 +358,25 @@ export class SqliteCacheEngine implements LocalStore {
       // one SQLite transaction — instead of 1-2 worker round-trips PER row. This
       // is the dominant sync-down cost; per-op execution here caused the churn
       // OOM. Mixed txs (LET/RETURN single-record mutations) keep the per-op path.
-      if (transaction && ops.every((o) => o.kind === 'upsert' || o.kind === 'delete' || o.kind === 'deleteAll' || o.kind === 'noop')) {
+      if (
+        transaction &&
+        ops.every(
+          (o) =>
+            o.kind === 'upsert' ||
+            o.kind === 'delete' ||
+            o.kind === 'deleteAll' ||
+            o.kind === 'noop'
+        )
+      ) {
         await this.runWriteBatch(ops);
-        shaped = [null, ...ops.map(() => [])];
+        // Shape each statement's result the SAME as the per-op path (`execOp`),
+        // so a caller reading a statement's output still works after taking the
+        // batch fast path. A single `create()` compiles to an all-upsert tx
+        // (createSet + createMutation) and reads `resultIndex:0` for the new
+        // row + its id; returning empty arrays here dropped that row (id became
+        // undefined → the reconcile crashed in `encodeRecordId`). The
+        // single-batch write is kept — this only rebuilds the return value.
+        shaped = [null, ...ops.map(pureWriteOpResult)];
       } else {
         const results: unknown[] = [];
         // Per-query scope holds `LET $var = (...)` bindings for later statements
@@ -365,7 +406,11 @@ export class SqliteCacheEngine implements LocalStore {
     }
   }
 
-  async execute<R>(query: SealedQuery<R>, vars?: Record<string, unknown>, opts?: { epoch?: number }): Promise<R> {
+  async execute<R>(
+    query: SealedQuery<R>,
+    vars?: Record<string, unknown>,
+    opts?: { epoch?: number }
+  ): Promise<R> {
     const raw = await this.query<unknown[]>(query.sql, vars, opts);
     return query.extract(raw);
   }
@@ -382,12 +427,15 @@ export class SqliteCacheEngine implements LocalStore {
     switch (op.kind) {
       case 'getById': {
         const row = await this.getById(tableOf(op.id), op.id);
-        if (op.value) return row ? row[op.value] ?? null : null;
+        if (op.value) return row ? (row[op.value] ?? null) : null;
         return row ? (op.select ? project(row, op.select) : row) : null;
       }
       case 'selectByIds': {
         if (op.ids.length === 0) return [];
-        let rows = await this.selectByIds(tableOf(op.ids[0]), op.ids, { select: op.select, orderBy: op.orderBy });
+        let rows = await this.selectByIds(tableOf(op.ids[0]), op.ids, {
+          select: op.select,
+          orderBy: op.orderBy,
+        });
         if (op.value) return rows.map((r) => r[op.value!]);
         return rows;
       }
@@ -401,8 +449,9 @@ export class SqliteCacheEngine implements LocalStore {
         // Cheap return — no read-back. The full merged row is only needed by a
         // LET-wrapped upsert, which reads it back in the 'let' case below. This
         // avoids an extra worker round-trip + full-row parse on EVERY sync-down
-        // write (the hot path under rapid churn).
-        return { ...op.data, id: stableKey(op.id) };
+        // write (the hot path under rapid churn). Shared with the batch fast
+        // path so the two never drift.
+        return pureWriteOpResult(op);
       case 'updateSet': {
         const existing = (await this.getById(tableOf(op.id), op.id)) ?? { id: stableKey(op.id) };
         for (const { path, op: setOp, value } of op.sets) {
@@ -419,11 +468,11 @@ export class SqliteCacheEngine implements LocalStore {
       }
       case 'delete':
         await this.delete(tableOf(op.id), op.id);
-        return [];
+        return pureWriteOpResult(op);
       case 'deleteAll':
         await this.ensureTable(op.table);
         await this.call('run', { sql: `DELETE FROM "${op.table}"` });
-        return [];
+        return pureWriteOpResult(op);
       case 'let': {
         let result = await this.execOp(op.inner, scope, vars);
         // A LET-bound UPSERT must expose the FULL merged row (e.g.
@@ -443,7 +492,7 @@ export class SqliteCacheEngine implements LocalStore {
         return obj;
       }
       case 'noop':
-        return null;
+        return pureWriteOpResult(op);
     }
   }
 
@@ -459,7 +508,9 @@ export class SqliteCacheEngine implements LocalStore {
       if (!tables.has(t)) {
         tables.add(t);
         this.knownTables.add(t);
-        stmts.push({ sql: `CREATE TABLE IF NOT EXISTS "${t}" (id TEXT PRIMARY KEY, data TEXT NOT NULL)` });
+        stmts.push({
+          sql: `CREATE TABLE IF NOT EXISTS "${t}" (id TEXT PRIMARY KEY, data TEXT NOT NULL)`,
+        });
       }
     };
     for (const op of ops) {
@@ -538,7 +589,14 @@ interface SqliteStats {
 function getStats(): SqliteStats {
   const g = globalThis as unknown as { __sqliteStats?: SqliteStats };
   if (!g.__sqliteStats) {
-    g.__sqliteStats = { roundTrips: 0, batchStatements: 0, maxBatch: 0, inFlight: 0, maxInFlight: 0, byType: {} };
+    g.__sqliteStats = {
+      roundTrips: 0,
+      batchStatements: 0,
+      maxBatch: 0,
+      inFlight: 0,
+      maxInFlight: 0,
+      byType: {},
+    };
   }
   return g.__sqliteStats;
 }
@@ -551,7 +609,11 @@ function renderOrderSql(orderBy: OrderBy): string {
     .join(', ')}`;
 }
 
-function comparisonSql(c: WhereComparison, bind: unknown[], params: Record<string, unknown>): string {
+function comparisonSql(
+  c: WhereComparison,
+  bind: unknown[],
+  params: Record<string, unknown>
+): string {
   const lhs = c.field === 'id' ? 'id' : `json_extract(data, '$.${c.field}')`;
   const value = c.paramRef ? params[c.paramRef] : c.value;
   bind.push(scalar(value));
