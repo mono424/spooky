@@ -686,8 +686,11 @@ fn run_direct_mode(
     // Ensure data dir exists
     std::fs::create_dir_all(&data_dir).ok();
 
-    // Build SPKY_JOB_CONFIG from backend apps with outbox method (mode-agnostic)
-    let job_config_json = build_job_config_json(config);
+    // Build SPKY_JOB_CONFIG from backend apps with outbox method (mode-agnostic).
+    // A Docker SSP can't reach host backends via 127.0.0.1; rewrite to
+    // host.docker.internal (see build_job_config_json).
+    let ssp_in_docker = matches!(versions.ssp, RuntimeSource::Image(_));
+    let job_config_json = build_job_config_json(config, ssp_in_docker);
 
     let ssp_kind = match &versions.ssp {
         RuntimeSource::Image(_) => LaunchKind::Docker {
@@ -2056,8 +2059,15 @@ mod supervisor_tests {
 }
 
 /// Build SPKY_JOB_CONFIG JSON from backend apps with outbox methods.
-/// Uses baseUrl from sp00ky.yml for dev mode (Docker-internal URLs use host.docker.internal).
-fn build_job_config_json(config: &Sp00kyConfig) -> String {
+///
+/// `baseUrl` in sp00ky.yml is written for the co-located cloud runtime, where
+/// SSP and the backend share a network namespace and `127.0.0.1:<port>` reaches
+/// the backend. In dev, when the SSP runs as a Docker container, `127.0.0.1`
+/// is the SSP container's own loopback, so a host-process backend (`dev: npm` /
+/// `uv`) or a sibling `dev: docker` backend (published to the host) is
+/// unreachable there. Rewrite the loopback host to `host.docker.internal` so
+/// the containerized SSP reaches the host. A host-binary SSP keeps `127.0.0.1`.
+fn build_job_config_json(config: &Sp00kyConfig, ssp_in_docker: bool) -> String {
     let mut entries = Vec::new();
     for (name, app) in config.backends() {
         if !app.runs_in_dev() {
@@ -2068,6 +2078,9 @@ fn build_job_config_json(config: &Sp00kyConfig) -> String {
             None => continue,
         };
         let base_url = match &app.base_url {
+            Some(u) if ssp_in_docker => u
+                .replace("127.0.0.1", "host.docker.internal")
+                .replace("localhost", "host.docker.internal"),
             Some(u) => u.clone(),
             None => continue,
         };
