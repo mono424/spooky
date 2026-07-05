@@ -435,6 +435,7 @@ pub fn create_app(state: AppState) -> Router {
         .route("/log", post(log_handler))
         .route("/debug/view/:view_id", get(debug_view_handler))
         .route("/debug/deps", get(debug_deps_handler))
+        .route("/debug/catchup-rows/:table", get(debug_catchup_rows_handler))
         .route("/view/register", post(register_view_handler))
         .route("/view/unregister", post(unregister_view_handler))
         .route("/crdt/apply", post(crdt_apply_handler))
@@ -3184,6 +3185,23 @@ async fn debug_view_handler(
     } else {
         Json(json!({ "error": "View not found" }))
     }
+}
+
+/// Dump one table's circuit rows as `{ raw_id: json }`. The scheduler fetches
+/// this on a persistent catch-up hash mismatch to diff its reconstructed
+/// projection against the circuit row-by-row (see the scheduler's
+/// `verify_catchup_at_m` diagnostic), turning a one-sided hash into a concrete
+/// list of missing / extra / differing rows.
+async fn debug_catchup_rows_handler(
+    State(state): State<AppState>,
+    Path(table): Path<String>,
+) -> impl IntoResponse {
+    let circuit = state.processor.read().await;
+    let rows: serde_json::Map<String, Value> = circuit
+        .dump_table_rows(&table)
+        .into_iter()
+        .collect();
+    Json(json!({ "table": table, "rows": rows }))
 }
 
 /// Debug dependency map handler

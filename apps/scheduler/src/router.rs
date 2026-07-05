@@ -27,6 +27,12 @@ pub struct SspPool {
     /// to re-bootstrap. The next heartbeat from these SSPs returns 409 so
     /// they tear down and re-register against the current frozen snapshot.
     forced_resync: HashSet<String>,
+    /// Consecutive catch-up verification failures per SSP, reset on any pass.
+    /// A plain re-bootstrap can't fix a *deterministic* scheduler-vs-circuit
+    /// hash gap (the SSP refetches the same diverging state every cycle), so
+    /// this counter lets the catch-up path escalate — re-clone the replica,
+    /// then admit anyway — instead of looping forever. See `poll_and_replay_ssp`.
+    catchup_failures: HashMap<String, u32>,
     strategy: LoadBalanceStrategy,
     round_robin_index: usize,
     max_buffer_size: usize,
@@ -41,10 +47,26 @@ impl SspPool {
             message_buffers: HashMap::new(),
             ssp_snapshot_seqs: HashMap::new(),
             forced_resync: HashSet::new(),
+            catchup_failures: HashMap::new(),
             strategy,
             round_robin_index: 0,
             max_buffer_size,
         }
+    }
+
+    /// Record one more consecutive catch-up verification failure for this SSP
+    /// and return the new running count. Cleared by `reset_catchup_failures`
+    /// on any successful verification (or admit).
+    pub fn record_catchup_failure(&mut self, ssp_id: &str) -> u32 {
+        let entry = self.catchup_failures.entry(ssp_id.to_string()).or_insert(0);
+        *entry += 1;
+        *entry
+    }
+
+    /// Reset the consecutive catch-up failure count for this SSP (on a pass,
+    /// or once we admit it to broadcast to break the loop).
+    pub fn reset_catchup_failures(&mut self, ssp_id: &str) {
+        self.catchup_failures.remove(ssp_id);
     }
 
     /// Flag an SSP for forced re-bootstrap on its next heartbeat. Used by
@@ -219,6 +241,7 @@ impl SspPool {
         self.message_buffers.remove(ssp_id);
         self.ssp_snapshot_seqs.remove(ssp_id);
         self.forced_resync.remove(ssp_id);
+        self.catchup_failures.remove(ssp_id);
         self.ssps.remove(ssp_id)
     }
 
@@ -232,6 +255,7 @@ impl SspPool {
         self.message_buffers.clear();
         self.ssp_snapshot_seqs.clear();
         self.forced_resync.clear();
+        self.catchup_failures.clear();
         self.round_robin_index = 0;
         count
     }
@@ -338,5 +362,38 @@ impl SspPool {
         self.ssp_states
             .values()
             .any(|s| matches!(s, SspState::Bootstrapping | SspState::Replaying))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pool() -> SspPool {
+        SspPool::new(LoadBalanceStrategy::RoundRobin, 100)
+    }
+
+    #[test]
+    fn catchup_failures_count_up_then_reset() {
+        let mut p = pool();
+        assert_eq!(p.record_catchup_failure("ssp-0"), 1);
+        assert_eq!(p.record_catchup_failure("ssp-0"), 2);
+        assert_eq!(p.record_catchup_failure("ssp-0"), 3);
+        // Independent per SSP.
+        assert_eq!(p.record_catchup_failure("ssp-1"), 1);
+        // Reset clears only the named SSP and restarts its streak.
+        p.reset_catchup_failures("ssp-0");
+        assert_eq!(p.record_catchup_failure("ssp-0"), 1);
+        assert_eq!(p.record_catchup_failure("ssp-1"), 2);
+    }
+
+    #[test]
+    fn remove_clears_catchup_failures() {
+        let mut p = pool();
+        p.record_catchup_failure("ssp-0");
+        p.record_catchup_failure("ssp-0");
+        p.remove("ssp-0");
+        // A re-registered SSP of the same id starts a fresh streak.
+        assert_eq!(p.record_catchup_failure("ssp-0"), 1);
     }
 }

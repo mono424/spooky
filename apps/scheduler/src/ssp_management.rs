@@ -6,8 +6,9 @@ use axum::{
     Json, Router,
 };
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::config::SchedulerConfig;
@@ -27,6 +28,12 @@ pub struct SspManagementState {
     pub config: Arc<SchedulerConfig>,
     pub status: Arc<RwLock<SchedulerStatus>>,
     pub event_buffer: Arc<RwLock<VecDeque<BufferedEvent>>>,
+    /// Global sequence counter — the seq the replica reflects after a re-clone.
+    pub seq_counter: Arc<AtomicU64>,
+    /// Serializes catch-up replica re-clones so two looping SSPs can't reset +
+    /// re-ingest the shared replica concurrently. A `try_lock` failure means a
+    /// re-clone is already running; the losing task just re-bootstraps instead.
+    pub reclone_lock: Arc<Mutex<()>>,
 }
 
 /// Create SSP management router
@@ -135,6 +142,8 @@ async fn handle_register(
     let event_buffer = state.event_buffer.clone();
     let scheduler_status = state.status.clone();
     let config = state.config.clone();
+    let seq_counter = state.seq_counter.clone();
+    let reclone_lock = state.reclone_lock.clone();
 
     let replica = state.replica.clone();
     tokio::spawn(async move {
@@ -148,6 +157,8 @@ async fn handle_register(
             scheduler_status,
             config,
             replica,
+            seq_counter,
+            reclone_lock,
         )
         .await
         {
@@ -253,6 +264,8 @@ async fn poll_and_replay_ssp(
     scheduler_status: Arc<RwLock<SchedulerStatus>>,
     config: Arc<SchedulerConfig>,
     replica: Arc<RwLock<Replica>>,
+    seq_counter: Arc<AtomicU64>,
+    reclone_lock: Arc<Mutex<()>>,
 ) -> Result<()> {
     let poll_interval = std::time::Duration::from_millis(config.ssp_poll_interval_ms);
     let timeout = std::time::Duration::from_secs(config.bootstrap_timeout_secs);
@@ -399,14 +412,65 @@ async fn poll_and_replay_ssp(
     // which compared the SSP's live (seq M) hashes against the frozen snapshot
     // (seq N) and so falsely flagged any table written during catch-up.
     let verified = match verify_catchup_at_m(&ssp_id, &ssp_url, &transport, &replica, &replayed).await {
-        Ok(true) => true,
+        Ok(true) => {
+            // Passed — clear the consecutive-failure streak.
+            ssp_pool.write().await.reset_catchup_failures(&ssp_id);
+            true
+        }
         Ok(false) => {
-            // Real divergence: flag for forced re-bootstrap and do NOT mark
-            // ready. The SSP (already heartbeating) gets a 409 on its next
-            // heartbeat and exits for a clean re-registration.
-            ssp_pool.write().await.mark_for_resync(&ssp_id);
-            warn!(ssp_id = %ssp_id, "Catch-up verification failed — withholding from broadcast; SSP will re-bootstrap");
-            false
+            // Real divergence. A plain re-bootstrap can't fix a *deterministic*
+            // scheduler-vs-circuit gap — the SSP refetches the same diverging
+            // state every cycle — so escalate by consecutive-failure count
+            // instead of looping forever (which leaves the whole cluster with
+            // NO ready SSP and all live queries failing).
+            let fails = ssp_pool.write().await.record_catchup_failure(&ssp_id);
+            let (reclone_after, admit_after) = catchup_breaker_thresholds();
+
+            if fails >= admit_after {
+                // Give up on the gate: admit the SSP so sync is restored. The
+                // circuit passed its own @N bootstrap self-check and every
+                // shared row is (almost certainly) semantically correct; a
+                // never-converging hash is not worth an indefinite outage. The
+                // row-level diagnostic above shows exactly what disagreed.
+                error!(
+                    ssp_id = %ssp_id,
+                    fails,
+                    "ALERT: catch-up never converged after {} attempts — admitting SSP to broadcast anyway to restore sync. Circuit may be marginally divergent from the scheduler projection (see the row-level diff above).",
+                    fails,
+                );
+                ssp_pool.write().await.reset_catchup_failures(&ssp_id);
+                true
+            } else {
+                if fails == reclone_after {
+                    // The replica itself may hold the odd representation. Do ONE
+                    // full re-clone from upstream before the next attempt so the
+                    // SSP re-bootstraps from a freshly-cloned snapshot.
+                    warn!(
+                        ssp_id = %ssp_id,
+                        fails,
+                        "Catch-up failed {} times — re-cloning replica from upstream before the next attempt",
+                        fails,
+                    );
+                    match reclone_replica_from_upstream(&config, &replica, &seq_counter, &reclone_lock).await {
+                        Ok(true) => {
+                            info!("Replica re-cloned from upstream; flagging all SSPs to re-bootstrap from the fresh snapshot");
+                            ssp_pool.write().await.mark_all_for_resync();
+                        }
+                        Ok(false) => {
+                            info!(ssp_id = %ssp_id, "Re-clone already in progress on another task; just re-bootstrapping this SSP");
+                            ssp_pool.write().await.mark_for_resync(&ssp_id);
+                        }
+                        Err(e) => {
+                            error!(ssp_id = %ssp_id, error = %e, "Replica re-clone failed; falling back to a plain re-bootstrap");
+                            ssp_pool.write().await.mark_for_resync(&ssp_id);
+                        }
+                    }
+                } else {
+                    ssp_pool.write().await.mark_for_resync(&ssp_id);
+                }
+                warn!(ssp_id = %ssp_id, fails, "Catch-up verification failed — withholding from broadcast; SSP will re-bootstrap");
+                false
+            }
         }
         Err(e) => {
             // Transient failure (e.g. /info unreachable). Favor availability —
@@ -473,7 +537,11 @@ async fn poll_and_replay_ssp(
         }
     }
 
-    info!("SSP '{}' is now fully caught up and ready", ssp_id);
+    if verified {
+        info!("SSP '{}' is now fully caught up and ready", ssp_id);
+    } else {
+        info!(ssp_id = %ssp_id, "SSP withheld from broadcast pending re-bootstrap");
+    }
     Ok(())
 }
 
@@ -609,7 +677,11 @@ async fn verify_catchup_at_m(
         }
     }
 
-    // Persistent mismatch after every attempt → a real divergence.
+    // Persistent mismatch after every attempt → a real divergence. Pull the
+    // SSP's actual circuit rows and diff them against the scheduler's projection
+    // row-by-row, so the log names the specific missing / extra / differing rows
+    // instead of the old one-sided dump (which showed the scheduler's first N
+    // rows in map order — not necessarily the diverging ones).
     for (table, sched, ssp_h) in &mismatches {
         error!(
             ssp_id = %ssp_id,
@@ -618,22 +690,57 @@ async fn verify_catchup_at_m(
             ssp = %ssp_h,
             "Catch-up hash mismatch"
         );
-        // Diagnostic: dump the canonical JSON of the scheduler's reconstructed
-        // rows (capped) so a representation gap (e.g. a `null` optional the SSP
-        // omits) is visible in the log without attaching a debugger.
-        if let Some(rows) = reference_rows.get(table) {
-            for (row_id, val) in rows.iter().take(CATCHUP_DIAG_MAX_ROWS) {
-                let canon = String::from_utf8_lossy(
-                    &ssp_protocol::snapshot_hash::canonical_json(val),
-                )
-                .into_owned();
-                error!(
-                    ssp_id = %ssp_id,
-                    table = %table,
-                    row_id = %row_id,
-                    reference_row = %canon,
-                    "Catch-up mismatch diagnostic (scheduler reconstructed row@M)"
-                );
+        let ref_rows = match reference_rows.get(table) {
+            Some(r) => r,
+            None => continue,
+        };
+        match fetch_ssp_catchup_rows(transport, ssp_url, table).await {
+            Ok(ssp_rows) => {
+                let all_ids: std::collections::BTreeSet<&String> =
+                    ref_rows.keys().chain(ssp_rows.keys()).collect();
+                let mut logged = 0usize;
+                for id in all_ids {
+                    if logged >= CATCHUP_DIAG_MAX_ROWS {
+                        warn!(ssp_id = %ssp_id, table = %table, "More diverging rows omitted (diagnostic cap reached)");
+                        break;
+                    }
+                    match (ref_rows.get(id), ssp_rows.get(id)) {
+                        (Some(r), None) => {
+                            error!(ssp_id = %ssp_id, table = %table, row_id = %id, scheduler_row = %canon_json(r), "Catch-up diff: row on scheduler, MISSING on SSP");
+                            logged += 1;
+                        }
+                        (None, Some(s)) => {
+                            error!(ssp_id = %ssp_id, table = %table, row_id = %id, ssp_row = %canon_json(s), "Catch-up diff: EXTRA row on SSP, absent on scheduler");
+                            logged += 1;
+                        }
+                        (Some(r), Some(s)) => {
+                            if ssp_protocol::snapshot_hash::record_digest(id.as_str(), r)
+                                != ssp_protocol::snapshot_hash::record_digest(id.as_str(), s)
+                            {
+                                error!(ssp_id = %ssp_id, table = %table, row_id = %id, scheduler_row = %canon_json(r), ssp_row = %canon_json(s), "Catch-up diff: row content differs");
+                                logged += 1;
+                            }
+                        }
+                        (None, None) => {}
+                    }
+                }
+                if logged == 0 {
+                    error!(ssp_id = %ssp_id, table = %table, "Catch-up hashes differ but no row-level diff found — possible canonicalization gap between scheduler and circuit");
+                }
+            }
+            Err(e) => {
+                // Couldn't reach the SSP's row dump (old build / transient) —
+                // fall back to the one-sided scheduler-projection dump.
+                warn!(ssp_id = %ssp_id, table = %table, error = %e, "Could not fetch SSP rows for row-level diff; dumping scheduler projection only");
+                for (row_id, val) in ref_rows.iter().take(CATCHUP_DIAG_MAX_ROWS) {
+                    error!(
+                        ssp_id = %ssp_id,
+                        table = %table,
+                        row_id = %row_id,
+                        reference_row = %canon_json(val),
+                        "Catch-up mismatch diagnostic (scheduler reconstructed row@M)"
+                    );
+                }
             }
         }
     }
@@ -651,8 +758,119 @@ async fn verify_catchup_at_m(
 const CATCHUP_VERIFY_ATTEMPTS: usize = 3;
 /// Delay between catch-up re-checks.
 const CATCHUP_VERIFY_RETRY_DELAY_MS: u64 = 150;
-/// Cap on per-table rows dumped in the mismatch diagnostic, to keep the log bounded.
-const CATCHUP_DIAG_MAX_ROWS: usize = 3;
+/// Cap on per-table rows dumped in the mismatch diagnostic, to keep the log
+/// bounded. Higher than the old one-sided dump because the row-level diff only
+/// logs rows that actually diverge (missing / extra / differing), so the cap is
+/// a real ceiling on divergences shown, not just the first N rows.
+const CATCHUP_DIAG_MAX_ROWS: usize = 20;
+
+/// Default consecutive catch-up failures before the breaker re-clones the
+/// replica from upstream. Override with `SPKY_CATCHUP_RECLONE_AFTER`.
+const CATCHUP_RECLONE_AFTER_DEFAULT: u32 = 3;
+/// Default consecutive catch-up failures before the breaker gives up on the
+/// gate and admits the SSP to broadcast anyway (restoring sync). Override with
+/// `SPKY_CATCHUP_ADMIT_AFTER`. Set very high to effectively disable admit; set
+/// re-clone/admit equal to skip the re-clone step.
+const CATCHUP_ADMIT_AFTER_DEFAULT: u32 = 5;
+
+/// Read the catch-up breaker thresholds `(reclone_after, admit_after)` from env,
+/// falling back to the compiled defaults. `admit_after` is floored to at least
+/// `reclone_after` so admit never precedes the re-clone attempt.
+fn catchup_breaker_thresholds() -> (u32, u32) {
+    let parse = |k: &str| {
+        std::env::var(k)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|n: &u32| *n > 0)
+    };
+    resolve_breaker_thresholds(
+        parse("SPKY_CATCHUP_RECLONE_AFTER"),
+        parse("SPKY_CATCHUP_ADMIT_AFTER"),
+    )
+}
+
+/// Pure core of [`catchup_breaker_thresholds`]: apply defaults and floor
+/// `admit` to at least `reclone` so admit never precedes the re-clone attempt.
+fn resolve_breaker_thresholds(reclone: Option<u32>, admit: Option<u32>) -> (u32, u32) {
+    let reclone = reclone.unwrap_or(CATCHUP_RECLONE_AFTER_DEFAULT);
+    let admit = admit.unwrap_or(CATCHUP_ADMIT_AFTER_DEFAULT).max(reclone);
+    (reclone, admit)
+}
+
+/// Canonical-JSON string of a value, for the mismatch diagnostic. Same encoding
+/// the hash uses, so the logged bytes are exactly what feeds the digest.
+fn canon_json(v: &serde_json::Value) -> String {
+    String::from_utf8_lossy(&ssp_protocol::snapshot_hash::canonical_json(v)).into_owned()
+}
+
+/// Fetch an SSP's circuit rows for one table (`/debug/catchup-rows/:table`),
+/// returned as `raw_id -> value`. Used by the catch-up diagnostic to diff the
+/// circuit against the scheduler's reconstructed projection.
+async fn fetch_ssp_catchup_rows(
+    transport: &Arc<HttpTransport>,
+    ssp_url: &str,
+    table: &str,
+) -> Result<std::collections::HashMap<String, serde_json::Value>> {
+    let resp = transport
+        .get_from_ssp(ssp_url, &format!("/debug/catchup-rows/{}", table))
+        .await
+        .map_err(|e| anyhow::anyhow!("GET /debug/catchup-rows failed: {}", e))?;
+    if !resp.status().is_success() {
+        anyhow::bail!("SSP /debug/catchup-rows returned HTTP {}", resp.status());
+    }
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("Parse /debug/catchup-rows JSON failed: {}", e))?;
+    let rows = json
+        .get("rows")
+        .and_then(|v| v.as_object())
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default();
+    Ok(rows)
+}
+
+/// Catch-up breaker step: re-clone the replica from upstream SurrealDB. Serialized
+/// by `reclone_lock` so two looping SSPs can't reset + re-ingest the shared
+/// replica at once. Returns `Ok(true)` if this call performed the re-clone,
+/// `Ok(false)` if another task already holds the lock (caller falls back to a
+/// plain re-bootstrap), `Err` on a clone failure.
+///
+/// Mirrors the bootstrap clone in `Scheduler::start`: reset the replica, clone
+/// every table from upstream, then rehash at the current global seq. Holds the
+/// replica write lock for the whole clone so in-flight bootstrap reads see a
+/// consistent snapshot (they block, then read the fresh clone).
+async fn reclone_replica_from_upstream(
+    config: &SchedulerConfig,
+    replica: &Arc<RwLock<Replica>>,
+    seq_counter: &Arc<AtomicU64>,
+    reclone_lock: &Arc<Mutex<()>>,
+) -> Result<bool> {
+    let _guard = match reclone_lock.try_lock() {
+        Ok(g) => g,
+        Err(_) => return Ok(false),
+    };
+
+    let db = crate::restore::connect_remote(&config.db)
+        .await
+        .context("reclone: connect to upstream SurrealDB failed")?;
+
+    // Snapshot the seq the clone reflects BEFORE the (slow) ingest, matching
+    // the bootstrap path — new events past this point re-arrive via replay.
+    let seq = seq_counter.load(Ordering::SeqCst);
+
+    {
+        let mut rep = replica.write().await;
+        rep.reset().await.context("reclone: replica reset failed")?;
+        rep.ingest_all(&db).await.context("reclone: ingest_all failed")?;
+        rep.set_snapshot_state(seq, None)
+            .await
+            .context("reclone: set_snapshot_state failed")?;
+    }
+
+    info!(seq, "Catch-up breaker: replica re-clone from upstream complete");
+    Ok(true)
+}
 
 /// Reconstruct a touched table's content at the catch-up cut from its rows@N
 /// (`seed`) plus the replayed `events`, then XOR-hash it. Events are applied by
@@ -714,6 +932,21 @@ mod catchup_tests {
             data,
             version: 0,
         }
+    }
+
+    #[test]
+    fn breaker_thresholds_default_and_floor() {
+        // Defaults when unset.
+        assert_eq!(
+            resolve_breaker_thresholds(None, None),
+            (CATCHUP_RECLONE_AFTER_DEFAULT, CATCHUP_ADMIT_AFTER_DEFAULT)
+        );
+        // Explicit values pass through when admit >= reclone.
+        assert_eq!(resolve_breaker_thresholds(Some(2), Some(6)), (2, 6));
+        // admit is floored to reclone so admit never precedes the re-clone.
+        assert_eq!(resolve_breaker_thresholds(Some(4), Some(1)), (4, 4));
+        // Setting them equal disables the re-clone step (admit on the same count).
+        assert_eq!(resolve_breaker_thresholds(Some(3), Some(3)), (3, 3));
     }
 
     #[test]

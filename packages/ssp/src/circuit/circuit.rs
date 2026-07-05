@@ -974,6 +974,23 @@ impl Circuit {
     pub fn dependency_map_dump(&self) -> &HashMap<String, Vec<String>> {
         &self.dependency_map
     }
+
+    /// Dump a table's circuit rows as `(raw_id, json)` pairs — the exact values
+    /// that feed the catch-up XOR set-hash. The scheduler pulls this on a
+    /// persistent catch-up mismatch (`/debug/catchup-rows/:table`) to diff its
+    /// reconstructed projection row-by-row against the circuit, so an operator
+    /// can see the specific diverging (or missing/extra) row instead of guessing
+    /// from a one-sided hash. Returns an empty vec for an unknown table.
+    pub fn dump_table_rows(&self, table: &str) -> Vec<(String, serde_json::Value)> {
+        match self.store.collections.get(table) {
+            Some(coll) => coll
+                .rows
+                .iter()
+                .map(|(id, val)| (id.clone(), serde_json::Value::from(val.clone())))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 impl Default for Circuit {

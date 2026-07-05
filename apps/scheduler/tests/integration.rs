@@ -133,6 +133,8 @@ impl TestHarness {
             config: Arc::clone(&self.config),
             status: Arc::clone(&self.status),
             event_buffer: Arc::clone(&self.event_buffer),
+            seq_counter: Arc::clone(&self.seq_counter),
+            reclone_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         ssp_management::create_ssp_router(state)
     }
