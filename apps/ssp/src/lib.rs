@@ -1166,6 +1166,47 @@ async fn self_bootstrap_with_metadata(
         }
     }
 
+    // Step 1c: Per-table record-link map. `INFO FOR TABLE` exposes each field's
+    // `DEFINE FIELD ... TYPE record<X>`; capture `field -> X` so the
+    // registration pipeline can lower a link-traversal permission
+    // (`assigned_to.owner.id = $auth.id`) into a SemiJoin against `X`. The
+    // target table isn't derivable from the field name (`assigned_to` links to
+    // `connection`), and a flat Filter can't dereference a link across rows, so
+    // without this every live query on an outbox table matches zero rows.
+    // Best-effort: a failed INFO or an unparseable field just leaves that link
+    // unresolved (its permission stays flat, i.e. today's behavior).
+    {
+        let mut resolved: Vec<(String, String, String)> = Vec::new();
+        for table in &tables {
+            let info = match metadata_source.query(&format!("INFO FOR TABLE {}", table)).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(target: "ssp::policy", table = %table, error = %e, "INFO FOR TABLE failed; skipping link map");
+                    continue;
+                }
+            };
+            let Some(fields) = info.get("fields").and_then(|f| f.as_object()) else {
+                continue;
+            };
+            for (field_name, def) in fields {
+                if let Some(target) = def.as_str().and_then(parse_link_target) {
+                    resolved.push((table.clone(), field_name.clone(), target));
+                }
+            }
+        }
+        if !resolved.is_empty() {
+            let mut circuit = processor.write().await;
+            for (table, field, target) in &resolved {
+                info!(
+                    target: "ssp::policy",
+                    table = %table, field = %field, link_target = %target,
+                    "registered record-link target"
+                );
+                circuit.set_link_target(table.clone(), field.clone(), target.clone());
+            }
+        }
+    }
+
     // Step 2: Load all table data, paged. Pulling the entire table in one
     // request blew up at multi-GB DBs because either the SurrealDB Rust SDK's
     // Ws engine (64 MiB tungstenite frame ceiling) or the scheduler proxy
@@ -1306,7 +1347,11 @@ async fn self_bootstrap_with_metadata(
 
         let prep = {
             let circuit = processor.read().await;
-            ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions())
+            ssp::service::view::prepare_registration_dbsp(
+                payload,
+                circuit.permissions(),
+                circuit.link_targets(),
+            )
         };
         match prep {
             Ok(data) => {
@@ -1331,6 +1376,28 @@ async fn self_bootstrap_with_metadata(
     }
 
     Ok(())
+}
+
+/// Extract the target table of a record-link field from its `DEFINE FIELD`
+/// statement: the `X` in `TYPE record<X>` / `option<record<X>>`.
+///
+/// Returns `None` for non-record fields, untyped `record` (no `<…>`), and
+/// record unions (`record<a | b>`) — the converter's link lowering can only
+/// scan a single concrete target table. ASCII-only idents, so byte offsets
+/// from the lowercased copy index the original safely.
+fn parse_link_target(define_field: &str) -> Option<String> {
+    let lower = define_field.to_lowercase();
+    let rec_idx = lower.find("record<")?;
+    let after = &define_field[rec_idx + "record<".len()..];
+    let close = after.find('>')?;
+    let inner = after[..close].trim();
+    if inner.is_empty()
+        || inner.contains('|')
+        || !inner.chars().all(|c| c.is_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    Some(inner.to_string())
 }
 
 /// Pull the raw `PERMISSIONS FOR select WHERE <expr>` text out of a
@@ -1410,6 +1477,43 @@ fn extract_select_permission_text(define_table: &str) -> String {
 
     // SurrealDB default for unlisted actions is DENY.
     "false".into()
+}
+
+#[cfg(test)]
+mod parse_link_target_tests {
+    use super::parse_link_target;
+
+    #[test]
+    fn record_type_extracts_target() {
+        assert_eq!(
+            parse_link_target("DEFINE FIELD owner ON connection TYPE record<user>").as_deref(),
+            Some("user")
+        );
+    }
+
+    #[test]
+    fn option_record_extracts_target() {
+        assert_eq!(
+            parse_link_target(
+                "DEFINE FIELD assigned_to ON job TYPE option<record<connection>> PERMISSIONS FULL"
+            )
+            .as_deref(),
+            Some("connection")
+        );
+    }
+
+    #[test]
+    fn non_record_field_is_none() {
+        assert_eq!(parse_link_target("DEFINE FIELD path ON job TYPE option<string>"), None);
+        assert_eq!(parse_link_target("DEFINE FIELD n ON job TYPE int"), None);
+    }
+
+    #[test]
+    fn untyped_record_and_unions_are_none() {
+        // Bare `record` has no target table; a union has more than one.
+        assert_eq!(parse_link_target("DEFINE FIELD r ON t TYPE record"), None);
+        assert_eq!(parse_link_target("DEFINE FIELD r ON t TYPE record<user | admin>"), None);
+    }
 }
 
 #[cfg(test)]
@@ -2593,7 +2697,11 @@ async fn register_view_handler(
     // table named so the client can fix its schema or pass the missing param.
     let data = {
         let circuit = state.processor.read().await;
-        match ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions()) {
+        match ssp::service::view::prepare_registration_dbsp(
+            payload,
+            circuit.permissions(),
+            circuit.link_targets(),
+        ) {
             Ok(d) => d,
             Err(e) => {
                 error!(target: "ssp::policy", error = %e, "Rejected view registration");

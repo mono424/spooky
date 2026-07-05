@@ -27,6 +27,7 @@ pub mod view {
     pub fn prepare_registration_dbsp(
         config: Value,
         permissions: &HashMap<String, String>,
+        links: &HashMap<String, HashMap<String, String>>,
     ) -> Result<DbspRegistrationData> {
         use crate::circuit::view::OutputFormat;
         use crate::operator::plan::{OperatorPlan, QueryPlan};
@@ -80,7 +81,7 @@ pub mod view {
         // Time the convert→plan→permission-inject path as the SSP "parse" phase.
         let parse_start = Instant::now();
 
-        let root_op_val = converter::convert_surql_to_dbsp(&surreal_ql)
+        let root_op_val = converter::convert_surql_to_dbsp_with_links(&surreal_ql, links)
             .or_else(|_| {
                 serde_json::from_str::<Value>(&surreal_ql).map_err(anyhow::Error::from)
             })
@@ -114,7 +115,12 @@ pub mod view {
             .unwrap_or("")
             .to_string();
 
-        permission_inject::inject_permissions(&mut root_op, permissions, safe_params.as_ref())?;
+        permission_inject::inject_permissions_with_links(
+            &mut root_op,
+            permissions,
+            safe_params.as_ref(),
+            links,
+        )?;
 
         let parse_ms = parse_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -180,7 +186,7 @@ mod start_window_isolation_tests {
             "params": { "database": "game_database:c1" },
             "clientId": "c", "ttl": "10m", "lastActiveAt": "", "format": "streaming"
         });
-        let data = prepare_registration_dbsp(payload, &perms).expect("prep");
+        let data = prepare_registration_dbsp(payload, &perms, &HashMap::new()).expect("prep");
         let update = circuit
             .add_query_with_auth(data.plan, data.safe_params, Some(OutputFormat::Streaming), String::new())
             .expect("delta");
@@ -215,7 +221,7 @@ mod start_window_register_before_ingest_tests {
             "params": { "database": "game_database:c1" },
             "clientId": "c", "ttl": "10m", "lastActiveAt": "", "format": "streaming"
         });
-        let data = prepare_registration_dbsp(payload, &perms).expect("prep");
+        let data = prepare_registration_dbsp(payload, &perms, &HashMap::new()).expect("prep");
         circuit.add_query_with_auth(data.plan, data.safe_params, Some(OutputFormat::Streaming), String::new());
 
         let changes: Vec<Change> = (0..160u32)
@@ -237,5 +243,110 @@ mod start_window_register_before_ingest_tests {
         eprintln!("len={} first={:?} last={:?}", recs.len(), recs.first(), recs.last());
         assert_eq!(recs.len(), 50, "window size");
         assert_eq!(recs.first().map(String::as_str), Some("game:g050"), "must START at offset 50");
+    }
+}
+
+#[cfg(test)]
+mod link_traversal_permission_tests {
+    //! Reproduction for the outbox-table live-query bug: an outbox table's
+    //! SELECT permission traverses a record link (`assigned_to.owner.id =
+    //! $auth.id`, job -> connection -> owner). The SSP injects that permission
+    //! as a flat Filter, but the Filter operator can't dereference a link into
+    //! another table's row, so `assigned_to.owner` resolves to NULL and EVERY
+    //! row is filtered out — the view materializes zero rows, no `_00_list_ref`
+    //! edges are written, and the client's query never receives live updates.
+    //!
+    //! With the link map (`job.assigned_to -> connection`) the converter lowers
+    //! the traversal into a SemiJoin against `connection`, so the rows survive.
+    use super::view::prepare_registration_dbsp;
+    use crate::circuit::view::OutputFormat;
+    use crate::circuit::{Circuit, Record};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    // The real gamesync outbox permission (see packages/schema/src/outbox/gamesync.surql).
+    const JOB_PERM: &str = "$access = \"account\" AND assigned_to.owner.id = $auth.id";
+
+    fn store_with_job() -> Circuit {
+        let mut circuit = Circuit::new();
+        circuit.load(vec![
+            // A job assigned to connection:c1, owned (via the connection) by user:u1.
+            Record::new(
+                "job",
+                "j1",
+                json!({ "id": "job:j1", "assigned_to": "connection:c1", "path": "/syncGames", "status": "pending" }),
+            ),
+            // Another user's job — must NOT leak into u1's view.
+            Record::new(
+                "job",
+                "j2",
+                json!({ "id": "job:j2", "assigned_to": "connection:c2", "path": "/syncGames", "status": "pending" }),
+            ),
+            Record::new("connection", "c1", json!({ "id": "connection:c1", "owner": "user:u1" })),
+            Record::new("connection", "c2", json!({ "id": "connection:c2", "owner": "user:u2" })),
+        ]);
+        circuit
+    }
+
+    fn register_job_view(circuit: &mut Circuit, links: &HashMap<String, HashMap<String, String>>) -> Vec<String> {
+        let mut perms = HashMap::new();
+        perms.insert("job".to_string(), JOB_PERM.to_string());
+
+        let payload = json!({
+            "id": "_00_query:jobview",
+            "surql": "SELECT * FROM job WHERE assigned_to = $assigned_to AND path = $path;",
+            "params": {
+                "assigned_to": "connection:c1",
+                "path": "/syncGames",
+                "auth": { "id": "user:u1" },
+                "access": "account",
+            },
+            "clientId": "c", "ttl": "10m", "lastActiveAt": "", "format": "streaming",
+        });
+
+        let data = prepare_registration_dbsp(payload, &perms, links).expect("prep");
+        circuit.add_query_with_auth(
+            data.plan,
+            data.safe_params,
+            Some(OutputFormat::Streaming),
+            "user:u1".to_string(),
+        );
+        let mut recs: Vec<String> = circuit
+            .get_view("_00_query:jobview")
+            .expect("view")
+            .cache
+            .keys()
+            .cloned()
+            .collect();
+        recs.sort();
+        recs
+    }
+
+    /// REPRODUCTION: with no link map the traversal permission stays a flat
+    /// Filter and the view is empty even though a matching, permitted row exists.
+    /// (Passes today's buggy behavior; documents the failure mode.)
+    #[test]
+    fn traversal_permission_without_link_map_yields_zero_rows() {
+        let mut circuit = store_with_job();
+        let recs = register_job_view(&mut circuit, &HashMap::new());
+        assert!(
+            recs.is_empty(),
+            "without the link map the link-traversal Filter drops all rows, got {recs:?}"
+        );
+    }
+
+    /// FIX: with `job.assigned_to -> connection` the permission lowers to a
+    /// SemiJoin, so u1's own job is visible and u2's is not.
+    #[test]
+    fn traversal_permission_with_link_map_admits_owned_row() {
+        let mut circuit = store_with_job();
+        let mut links: HashMap<String, HashMap<String, String>> = HashMap::new();
+        links
+            .entry("job".to_string())
+            .or_default()
+            .insert("assigned_to".to_string(), "connection".to_string());
+
+        let recs = register_job_view(&mut circuit, &links);
+        assert_eq!(recs, vec!["job:j1".to_string()], "u1 sees only their own job");
     }
 }

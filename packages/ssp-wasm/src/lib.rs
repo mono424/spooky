@@ -221,6 +221,7 @@ impl Sp00kyProcessor {
         let data = ssp::service::view::prepare_registration_dbsp(
             config_val,
             self.circuit.permissions(),
+            self.circuit.link_targets(),
         )
         .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 

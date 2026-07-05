@@ -9,11 +9,35 @@ use nom::{
     IResult,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
+/// Per-table record-link field map: `table -> (field -> target_table)`.
+///
+/// Populated at bootstrap from `INFO FOR TABLE` (`DEFINE FIELD ... TYPE
+/// record<X>` / `option<record<X>>`). Lets the converter lower a multi-hop
+/// link-traversal equality (`assigned_to.owner.id = $auth.id`) into a
+/// `SemiJoin` against the linked table, because the target table name is NOT
+/// derivable from the field name (`assigned_to` links to `connection`). Without
+/// it, such a predicate stays a flat `Filter` whose path can't be dereferenced
+/// across rows, so the view matches zero rows (see `lower_link_traversals`).
+pub type LinkMap = HashMap<String, HashMap<String, String>>;
+
+/// Convert with no link schema (link-traversal predicates stay flat). Kept for
+/// call sites / tests that don't need permission link lowering.
 pub fn convert_surql_to_dbsp(sql: &str) -> Result<Value> {
+    convert_surql_to_dbsp_with_links(sql, &LinkMap::new())
+}
+
+/// Convert `sql` to a DBSP plan, then lower any record-link-traversal equality
+/// predicate (`link.….field = value`) into a `SemiJoin` using `links` to resolve
+/// each link's target table. See [`lower_link_traversals`].
+pub fn convert_surql_to_dbsp_with_links(sql: &str, links: &LinkMap) -> Result<Value> {
     let clean_sql = sql.trim().trim_end_matches(';');
     match parse_full_query(clean_sql) {
-        Ok((_, plan)) => Ok(plan),
+        Ok((_, mut plan)) => {
+            lower_link_traversals(&mut plan, links);
+            Ok(plan)
+        }
         Err(e) => Err(anyhow!("SQL Parsing Error: {}", e)),
     }
 }
@@ -533,6 +557,187 @@ fn semijoin_for_subquery(base: &Value, sub: &Value) -> Value {
     }
 }
 
+/// Post-pass over a converted plan (JSON): rewrite any `Filter{Scan{table}}`
+/// whose predicate compares a *record-link traversal* path (`link.….field`) into
+/// a `SemiJoin` against the linked table, so the cross-row dereference the
+/// `Filter` operator can't do becomes a proper DBSP join.
+///
+/// Why this is needed: the `Filter` operator resolves a field path on a single
+/// row. For `assigned_to.owner.id` on a `job` row, `assigned_to` is a record-ref
+/// string (`connection:…`); the next segment `owner` can't be read off a string,
+/// so the path resolves to NULL and the predicate is always false. Lowering
+/// `assigned_to.owner.id = $auth.id` to
+/// `SemiJoin(Scan{job}, Filter(Scan{connection}, owner.id = $auth.id),
+///          on: assigned_to = id)` makes the deref a join the runtime can do.
+///
+/// A trailing `.id` on a link (`owner.id`) is left flat — `resolve_field` reads
+/// the id straight off the record-ref string, so it needs no join. Only a
+/// genuine cross-table hop (a link segment followed by more than `.id`) is
+/// lowered. The rewrite recurses into its own output, so multi-hop chains
+/// (`a.b.c`, each of `a`,`b` a link) unfold one join per hop.
+fn lower_link_traversals(plan: &mut Value, links: &LinkMap) {
+    if links.is_empty() {
+        return; // no schema → nothing to lower; identical to prior behavior
+    }
+    let op = plan.get("op").and_then(|v| v.as_str()).map(str::to_string);
+    match op.as_deref() {
+        Some("filter") => {
+            if let Some(input) = plan.get_mut("input") {
+                lower_link_traversals(input, links);
+            }
+            let table = plan
+                .get("input")
+                .filter(|i| i.get("op").and_then(|o| o.as_str()) == Some("scan"))
+                .and_then(|i| i.get("table"))
+                .and_then(|t| t.as_str())
+                .map(str::to_string);
+            if let Some(table) = table {
+                if let Some(pred) = plan.get("predicate").cloned() {
+                    if predicate_contains_link_leaf(&pred, &table, links) {
+                        let scan = plan.get("input").cloned().unwrap();
+                        *plan = lower_predicate_to_plan(&scan, &pred, &table, links);
+                        // Recurse into the rewritten plan so deeper hops (a link
+                        // in the inner Filter's WHERE) also unfold.
+                        lower_link_traversals(plan, links);
+                    }
+                }
+            }
+        }
+        Some("scan") | None => {}
+        _ => {
+            for key in ["input", "left", "right"] {
+                if let Some(child) = plan.get_mut(key) {
+                    lower_link_traversals(child, links);
+                }
+            }
+            if let Some(projs) = plan.get_mut("projections").and_then(|p| p.as_array_mut()) {
+                for p in projs {
+                    if let Some(sub) = p.get_mut("plan") {
+                        lower_link_traversals(sub, links);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Lower a WHERE predicate over `scan` (a `Scan{table}`) into a plan, treating
+/// record-link-traversal `eq` leaves like `IN (subquery)` markers. Mirrors
+/// [`lower_where_to_plan`] (OR → Distinct(Union), AND → Filter + SemiJoins) but
+/// additionally converts link leaves via [`link_leaf_to_marker`].
+fn lower_predicate_to_plan(scan: &Value, expr: &Value, table: &str, links: &LinkMap) -> Value {
+    match expr.get("type").and_then(|t| t.as_str()) {
+        Some("or") => {
+            let branches = expr
+                .get("predicates")
+                .and_then(|p| p.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let mut plans = branches.iter().map(|b| lower_predicate_to_plan(scan, b, table, links));
+            let first = plans.next().unwrap_or_else(|| scan.clone());
+            let unioned = plans.fold(first, |acc, p| json!({ "op": "union", "left": acc, "right": p }));
+            json!({ "op": "distinct", "input": unioned })
+        }
+        Some("and") => {
+            let list = expr
+                .get("predicates")
+                .and_then(|p| p.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let (markers, preds): (Vec<Value>, Vec<Value>) =
+                list.into_iter().partition(|p| is_marker_leaf(p, table, links));
+            let mut base = scan.clone();
+            if !preds.is_empty() {
+                let pred = if preds.len() == 1 {
+                    preds[0].clone()
+                } else {
+                    json!({ "type": "and", "predicates": preds })
+                };
+                base = json!({ "op": "filter", "predicate": pred, "input": base });
+            }
+            for m in markers {
+                base = semijoin_for_subquery(&base, &to_marker(&m, table, links));
+            }
+            base
+        }
+        Some("in_subquery") => semijoin_for_subquery(scan, expr),
+        _ if is_link_leaf(expr, table, links) => {
+            semijoin_for_subquery(scan, &link_leaf_to_marker(expr, table, links))
+        }
+        _ => json!({ "op": "filter", "predicate": expr.clone(), "input": scan.clone() }),
+    }
+}
+
+/// True if `expr` (any AND/OR depth) contains a record-link-traversal `eq` leaf.
+fn predicate_contains_link_leaf(expr: &Value, table: &str, links: &LinkMap) -> bool {
+    match expr.get("type").and_then(|t| t.as_str()) {
+        Some("and") | Some("or") => expr
+            .get("predicates")
+            .and_then(|p| p.as_array())
+            .map(|list| list.iter().any(|p| predicate_contains_link_leaf(p, table, links)))
+            .unwrap_or(false),
+        _ => is_link_leaf(expr, table, links),
+    }
+}
+
+/// A leaf that must be threaded as a SemiJoin: an existing `in_subquery` marker
+/// or a record-link-traversal `eq`.
+fn is_marker_leaf(leaf: &Value, table: &str, links: &LinkMap) -> bool {
+    leaf.get("type").and_then(|t| t.as_str()) == Some("in_subquery")
+        || is_link_leaf(leaf, table, links)
+}
+
+fn to_marker(leaf: &Value, table: &str, links: &LinkMap) -> Value {
+    if leaf.get("type").and_then(|t| t.as_str()) == Some("in_subquery") {
+        leaf.clone()
+    } else {
+        link_leaf_to_marker(leaf, table, links)
+    }
+}
+
+/// True iff `leaf` is `<link>.<rest…> = value` where `<link>` is a record link
+/// on `table` and `<rest…>` is more than a bare `id` — i.e. a cross-table hop
+/// the `Filter` operator cannot dereference. `<link>.id` is excluded: the id is
+/// readable off the record-ref string, so it stays a flat filter.
+fn is_link_leaf(leaf: &Value, table: &str, links: &LinkMap) -> bool {
+    if leaf.get("type").and_then(|t| t.as_str()) != Some("eq") {
+        return false;
+    }
+    let Some(field) = leaf.get("field").and_then(|f| f.as_str()) else {
+        return false;
+    };
+    let segs: Vec<&str> = field.split('.').collect();
+    if segs.len() < 2 {
+        return false;
+    }
+    if links.get(table).and_then(|m| m.get(segs[0])).is_none() {
+        return false;
+    }
+    !(segs.len() == 2 && segs[1] == "id")
+}
+
+/// Convert a link-traversal `eq` leaf into an `in_subquery` marker so
+/// [`semijoin_for_subquery`] can lower it: `link.rest = v` on `table` becomes
+/// `link IN (SELECT VALUE id FROM <target> WHERE rest = v)`.
+fn link_leaf_to_marker(leaf: &Value, table: &str, links: &LinkMap) -> Value {
+    let field = leaf.get("field").and_then(|f| f.as_str()).unwrap_or("");
+    let value = leaf.get("value").cloned().unwrap_or(Value::Null);
+    // is_link_leaf guarantees a '.' and a resolvable first-segment link.
+    let (link, rest) = field.split_once('.').unwrap_or((field, "id"));
+    let target = links
+        .get(table)
+        .and_then(|m| m.get(link))
+        .cloned()
+        .unwrap_or_default();
+    json!({
+        "type": "in_subquery",
+        "left": link,
+        "proj": "id",
+        "table": target,
+        "where": { "type": "eq", "field": rest, "value": value },
+    })
+}
+
 fn wrap_conditions(input_op: Value, predicate: Value) -> Value {
     let mut joins = Vec::new();
     let mut filters = Vec::new();
@@ -732,6 +937,77 @@ mod tests {
             }
             _ => panic!("Expected Project operator at top level"),
         }
+    }
+
+    fn link_map(pairs: &[(&str, &str, &str)]) -> LinkMap {
+        let mut m = LinkMap::new();
+        for (table, field, target) in pairs {
+            m.entry(table.to_string())
+                .or_default()
+                .insert(field.to_string(), target.to_string());
+        }
+        m
+    }
+
+    #[test]
+    fn link_traversal_without_map_stays_flat_filter() {
+        // No link map → the record-link traversal stays a flat Filter (the
+        // buggy shape: the Filter can't dereference `assigned_to` across rows).
+        let sql = "SELECT * FROM job WHERE assigned_to.owner.id = $auth.id";
+        let plan = convert_surql_to_dbsp(sql).expect("parse");
+        assert_eq!(plan.get("op").and_then(|v| v.as_str()), Some("filter"));
+        assert_eq!(
+            plan.pointer("/input/op").and_then(|v| v.as_str()),
+            Some("scan"),
+            "flat Filter over Scan"
+        );
+    }
+
+    #[test]
+    fn link_traversal_with_map_lowers_to_semijoin() {
+        // With `job.assigned_to -> connection` the traversal lowers to
+        // SemiJoin(Scan{job}, Filter(Scan{connection}, owner.id = $auth.id),
+        //         on: assigned_to = id).
+        let sql = "SELECT * FROM job WHERE assigned_to.owner.id = $auth.id";
+        let links = link_map(&[("job", "assigned_to", "connection")]);
+        let plan = convert_surql_to_dbsp_with_links(sql, &links).expect("parse");
+
+        assert_eq!(plan.get("op").and_then(|v| v.as_str()), Some("semijoin"));
+        assert_eq!(plan.pointer("/left/op").and_then(|v| v.as_str()), Some("scan"));
+        assert_eq!(plan.pointer("/left/table").and_then(|v| v.as_str()), Some("job"));
+        assert_eq!(plan.pointer("/on/left_field").and_then(|v| v.as_str()), Some("assigned_to"));
+        assert_eq!(plan.pointer("/on/right_field").and_then(|v| v.as_str()), Some("id"));
+        // right = Filter(Scan{connection}, owner.id = $auth.id)
+        assert_eq!(plan.pointer("/right/op").and_then(|v| v.as_str()), Some("filter"));
+        assert_eq!(plan.pointer("/right/input/table").and_then(|v| v.as_str()), Some("connection"));
+    }
+
+    #[test]
+    fn link_traversal_preserves_sibling_conjuncts() {
+        // The real permission: `$access = "account" AND assigned_to.owner.id =
+        // $auth.id`. The flat conjunct stays a Filter on the job scan; the
+        // traversal becomes the SemiJoin on top.
+        let sql = "SELECT * FROM job WHERE $access = \"account\" AND assigned_to.owner.id = $auth.id";
+        let links = link_map(&[("job", "assigned_to", "connection")]);
+        let plan = convert_surql_to_dbsp_with_links(sql, &links).expect("parse");
+
+        assert_eq!(plan.get("op").and_then(|v| v.as_str()), Some("semijoin"));
+        // left = Filter(Scan{job}, $access = "account")
+        assert_eq!(plan.pointer("/left/op").and_then(|v| v.as_str()), Some("filter"));
+        assert_eq!(plan.pointer("/left/input/table").and_then(|v| v.as_str()), Some("job"));
+        assert_eq!(plan.pointer("/left/predicate/type").and_then(|v| v.as_str()), Some("parameq"));
+    }
+
+    #[test]
+    fn single_hop_dot_id_is_not_treated_as_link_traversal() {
+        // `owner.id = $auth.id` is single-hop: resolve_field reads the id off the
+        // record-ref string directly, so it must stay a flat Filter (no join),
+        // even when a link map is present.
+        let sql = "SELECT * FROM connection WHERE owner.id = $auth.id";
+        let links = link_map(&[("connection", "owner", "user")]);
+        let plan = convert_surql_to_dbsp_with_links(sql, &links).expect("parse");
+        assert_eq!(plan.get("op").and_then(|v| v.as_str()), Some("filter"));
+        assert_eq!(plan.pointer("/input/op").and_then(|v| v.as_str()), Some("scan"));
     }
 
     #[test]

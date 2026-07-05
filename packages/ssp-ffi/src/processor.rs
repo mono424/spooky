@@ -135,8 +135,12 @@ impl Processor {
 
     /// Register a new materialized view.
     pub fn register_view(&mut self, config: Value) -> Result<WasmViewUpdate> {
-        let data = ssp::service::view::prepare_registration_dbsp(config, self.circuit.permissions())
-            .map_err(|e| anyhow!("Registration failed: {}", e))?;
+        let data = ssp::service::view::prepare_registration_dbsp(
+            config,
+            self.circuit.permissions(),
+            self.circuit.link_targets(),
+        )
+        .map_err(|e| anyhow!("Registration failed: {}", e))?;
 
         let plan_id = data.plan.id.clone();
         let initial_delta = self

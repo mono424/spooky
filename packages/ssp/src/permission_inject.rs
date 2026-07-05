@@ -38,23 +38,39 @@ enum PermInjection {
 
 /// Walk `plan` and inject each scanned table's permission predicate. Errors
 /// abort registration; partial injection is never visible.
+///
+/// Link-schema-free entry point (permissions with record-link traversals stay
+/// flat). Kept for callers/tests that don't need link lowering.
 pub fn inject_permissions(
     plan: &mut OperatorPlan,
     perms: &HashMap<String, String>,
     params: Option<&Value>,
 ) -> Result<()> {
-    inject_node(plan, perms, params)
+    inject_permissions_with_links(plan, perms, params, &HashMap::new())
+}
+
+/// As [`inject_permissions`], but resolves record-link target tables via `links`
+/// so a permission like `assigned_to.owner.id = $auth.id` lowers to a `SemiJoin`
+/// instead of an unevaluable flat `Filter`. See [`crate::converter::LinkMap`].
+pub fn inject_permissions_with_links(
+    plan: &mut OperatorPlan,
+    perms: &HashMap<String, String>,
+    params: Option<&Value>,
+    links: &HashMap<String, HashMap<String, String>>,
+) -> Result<()> {
+    inject_node(plan, perms, params, links)
 }
 
 fn inject_node(
     plan: &mut OperatorPlan,
     perms: &HashMap<String, String>,
     params: Option<&Value>,
+    links: &HashMap<String, HashMap<String, String>>,
 ) -> Result<()> {
     match plan {
         OperatorPlan::Scan { table } => {
             let table_name = table.clone();
-            let Some(injected) = build_injection(&table_name, perms, params)? else {
+            let Some(injected) = build_injection(&table_name, perms, params, links)? else {
                 return Ok(());
             };
             let scan = OperatorPlan::Scan { table: table_name };
@@ -69,7 +85,7 @@ fn inject_node(
         OperatorPlan::Filter { input, predicate } => {
             if let OperatorPlan::Scan { table } = input.as_ref() {
                 let table_name = table.clone();
-                let Some(injected) = build_injection(&table_name, perms, params)? else {
+                let Some(injected) = build_injection(&table_name, perms, params, links)? else {
                     return Ok(());
                 };
                 match injected {
@@ -86,25 +102,25 @@ fn inject_node(
                 }
                 return Ok(());
             }
-            inject_node(input, perms, params)?;
+            inject_node(input, perms, params, links)?;
         }
         OperatorPlan::Join { left, right, .. }
         | OperatorPlan::SemiJoin { left, right, .. }
         | OperatorPlan::AntiJoin { left, right, .. }
         | OperatorPlan::Union { left, right } => {
-            inject_node(left, perms, params)?;
-            inject_node(right, perms, params)?;
+            inject_node(left, perms, params, links)?;
+            inject_node(right, perms, params, links)?;
         }
         OperatorPlan::Project { input, projections } => {
-            inject_node(input, perms, params)?;
+            inject_node(input, perms, params, links)?;
             for proj in projections.iter_mut() {
                 if let Projection::Subquery { plan, .. } = proj {
-                    inject_node(plan, perms, params)?;
+                    inject_node(plan, perms, params, links)?;
                 }
             }
         }
         OperatorPlan::Limit { input, .. } | OperatorPlan::Distinct { input } => {
-            inject_node(input, perms, params)?;
+            inject_node(input, perms, params, links)?;
         }
     }
     Ok(())
@@ -132,6 +148,7 @@ fn build_injection(
     table: &str,
     perms: &HashMap<String, String>,
     params: Option<&Value>,
+    links: &HashMap<String, HashMap<String, String>>,
 ) -> Result<Option<PermInjection>> {
     let raw = match perms.get(table) {
         Some(t) => t.trim(),
@@ -165,7 +182,7 @@ fn build_injection(
     }
 
     let synthetic = format!("SELECT * FROM {table} WHERE {raw}");
-    let plan_val = converter::convert_surql_to_dbsp(&synthetic)
+    let plan_val = converter::convert_surql_to_dbsp_with_links(&synthetic, links)
         .map_err(|e| anyhow!("permission for `{table}` failed to parse: {e}"))?;
 
     let parsed: OperatorPlan = serde_json::from_value(plan_val).map_err(|e| {
@@ -251,6 +268,70 @@ mod tests {
 
     fn perms_with(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs.iter().map(|(t, p)| (t.to_string(), p.to_string())).collect()
+    }
+
+    fn links_with(pairs: &[(&str, &str, &str)]) -> HashMap<String, HashMap<String, String>> {
+        let mut m: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for (t, f, target) in pairs {
+            m.entry(t.to_string()).or_default().insert(f.to_string(), target.to_string());
+        }
+        m
+    }
+
+    /// An outbox permission that traverses a record link
+    /// (`assigned_to.owner.id = $auth.id`) must inject as a SemiJoin
+    /// composition (via the link map), not a flat unevaluable Filter.
+    #[test]
+    fn link_traversal_permission_injects_semijoin() {
+        // User view: SELECT * FROM job WHERE assigned_to = $assigned_to
+        let mut plan = OperatorPlan::Filter {
+            input: Box::new(OperatorPlan::Scan { table: "job".into() }),
+            predicate: Predicate::Eq {
+                field: Path::new("assigned_to"),
+                value: json!({ "$param": "assigned_to" }),
+            },
+        };
+        let perms = perms_with(&[("job", "$access = \"account\" AND assigned_to.owner.id = $auth.id")]);
+        let links = links_with(&[("job", "assigned_to", "connection")]);
+        let params = json!({ "auth": { "id": "user:u1" }, "access": "account", "assigned_to": "connection:c1" });
+
+        inject_permissions_with_links(&mut plan, &perms, Some(&params), &links).unwrap();
+
+        // Root is the id=id intersection wrapper: SemiJoin(view, perm).
+        match plan {
+            OperatorPlan::SemiJoin { left, right, on } => {
+                assert!(matches!(*left, OperatorPlan::Filter { .. }), "view filter kept as left");
+                assert_eq!(on.left_field.segments(), &["id".to_string()]);
+                assert_eq!(on.right_field.segments(), &["id".to_string()]);
+                // right = permission SemiJoin(Filter(Scan{job}, $access), Filter(Scan{connection}), on assigned_to=id)
+                match *right {
+                    OperatorPlan::SemiJoin { right: perm_right, on: perm_on, .. } => {
+                        assert_eq!(perm_on.left_field.segments(), &["assigned_to".to_string()]);
+                        assert_eq!(perm_on.right_field.segments(), &["id".to_string()]);
+                        match *perm_right {
+                            OperatorPlan::Filter { input, .. } => {
+                                assert!(matches!(*input, OperatorPlan::Scan { table } if table == "connection"));
+                            }
+                            other => panic!("expected Filter(Scan connection), got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected permission SemiJoin, got {other:?}"),
+                }
+            }
+            other => panic!("expected SemiJoin at root, got {other:?}"),
+        }
+    }
+
+    /// Without a link map (or for an unmapped link) the same permission stays a
+    /// flat Filter — the pre-fix behavior that drops every row.
+    #[test]
+    fn link_traversal_permission_without_map_stays_flat() {
+        let mut plan = OperatorPlan::Scan { table: "job".into() };
+        let perms = perms_with(&[("job", "$access = \"account\" AND assigned_to.owner.id = $auth.id")]);
+        let params = json!({ "auth": { "id": "user:u1" }, "access": "account" });
+
+        inject_permissions(&mut plan, &perms, Some(&params)).unwrap();
+        assert!(matches!(plan, OperatorPlan::Filter { .. }), "no link map → flat Filter");
     }
 
     #[test]

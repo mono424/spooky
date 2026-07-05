@@ -97,6 +97,12 @@ pub struct Circuit {
     /// permission through the same converter that handles user queries and
     /// AND-folds the result into the scan's filter.
     permissions: HashMap<String, String>,
+    /// Per-table record-link field map: `table -> (field -> target_table)`,
+    /// loaded from `INFO FOR TABLE` at boot (`DEFINE FIELD ... TYPE record<X>`).
+    /// Lets the converter lower a link-traversal permission
+    /// (`assigned_to.owner.id = $auth.id`) into a `SemiJoin` — the target table
+    /// isn't derivable from the field name. See `converter::LinkMap`.
+    link_targets: HashMap<String, HashMap<String, String>>,
 }
 
 /// Compute the full set of subquery records visible through the current view.
@@ -279,6 +285,7 @@ impl Circuit {
             views: HashMap::new(),
             dependency_map: HashMap::new(),
             permissions: HashMap::new(),
+            link_targets: HashMap::new(),
         }
     }
 
@@ -291,6 +298,26 @@ impl Circuit {
     /// Called once per table at boot time after `INFO FOR DB` is parsed.
     pub fn set_permission(&mut self, table: impl Into<String>, where_text: impl Into<String>) {
         self.permissions.insert(table.into(), where_text.into());
+    }
+
+    /// Read-only access to the per-table record-link field map (for lowering
+    /// link-traversal permission predicates to semi-joins).
+    pub fn link_targets(&self) -> &HashMap<String, HashMap<String, String>> {
+        &self.link_targets
+    }
+
+    /// Register that `table.field` is a record link to `target` table. Called
+    /// once per record-typed field at boot time after `INFO FOR TABLE` is parsed.
+    pub fn set_link_target(
+        &mut self,
+        table: impl Into<String>,
+        field: impl Into<String>,
+        target: impl Into<String>,
+    ) {
+        self.link_targets
+            .entry(table.into())
+            .or_default()
+            .insert(field.into(), target.into());
     }
 
     /// Bulk-load initial data into base collections.
@@ -826,6 +853,9 @@ impl Circuit {
             views: HashMap::new(),
             dependency_map: HashMap::new(),
             permissions: HashMap::new(),
+            // Re-seeded from INFO FOR DB / INFO FOR TABLE after restore, same as
+            // `permissions` (neither is part of the serialized snapshot).
+            link_targets: HashMap::new(),
         };
 
         for qs in state.queries {

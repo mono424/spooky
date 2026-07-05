@@ -141,8 +141,12 @@ impl TestHarness {
         let payload = view_payload(id, surql);
         let data = {
             let circuit = self.processor.read().await;
-            ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions())
-                .expect("Failed to prepare view registration")
+            ssp::service::view::prepare_registration_dbsp(
+                payload,
+                circuit.permissions(),
+                circuit.link_targets(),
+            )
+            .expect("Failed to prepare view registration")
         };
         let mut circuit = self.processor.write().await;
         circuit.add_query(data.plan, data.safe_params, Some(OutputFormat::Streaming));
@@ -1035,8 +1039,12 @@ mod permission_register_tests {
         );
         let data = {
             let circuit = h.processor.read().await;
-            ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions())
-                .expect("registration with valid permission must succeed")
+            ssp::service::view::prepare_registration_dbsp(
+                payload,
+                circuit.permissions(),
+                circuit.link_targets(),
+            )
+            .expect("registration with valid permission must succeed")
         };
         {
             let mut circuit = h.processor.write().await;
@@ -1099,8 +1107,11 @@ mod permission_register_tests {
             "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread",
         );
         let circuit = h.processor.read().await;
-        let result =
-            ssp::service::view::prepare_registration_dbsp(payload, circuit.permissions());
+        let result = ssp::service::view::prepare_registration_dbsp(
+            payload,
+            circuit.permissions(),
+            circuit.link_targets(),
+        );
         let err = match result {
             Ok(_) => panic!("expected Err, got Ok"),
             Err(e) => e,
