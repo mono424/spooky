@@ -1754,7 +1754,7 @@ fn deploy_static_frontend_cloudflare(
     Ok(())
 }
 
-pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
+pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
     // Guided flow: ensure login → project → billing before expensive work
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
@@ -1780,6 +1780,41 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
     let config = backend::load_config(&config_path);
     config.validate()?;
 
+    // --only: restrict this deploy to a subset of apps. The selected apps are
+    // built/uploaded and sent with `partial: true`; the control plane merges them
+    // over the previous deployment so every other running service is left alone.
+    // Validate names up-front against the deployable apps in sp00ky.yml.
+    let only_filter: Option<std::collections::HashSet<String>> = if only.is_empty() {
+        None
+    } else {
+        let mut valid: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (n, _) in config.backends() {
+            valid.insert(n.to_string());
+        }
+        for (n, _) in config.docker_apps() {
+            valid.insert(n.to_string());
+        }
+        if let Some((n, _)) = config.frontend() {
+            valid.insert(n.to_string());
+        }
+        let unknown: Vec<String> = only
+            .iter()
+            .filter(|n| !valid.contains(n.as_str()))
+            .cloned()
+            .collect();
+        if !unknown.is_empty() {
+            let mut names: Vec<String> = valid.into_iter().collect();
+            names.sort();
+            bail!(
+                "--only: unknown app(s): {}. Valid apps: {}",
+                unknown.join(", "),
+                names.join(", ")
+            );
+        }
+        Some(only.iter().cloned().collect())
+    };
+    let is_partial = only_filter.is_some();
+
     let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
     let mut backend_manifests: Vec<serde_json::Value> = Vec::new();
     let mut external_backends: Vec<serde_json::Value> = Vec::new();
@@ -1802,6 +1837,13 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                 "base_url": app_config.base_url,
             }));
             continue;
+        }
+        // --only: skip building backends not in the selected subset.
+        if let Some(ref f) = only_filter {
+            if !f.contains(name) {
+                println!("  Skipping backend '{}' (not in --only)", name);
+                continue;
+            }
         }
 
         let deploy = match &app_config.deploy {
@@ -2028,6 +2070,13 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         if !app_config.deploys() {
             println!("  Skipping devOnly docker app '{}' (local dev only)", name);
             continue;
+        }
+        // --only: skip docker apps not in the selected subset.
+        if let Some(ref f) = only_filter {
+            if !f.contains(name) {
+                println!("  Skipping docker app '{}' (not in --only)", name);
+                continue;
+            }
         }
         let image_ref = app_config
             .image
@@ -2314,7 +2363,18 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
 
     // Build and upload frontend if configured
     let mut frontend_manifest: Option<serde_json::Value> = None;
-    if let Some((frontend_name, frontend_app)) = config.frontend() {
+    let frontend_selected = config
+        .frontend()
+        .map(|(n, _)| only_filter.as_ref().map_or(true, |f| f.contains(n)))
+        .unwrap_or(false);
+    if !frontend_selected {
+        if let Some((n, _)) = config.frontend() {
+            if only_filter.is_some() {
+                println!("  Skipping frontend '{}' (not in --only)", n);
+            }
+        }
+    }
+    if let Some((frontend_name, frontend_app)) = config.frontend().filter(|_| frontend_selected) {
         if platform == "cloudflare" {
         // Free plan: static SPA on Cloudflare Workers Static Assets. Bake the
         // external SurrealDB endpoint the SPA connects to directly. No manifest —
@@ -2594,6 +2654,9 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         "upgrade_infra": upgrade,
         "clean": clean,
         "ssp_job_config": ssp_job_config,
+        // Partial deploy: control plane merges these apps over the previous
+        // deployment instead of treating them as the complete desired set.
+        "partial": is_partial,
     });
 
     println!("PAYLOAD: {}", deploy_body);

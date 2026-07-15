@@ -20,6 +20,7 @@ import {
   type BackendInfo,
   emptyBackendInfo,
   parseBackendInfo,
+  UNAVAILABLE,
 } from './versions';
 
 // Real bundled frontend versions, injected at build time by tsdown's
@@ -82,9 +83,17 @@ export class DevToolsService implements StreamUpdateReceiver {
       });
     }
 
-    // Subscribe to auth events
+    // Subscribe to auth events. The initial fire-and-forget version fetch (below)
+    // races the remote connection; on the free plan the remote DB (SurrealDB
+    // Cloud) has no guest access, so `fn::spooky::info()` is only callable once
+    // signed in. Re-fetch when auth resolves — until the versions actually land —
+    // instead of leaving them 'unavailable' forever.
     this.authService.eventSystem.subscribe(AuthEventTypes.AuthStateChanged, () => {
-      this.notifyDevTools();
+      if (this.authService.isAuthenticated && this.backendInfo.versions.ssp === UNAVAILABLE) {
+        void this.refreshBackendVersions();
+      } else {
+        this.notifyDevTools();
+      }
     });
 
     // Fire-and-forget backend version discovery; re-push state when it lands.

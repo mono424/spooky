@@ -164,6 +164,11 @@ enum Commands {
         /// SurrealDB data.
         #[arg(long)]
         clean: bool,
+        /// Deploy only a subset of apps (comma-separated names from sp00ky.yml,
+        /// e.g. `--only api,web`). Builds/uploads just those apps; every other
+        /// running service is left untouched. Omit to deploy everything.
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
     },
     /// Show deployment status
     Status,
@@ -2672,7 +2677,11 @@ fn main() -> Result<()> {
         },
 
         // ── Deploy & operate (current project) ─────────────────────────────
-        Some(Commands::Deploy { upgrade, clean }) => cloud::deploy(upgrade, clean),
+        Some(Commands::Deploy {
+            upgrade,
+            clean,
+            only,
+        }) => cloud::deploy(upgrade, clean, only),
         Some(Commands::Status) => cloud::status(),
         Some(Commands::Logs {
             filter,

@@ -4,8 +4,37 @@ import wasm from 'vite-plugin-wasm';
 import topLevelAwait from 'vite-plugin-top-level-await';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
+import { createRequire } from 'module';
+
+// This app resolves @spooky-sync/core from SOURCE (see resolve.alias below), so
+// core's own tsdown `define` for these version globals never runs. Bake them
+// here too — otherwise the DevTools/version panel reports 'unknown'. Mirrors
+// packages/core/tsdown.config.ts.
+const require = createRequire(import.meta.url);
+const coreVersion: string = require('../../packages/core/package.json').version;
+let wasmVersion = coreVersion;
+try {
+  wasmVersion = require('@spooky-sync/ssp-wasm/package.json').version;
+} catch {
+  try {
+    wasmVersion = require('../../packages/ssp-wasm/package.json').version;
+  } catch {
+    /* keep fallback */
+  }
+}
+let surrealVersion = 'unknown';
+try {
+  surrealVersion = require('@surrealdb/wasm/package.json').version;
+} catch {
+  /* keep fallback */
+}
 
 export default defineConfig({
+  define: {
+    __SP00KY_CORE_VERSION__: JSON.stringify(coreVersion),
+    __SP00KY_WASM_VERSION__: JSON.stringify(wasmVersion),
+    __SP00KY_SURREAL_VERSION__: JSON.stringify(surrealVersion),
+  },
   plugins: [
     solid(),
     wasm(),
