@@ -474,8 +474,9 @@ SPKY_SSP_LISTEN_ADDR=0.0.0.0:8667
 # token, which is intended for dev only.
 SPKY_AUTH_SECRET=your-secret-token
 
-# Database connection (WebSocket URL)
-SPKY_DB_WS=ws://127.0.0.1:8000
+# Database connection (HTTP engine; ws:// values are accepted and normalized).
+# SPKY_DB_WS is read as a legacy fallback.
+SPKY_DB_URL=http://127.0.0.1:8000
 SPKY_DB_USER=root
 SPKY_DB_PASS=root
 SPKY_DB_NS=main
@@ -538,6 +539,40 @@ When `SPKY_SCHEDULER_URL` is not set:
 - No registration or heartbeat
 - Direct client connections only
 - Useful for development and single-SSP deployments
+- The SSP owns the full maintenance plane the scheduler provides in
+  cluster mode (see below)
+
+#### Standalone Maintenance Plane
+
+A standalone SSP exposes the same backup/restore and backend-health
+surface the scheduler serves on port 9667 in cluster mode:
+
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/backup/create` | POST | Enqueue a backup (`{backup_id, project_slug}`) — exports the main SurrealDB, gzips, uploads to S3 (`S3_*` env vars) |
+| `/backup/status` | GET | Recent backup jobs + S3 reachability |
+| `/backup/status/:backup_id` | GET | Single backup job status |
+| `/backup/restore` | POST | Enqueue a restore (`{restore_id?, backup_id, project_slug, storage_path}`) |
+| `/backup/restore/status/:restore_id` | GET | Single restore job status |
+| `/backends` | PUT | Replace the backend health-check list at runtime (JSON array; same shape as `SPKY_BACKENDS`) |
+
+Unlike the scheduler's (unauthenticated) equivalents, these routes sit
+behind the SSP's bearer auth — callers must send
+`Authorization: Bearer $SPKY_AUTH_SECRET`.
+
+During a restore the SSP transitions `Ready → Bootstrapping`: `/ingest`
+returns 503 and events pushed by SurrealDB `DEFINE EVENT` triggers in
+that window are rejected and **not** replayed — after the restore the
+state is exactly the imported dump, and the circuit is re-bootstrapped
+from it. If the circuit re-bootstrap fails after the main DB was
+already replaced, the SSP stays `Bootstrapping` (blocking traffic); a
+process restart reruns the normal startup bootstrap and self-heals.
+
+With a backend list configured (`SPKY_BACKENDS`, or legacy
+`SPKY_SCHEDULER_BACKENDS`; poll interval
+`SPKY_HEALTH_CHECK_INTERVAL_SECS`, default 15s), `GET /health` mirrors
+the scheduler's aggregation — `healthy` / `degraded` / `unavailable`
+plus per-status backend counts.
 
 ### Scheduler Mode
 

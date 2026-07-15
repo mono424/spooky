@@ -19,9 +19,9 @@ ingest_port: 9667
 ```
 
 A subset of fields can also be overridden with `SPKY_*` env vars
-(`SPKY_DB_WS`, `SPKY_DB_NS`, `SPKY_DB_NAME`, `SPKY_DB_USER`,
+(`SPKY_DB_URL` (or legacy `SPKY_DB_WS`), `SPKY_DB_NS`, `SPKY_DB_NAME`, `SPKY_DB_USER`,
 `SPKY_DB_PASS`, `SPKY_SCHEDULER_ID`,
-`SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS`, `SPKY_SCHEDULER_BACKENDS`).
+`SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS`, `SPKY_BACKENDS` (or legacy `SPKY_SCHEDULER_BACKENDS`)).
 The bind host/port are YAML-only.
 
 ## Authentication
@@ -512,13 +512,13 @@ job_tables:
 **Environment Variables (overrides for YAML fields):**
 
 - `SPKY_SCHEDULER_ID` - Unique scheduler identifier (defaults to `scheduler-<uuid>`)
-- `SPKY_DB_WS` - SurrealDB WebSocket URL (overrides `db.url`)
+- `SPKY_DB_URL` - SurrealDB URL (overrides `db.url`; HTTP engine — `ws://` values are accepted and normalized). `SPKY_DB_WS` is read as a legacy fallback.
 - `SPKY_DB_NS` - SurrealDB namespace (overrides `db.namespace`)
 - `SPKY_DB_NAME` - SurrealDB database (overrides `db.database`)
 - `SPKY_DB_USER` - SurrealDB username (overrides `db.username`)
 - `SPKY_DB_PASS` - SurrealDB password (overrides `db.password`)
 - `SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS` - Override for `snapshot_update_interval_secs` (default: `300`)
-- `SPKY_SCHEDULER_BACKENDS` - JSON-encoded backend list (job-runner configuration)
+- `SPKY_BACKENDS` - JSON-encoded backend health-check list (`SPKY_SCHEDULER_BACKENDS` accepted as legacy fallback)
 - `SPKY_BOOTSTRAP_PAGE_SIZE` - Rows read per bootstrap page from the replica (default: `500`)
 - `SPKY_AUTH_SECRET` - Optional shared secret; when set, SSP clients are required to send `Authorization: Bearer <secret>` on `/proxy/*`
 

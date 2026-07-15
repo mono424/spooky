@@ -943,6 +943,41 @@ impl Circuit {
             .collect()
     }
 
+    /// Whether a record is currently present in the store. Used by catch-up to
+    /// pick `Create` (new membership) vs `Update` (content-only) when replaying
+    /// post-snapshot rows through [`Self::step`].
+    pub fn contains(&self, table: &str, id: &str) -> bool {
+        self.store
+            .collections
+            .get(table)
+            .map(|c| c.get_row(id).is_some())
+            .unwrap_or(false)
+    }
+
+    /// Highest `_00_rv` currently folded into each table's rows (`-1` when a
+    /// table has no versioned row). This is the resume-point a `CircuitStore`
+    /// snapshot carries: on a warm restart, catch-up loads only rows whose
+    /// `_00_rv` exceeds the per-table value here (see `bootstrap::catch_up_from_db`).
+    pub fn max_row_versions(&self) -> BTreeMap<String, i64> {
+        self.store
+            .collections
+            .iter()
+            .map(|(name, coll)| {
+                let max = coll
+                    .rows
+                    .values()
+                    .filter_map(|v| {
+                        serde_json::Value::from(v.clone())
+                            .get("_00_rv")
+                            .and_then(|r| r.as_i64())
+                    })
+                    .max()
+                    .unwrap_or(-1);
+                (name.clone(), max)
+            })
+            .collect()
+    }
+
     /// Per-table incremental XOR set-hashes (the `catchup_xor` accumulators),
     /// formatted `x3:`. Compared against the scheduler's reconstructed hash at
     /// the catch-up cut to verify a rejoining SSP — see the scheduler's
@@ -973,6 +1008,23 @@ impl Circuit {
     /// Dependency map: table → [query_ids] for debugging.
     pub fn dependency_map_dump(&self) -> &HashMap<String, Vec<String>> {
         &self.dependency_map
+    }
+
+    /// Dump a table's circuit rows as `(raw_id, json)` pairs — the exact values
+    /// that feed the catch-up XOR set-hash. The scheduler pulls this on a
+    /// persistent catch-up mismatch (`/debug/catchup-rows/:table`) to diff its
+    /// reconstructed projection row-by-row against the circuit, so an operator
+    /// can see the specific diverging (or missing/extra) row instead of guessing
+    /// from a one-sided hash. Returns an empty vec for an unknown table.
+    pub fn dump_table_rows(&self, table: &str) -> Vec<(String, serde_json::Value)> {
+        match self.store.collections.get(table) {
+            Some(coll) => coll
+                .rows
+                .iter()
+                .map(|(id, val)| (id.clone(), serde_json::Value::from(val.clone())))
+                .collect(),
+            None => Vec::new(),
+        }
     }
 }
 

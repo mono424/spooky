@@ -1183,6 +1183,34 @@ fn load_vault_envs_for_deploy(client: &mut CloudClient, pid: &str, prod: bool) -
     result
 }
 
+/// Load the decrypted vault vars for an environment into a key→value map.
+fn load_vault_map_for_deploy(
+    client: &mut CloudClient,
+    pid: &str,
+    prod: bool,
+) -> std::collections::HashMap<String, String> {
+    load_vault_envs_for_deploy(client, pid, prod)
+        .into_iter()
+        .filter_map(|e| e.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+        .collect()
+}
+
+/// Resolve a `SecretValue` (literal or `{ vault: KEY }`) against a loaded vault
+/// map. Errors when a referenced vault key is absent.
+fn resolve_secret_value(
+    value: &backend::SecretValue,
+    vault: &std::collections::HashMap<String, String>,
+) -> Result<String> {
+    match value {
+        backend::SecretValue::Literal(s) => Ok(s.clone()),
+        backend::SecretValue::Vault { vault: key } => vault.get(key).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "SurrealDB credential references vault key '{key}', which is not present in the vault (set it with `spky env set {key} ...`, and enable CI access if deploying on push)"
+            )
+        }),
+    }
+}
+
 /// Resolve a single EnvSource into "KEY=VAL" strings for cloud deploy.
 fn resolve_deploy_env_source(
     source: &backend::EnvSource,
@@ -1613,12 +1641,135 @@ fn build_frontend_manifest(
     })
 }
 
+/// Free/Cloudflare frontend: build the SPA and upload its static output dir to
+/// the control plane (`PUT /frontend-assets`), which publishes it via Cloudflare
+/// Workers Static Assets. No Docker image — the SPA talks directly to SurrealDB
+/// via the baked `VITE_DB_ENDPOINT`.
+fn deploy_static_frontend_cloudflare(
+    client: &CloudClient,
+    pid: &str,
+    slug: &str,
+    frontend_name: &str,
+    frontend_app: &backend::AppConfig,
+    config_dir: &std::path::Path,
+    db_endpoint: Option<&str>,
+    db_ns: Option<&str>,
+    db_db: Option<&str>,
+) -> Result<()> {
+    let deploy = frontend_app
+        .deploy
+        .as_ref()
+        .context("Frontend app is missing 'deploy' configuration")?;
+    let static_cfg = deploy.static_site.as_ref().context(
+        "Free-plan frontend needs a 'deploy.static' block ({ build, dir }). \
+         Add it under the web app in sp00ky.yml.",
+    )?;
+
+    let app_dir = match &deploy.context {
+        Some(ctx) => config_dir.join(ctx),
+        None => config_dir.to_path_buf(),
+    };
+
+    if let Some(build) = &static_cfg.build {
+        println!("  Building static frontend ('{}'): {}", frontend_name, build);
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c").arg(build).current_dir(&app_dir);
+        if let Some(ep) = db_endpoint {
+            cmd.env("VITE_DB_ENDPOINT", ep);
+            println!("  DB endpoint: {}", ep);
+        }
+        if let Some(ns) = db_ns {
+            cmd.env("VITE_DB_NS", ns);
+        }
+        if let Some(db) = db_db {
+            cmd.env("VITE_DB_DB", db);
+        }
+        if db_ns.is_some() || db_db.is_some() {
+            println!("  DB ns/db: {}/{}", db_ns.unwrap_or("-"), db_db.unwrap_or("-"));
+        }
+        let status = cmd
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status()
+            .context("Failed to run static frontend build")?;
+        if !status.success() {
+            bail!("Static frontend build failed");
+        }
+    }
+
+    let dist_dir = app_dir.join(&static_cfg.dir);
+    if !dist_dir.is_dir() {
+        bail!(
+            "Static output dir not found: {} (set deploy.static.dir)",
+            dist_dir.display()
+        );
+    }
+
+    // gzip'd tar of the built dir contents (files at the archive root).
+    let tmp_tar = std::env::temp_dir().join(format!("sp00ky-{}-web.tar.gz", slug));
+    let _ = fs::remove_file(&tmp_tar);
+    let tar_status = std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(&tmp_tar)
+        .arg("-C")
+        .arg(&dist_dir)
+        .arg(".")
+        .status()
+        .context("Failed to tar static frontend")?;
+    if !tar_status.success() {
+        bail!("Failed to archive static frontend dir");
+    }
+
+    let data = fs::read(&tmp_tar).context("Failed to read static frontend archive")?;
+    let total = data.len();
+    println!(
+        "  Uploading static frontend ({:.1}KB)...",
+        total as f64 / 1024.0
+    );
+    let url = format!(
+        "{}/v1/projects/{}/frontend-assets",
+        upload_base_url(&client.base_url),
+        pid
+    );
+    let progress = ProgressReader::new(&data, total, "  Uploading frontend");
+    match ureq::put(&url)
+        .set("Authorization", &format!("Bearer {}", client.token))
+        .set("Content-Type", "application/gzip")
+        .set("Content-Length", &total.to_string())
+        .send(progress)
+    {
+        Ok(_) => println!(),
+        Err(ureq::Error::Status(code, resp)) => {
+            println!();
+            let body = resp.into_string().unwrap_or_default();
+            bail!("Frontend asset upload failed (HTTP {}): {}", code, body);
+        }
+        Err(ureq::Error::Transport(t)) => {
+            println!();
+            bail!("Frontend asset upload failed: {}", t);
+        }
+    }
+    let _ = fs::remove_file(&tmp_tar);
+    println!("  Static frontend uploaded — will publish on Cloudflare.");
+    Ok(())
+}
+
 pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
     // Guided flow: ensure login → project → billing before expensive work
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
     let (slug, project) = ensure_project(&mut client)?;
     let pid = project_id(&project);
+    let mut platform = project
+        .get("platform")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // The free plan always runs on Cloudflare — derive it if the API omitted the
+    // platform (older responses), so the static-frontend path is taken.
+    if platform.is_empty() && project.get("plan").and_then(|v| v.as_str()) == Some("free") {
+        platform = "cloudflare".to_string();
+    }
     ensure_billing_active(&mut client, &slug, &project)?;
 
     println!();
@@ -1950,6 +2101,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                             timeout: None,
                             timeout_overridable: None,
                             cmd: None,
+                            static_site: None,
                         });
                     backend_manifests.push(build_backend_manifest(
                         name,
@@ -2073,6 +2225,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
                 timeout: None,
                 timeout_overridable: None,
                 cmd: None,
+                static_site: None,
             });
         backend_manifests.push(build_backend_manifest(
             name,
@@ -2096,14 +2249,45 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
             "namespace": resolved_surreal.namespace,
             "database": resolved_surreal.database,
         }),
-        HostingMode::External => serde_json::json!({
-            "hosting": "external",
-            "endpoint": resolved_surreal.endpoint,
-            "namespace": resolved_surreal.namespace,
-            "database": resolved_surreal.database,
-            "username": resolved_surreal.username,
-            "password": resolved_surreal.password,
-        }),
+        HostingMode::External => {
+            use base64::Engine as _;
+            // Resolve credentials — each is a literal or a `{ vault: KEY }`
+            // reference — against the decrypted prod vault. Load the vault only
+            // when at least one field actually references it.
+            let needs_vault = resolved_surreal.username.vault_key().is_some()
+                || resolved_surreal.password.vault_key().is_some()
+                || resolved_surreal
+                    .endpoint
+                    .as_ref()
+                    .and_then(|e| e.vault_key())
+                    .is_some();
+            let vault = if needs_vault {
+                load_vault_map_for_deploy(&mut client, &pid, true)
+            } else {
+                std::collections::HashMap::new()
+            };
+            let endpoint = match &resolved_surreal.endpoint {
+                Some(v) => Some(resolve_secret_value(v, &vault)?),
+                None => None,
+            };
+            let username = resolve_secret_value(&resolved_surreal.username, &vault)?;
+            let password = resolve_secret_value(&resolved_surreal.password, &vault)?;
+            // Free/Cloudflare: the SSP Worker talks to the DB over HTTP-RPC and
+            // needs a ready Authorization header value. Send `auth` = Basic
+            // creds; the control plane stores it as surrealdb_auth.
+            let auth = format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD
+                    .encode(format!("{username}:{password}"))
+            );
+            serde_json::json!({
+                "hosting": "external",
+                "endpoint": endpoint,
+                "namespace": resolved_surreal.namespace,
+                "database": resolved_surreal.database,
+                "auth": auth,
+            })
+        }
     };
     // Attach persistent bucket-storage provisioning when configured. The
     // spooky-cloud control plane (Go repo ~/dev/spooky-cloud) must read this,
@@ -2131,6 +2315,34 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
     // Build and upload frontend if configured
     let mut frontend_manifest: Option<serde_json::Value> = None;
     if let Some((frontend_name, frontend_app)) = config.frontend() {
+        if platform == "cloudflare" {
+        // Free plan: static SPA on Cloudflare Workers Static Assets. Bake the
+        // external SurrealDB endpoint the SPA connects to directly. No manifest —
+        // the control plane's free deploy path publishes the uploaded assets.
+        let db_endpoint = surrealdb_manifest
+            .get("endpoint")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let db_ns = surrealdb_manifest
+            .get("namespace")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let db_db = surrealdb_manifest
+            .get("database")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        deploy_static_frontend_cloudflare(
+            &client,
+            &pid,
+            &slug,
+            frontend_name,
+            frontend_app,
+            config_dir,
+            db_endpoint.as_deref(),
+            db_ns.as_deref(),
+            db_db.as_deref(),
+        )?;
+        } else {
         let frontend_deploy = frontend_app
             .deploy
             .as_ref()
@@ -2335,6 +2547,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
 
             println!("  Frontend ready for deployment.");
         } // end else (frontend changed)
+        } // end else (non-cloudflare docker frontend)
     }
 
     let ssp_count = config.deployment.as_ref().and_then(|d| d.ssp_count);
@@ -2349,6 +2562,28 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         .as_ref()
         .and_then(|c| c.resolved(DeployEnv::Cloud));
 
+    // Free (Cloudflare): assemble SPKY_JOB_CONFIG from outbox backends so the
+    // SSP Worker can dispatch jobs to the (self-hosted) backends. base_url must
+    // be a public URL the Worker can reach; backends without one are skipped.
+    let mut ssp_job_config = serde_json::Value::Null;
+    if platform == "cloudflare" {
+        let mut entries: Vec<serde_json::Value> = Vec::new();
+        for (name, app) in config.backends() {
+            let Some(m) = &app.method else { continue };
+            if !matches!(m.method_type, crate::backend::MethodType::Outbox) {
+                continue;
+            }
+            if let (Some(table), Some(base_url)) = (m.table.as_ref(), app.base_url.as_ref()) {
+                entries.push(serde_json::json!({
+                    "name": name,
+                    "base_url": base_url,
+                    "table": table,
+                }));
+            }
+        }
+        ssp_job_config = serde_json::json!(entries);
+    }
+
     let deploy_body = serde_json::json!({
         "surrealdb": surrealdb_manifest,
         "backends": backend_manifests,
@@ -2358,6 +2593,7 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
         "log_level": cloud_log_level,
         "upgrade_infra": upgrade,
         "clean": clean,
+        "ssp_job_config": ssp_job_config,
     });
 
     println!("PAYLOAD: {}", deploy_body);
@@ -2554,6 +2790,17 @@ pub fn deploy(upgrade: bool, clean: bool) -> Result<()> {
             bail!("Deployment failed: {}", detail);
         }
         _ => bail!("Deployment ended unexpectedly (status: {})", phase1_status),
+    }
+
+    // Free (Cloudflare) projects have no CLI migrate phase — the schema is
+    // applied out-of-band via the control-plane proxy. Push it automatically
+    // now so a single `spky deploy` also lands the schema + reloads the node.
+    if platform == "cloudflare" {
+        println!();
+        println!("Applying schema to the SSP node...");
+        if let Err(e) = push_schema_inner(&mut client, &slug, &pid) {
+            println!("  ▸ Warning: schema push failed: {} (run `spky push` to retry)", e);
+        }
     }
 
     Ok(())
@@ -3053,6 +3300,69 @@ pub fn resolve_cloud_surreal(config_path: &std::path::Path) -> Result<CloudSurre
         .to_string();
 
     Ok(CloudSurreal { url, password })
+}
+
+/// A fully-resolved external SurrealDB connection (endpoint + credentials).
+pub struct ExternalSurreal {
+    pub url: String,
+    pub username: String,
+    pub password: String,
+}
+
+/// Resolve an external ("bring-your-own") SurrealDB connection from the manifest,
+/// decrypting any `{ vault: KEY }` credential references via the tenant vault.
+///
+/// For external hosting Sp00ky doesn't run the DB, so there's no deployment URL
+/// to look up (that's only for managed/cloud DBs) — the endpoint and credentials
+/// come straight from `sp00ky.yml`. The vault is only contacted when a credential
+/// actually references it, so literal creds resolve offline.
+pub fn resolve_external_surreal(config_path: &std::path::Path) -> Result<ExternalSurreal> {
+    let config = backend::load_config(config_path);
+    let resolved = config.resolved_surrealdb();
+
+    let needs_vault = resolved.username.vault_key().is_some()
+        || resolved.password.vault_key().is_some()
+        || resolved
+            .endpoint
+            .as_ref()
+            .and_then(|e| e.vault_key())
+            .is_some();
+
+    let vault = if needs_vault {
+        let slug = std::env::var("SP00KY_CLOUD_PROJECT")
+            .ok()
+            .or(config.slug.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "SurrealDB credentials reference the vault, but no project is configured. \
+                     Add a `slug:` to sp00ky.yml or set SP00KY_CLOUD_PROJECT."
+                )
+            })?;
+        let creds = load_credentials().ok_or_else(|| {
+            anyhow::anyhow!(
+                "SurrealDB credentials reference the vault — run `spky login` first to resolve them."
+            )
+        })?;
+        let mut client = CloudClient::new(&creds);
+        let project = fetch_project(&mut client, &slug)?
+            .ok_or_else(|| anyhow::anyhow!("Cloud project '{}' not found.", slug))?;
+        let pid = project_id(&project);
+        load_vault_map_for_deploy(&mut client, &pid, true)
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    let url = match &resolved.endpoint {
+        Some(e) => resolve_secret_value(e, &vault)?,
+        None => bail!("SurrealDB hosting is 'external' but no endpoint URL was provided"),
+    };
+    let username = resolve_secret_value(&resolved.username, &vault)?;
+    let password = resolve_secret_value(&resolved.password, &vault)?;
+    Ok(ExternalSurreal {
+        url,
+        username,
+        password,
+    })
 }
 
 pub fn credentials(raw: bool) -> Result<()> {
@@ -3825,6 +4135,54 @@ pub fn scale(ssp: u32) -> Result<()> {
     Ok(())
 }
 
+/// Push the local schema to a free (Cloudflare) project's SSP node. Builds the
+/// full server schema (user tables + change-push events + meta tables) WITHOUT
+/// the remote-function/`$sp00ky_*` param DEFINEs — the control plane owns those
+/// for free projects — and POSTs it to the schema proxy, which applies it to the
+/// project's database with server-side creds and reloads the node.
+pub fn push() -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (slug, pid) = resolve_project_id(&mut client)?;
+    push_schema_inner(&mut client, &slug, &pid)
+}
+
+/// Build the local server schema and POST it to the schema proxy. Shared by the
+/// standalone `spky push` and the free-project tail of `spky deploy`.
+pub(crate) fn push_schema_inner(client: &mut CloudClient, slug: &str, pid: &str) -> Result<()> {
+    let config_path = std::env::current_dir()?.join("sp00ky.yml");
+    let config = backend::load_config(&config_path);
+    config.validate()?;
+
+    let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+    let schema_rel = config.resolved_schema().schema;
+    let input_path = config_dir.join(&schema_rel);
+    if !input_path.exists() {
+        bail!("schema file not found: {}", input_path.display());
+    }
+
+    let builder_config = crate::schema_builder::SchemaBuilderConfig {
+        input_path,
+        config_path: Some(config_path.clone()),
+        mode: config.mode.clone().unwrap_or_default(),
+        endpoint: None,
+        secret: None,
+        include_functions: false,
+    };
+    let sql = crate::schema_builder::build_server_schema(&builder_config)
+        .context("failed to build schema")?;
+
+    println!("Pushing schema for '{}' ({} bytes)...", slug, sql.len());
+    client
+        .post(
+            &format!("/v1/projects/{}/schema", pid),
+            &serde_json::json!({ "sql": sql }),
+        )
+        .context("schema push failed (is this a free/cloudflare project?)")?;
+    println!("  ▸ Schema queued — the SSP node will reload to pick it up.");
+    Ok(())
+}
+
 pub fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
@@ -4426,7 +4784,7 @@ pub fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
             println!();
 
             // Plan selection
-            let plans = vec!["Starter", "Pro"];
+            let plans = vec!["Starter", "Pro", "Free (Cloudflare)"];
             let default_plan = if current_plan == "pro" { 1 } else { 0 };
             let plan_selection = inquire::Select::new("Select a plan:", plans)
                 .with_starting_cursor(default_plan)
@@ -4434,8 +4792,45 @@ pub fn billing(action: Option<CloudBillingCommands>) -> Result<()> {
                 .context("Failed to select plan")?;
             let new_plan = match plan_selection {
                 "Pro" => "pro",
+                "Free (Cloudflare)" => "free",
                 _ => "starter",
             };
+
+            // Free: no billing interval. Confirm the (destructive) downgrade —
+            // this cancels the subscription and tears down the paid deployment.
+            if new_plan == "free" {
+                if current_plan == "free" {
+                    println!("  Already on the free plan.");
+                    return Ok(());
+                }
+                let confirm = inquire::Confirm::new(
+                    "Downgrade to Free? This cancels your subscription and tears down \
+                     the current deployment. You then run `spky deploy` to publish on Cloudflare.",
+                )
+                .with_default(false)
+                .prompt()
+                .context("Failed to read confirmation")?;
+                if !confirm {
+                    println!("  Cancelled.");
+                    return Ok(());
+                }
+                let resp = client.post(
+                    "/v1/billing/change-plan",
+                    &serde_json::json!({ "project_id": slug, "plan": "free" }),
+                )?;
+                let data: serde_json::Value =
+                    resp.into_json().context("Failed to parse response")?;
+                let status = data["status"].as_str().unwrap_or("unknown");
+                if status == "downgraded" {
+                    println!("  Switched to the free plan. Old deployment torn down.");
+                    println!("  Run `spky deploy` to publish on Cloudflare.");
+                } else if status == "no_change" {
+                    println!("  Already on the free plan.");
+                } else {
+                    println!("  Response: {}", data);
+                }
+                return Ok(());
+            }
 
             // Billing interval selection
             let intervals = vec!["Monthly", "Yearly"];
@@ -6354,6 +6749,38 @@ fn env_change_passphrase() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod secret_value_tests {
+    use super::*;
+
+    #[test]
+    fn literal_resolves_to_itself() {
+        let vault = std::collections::HashMap::new();
+        let v = backend::SecretValue::Literal("hunter2".to_string());
+        assert_eq!(resolve_secret_value(&v, &vault).unwrap(), "hunter2");
+    }
+
+    #[test]
+    fn vault_reference_resolves_from_map() {
+        let mut vault = std::collections::HashMap::new();
+        vault.insert("DB_PASSWORD".to_string(), "s3cr3t".to_string());
+        let v = backend::SecretValue::Vault {
+            vault: "DB_PASSWORD".to_string(),
+        };
+        assert_eq!(resolve_secret_value(&v, &vault).unwrap(), "s3cr3t");
+    }
+
+    #[test]
+    fn missing_vault_key_errors() {
+        let vault = std::collections::HashMap::new();
+        let v = backend::SecretValue::Vault {
+            vault: "MISSING".to_string(),
+        };
+        let err = resolve_secret_value(&v, &vault).unwrap_err();
+        assert!(err.to_string().contains("MISSING"));
+    }
 }
 
 #[cfg(test)]

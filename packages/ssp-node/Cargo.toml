@@ -1,0 +1,40 @@
+[package]
+name = "ssp-node"
+version = "0.0.1-canary.115"
+edition = "2021"
+description = "Portable SSP node core: platform ports (traits) + shared types for the VM (tokio/axum) and Cloudflare (workers-rs) shells"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+loro = "1"
+lru = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# `sync` + `macros` only — both wasm32-safe. NEVER add `rt`, `time`, or `net`
+# here; runtime concerns live behind the port traits.
+tokio = { version = "1", default-features = false, features = ["sync", "macros"] }
+tracing = "0.1"
+web-time = "1"
+
+ssp = { path = "../ssp" }
+ssp-protocol = { path = "../ssp-protocol" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# ssp → ulid → rand → getrandom: needs the JS backend on wasm32 (paired with
+# the rustflags cfg in .cargo/config.toml, same pattern as packages/ssp-wasm).
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+anyhow = "1"
+# Embedded in-memory SurrealDB + a mock HTTP backend so the job tests exercise
+# the real SQL and dispatch through the Db/HttpClient PORTS, end to end.
+# Native-only (tests don't run on the wasm target; the portability gate is a
+# plain `cargo check`, which ignores dev-deps).
+reqwest = { version = "0.12", features = ["json"] }
+surrealdb = { version = "3.1.2", default-features = false, features = ["kv-mem"] }
+tokio = { version = "1", features = ["full"] }
+wiremock = "0.6"

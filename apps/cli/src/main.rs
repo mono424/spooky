@@ -229,6 +229,11 @@ enum Commands {
         #[arg(long, visible_alias = "db")]
         surreal: bool,
     },
+    /// Push the current schema to a free (Cloudflare) project's SSP node.
+    /// Builds the server schema locally and sends it to the control plane,
+    /// which applies it to the project's database and reloads the node. For
+    /// paid plans, schema is applied during `deploy` instead.
+    Push,
     /// Scale a deployment component (e.g. `spky scale ssp 3`)
     Scale {
         #[command(subcommand)]
@@ -1107,17 +1112,29 @@ impl ConnectionArgs {
             .clone()
             .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
         let resolved = backend::load_config(&config_file).resolved_surrealdb();
-        let cloud = cloud::resolve_cloud_surreal(&config_file)?;
         let namespace = if self.namespace == "main" {
-            resolved.namespace
+            resolved.namespace.clone()
         } else {
             self.namespace.clone()
         };
         let database = if self.database == "main" {
-            resolved.database
+            resolved.database.clone()
         } else {
             self.database.clone()
         };
+        // External DB: Sp00ky doesn't host it, so there's no deployment URL —
+        // resolve the endpoint + credentials (incl. vault refs) from the manifest.
+        if resolved.hosting == backend::HostingMode::External {
+            let ext = cloud::resolve_external_surreal(&config_file)?;
+            return Ok(Some(ResolvedConnection {
+                url: ext.url,
+                namespace,
+                database,
+                username: ext.username,
+                password: ext.password,
+            }));
+        }
+        let cloud = cloud::resolve_cloud_surreal(&config_file)?;
         Ok(Some(ResolvedConnection {
             url: cloud.url,
             namespace,
@@ -1141,20 +1158,33 @@ impl ConnectionArgs {
             .clone()
             .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
         let resolved = backend::load_config(&config_file).resolved_surrealdb();
-        let url = self
-            .url
-            .clone()
-            .unwrap_or_else(|| dev::surreal_connection_url(&resolved, dev::SURREAL_PORT));
         let namespace = if self.namespace == "main" {
-            resolved.namespace
+            resolved.namespace.clone()
         } else {
             self.namespace.clone()
         };
         let database = if self.database == "main" {
-            resolved.database
+            resolved.database.clone()
         } else {
             self.database.clone()
         };
+        // External DB with no explicit --url: connect to the manifest's endpoint
+        // using its credentials (resolving `{ vault: KEY }` refs). The external
+        // endpoint is the same whether or not `--cloud` is passed.
+        if resolved.hosting == backend::HostingMode::External && self.url.is_none() {
+            let ext = cloud::resolve_external_surreal(&config_file)?;
+            return Ok(ResolvedConnection {
+                url: ext.url,
+                namespace,
+                database,
+                username: ext.username,
+                password: ext.password,
+            });
+        }
+        let url = self
+            .url
+            .clone()
+            .unwrap_or_else(|| dev::surreal_connection_url(&resolved, dev::SURREAL_PORT));
         Ok(ResolvedConnection {
             url,
             namespace,
@@ -2668,6 +2698,7 @@ fn main() -> Result<()> {
             upgrade,
             surreal,
         }) => cloud::restart(clean, upgrade, surreal),
+        Some(Commands::Push) => cloud::push(),
         Some(Commands::Scale { action }) => match action {
             ScaleCommands::Ssp { count } => cloud::scale(count),
         },

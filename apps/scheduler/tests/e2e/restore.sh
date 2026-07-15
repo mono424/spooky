@@ -85,7 +85,7 @@ wait_http "$MINIO_URL/minio/health/live"  "MinIO"
 log "Building scheduler"
 ( cd "$SCHEDULER_DIR" && cargo build -q )
 
-SCHED_BIN="$SCHEDULER_DIR/target/debug/scheduler"
+SCHED_BIN="$(cd "$SCHEDULER_DIR/../.." && pwd)/target/debug/scheduler"
 [[ -x "$SCHED_BIN" ]] || fail "Scheduler binary not found at $SCHED_BIN"
 
 WORKDIR="$(mktemp -d)"

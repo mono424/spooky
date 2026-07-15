@@ -1,9 +1,21 @@
-pub mod backend_health;
-pub mod backup;
 pub mod config;
+pub mod maintenance_host;
 pub mod replica;
-pub mod restore;
 pub mod router;
+
+// Backup/restore/backend-health moved to the shared `maintenance` crate so a
+// standalone SSP can expose the same plane. These shims keep the historical
+// `scheduler::backup::*` / `scheduler::restore::*` paths working.
+pub use maintenance::backend_health;
+pub mod backup {
+    pub use maintenance::backup::*;
+    pub use maintenance::routes::{create_backup_router, BackupState};
+    pub use maintenance::s3::{ensure_bucket, BackupConfig};
+}
+pub mod restore {
+    pub use maintenance::db::connect_http as connect_remote;
+    pub use maintenance::restore::*;
+}
 pub mod job_scheduler;
 pub mod transport;
 pub mod messages;
@@ -239,45 +251,11 @@ impl Scheduler {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn backup_state(
-        &self,
-        registry: Arc<crate::backup::BackupRegistry>,
-        tx: tokio::sync::mpsc::Sender<crate::backup::BackupJob>,
-        config: Arc<crate::backup::BackupConfig>,
-        restore_registry: Arc<crate::restore::RestoreRegistry>,
-        restore_tx: tokio::sync::mpsc::Sender<crate::restore::RestoreJob>,
-        backup_restore_lock: Arc<tokio::sync::Mutex<()>>,
-    ) -> crate::backup::BackupState {
-        crate::backup::BackupState {
-            replica: Arc::clone(&self.replica),
+    /// Host hooks for the shared backup/restore workers.
+    pub fn maintenance_host(&self) -> Arc<crate::maintenance_host::SchedulerHost> {
+        Arc::new(crate::maintenance_host::SchedulerHost {
             ingest: self.ingest_state(),
-            config,
-            registry,
-            tx,
-            restore_registry,
-            restore_tx,
-            backup_restore_lock,
-        }
-    }
-
-    pub fn restore_state(
-        &self,
-        registry: Arc<crate::restore::RestoreRegistry>,
-        tx: tokio::sync::mpsc::Sender<crate::restore::RestoreJob>,
-        s3_config: Arc<crate::backup::BackupConfig>,
-        backup_restore_lock: Arc<tokio::sync::Mutex<()>>,
-    ) -> crate::restore::RestoreState {
-        crate::restore::RestoreState {
-            replica: Arc::clone(&self.replica),
-            ingest: self.ingest_state(),
-            ssp_pool: Arc::clone(&self.ssp_pool),
-            s3_config,
-            db_config: Arc::new(self.config.db.clone()),
-            registry,
-            tx,
-            backup_restore_lock,
-        }
+        })
     }
 
     /// Get config
@@ -315,19 +293,17 @@ impl Scheduler {
             self.config.db.database,
             self.config.db.url,
         );
-        let ws_addr = self.config.db.url
-            .strip_prefix("ws://")
-            .or_else(|| self.config.db.url.strip_prefix("wss://"))
-            .unwrap_or(&self.config.db.url);
+        // HTTP engine (raw: signin only) — the NS/DB self-heal below must run
+        // before selecting them on the connection.
+        let db = maintenance::db::connect_http_raw(&self.config.db).await?;
 
-        let db = surrealdb::Surreal::new::<surrealdb::engine::remote::ws::Ws>(
-            ws_addr
-        ).await?;
-
-        db.signin(surrealdb::opt::auth::Root {
-            username: self.config.db.username.clone(),
-            password: self.config.db.password.clone(),
-        }).await?;
+        // This handle lives for the scheduler's whole lifetime (feature-flag
+        // sweep holds a clone); keep its HTTP auth token fresh.
+        maintenance::db::spawn_periodic_resignin(
+            db.clone(),
+            self.config.db.clone(),
+            maintenance::db::RESIGNIN_INTERVAL_SECS,
+        );
 
         // Self-heal NS/DB so the scheduler can bootstrap against a brand-new
         // SurrealDB instance — Phase 4a (CLI) usually defines these, but the

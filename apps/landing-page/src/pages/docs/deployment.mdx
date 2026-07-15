@@ -143,7 +143,8 @@ All `SPKY_*` vars below are read directly from the process environment.
 | :--- | :--- | :--- |
 | `SPKY_SSP_LISTEN_ADDR` | Address and port for the SSP HTTP server | `0.0.0.0:8667` |
 | `SPKY_AUTH_SECRET` | Bearer token for authenticating SSP API requests. When unset the auth middleware accepts any bearer (dev only). | *(empty)* |
-| `SPKY_DB_WS` | SurrealDB WebSocket URL | `ws://127.0.0.1:8000` |
+| `SPKY_DB_URL` | SurrealDB URL (HTTP engine; `ws://` values are accepted and normalized) | `http://127.0.0.1:8000` |
+| `SPKY_DB_WS` | Legacy fallback for `SPKY_DB_URL` (any scheme accepted) | *(unset)* |
 | `SPKY_DB_USER` | SurrealDB username | `root` |
 | `SPKY_DB_PASS` | SurrealDB password | `root` |
 | `SPKY_DB_NS` | SurrealDB namespace | `test` |
@@ -174,7 +175,8 @@ only.
 | Variable | Description | Default |
 | :--- | :--- | :--- |
 | `SPKY_SCHEDULER_ID` | Unique scheduler identifier | `scheduler-<uuid>` |
-| `SPKY_DB_WS` | SurrealDB WebSocket URL | `ws://localhost:8000` |
+| `SPKY_DB_URL` | SurrealDB URL (HTTP engine; `ws://` values are accepted and normalized) | `http://localhost:8000` |
+| `SPKY_DB_WS` | Legacy fallback for `SPKY_DB_URL` (any scheme accepted) | *(unset)* |
 | `SPKY_DB_NS` | SurrealDB namespace | `sp00ky` |
 | `SPKY_DB_NAME` | SurrealDB database | `sp00ky` |
 | `SPKY_DB_USER` | SurrealDB username | `root` |
@@ -182,4 +184,4 @@ only.
 | `SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS` | Snapshot update interval (seconds) | `300` |
 | `SPKY_BOOTSTRAP_PAGE_SIZE` | Rows read per bootstrap page from the replica | `500` |
 | `SPKY_AUTH_SECRET` | Optional shared secret; when set, callers to `/proxy/*` must send `Authorization: Bearer <secret>`. | *(empty)* |
-| `SPKY_SCHEDULER_BACKENDS` | JSON-encoded backend list (job-runner configuration) | *(unset)* |
+| `SPKY_BACKENDS` | JSON-encoded backend health-check list (`SPKY_SCHEDULER_BACKENDS` accepted as legacy fallback) | *(unset)* |

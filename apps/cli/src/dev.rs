@@ -40,8 +40,8 @@ const INFRA_SERVICES_SURREALISM: &[&str] = &["surrealdb"];
 pub(crate) fn surreal_connection_url(resolved: &ResolvedSurrealDb, local_port: u16) -> String {
     match &resolved.hosting {
         HostingMode::External => resolved
-            .endpoint
-            .clone()
+            .endpoint_literal()
+            .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!("http://localhost:{}", local_port)),
         HostingMode::Cloud => format!("http://localhost:{}", local_port),
     }
@@ -459,8 +459,8 @@ fn run_direct_mode(
         std::fs::create_dir_all(&surreal_data_dir).ok();
         let surreal_data_mount = format!("{}:/data", surreal_data_dir.display());
 
-        let surreal_user_env = format!("SURREAL_USER={}", resolved_surreal.username);
-        let surreal_pass_env = format!("SURREAL_PASS={}", resolved_surreal.password);
+        let surreal_user_env = format!("SURREAL_USER={}", resolved_surreal.username_literal());
+        let surreal_pass_env = format!("SURREAL_PASS={}", resolved_surreal.password_literal());
         let surreal_port_pub = format!("{}:8000", SURREAL_PORT);
 
         let mut surreal_args: Vec<String> = vec![
@@ -516,9 +516,9 @@ fn run_direct_mode(
             "0.0.0.0:8000".into(),
             "--allow-all".into(),
             "--user".into(),
-            resolved_surreal.username.clone(),
+            resolved_surreal.username_literal(),
             "--pass".into(),
-            resolved_surreal.password.clone(),
+            resolved_surreal.password_literal(),
             "surrealkv:/data".into(),
         ]);
 
@@ -557,8 +557,8 @@ fn run_direct_mode(
             &surreal_url,
             &resolved_surreal.namespace,
             &resolved_surreal.database,
-            &resolved_surreal.username,
-            &resolved_surreal.password,
+            &resolved_surreal.username_literal(),
+            &resolved_surreal.password_literal(),
         );
         bootstrap_client
             .ensure_ns_db()
@@ -640,8 +640,8 @@ fn run_direct_mode(
             db_ws: urls.scheduler_db_ws(),
             ns: resolved_surreal.namespace.clone(),
             db_name: resolved_surreal.database.clone(),
-            db_user: resolved_surreal.username.clone(),
-            db_pass: resolved_surreal.password.clone(),
+            db_user: resolved_surreal.username_literal(),
+            db_pass: resolved_surreal.password_literal(),
         };
 
         println!("{} Phase 5: Starting scheduler...", PREFIX);
@@ -710,8 +710,8 @@ fn run_direct_mode(
         db_ws: urls.ssp_db_ws(),
         ns: resolved_surreal.namespace.clone(),
         db_name: resolved_surreal.database.clone(),
-        db_user: resolved_surreal.username.clone(),
-        db_pass: resolved_surreal.password.clone(),
+        db_user: resolved_surreal.username_literal(),
+        db_pass: resolved_surreal.password_literal(),
         job_config: job_config_json,
         ref_mode: config.resolved_ref_mode().as_str().to_string(),
         anon_live: if config.resolved_anonymous_live_queries() {
@@ -2125,8 +2125,8 @@ fn build_spky_dev_vars(
         ),
         ("SPKY_DB_NS".into(), resolved_surreal.namespace.clone()),
         ("SPKY_DB_NAME".into(), resolved_surreal.database.clone()),
-        ("SPKY_DB_USER".into(), resolved_surreal.username.clone()),
-        ("SPKY_DB_PASS".into(), resolved_surreal.password.clone()),
+        ("SPKY_DB_USER".into(), resolved_surreal.username_literal()),
+        ("SPKY_DB_PASS".into(), resolved_surreal.password_literal()),
         ("SPKY_SSP_ADDR".into(), format!("localhost:{}", SSP_PORT)),
     ];
     if *mode == DeployMode::Cluster {

@@ -9,9 +9,13 @@ const CARGO_TOML_PACKAGES = [
   "apps/scheduler/Cargo.toml",
   "apps/ssp/Cargo.toml",
   "apps/cli/Cargo.toml",
+  "apps/ssp-portable/Cargo.toml",
+  "apps/ssp-cf/Cargo.toml",
   "packages/ssp/Cargo.toml",
   "packages/ssp-protocol/Cargo.toml",
-  "packages/job-runner/Cargo.toml",
+  "packages/ssp-ffi/Cargo.toml",
+  "packages/ssp-node/Cargo.toml",
+  "packages/maintenance/Cargo.toml",
   "packages/ssp-wasm/Cargo.toml",
 ];
 

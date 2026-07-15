@@ -107,7 +107,7 @@ export class SqliteCacheEngine implements LocalStore {
 
   private spawnWorker(): Worker {
     // The worker is a separate module entry; the bundler rewrites this URL.
-    const worker = new Worker(new URL('./sqlite-worker.js', import.meta.url), { type: 'module' });
+    const worker = new Worker(new URL('./sqlite-worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = (ev: MessageEvent) => {
       const { id, ok, error, ...rest } = ev.data ?? {};
       const p = this.pending.get(id);

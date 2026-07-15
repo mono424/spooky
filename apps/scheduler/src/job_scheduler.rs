@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use surrealdb::engine::remote::ws::{Client, Ws};
+use surrealdb::engine::remote::http::Client;
 use surrealdb::types::RecordId;
 use surrealdb::Surreal;
 use tokio::sync::RwLock;
@@ -339,20 +339,7 @@ fn job_tables_from_env() -> Vec<String> {
 
 /// Connect a fresh SurrealDB client to the upstream, mirroring `Scheduler::start`.
 async fn connect_remote(db: &DbConfig) -> Result<Surreal<Client>> {
-    let ws_addr = db
-        .url
-        .strip_prefix("ws://")
-        .or_else(|| db.url.strip_prefix("wss://"))
-        .unwrap_or(&db.url);
-    let conn = Surreal::new::<Ws>(ws_addr).await?;
-    conn.signin(surrealdb::opt::auth::Root {
-        username: db.username.clone(),
-        password: db.password.clone(),
-    })
-    .await?;
-    conn.use_ns(&db.namespace).await?;
-    conn.use_db(&db.database).await?;
-    Ok(conn)
+    maintenance::db::connect_http(db).await
 }
 
 /// A job is recoverable only if its `assignee` has left the pool (or was never

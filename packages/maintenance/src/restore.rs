@@ -4,33 +4,16 @@ use flate2::read::GzDecoder;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::io::Read;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
-use crate::backup::BackupConfig;
-use crate::config::DbConfig;
-use crate::ingest::IngestState;
-use crate::replica::Replica;
-use crate::router::SspPool;
-use crate::SchedulerStatus;
+use crate::db::{connect_http, DbConfig};
+use crate::host::MaintenanceHost;
+use crate::s3::BackupConfig;
 
 const RECENT_JOB_LIMIT: usize = 50;
 const RESTORE_QUEUE_CAPACITY: usize = 8;
-const BOOTSTRAP_DRAIN_TIMEOUT_SECS: u64 = 10;
-
-#[derive(Clone)]
-pub struct RestoreState {
-    pub replica: Arc<RwLock<Replica>>,
-    pub ingest: IngestState,
-    pub ssp_pool: Arc<RwLock<SspPool>>,
-    pub s3_config: Arc<BackupConfig>,
-    pub db_config: Arc<DbConfig>,
-    pub registry: Arc<RestoreRegistry>,
-    pub tx: mpsc::Sender<RestoreJob>,
-    pub backup_restore_lock: Arc<Mutex<()>>,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,6 +24,11 @@ pub enum RestoreStatus {
     Failed,
 }
 
+/// Serialized field names are API surface (spooky-cloud reads `snapshot_seq`);
+/// `replica_restored` historically meant "the scheduler's replica was
+/// restored" and now means "host-specific state was restored" (replica for the
+/// scheduler, circuit re-bootstrap for a standalone SSP). `ssps_evicted` is
+/// scheduler-specific and null for other hosts.
 #[derive(Debug, Clone, Serialize)]
 pub struct RestoreJobState {
     pub restore_id: String,
@@ -130,11 +118,11 @@ impl RestoreRegistry {
         self.update(id, |s| {
             s.status = RestoreStatus::Completed;
             s.finished_at = Some(Utc::now());
-            s.snapshot_seq = Some(outcome.snapshot_seq);
+            s.snapshot_seq = outcome.snapshot_seq;
             s.pending_cleared = Some(outcome.pending_cleared);
             s.main_db_restored = outcome.main_db_restored;
-            s.replica_restored = outcome.replica_restored;
-            s.ssps_evicted = Some(outcome.ssps_evicted);
+            s.replica_restored = outcome.host_state_restored;
+            s.ssps_evicted = outcome.ssps_evicted;
         })
         .await;
         self.trim().await;
@@ -146,7 +134,7 @@ impl RestoreRegistry {
             s.finished_at = Some(Utc::now());
             s.error = Some(err);
             s.main_db_restored = progress.main_db_restored;
-            s.replica_restored = progress.replica_restored;
+            s.replica_restored = progress.host_state_restored;
         })
         .await;
         self.trim().await;
@@ -220,25 +208,26 @@ pub fn create_restore_channel() -> (mpsc::Sender<RestoreJob>, mpsc::Receiver<Res
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RestoreProgress {
+    /// True once `begin_restore` succeeded — only then is the host's
+    /// finish_restore transition invoked (a failure before the gate leaves
+    /// host status untouched, matching pre-refactor behavior).
+    pub gate_entered: bool,
     pub main_db_restored: bool,
-    pub replica_restored: bool,
+    pub host_state_restored: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct RestoreOutcome {
-    pub snapshot_seq: u64,
+    pub snapshot_seq: Option<u64>,
     pub pending_cleared: usize,
     pub main_db_restored: bool,
-    pub replica_restored: bool,
-    pub ssps_evicted: usize,
+    pub host_state_restored: bool,
+    pub ssps_evicted: Option<usize>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn run_restore_worker(
     mut rx: mpsc::Receiver<RestoreJob>,
-    replica: Arc<RwLock<Replica>>,
-    ingest: IngestState,
-    ssp_pool: Arc<RwLock<SspPool>>,
+    host: Arc<dyn MaintenanceHost>,
     s3_config: Arc<BackupConfig>,
     db_config: Arc<DbConfig>,
     registry: Arc<RestoreRegistry>,
@@ -255,25 +244,30 @@ pub async fn run_restore_worker(
         );
 
         let mut progress = RestoreProgress::default();
-        match execute_restore(
+        let result = execute_restore(
             &job,
-            &replica,
-            &ingest,
-            &ssp_pool,
+            host.as_ref(),
             &s3_config,
             &db_config,
             &lock,
             &mut progress,
         )
-        .await
-        {
+        .await;
+
+        // Host decides whether it is safe to serve traffic again — but only
+        // if the gate was ever entered; earlier failures never touched status.
+        if progress.gate_entered {
+            host.finish_restore(&result, progress).await;
+        }
+
+        match result {
             Ok(outcome) => {
                 registry.mark_completed(&job.restore_id, outcome).await;
                 info!(
                     restore_id = %job.restore_id,
-                    snapshot_seq = outcome.snapshot_seq,
+                    snapshot_seq = ?outcome.snapshot_seq,
                     pending_cleared = outcome.pending_cleared,
-                    ssps_evicted = outcome.ssps_evicted,
+                    ssps_evicted = ?outcome.ssps_evicted,
                     "Restore completed"
                 );
             }
@@ -286,7 +280,7 @@ pub async fn run_restore_worker(
                     restore_id = %job.restore_id,
                     error = %err_str,
                     main_db_restored = progress.main_db_restored,
-                    replica_restored = progress.replica_restored,
+                    host_state_restored = progress.host_state_restored,
                     "Restore failed"
                 );
             }
@@ -295,12 +289,9 @@ pub async fn run_restore_worker(
     info!("Restore worker exiting (channel closed)");
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn execute_restore(
     job: &RestoreJob,
-    replica: &Arc<RwLock<Replica>>,
-    ingest: &IngestState,
-    ssp_pool: &Arc<RwLock<SspPool>>,
+    host: &dyn MaintenanceHost,
     s3_config: &BackupConfig,
     db_config: &DbConfig,
     lock: &Arc<Mutex<()>>,
@@ -339,103 +330,14 @@ async fn execute_restore(
     // 3. Serialize with the backup worker — only one DB-mutating op at a time.
     let _guard = lock.lock().await;
 
-    // 4. Transition Ready → Restoring. Refuse if scheduler isn't Ready.
-    {
-        let mut status = ingest.status.write().await;
-        if *status != SchedulerStatus::Ready {
-            anyhow::bail!(
-                "Cannot restore: scheduler status is {:?}, expected Ready",
-                *status
-            );
-        }
-        *status = SchedulerStatus::Restoring;
-        info!(restore_id = %job.restore_id, "Scheduler status → Restoring");
-    }
+    // 4. Host gate: refuse unless restorable, block ingest while restoring.
+    host.begin_restore()
+        .await
+        .context("Host refused restore")?;
+    progress.gate_entered = true;
 
-    // From here on, any early return must decide whether to reset status to
-    // Ready (safe failure, no DB mutated) or leave it Restoring (unsafe,
-    // operator intervention required). We track that via `progress`.
-    let result = execute_restore_inner(
-        job,
-        &dump_path,
-        replica,
-        ingest,
-        ssp_pool,
-        db_config,
-        progress,
-    )
-    .await;
-
-    match &result {
-        Ok(_) => {
-            *ingest.status.write().await = SchedulerStatus::Ready;
-            info!(restore_id = %job.restore_id, "Scheduler status → Ready");
-        }
-        Err(e) => {
-            if progress.replica_restored {
-                // Replica import succeeded but a later step (pending-clear or
-                // SSP eviction) failed. Replica + main are consistent; it's
-                // safe to return to Ready.
-                *ingest.status.write().await = SchedulerStatus::Ready;
-                warn!(
-                    restore_id = %job.restore_id,
-                    error = %e,
-                    "Restore post-import step failed; status → Ready anyway"
-                );
-            } else if progress.main_db_restored {
-                // Main DB wiped/imported but replica is still the pre-restore
-                // state or has been reset without import — serving reads would
-                // return wrong data. Leave Restoring to block traffic.
-                warn!(
-                    restore_id = %job.restore_id,
-                    error = %e,
-                    "Restore partial failure after main DB changed; status stays Restoring"
-                );
-            } else {
-                // Nothing mutated; safe to recover.
-                *ingest.status.write().await = SchedulerStatus::Ready;
-                warn!(
-                    restore_id = %job.restore_id,
-                    error = %e,
-                    "Restore failed before any DB mutation; status → Ready"
-                );
-            }
-        }
-    }
-
-    result
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn execute_restore_inner(
-    job: &RestoreJob,
-    dump_path: &std::path::Path,
-    replica: &Arc<RwLock<Replica>>,
-    ingest: &IngestState,
-    ssp_pool: &Arc<RwLock<SspPool>>,
-    db_config: &DbConfig,
-    progress: &mut RestoreProgress,
-) -> Result<RestoreOutcome> {
-    // 5. Wait (bounded) for in-flight SSP bootstraps to drain.
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_secs(BOOTSTRAP_DRAIN_TIMEOUT_SECS);
-    loop {
-        let active = ssp_pool.read().await.has_active_bootstrap();
-        if !active {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            warn!(
-                restore_id = %job.restore_id,
-                "Proceeding with restore despite active SSP bootstraps (timed out)"
-            );
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
-
-    // 6. Restore the main remote SurrealDB.
-    let remote = connect_remote(db_config)
+    // 5. Restore the main remote SurrealDB.
+    let remote = connect_http(db_config)
         .await
         .context("Failed to connect to main SurrealDB for restore")?;
 
@@ -455,114 +357,18 @@ async fn execute_restore_inner(
         .context("Failed to re-select remote database after wipe")?;
 
     remote
-        .import(dump_path)
+        .import(&dump_path)
         .await
         .context("Failed to import dump into main SurrealDB")?;
     progress.main_db_restored = true;
     info!(restore_id = %job.restore_id, "Main SurrealDB restored");
 
-    // 7. Restore the snapshot replica: drop the on-disk DB, reopen empty, import.
-    let restored_seq = {
-        let mut rep = replica.write().await;
-        rep.reset().await.context("Failed to reset replica")?;
-        rep.import_from_file(dump_path)
-            .await
-            .context("Failed to import dump into replica")?;
-        rep.reload_snapshot_seq()
-            .await
-            .context("Failed to reload snapshot_seq from restored replica")?
-    };
-    progress.replica_restored = true;
-    info!(
-        restore_id = %job.restore_id,
-        restored_seq,
-        "Replica restored from dump"
-    );
-
-    // 8. Clear pending items.
-    let buffer_cleared = {
-        let mut buffer = ingest.event_buffer.write().await;
-        let n = buffer.len();
-        buffer.clear();
-        n
-    };
-    {
-        let mut wal = ingest.wal.write().await;
-        wal.truncate(u64::MAX)
-            .context("Failed to truncate WAL during restore")?;
-    }
-    ingest.seq_counter.store(restored_seq, Ordering::SeqCst);
-    {
-        // Persist the restored seq explicitly so the metadata row matches the
-        // authoritative counter even if the dump's seq differs subtly.
-        let mut rep = replica.write().await;
-        rep.set_snapshot_seq(restored_seq)
-            .await
-            .context("Failed to persist restored snapshot_seq")?;
-    }
-
-    // 9. Evict SSPs. They will re-register on next heartbeat.
-    let evicted = {
-        let mut pool = ssp_pool.write().await;
-        pool.clear_all()
-    };
-    info!(
-        restore_id = %job.restore_id,
-        evicted,
-        "SSPs evicted; will re-register against restored state"
-    );
-
-    Ok(RestoreOutcome {
-        snapshot_seq: restored_seq,
-        pending_cleared: buffer_cleared,
-        main_db_restored: true,
-        replica_restored: true,
-        ssps_evicted: evicted,
-    })
-}
-
-/// Open a fresh HTTP connection to the main SurrealDB.
-///
-/// We use the HTTP engine (not WS) because `Surreal::import()` / `Surreal::export()`
-/// are only implemented for HTTP and local storage engines. Calling `.import()` on
-/// a WebSocket client returns `BackupsNotSupported` ("The protocol or storage
-/// engine does not support backups on this architecture").
-pub(crate) async fn connect_remote(
-    db_config: &DbConfig,
-) -> Result<surrealdb::Surreal<surrealdb::engine::remote::http::Client>> {
-    let (addr, secure) = if let Some(rest) = db_config.url.strip_prefix("wss://") {
-        (rest, true)
-    } else if let Some(rest) = db_config.url.strip_prefix("ws://") {
-        (rest, false)
-    } else if let Some(rest) = db_config.url.strip_prefix("https://") {
-        (rest, true)
-    } else if let Some(rest) = db_config.url.strip_prefix("http://") {
-        (rest, false)
-    } else {
-        (db_config.url.as_str(), false)
-    };
-
-    let db = if secure {
-        surrealdb::Surreal::new::<surrealdb::engine::remote::http::Https>(addr)
-            .await
-            .with_context(|| format!("Failed to open HTTPS to {}", db_config.url))?
-    } else {
-        surrealdb::Surreal::new::<surrealdb::engine::remote::http::Http>(addr)
-            .await
-            .with_context(|| format!("Failed to open HTTP to {}", db_config.url))?
-    };
-
-    db.signin(surrealdb::opt::auth::Root {
-        username: db_config.username.clone(),
-        password: db_config.password.clone(),
-    })
-    .await
-    .context("Remote SurrealDB signin failed")?;
-
-    db.use_ns(&db_config.namespace)
-        .use_db(&db_config.database)
+    // 6. Host resynchronizes its own state from the restored database.
+    let outcome = host
+        .post_restore(&dump_path)
         .await
-        .context("Failed to select remote namespace/database")?;
+        .context("Host post-restore step failed")?;
+    progress.host_state_restored = outcome.host_state_restored;
 
-    Ok(db)
+    Ok(outcome)
 }

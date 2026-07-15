@@ -14,7 +14,7 @@ use ssp_server::crdt::{CrdtAllowList, CrdtCache};
 use ssp_server::metrics::Metrics;
 use ssp_server::{create_app, AppState, SharedDb, SspStatus};
 
-use job_runner::{JobConfig, JobEntry};
+use ssp_node::jobs::{JobConfig, JobEntry};
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ impl TestHarness {
 
         // Unconnected SurrealDB client — handlers that don't touch DB work fine,
         // handlers that do will get runtime errors (which are logged but not propagated).
-        let db: surrealdb::Surreal<surrealdb::engine::remote::ws::Client> =
+        let db: surrealdb::Surreal<surrealdb::engine::remote::http::Client> =
             surrealdb::Surreal::init();
 
         // Permission injection now default-denies any table without a
@@ -93,6 +93,14 @@ impl TestHarness {
     }
 
     fn app(&self) -> Router {
+        // Shared with the node below so a migrated handler and a shell handler
+        // observe the same view-metrics + edge channel. No flusher is spawned
+        // (rx dropped) so edge sends fall back to a direct write.
+        let view_metrics = Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+        let edge_update_tx = {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            tx
+        };
         let state = AppState {
             db: Arc::clone(&self.db),
             processor: Arc::clone(&self.processor),
@@ -100,21 +108,56 @@ impl TestHarness {
             metrics: Arc::clone(&self.metrics),
             job_config: Arc::clone(&self.job_config),
             job_queue_tx: self.job_queue_tx.clone(),
-            job_control: job_runner::JobControl::new(),
+            job_control: ssp_node::jobs::JobControl::new(),
             ssp_id: "test-ssp".to_string(),
             scheduler_url: None,
             start_time: self.start_time,
             crdt_cache: Arc::clone(&self.crdt_cache),
-            view_metrics: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            view_metrics: Arc::clone(&view_metrics),
             ref_mode: ssp_protocol::RefMode::Single,
             surrealdb_version: String::new(),
             anonymous_live_queries: false,
-            edge_update_tx: {
-                // No coalescing flusher is spawned in tests; dropping the receiver
-                // makes edge-update sends fail, so the handlers fall back to a
-                // synchronous direct edge write — deterministic for assertions.
-                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-                tx
+            edge_update_tx: edge_update_tx.clone(),
+            backend_health: None,
+            shared_backend_configs: None,
+            platform: {
+                // Timer receiver dropped: tests never dispatch on_timer.
+                let (platform, _timer_rx) =
+                    ssp_server::adapters::vm_platform(Arc::clone(&self.db), Arc::clone(&self.metrics));
+                platform
+            },
+            auth_secret: AUTH_SECRET.to_string(),
+            node: {
+                let (platform, _timer_rx) =
+                    ssp_server::adapters::vm_platform(Arc::clone(&self.db), Arc::clone(&self.metrics));
+                Arc::new(ssp_node::SspNode {
+                    platform,
+                    status: Arc::clone(&self.status),
+                    processor: Arc::clone(&self.processor),
+                    job_config: Arc::clone(&self.job_config),
+                    job_control: ssp_node::jobs::JobControl::new(),
+                    job_queue_tx: self.job_queue_tx.clone(),
+                    ssp_id: "test-ssp".to_string(),
+                    auth_secret: AUTH_SECRET.to_string(),
+                    ref_mode: ssp_protocol::RefMode::Single,
+                    version: env!("CARGO_PKG_VERSION"),
+                    surrealdb_version: String::new(),
+                    advertise_ip: None,
+                    info_env: Vec::new(),
+                    start_epoch_ms: 0,
+                    backend_health: None,
+                    // Share the circuit-adjacent state with the shell so a
+                    // migrated handler and a shell handler see the same view set.
+                    crdt_cache: Arc::clone(&self.crdt_cache),
+                    view_metrics: Arc::clone(&view_metrics),
+                    edge_update_tx: edge_update_tx.clone(),
+                    anonymous_live_queries: false,
+                    standalone: true,
+                    ttl_cleanup_interval_secs: 60,
+                    bootstrap_page_size: 200,
+                    checkpoint_interval_secs: None,
+                    max_snapshot_age_secs: 3600,
+                })
             },
         };
         create_app(state)
@@ -1155,7 +1198,7 @@ mod permission_register_tests {
 
 mod db_integration_tests {
     use super::*;
-    use surrealdb::engine::remote::ws::Ws;
+    use surrealdb::engine::remote::http::Http;
     use surrealdb::opt::auth::Root;
     use surrealdb::Surreal;
 
@@ -1167,7 +1210,7 @@ mod db_integration_tests {
             std::env::set_var("SPKY_AUTH_SECRET", AUTH_SECRET);
         }
 
-        let db = Surreal::new::<Ws>(&addr)
+        let db = Surreal::new::<Http>(&addr)
             .await
             .expect("Failed to connect to SurrealDB");
         db.signin(Root {

@@ -27,25 +27,10 @@ pub struct SchedulerConfig {
     pub backends: Vec<BackendHealthConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct BackendHealthConfig {
-    pub name: String,
-    pub url: String,
-    pub healthcheck: String,
-    #[serde(default)]
-    pub port: Option<u16>,
-    #[serde(default)]
-    pub env: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct DbConfig {
-    pub url: String,
-    pub namespace: String,
-    pub database: String,
-    pub username: String,
-    pub password: String,
-}
+// Both moved to the shared `maintenance` crate; re-exported so existing
+// `config::DbConfig` / `config::BackendHealthConfig` paths keep working.
+pub use maintenance::backend_health::BackendHealthConfig;
+pub use maintenance::db::DbConfig;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,7 +44,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             db: DbConfig {
-                url: "ws://localhost:8000".to_string(),
+                url: "http://localhost:8000".to_string(),
                 namespace: "sp00ky".to_string(),
                 database: "sp00ky".to_string(),
                 username: "root".to_string(),
@@ -98,8 +83,10 @@ impl SchedulerConfig {
         let config = builder.build()?;
         let mut scheduler_config: SchedulerConfig = config.try_deserialize()?;
 
-        // Override DB settings from SPKY_* environment variables
-        if let Ok(v) = std::env::var("SPKY_DB_WS") {
+        // Override DB settings from SPKY_* environment variables.
+        // SPKY_DB_URL is canonical; SPKY_DB_WS kept as a legacy fallback
+        // (any scheme is accepted — ws:// URLs are normalized to HTTP).
+        if let Ok(v) = std::env::var("SPKY_DB_URL").or_else(|_| std::env::var("SPKY_DB_WS")) {
             scheduler_config.db.url = v;
         }
         if let Ok(v) = std::env::var("SPKY_DB_NS") {
@@ -140,11 +127,8 @@ impl SchedulerConfig {
         }
 
         // Parse backend health check targets from JSON env var
-        if let Ok(backends_json) = std::env::var("SPKY_SCHEDULER_BACKENDS") {
-            if let Ok(backends) = serde_json::from_str::<Vec<BackendHealthConfig>>(&backends_json) {
-                scheduler_config.backends = backends;
-            }
-        }
+        // (SPKY_BACKENDS preferred, SPKY_SCHEDULER_BACKENDS legacy fallback).
+        scheduler_config.backends = maintenance::backend_health::backends_from_env();
 
         Ok(scheduler_config)
     }

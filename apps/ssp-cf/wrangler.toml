@@ -1,0 +1,28 @@
+name = "ssp-cf"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-09-23"
+
+# One Durable Object class = the SSP node. One instance per project (keyed by
+# the X-Spooky-Project header in the top-level fetch handler).
+[[durable_objects.bindings]]
+name = "SSP_NODE"
+class_name = "SspNodeDo"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SspNodeDo"]
+
+# Non-secret config. The DB stays EXTERNAL — this points at SurrealDB Cloud (or
+# any HTTP-RPC SurrealDB). The node talks to it via HttpSqlDb over fetch.
+[vars]
+SPKY_DB_URL = "https://REPLACE-ME.surreal.cloud"
+SPKY_DB_NS = "spooky"
+SPKY_DB_DB = "spooky"
+SPKY_SSP_ID = "cf-ssp"
+
+# Secrets (set with `wrangler secret put ...`, never commit):
+#   SPKY_DB_AUTH      full Authorization header value, e.g. "Bearer <jwt>"
+#   SPKY_AUTH_SECRET  bearer secret the platform uses to call this node
+
+[build]
+command = "worker-build --release"

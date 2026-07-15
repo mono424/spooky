@@ -1,0 +1,6 @@
+# getrandom 0.3 (via ssp → ulid → rand) needs an explicit JS backend on
+# wasm32-unknown-unknown. Same pattern as packages/ssp-wasm. Applies when
+# cargo is invoked from this directory — which is what
+# scripts/check-portability.sh does.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

@@ -40,8 +40,8 @@ pub fn run(fix: bool) -> Result<()> {
     let main = fetch_main_stats(
         &surreal.namespace,
         &surreal.database,
-        &surreal.username,
-        &surreal.password,
+        &surreal.username_literal(),
+        &surreal.password_literal(),
     )
     .context("Failed to fetch counts/hashes from SurrealDB")?;
     let replica = fetch_scheduler_stats().unwrap_or_else(|e| {

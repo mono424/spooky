@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
-use surrealdb::engine::remote::ws::Client;
+use surrealdb::engine::remote::http::Client;
 use surrealdb::Surreal;
 use tracing::{debug, error, info, warn};
 

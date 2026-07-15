@@ -71,7 +71,7 @@ impl TestHarness {
 
         let config = SchedulerConfig {
             db: DbConfig {
-                url: "ws://localhost:8000".to_string(),
+                url: "http://localhost:8000".to_string(),
                 namespace: "sp00ky".to_string(),
                 database: "sp00ky".to_string(),
                 username: "root".to_string(),
@@ -91,6 +91,7 @@ impl TestHarness {
             ssp_poll_interval_ms: 100,
             wal_path,
             scheduler_id: "test-scheduler".to_string(),
+            ..SchedulerConfig::default()
         };
 
         Self {
@@ -133,6 +134,8 @@ impl TestHarness {
             config: Arc::clone(&self.config),
             status: Arc::clone(&self.status),
             event_buffer: Arc::clone(&self.event_buffer),
+            seq_counter: Arc::clone(&self.seq_counter),
+            reclone_lock: Arc::new(tokio::sync::Mutex::new(())),
         };
         ssp_management::create_ssp_router(state)
     }
@@ -171,6 +174,19 @@ impl TestHarness {
             start_time: std::time::Instant::now(),
             scheduler_id: "test-scheduler".to_string(),
             status: Arc::clone(&self.status),
+            backend_health: scheduler::backend_health::create_health_cache(&[]),
+            shared_backend_configs: scheduler::backend_health::create_shared_configs(&[]),
+            ingest: IngestState {
+                replica: Arc::clone(&self.replica),
+                transport: Arc::clone(&self.transport),
+                ssp_pool: Arc::clone(&self.ssp_pool),
+                status: Arc::clone(&self.status),
+                event_buffer: Arc::clone(&self.event_buffer),
+                seq_counter: Arc::clone(&self.seq_counter),
+                wal: Arc::clone(&self.wal),
+            },
+            replica: Arc::clone(&self.replica),
+            surrealdb_version: Arc::new(RwLock::new("unknown".to_string())),
         };
         metrics::create_metrics_router(state)
     }
@@ -189,12 +205,14 @@ impl TestHarness {
         let ssp_info = SspInfo {
             id: id.to_string(),
             url: url.to_string(),
+            version: "test".to_string(),
             connected_at: std::time::Instant::now(),
             last_heartbeat: std::time::Instant::now(),
             query_count: 0,
             views: 0,
             cpu_usage: None,
             memory_usage: None,
+            env: None,
         };
         let mut pool = self.ssp_pool.write().await;
         pool.upsert(ssp_info);
@@ -206,12 +224,14 @@ impl TestHarness {
         let ssp_info = SspInfo {
             id: id.to_string(),
             url: url.to_string(),
+            version: "test".to_string(),
             connected_at: std::time::Instant::now(),
             last_heartbeat: std::time::Instant::now(),
             query_count: 0,
             views: 0,
             cpu_usage: None,
             memory_usage: None,
+            env: None,
         };
         let mut pool = self.ssp_pool.write().await;
         pool.upsert(ssp_info);
@@ -544,7 +564,8 @@ mod ssp_management_tests {
     fn register_payload(ssp_id: &str, url: &str) -> Value {
         json!({
             "ssp_id": ssp_id,
-            "url": url
+            "url": url,
+            "version": "test"
         })
     }
 
@@ -554,7 +575,8 @@ mod ssp_management_tests {
             "timestamp": 1000,
             "views": 5,
             "cpu_usage": 45.0,
-            "memory_usage": 60.0
+            "memory_usage": 60.0,
+            "version": "test"
         })
     }
 
@@ -807,10 +829,13 @@ mod proxy_tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        // INFO FOR DB returns a non-empty result with database metadata
-        assert!(body.is_array());
-        let results = body.as_array().unwrap();
-        assert!(!results.is_empty(), "INFO FOR DB should return metadata");
+        // INFO FOR DB returns database metadata (response shape depends on
+        // the SurrealDB version: array of results or a single object).
+        assert!(
+            body.is_array() || body.is_object(),
+            "INFO FOR DB should return metadata, got: {body}"
+        );
+        assert!(!body.is_null(), "INFO FOR DB should return metadata");
     }
 
     #[tokio::test]
@@ -907,13 +932,15 @@ mod query_tests {
         let h = TestHarness::new().await;
         let app = h.query_router();
 
+        // Unregister is idempotent: an untracked query id (e.g. a stale
+        // `_00_dbsp_cleanup` row after a scheduler restart) returns OK.
         let (status, _) = post_json(
             app,
             "/view/unregister",
             &json!({"id": "nonexistent"}),
         )
         .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(status, StatusCode::OK);
     }
 }
 
@@ -1093,7 +1120,7 @@ mod bootstrap_protocol_tests {
         let (status, _) = post_json(
             app,
             "/ssp/register",
-            &json!({"ssp_id": "ssp-1", "url": "http://localhost:9999"}),
+            &json!({"ssp_id": "ssp-1", "url": "http://localhost:9999", "version": "test"}),
         )
         .await;
         assert_eq!(status, StatusCode::ACCEPTED);
@@ -1125,7 +1152,7 @@ mod bootstrap_protocol_tests {
         let (status, _) = post_json(
             app,
             "/ssp/register",
-            &json!({"ssp_id": "ssp-1", "url": "http://localhost:9999"}),
+            &json!({"ssp_id": "ssp-1", "url": "http://localhost:9999", "version": "test"}),
         )
         .await;
         assert_eq!(status, StatusCode::ACCEPTED);
@@ -1193,7 +1220,7 @@ mod bootstrap_protocol_tests {
             (
                 "POST",
                 "/ssp/register",
-                json!({"ssp_id": "s1", "url": "http://localhost:1234"}),
+                json!({"ssp_id": "s1", "url": "http://localhost:1234", "version": "test"}),
             ),
             (
                 "POST",
@@ -1277,7 +1304,7 @@ mod bootstrap_protocol_tests {
         let (status, _) = post_json(
             app,
             "/ssp/register",
-            &json!({"ssp_id": "ssp-1", "url": "http://localhost:9999"}),
+            &json!({"ssp_id": "ssp-1", "url": "http://localhost:9999", "version": "test"}),
         )
         .await;
         assert_eq!(status, StatusCode::ACCEPTED);

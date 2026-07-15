@@ -1,18 +1,20 @@
 [package]
 name = "ssp-server"
-version = "0.0.1-canary.113"
+version = "0.0.1-canary.115"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
+async-trait = "0.1"
 axum = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-surrealdb = { version = "3.1.2", features = ["protocol-ws", "protocol-http"] }
+surrealdb = { version = "3.1.2", default-features = false, features = ["protocol-http", "rustls"] }
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "io-util"] }
 ssp = { path = "../../packages/ssp" }
-job-runner = { path = "../../packages/job-runner" }
 ssp-protocol = { path = "../../packages/ssp-protocol" }
+ssp-node = { path = "../../packages/ssp-node" }
+maintenance = { path = "../../packages/maintenance" }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }

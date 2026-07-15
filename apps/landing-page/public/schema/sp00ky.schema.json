@@ -215,6 +215,27 @@
         }
       ]
     },
+    "secretValue": {
+      "description": "A literal value, or a reference to an encrypted vault key resolved at deploy time.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "vault": {
+              "type": "string",
+              "description": "Vault key name whose decrypted value is used."
+            }
+          },
+          "required": [
+            "vault"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "surrealdbConfig": {
       "type": "object",
       "description": "Full SurrealDB configuration.",
@@ -244,38 +265,62 @@
           "default": "cloud"
         },
         "endpoint": {
-          "type": "string",
-          "description": "SurrealDB endpoint URL. Required when hosting is \"external\".",
+          "$ref": "#/$defs/secretValue",
+          "description": "SurrealDB endpoint URL (literal or { vault: KEY }). Required when hosting is \"external\"; not allowed otherwise.",
           "examples": [
             "https://api.example.com"
           ]
         },
         "username": {
-          "type": "string",
-          "description": "SurrealDB username.",
-          "default": "root"
+          "$ref": "#/$defs/secretValue",
+          "description": "SurrealDB username (literal or { vault: KEY }). Only valid when hosting is \"external\". Default \"root\"."
         },
         "password": {
-          "type": "string",
-          "description": "SurrealDB password.",
-          "default": "root"
+          "$ref": "#/$defs/secretValue",
+          "description": "SurrealDB password (literal or { vault: KEY }). Only valid when hosting is \"external\". Default \"root\"."
         }
       },
-      "if": {
-        "properties": {
-          "hosting": {
-            "const": "external"
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "hosting": {
+                "const": "external"
+              }
+            },
+            "required": [
+              "hosting"
+            ]
+          },
+          "then": {
+            "required": [
+              "endpoint"
+            ]
+          },
+          "else": {
+            "description": "Credentials are only meaningful for external hosting; the managed DB generates its own root password.",
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "endpoint"
+                  ]
+                },
+                {
+                  "required": [
+                    "username"
+                  ]
+                },
+                {
+                  "required": [
+                    "password"
+                  ]
+                }
+              ]
+            }
           }
-        },
-        "required": [
-          "hosting"
-        ]
-      },
-      "then": {
-        "required": [
-          "endpoint"
-        ]
-      },
+        }
+      ],
       "additionalProperties": false
     },
     "appConfig": {

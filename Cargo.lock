@@ -3424,23 +3424,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "job-runner"
-version = "0.0.1-canary.113"
-dependencies = [
- "anyhow",
- "dashmap 6.1.0",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_yaml",
- "surrealdb",
- "tokio",
- "tokio-util",
- "tracing",
- "wiremock",
-]
-
-[[package]]
 name = "jobserver"
 version = "0.1.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3880,6 +3863,26 @@ name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
+
+[[package]]
+name = "maintenance"
+version = "0.0.1-canary.115"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum 0.7.9",
+ "chrono",
+ "flate2",
+ "reqwest 0.12.28",
+ "rust-s3",
+ "serde",
+ "serde_json",
+ "surrealdb",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
 
 [[package]]
 name = "maplit"
@@ -6207,7 +6210,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler"
-version = "0.0.1-canary.113"
+version = "0.0.1-canary.115"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6217,6 +6220,7 @@ dependencies = [
  "flate2",
  "futures",
  "http-body-util",
+ "maintenance",
  "reqwest 0.12.28",
  "rust-s3",
  "serde",
@@ -6724,7 +6728,7 @@ dependencies = [
 
 [[package]]
 name = "sp00ky-cli"
-version = "0.0.1-canary.113"
+version = "0.0.1-canary.115"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6787,7 +6791,7 @@ dependencies = [
 
 [[package]]
 name = "ssp"
-version = "0.0.1-canary.113"
+version = "0.0.1-canary.115"
 dependencies = [
  "anyhow",
  "blake3",
@@ -6813,7 +6817,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-ffi"
-version = "0.0.1-canary.113"
+version = "0.0.1-canary.115"
 dependencies = [
  "anyhow",
  "libc",
@@ -6823,20 +6827,67 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssp-node"
+version = "0.0.1-canary.115"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "getrandom 0.3.4",
+ "loro",
+ "lru",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "ssp",
+ "ssp-protocol",
+ "surrealdb",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "web-time",
+ "wiremock",
+]
+
+[[package]]
+name = "ssp-portable"
+version = "0.0.1-canary.115"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "http-body-util",
+ "hyper 1.9.0",
+ "hyper-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "ssp",
+ "ssp-node",
+ "ssp-protocol",
+ "surrealdb",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ssp-protocol"
-version = "0.0.1-canary.113"
+version = "0.0.1-canary.115"
 dependencies = [
  "blake3",
  "serde",
  "serde_json",
- "surrealdb",
 ]
 
 [[package]]
 name = "ssp-server"
-version = "0.0.1-canary.113"
+version = "0.0.1-canary.115"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum 0.7.9",
  "base64 0.22.1",
  "chrono",
@@ -6844,9 +6895,9 @@ dependencies = [
  "dotenvy",
  "hostname",
  "http-body-util",
- "job-runner",
  "loro",
  "lru",
+ "maintenance",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
@@ -6855,6 +6906,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ssp",
+ "ssp-node",
  "ssp-protocol",
  "surrealdb",
  "tokio",
@@ -6868,7 +6920,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-wasm"
-version = "0.0.1-canary.113"
+version = "0.0.1-canary.115"
 dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",

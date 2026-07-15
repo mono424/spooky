@@ -1,14 +1,27 @@
 # yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json
-mode: cluster # "singlenode", "cluster", or "surrealism"
+mode: singlenode # "singlenode", "cluster", or "surrealism"
 cloudApi: https://api-stg.sp00ky.cloud # override Sp00ky Cloud API endpoint
 slug: threads
 surrealdb:
-  namespace: main
-  database: example
-  # username: root       # SurrealDB auth username (default: root)
-  # password: root       # SurrealDB auth password (default: root)
-  # hosting: cloud      # "cloud" (default) or "external"
-  # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
+  hosting: external
+  endpoint: wss://sp00ky-demo-06fm9vpfdltobduaregfd8ddfo.aws-euw1.surreal.cloud
+  namespace: sp00ky-demo
+  database: threads
+  username: spky
+  password:
+    vault: DB_PASSWORD
+
+  # hosting defaults to "cloud" — Sp00ky provisions and manages the DB, and
+  # generates its own root password. endpoint/username/password are ONLY valid
+  # with `hosting: external` (setting them under cloud is a hard error).
+  #
+  # --- Bring-your-own external DB — uncomment to use ---
+  # hosting: external
+  # endpoint: "https://my-surreal.example.com"   # required for external
+  # Each credential is a literal OR a `{ vault: KEY }` reference resolved from
+  # the encrypted vault at deploy time — mix freely, just like `env:` below.
+  # username: root                     # literal
+  # password: { vault: DB_PASSWORD }   # pulled from the vault (spky env set DB_PASSWORD ...)
 schema: ./schema
 # Storage layout for the SSP's internal `_00_list_ref` table.
 # `dedicated` (default) gives each authenticated user their own
@@ -49,6 +62,12 @@ apps:
       dockerfile: ./app-solid/Dockerfile
       context: ../
       port: 80
+      # Free/Cloudflare plan: build the SPA and host it on Cloudflare Workers
+      # Static Assets (no Docker image). VITE_DB_ENDPOINT is baked from the
+      # external SurrealDB endpoint above so the SPA syncs directly against it.
+      static:
+        build: pnpm --filter @example/app-solid build
+        dir: example/app-solid/dist
     env:
       dev: '.env.local'
       # `vault:` pulls these from the encrypted vault. For automatic deploys
@@ -59,6 +78,7 @@ apps:
         - 'VITE_DB_ENDPOINT'
   api:
     type: backend
+    scope: devOnly
     # hosting: cloud    # "cloud" (default) or "external" (self-hosted at baseUrl)
     spec: ./api/openapi.yml
     baseUrl: http://host.docker.internal:3660

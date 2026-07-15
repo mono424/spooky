@@ -55,6 +55,8 @@ async fn main() -> Result<()> {
         config: std::sync::Arc::new(config.clone()),
         status: scheduler.status.clone(),
         event_buffer: scheduler.event_buffer.clone(),
+        seq_counter: std::sync::Arc::clone(&scheduler.seq_counter),
+        reclone_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
     };
     let ssp_router = scheduler::ssp_management::create_ssp_router(ssp_mgmt_state);
 
@@ -84,14 +86,16 @@ async fn main() -> Result<()> {
     let restore_registry = Arc::new(scheduler::restore::RestoreRegistry::new());
     let (restore_tx, restore_rx) = scheduler::restore::create_restore_channel();
     let backup_restore_lock = Arc::new(tokio::sync::Mutex::new(()));
-    let backup_router = scheduler::backup::create_backup_router(scheduler.backup_state(
-        Arc::clone(&backup_registry),
-        backup_tx.clone(),
-        Arc::clone(&backup_config),
-        Arc::clone(&restore_registry),
-        restore_tx.clone(),
-        Arc::clone(&backup_restore_lock),
-    ));
+    let maintenance_host: Arc<dyn maintenance::MaintenanceHost> = scheduler.maintenance_host();
+    let backup_router = scheduler::backup::create_backup_router(maintenance::BackupState {
+        host: Arc::clone(&maintenance_host),
+        config: Arc::clone(&backup_config),
+        registry: Arc::clone(&backup_registry),
+        tx: backup_tx.clone(),
+        restore_registry: Arc::clone(&restore_registry),
+        restore_tx: restore_tx.clone(),
+        backup_restore_lock: Arc::clone(&backup_restore_lock),
+    });
 
     let app = axum::Router::new()
         .merge(ingest_router)
@@ -121,15 +125,14 @@ async fn main() -> Result<()> {
 
     // Spawn the single-consumer backup worker
     {
-        let replica = scheduler.replica.clone();
-        let ingest = scheduler.ingest_state();
+        let host = Arc::clone(&maintenance_host);
         let config = Arc::clone(&backup_config);
         let db_config = Arc::new(scheduler.config().db.clone());
         let registry = Arc::clone(&backup_registry);
         let lock = Arc::clone(&backup_restore_lock);
         tokio::spawn(async move {
             scheduler::backup::run_backup_worker(
-                backup_rx, replica, ingest, config, db_config, registry, lock,
+                backup_rx, host, config, db_config, registry, lock,
             )
             .await;
         });
@@ -137,16 +140,14 @@ async fn main() -> Result<()> {
 
     // Spawn the single-consumer restore worker
     {
-        let replica = scheduler.replica.clone();
-        let ingest = scheduler.ingest_state();
-        let ssp_pool = Arc::clone(&scheduler.ssp_pool);
+        let host = Arc::clone(&maintenance_host);
         let s3_config = Arc::clone(&backup_config);
         let db_config = Arc::new(scheduler.config().db.clone());
         let registry = Arc::clone(&restore_registry);
         let lock = Arc::clone(&backup_restore_lock);
         tokio::spawn(async move {
             scheduler::restore::run_restore_worker(
-                restore_rx, replica, ingest, ssp_pool, s3_config, db_config, registry, lock,
+                restore_rx, host, s3_config, db_config, registry, lock,
             )
             .await;
         });

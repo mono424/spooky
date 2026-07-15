@@ -11,10 +11,15 @@ buckets: []{{CLIENT_TYPES_SECTION}}
 # surrealdb:
 #   namespace: main
 #   database: main
-#   username: root                # default: root
-#   password: root                # default: root
-#   # hosting: cloud              # "cloud" (default) or "external"
-#   # endpoint: "wss://my-surreal.example.com"  # required when hosting: external
+#   # hosting defaults to "cloud" (Sp00ky manages the DB + root password).
+#   # endpoint/username/password are ONLY valid with hosting: external.
+#   # --- Bring-your-own external DB ---
+#   # hosting: external
+#   # endpoint: "https://my-surreal.example.com"   # required for external
+#   # Each credential is a literal OR a { vault: KEY } reference resolved from
+#   # the encrypted vault at deploy time (mix freely, like env: below).
+#   # username: root
+#   # password: { vault: DB_PASSWORD }
 #
 # version:                        # service versions per environment
 #   dev: dev

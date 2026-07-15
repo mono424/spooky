@@ -1,0 +1,32 @@
+# Cloudflare Durable Object shell for the SSP node. NOT a workspace member of
+# the main tree (it only builds for wasm32 via worker-build/wrangler); the empty
+# [workspace] table below detaches it so `cargo` at the repo root ignores it and
+# a plain `cargo check --target wasm32-unknown-unknown` here builds it alone.
+[workspace]
+
+[package]
+name = "ssp-cf"
+version = "0.0.1-canary.115"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+worker = "0.8"
+worker-macros = "0.8"
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+tracing = "0.1"
+console_error_panic_hook = "0.1"
+
+ssp = { path = "../../packages/ssp" }
+ssp-protocol = { path = "../../packages/ssp-protocol" }
+ssp-node = { path = "../../packages/ssp-node" }
+
+# ssp → ulid → rand → getrandom: JS backend on wasm32 (see .cargo/config.toml).
+getrandom = { version = "0.3", features = ["wasm_js"] }

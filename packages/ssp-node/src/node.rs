@@ -1,0 +1,1440 @@
+//! The portable node: shared HTTP dispatch over the platform ports.
+//!
+//! `SspNode::route` is the single entry both shells converge on. Routes
+//! migrate here from the VM shell's axum handlers one at a time (the shell
+//! mounts the node as its axum FALLBACK, so a route removed from the axum
+//! table falls through to the core — every intermediate commit stays green).
+//!
+//! Migrated so far: `/version`, `/log`, `/reset`, `/job/kill`, `/job/retry`,
+//! `/job/recover`. Still in the VM shell: `/ingest`, `/view/*`, `/crdt/apply`,
+//! `/debug/*`, `/health`, `/info`, `/info/text`, `/backends`, `/backup/*`.
+
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::sync::Arc;
+use tokio::sync::{mpsc, RwLock};
+use tracing::{debug, error, info, warn};
+
+use ssp::circuit::Circuit;
+
+use crate::api::{ApiRequest, ApiResponse, RouteId};
+use crate::jobs::{
+    enqueue_recovered, fail_if_pending_helper, load_job_record, reset_for_retry_helper,
+    set_assignee_helper, JobConfig, JobControl, JobEntry,
+};
+use crate::platform::Platform;
+use crate::ports::{BackendHealth, Db, Telemetry};
+use crate::status::SspStatus;
+
+/// Everything the migrated handlers need, platform-independent. Constructed
+/// once by the shell and shared with its framework layer.
+pub struct SspNode {
+    pub platform: Platform,
+    pub status: Arc<RwLock<SspStatus>>,
+    pub processor: Arc<RwLock<Circuit>>,
+    pub job_config: Arc<JobConfig>,
+    pub job_control: JobControl,
+    pub job_queue_tx: mpsc::Sender<JobEntry>,
+    pub ssp_id: String,
+    /// Bearer secret for authenticated routes (`NodeConfig.auth_secret`).
+    pub auth_secret: String,
+    pub ref_mode: ssp_protocol::RefMode,
+    /// The shell binary's version string (surfaced via `/version` + `/info`).
+    pub version: &'static str,
+    /// Upstream SurrealDB server version, queried once at startup by the shell.
+    pub surrealdb_version: String,
+    /// Externally reachable IP for this node (`SPKY_SSP_ADVERTISE_ADDR` host),
+    /// surfaced via `/info`. `None` when unset.
+    pub advertise_ip: Option<String>,
+    /// Deployment env vars surfaced verbatim in `/info` (key, value). The shell
+    /// collects these — the core never reads the process environment.
+    pub info_env: Vec<(String, String)>,
+    /// Epoch-ms when the node started, for the `/info` uptime field.
+    pub start_epoch_ms: u64,
+    /// Backend health monitor — standalone mode only (`None` in cluster mode,
+    /// where the scheduler owns backend health + `PUT /backends`).
+    pub backend_health: Option<Arc<dyn BackendHealth>>,
+    /// Server-side CRDT merge cache (`/crdt/apply`).
+    pub crdt_cache: Arc<crate::crdt::CrdtCache>,
+    /// Per-view latency state, keyed by view id.
+    pub view_metrics: Arc<crate::view_metrics::ViewMetrics>,
+    /// Coalescing edge-update channel (view register/ingest push `ViewDelta`s
+    /// here; the `run_edge_update_service` task batches them). Sender is cheap
+    /// to clone and wasm-safe (`tokio::sync::mpsc`).
+    pub edge_update_tx: mpsc::UnboundedSender<Vec<ssp::circuit::ViewDelta>>,
+    /// When true, anonymous (empty auth) registrations route to the shared
+    /// world-readable `_00_list_ref_anon` table.
+    pub anonymous_live_queries: bool,
+    /// `true` when no scheduler fronts this SSP (standalone mode): this node
+    /// handles all jobs and owns the recovery sweep.
+    pub standalone: bool,
+    /// View TTL cleanup cadence (seconds) — the `TtlCleanup` timer re-arm.
+    pub ttl_cleanup_interval_secs: u64,
+    /// Rows per bootstrap page (keyset pagination) for cold-start rebuild.
+    pub bootstrap_page_size: usize,
+    /// Periodic circuit-checkpoint cadence; `None` disables (VM).
+    pub checkpoint_interval_secs: Option<u64>,
+    /// Max age of a restored snapshot before `bootstrap()` rebuilds instead.
+    pub max_snapshot_age_secs: u64,
+}
+
+/// Standalone job-recovery sweep cadence + staleness windows (were shell consts).
+pub const JOB_RECOVERY_INTERVAL_SECS: u64 = 60;
+const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
+const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
+
+/// Projection for recovery row reads: `type::string(id) AS id` keeps the
+/// RecordId out of the flattened JSON; `recurring`+`interval` preserve a
+/// recovered recurring job's schedule flag.
+const RECOVERY_FIELDS: &str = "type::string(id) AS id, status, path, payload, retries, \
+                               max_retries, retry_strategy, timeout, recurring, interval";
+
+#[derive(Deserialize, Debug)]
+struct LogRequest {
+    message: String,
+    #[serde(default)]
+    level: String,
+    #[serde(default)]
+    data: Option<Value>,
+}
+
+#[derive(Deserialize, Debug)]
+struct JobActionRequest {
+    id: String,
+}
+
+fn ok_json(json: Value) -> ApiResponse {
+    ApiResponse::json(200, json)
+}
+
+fn err_json(status: u16, code: &str, message: impl Into<String>) -> ApiResponse {
+    ApiResponse::json(status, json!({ "code": code, "message": message.into() }))
+}
+
+impl SspNode {
+    /// Dispatch one request. `None` = the route is not (yet) served by the
+    /// core — the shell keeps handling it in its own framework layer.
+    pub async fn route(&self, req: ApiRequest) -> Option<ApiResponse> {
+        let route = RouteId::match_path(req.method, &req.path)?;
+
+        // Bearer auth, identical to the shell middleware it replaces: the
+        // presented token must equal the configured secret exactly.
+        let requires_auth = route.requires_auth();
+        if requires_auth && req.bearer.as_deref() != Some(self.auth_secret.as_str()) {
+            return Some(ApiResponse::json(401, Value::Null));
+        }
+
+        let mut response = match route {
+            RouteId::Version => self.version_handler(),
+            RouteId::Log => self.log_handler(&req)?,
+            RouteId::Reset => self.reset_handler().await,
+            RouteId::Reload => self.reload_handler().await,
+            RouteId::JobKill => self.job_kill_handler(&req).await?,
+            RouteId::JobRetry => self.job_retry_handler(&req).await?,
+            RouteId::JobRecover => self.job_recover_handler(&req).await?,
+            RouteId::Health => self.health_handler().await,
+            RouteId::Info => self.info_handler().await,
+            RouteId::InfoText => self.info_text_handler().await,
+            RouteId::BackendsUpdate => self.update_backends_handler(&req).await?,
+            RouteId::DebugView { view_id } => self.debug_view_handler(&view_id).await,
+            RouteId::DebugDeps => self.debug_deps_handler().await,
+            RouteId::DebugCatchupRows { table } => self.debug_catchup_rows_handler(&table).await,
+            RouteId::CrdtApply => self.crdt_apply_handler(&req).await?,
+            RouteId::ViewUnregister => self.unregister_view_handler(&req).await?,
+            RouteId::ViewRegister => self.register_view_handler(&req).await?,
+            RouteId::Ingest => self.ingest_handler(&req).await?,
+            // Known route, not migrated yet — the shell's framework layer
+            // still owns it.
+            _ => return None,
+        };
+
+        if !requires_auth {
+            // Public routes carry a permissive CORS header so browser
+            // DevTools can read them cross-origin (simple GETs, no preflight).
+            response.headers.push(("Access-Control-Allow-Origin", "*".to_string()));
+        }
+        Some(response)
+    }
+
+    fn version_handler(&self) -> ApiResponse {
+        ok_json(json!({
+            "version": self.version,
+            "mode": "streaming"
+        }))
+    }
+
+    fn log_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        let Ok(payload) = serde_json::from_slice::<LogRequest>(&req.body) else {
+            return Some(err_json(422, "bad_body", "invalid log payload"));
+        };
+        let msg = if let Some(data) = &payload.data {
+            format!("{} | data: {}", payload.message, data)
+        } else {
+            payload.message.clone()
+        };
+
+        match payload.level.to_lowercase().as_str() {
+            "error" => error!(remote = true, "{}", msg),
+            "warn" => warn!(remote = true, "{}", msg),
+            "debug" => debug!(remote = true, "{}", msg),
+            "trace" => tracing::trace!(remote = true, "{}", msg),
+            _ => info!(remote = true, "{}", msg),
+        }
+
+        Some(ok_json(Value::Null))
+    }
+
+    async fn reset_handler(&self) -> ApiResponse {
+        info!("Resetting circuit state");
+        wipe_circuit_and_edges(
+            self.platform.db.as_ref(),
+            &self.processor,
+            self.platform.telemetry.as_ref(),
+            self.ref_mode,
+        )
+        .await;
+        ok_json(Value::Null)
+    }
+
+    /// `POST /admin/reload` — re-scan the DB schema and reload data into a
+    /// fresh circuit. Picks up tables/permissions defined AFTER the last
+    /// bootstrap (view registration reads permissions captured at bootstrap, so
+    /// a schema change is invisible until a reload). Gates ingest (status →
+    /// Bootstrapping) for the duration, exactly like a cold start.
+    async fn reload_handler(&self) -> ApiResponse {
+        match self.reload().await {
+            Ok(()) => ok_json(json!({ "status": "ready" })),
+            Err(e) => err_json(500, "reload_failed", e.to_string()),
+        }
+    }
+
+    /// Fresh rebuild-from-DB into a new circuit. Shares the cold-start REBUILD
+    /// path ([`crate::bootstrap::rebuild_from_db`]) so schema discovery, view
+    /// re-registration from `_00_query`, and reseed all match bootstrap.
+    pub async fn reload(&self) -> anyhow::Result<()> {
+        *self.status.write().await = SspStatus::Bootstrapping;
+        *self.processor.write().await = Circuit::new();
+        match crate::bootstrap::rebuild_from_db(
+            self.platform.db.as_ref(),
+            &self.processor,
+            self.bootstrap_page_size,
+        )
+        .await
+        {
+            Ok(()) => {
+                *self.status.write().await = SspStatus::Ready;
+                Ok(())
+            }
+            Err(e) => {
+                *self.status.write().await = SspStatus::Failed;
+                Err(e)
+            }
+        }
+    }
+
+    /// `POST /job/kill` — stop a job.
+    ///
+    /// - `processing` and in-flight on this SSP: fire the cancellation and let
+    ///   the runner write the terminal status (single-writer invariant).
+    /// - `pending`/queued (or `processing` owned elsewhere): set a kill flag
+    ///   the runner honors at dequeue.
+    /// - `success`/`failed`: idempotent no-op.
+    async fn job_kill_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        let Ok(action) = serde_json::from_slice::<JobActionRequest>(&req.body) else {
+            return Some(err_json(422, "bad_body", "invalid job action payload"));
+        };
+        if !valid_record_id(&action.id) {
+            return Some(err_json(400, "bad_id", "id must be 'table:key'"));
+        }
+
+        let record = match load_job_record(self.platform.db.as_ref(), &action.id).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                return Some(err_json(404, "not_found", format!("job '{}' not found", action.id)));
+            }
+            Err(e) => return Some(err_json(500, "db_error", e.to_string())),
+        };
+
+        let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let resp = match status {
+            "success" | "failed" => ok_json(
+                json!({ "id": action.id, "status": status, "message": "already terminal; no-op" }),
+            ),
+            "processing" => {
+                if self.job_control.cancel_inflight(&action.id) {
+                    ok_json(json!({ "id": action.id, "status": "cancelling", "message": "cancelling in-flight request" }))
+                } else {
+                    // Processing, but not in-flight on this SSP (cluster:
+                    // another SSP owns it, or a stale row). Flag it so any
+                    // later re-enqueue is dropped, and report it wasn't local.
+                    self.job_control.mark_killed_pending(&action.id);
+                    ok_json(json!({ "id": action.id, "status": "processing", "message": "not in-flight on this ssp; kill flag set" }))
+                }
+            }
+            _ => {
+                // pending / unknown. Two cooperating actions, in this order:
+                //  1. Set the drop-flag first, so a queued copy fails at dequeue
+                //     (runner is the sole status writer there — no clobber).
+                //  2. Also terminalize the row directly *iff* still pending
+                //     (pickup is CREATE-only; an orphaned pending row is never
+                //     enqueued, so the flag alone would be a no-op forever).
+                self.job_control.mark_killed_pending(&action.id);
+                let error_entry = json!({ "code": "killed", "reason": "killed by operator" });
+                match fail_if_pending_helper(self.platform.db.as_ref(), &action.id, error_entry).await {
+                    Ok(true) => ok_json(
+                        json!({ "id": action.id, "status": "failed", "message": "killed pending job" }),
+                    ),
+                    Ok(false) => ok_json(
+                        // Not pending at write time (raced to 'processing', or
+                        // already terminal). The flag still guards a queued copy.
+                        json!({ "id": action.id, "status": status, "message": "kill flag set; will fail at dequeue" }),
+                    ),
+                    Err(e) => err_json(500, "db_error", e.to_string()),
+                }
+            }
+        };
+        Some(resp)
+    }
+
+    /// `POST /job/retry` — re-run a terminal (`failed`/`success`) job. Resets
+    /// the row and re-enqueues a fresh `JobEntry` directly, because a plain
+    /// `UPDATE` would not re-trigger the CREATE-gated ingest path.
+    async fn job_retry_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        let Ok(action) = serde_json::from_slice::<JobActionRequest>(&req.body) else {
+            return Some(err_json(422, "bad_body", "invalid job action payload"));
+        };
+        let Some((table, _)) = action.id.split_once(':') else {
+            return Some(err_json(400, "bad_id", "id must be 'table:key'"));
+        };
+
+        let Some(backend) = self.job_config.job_tables.get(table).cloned() else {
+            return Some(err_json(
+                404,
+                "unknown_table",
+                format!("no job backend configured for table '{}'", table),
+            ));
+        };
+
+        let record = match load_job_record(self.platform.db.as_ref(), &action.id).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                return Some(err_json(404, "not_found", format!("job '{}' not found", action.id)));
+            }
+            Err(e) => return Some(err_json(500, "db_error", e.to_string())),
+        };
+
+        let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "failed" && status != "success" {
+            return Some(err_json(
+                409,
+                "not_terminal",
+                format!("cannot retry job in '{}' state; only 'failed'/'success'", status),
+            ));
+        }
+
+        // Clear any stale kill flag so the re-enqueued job isn't dropped at
+        // dequeue. Order matters: remove the flag BEFORE re-enqueueing.
+        self.job_control.take_killed_pending(&action.id);
+
+        if let Err(e) = reset_for_retry_helper(self.platform.db.as_ref(), &action.id).await {
+            return Some(err_json(500, "db_error", e.to_string()));
+        }
+
+        // Rebuild the JobEntry. `from_record` copies `retries` from the
+        // (pre-reset) snapshot, so force it to 0 to honor the retry budget.
+        let timeout_override = record.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let mut job = JobEntry::from_record(
+            action.id.clone(),
+            backend.base_url.clone(),
+            backend.auth_token.clone(),
+            &record,
+            backend.effective_timeout(timeout_override),
+        );
+        job.retries = 0;
+
+        // Guard against a concurrent retry / recovery sweep enqueueing the
+        // same id twice. Already queued ⇒ this retry is a no-op.
+        if !self.job_control.mark_enqueued(&action.id) {
+            return Some(ok_json(
+                json!({ "id": action.id, "status": "pending", "message": "already queued" }),
+            ));
+        }
+        if let Err(e) = self.job_queue_tx.send(job).await {
+            self.job_control.clear_enqueued(&action.id);
+            return Some(err_json(500, "enqueue_failed", e.to_string()));
+        }
+
+        Some(ok_json(json!({ "id": action.id, "status": "pending", "message": "re-enqueued" })))
+    }
+
+    /// `POST /job/recover` — cluster recovery entry point. This SSP takes
+    /// ownership (`assignee = ssp_id`) and re-enqueues through the same
+    /// `enqueue_recovered` path as the singlenode sweep, so `mark_enqueued`
+    /// still guarantees a job already moving here is never double-executed.
+    /// Only acts on rows that are still `pending`.
+    async fn job_recover_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        let Ok(action) = serde_json::from_slice::<JobActionRequest>(&req.body) else {
+            return Some(err_json(422, "bad_body", "invalid job action payload"));
+        };
+        let Some((table, _)) = action.id.split_once(':') else {
+            return Some(err_json(400, "bad_id", "id must be 'table:key'"));
+        };
+
+        let Some(backend) = self.job_config.job_tables.get(table).cloned() else {
+            return Some(err_json(
+                404,
+                "unknown_table",
+                format!("no job backend configured for table '{}'", table),
+            ));
+        };
+
+        let record = match load_job_record(self.platform.db.as_ref(), &action.id).await {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                return Some(err_json(404, "not_found", format!("job '{}' not found", action.id)));
+            }
+            Err(e) => return Some(err_json(500, "db_error", e.to_string())),
+        };
+
+        // Only recover rows still pending. Anything else (terminal, or
+        // processing the scheduler hasn't reset) is left alone so we never
+        // re-run a finished or killed job on a race.
+        let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "pending" {
+            return Some(ok_json(
+                json!({ "id": action.id, "status": status, "message": "not pending; recover skipped" }),
+            ));
+        }
+
+        // Take ownership before enqueueing so the scheduler sweep sees this
+        // SSP as the new owner on its next pass and stops re-dispatching.
+        if let Err(e) =
+            set_assignee_helper(self.platform.db.as_ref(), &action.id, &self.ssp_id).await
+        {
+            warn!(job_id = %action.id, error = %e, "Failed to persist assignee on recover");
+        }
+
+        let message = if enqueue_recovered(
+            &self.job_control,
+            &self.job_queue_tx,
+            &backend,
+            &action.id,
+            &record,
+        )
+        .await
+        {
+            "re-enqueued"
+        } else {
+            // Already queued or in-flight on this SSP — idempotent no-op.
+            "already queued"
+        };
+        Some(ok_json(json!({ "id": action.id, "status": "pending", "message": message })))
+    }
+
+    fn status_str(status: SspStatus) -> &'static str {
+        match status {
+            SspStatus::Bootstrapping => "bootstrapping",
+            SspStatus::Ready => "ready",
+            SspStatus::Failed => "failed",
+        }
+    }
+
+    /// Health check. In standalone mode with a backend health monitor active,
+    /// mirrors the scheduler's aggregation: healthy / degraded / unavailable
+    /// derived from SSP readiness plus backend health counts.
+    async fn health_handler(&self) -> ApiResponse {
+        let status = *self.status.read().await;
+        let ssp_ready = status == SspStatus::Ready;
+        let status_str = Self::status_str(status);
+
+        let Some(backend_health) = &self.backend_health else {
+            // Cluster mode (or no monitor): historical shape, untouched.
+            let http_status = if ssp_ready { 200 } else { 503 };
+            return ApiResponse::json(http_status, json!({ "status": status_str }));
+        };
+
+        let c = backend_health.counts().await;
+        let all_backends_ok = c.total == 0 || c.healthy == c.total;
+        let all_backends_down = c.total > 0 && (c.unreachable + c.unhealthy) == c.total;
+
+        // Same classification as the scheduler's /health, with this SSP's
+        // readiness standing in for the pool's ready count.
+        let (http_status, aggregate) = if ssp_ready && all_backends_ok {
+            (200, "healthy")
+        } else if !ssp_ready || all_backends_down {
+            (503, "unavailable")
+        } else {
+            (200, "degraded")
+        };
+
+        ApiResponse::json(
+            http_status,
+            json!({
+                "status": aggregate,
+                "ssp": { "status": status_str },
+                "backends": {
+                    "healthy": c.healthy,
+                    "unhealthy": c.unhealthy,
+                    "unreachable": c.unreachable,
+                    "total": c.total,
+                }
+            }),
+        )
+    }
+
+    /// Update backend health check configs at runtime (standalone only — in
+    /// cluster mode the scheduler owns `PUT /backends`).
+    async fn update_backends_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        let Some(backend_health) = &self.backend_health else {
+            return Some(err_json(
+                409,
+                "no_monitor",
+                "backend health monitor not active (cluster mode — use the scheduler's /backends)",
+            ));
+        };
+        let Ok(specs) = serde_json::from_slice::<Vec<crate::ports::BackendSpec>>(&req.body) else {
+            return Some(err_json(422, "bad_body", "invalid backends payload"));
+        };
+        info!(count = specs.len(), "Updating backend configs via PUT /backends");
+        backend_health.update(specs).await;
+        Some(ok_json(Value::Null))
+    }
+
+    /// Build the single-entity `/info` array (shared by `/info` and
+    /// `/info/text`).
+    async fn info_value(&self) -> Value {
+        let status_str = Self::status_str(*self.status.read().await);
+        let circuit = self.processor.read().await;
+
+        let circuit_tables: serde_json::Map<String, Value> = circuit
+            .table_record_counts()
+            .into_iter()
+            .map(|(t, c)| (t, Value::from(c)))
+            .collect();
+
+        // Per-table content hashes — bit-identical to scheduler hashes when
+        // the circuit is in sync with the frozen snapshot. Used by `spky
+        // verify` and the scheduler's post-replay integrity check.
+        let circuit_hashes: serde_json::Map<String, Value> = circuit
+            .compute_table_hashes()
+            .into_iter()
+            .map(|(t, h)| (t, Value::String(h)))
+            .collect();
+
+        // Per-table incremental XOR set-hashes (`x3:`), maintained per ingest.
+        // The scheduler reconstructs these at the catch-up cut M to verify a
+        // rejoining SSP before routing live traffic to it.
+        let catchup_hashes: serde_json::Map<String, Value> = circuit
+            .compute_catchup_hashes()
+            .into_iter()
+            .map(|(t, h)| (t, Value::String(h)))
+            .collect();
+
+        let ref_mode_str = match self.ref_mode {
+            ssp_protocol::RefMode::Single => "single",
+            ssp_protocol::RefMode::Dedicated => "dedicated",
+        };
+
+        let env_vars: serde_json::Map<String, Value> = self
+            .info_env
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect();
+
+        let uptime_seconds = crate::now_epoch_ms().saturating_sub(self.start_epoch_ms) / 1000;
+
+        json!([
+            {
+                "entity": "ssp",
+                "id": self.ssp_id,
+                "ip": self.advertise_ip,
+                "status": status_str,
+                "views": circuit.view_count(),
+                "version": self.version,
+                "surrealdb_version": self.surrealdb_version,
+                "uptime_seconds": uptime_seconds,
+                "last_heartbeat_seconds_ago": null,
+                "circuit_tables": circuit_tables,
+                "circuit_hashes": circuit_hashes,
+                "catchup_hashes": catchup_hashes,
+                "ref_mode": ref_mode_str,
+                "env": env_vars,
+            }
+        ])
+    }
+
+    async fn info_handler(&self) -> ApiResponse {
+        ok_json(self.info_value().await)
+    }
+
+    /// `/info/text` — the same entity list serialized to a JSON string and
+    /// served as `text/plain`. SurrealDB's `/spooky` custom API proxies this
+    /// via `http::get` and passes the body through verbatim, so it must
+    /// already be valid JSON text.
+    async fn info_text_handler(&self) -> ApiResponse {
+        let body = serde_json::to_string(&self.info_value().await).unwrap_or_else(|_| "[]".into());
+        ApiResponse::text(200, "text/plain", body)
+    }
+
+    /// Debug: cache state for one view.
+    async fn debug_view_handler(&self, view_id: &str) -> ApiResponse {
+        let circuit = self.processor.read().await;
+        if let Some(view) = circuit.get_view(view_id) {
+            let cache_summary: Vec<_> = view
+                .cache
+                .iter()
+                .map(|(k, &w)| json!({ "key": k, "weight": w }))
+                .collect();
+            ok_json(json!({
+                "view_id": view_id,
+                "cache_size": view.cache.len(),
+                "last_hash": view.last_hash,
+                "format": format!("{:?}", view.format),
+                "cache": cache_summary,
+                "subquery_tables": view.subquery_tables,
+                "referenced_tables": view.referenced_tables,
+                "content_generation": view.content_generation,
+                "subquery_cache": view.subquery_cache.iter()
+                    .map(|(k, (pk, alias))| json!({"key": k, "parent_key": pk, "alias": alias}))
+                    .collect::<Vec<_>>(),
+            }))
+        } else {
+            ok_json(json!({ "error": "View not found" }))
+        }
+    }
+
+    /// Debug: dump one table's circuit rows as `{ raw_id: json }`. The
+    /// scheduler fetches this on a persistent catch-up hash mismatch to diff
+    /// its reconstructed projection against the circuit row-by-row.
+    async fn debug_catchup_rows_handler(&self, table: &str) -> ApiResponse {
+        let circuit = self.processor.read().await;
+        let rows: serde_json::Map<String, Value> =
+            circuit.dump_table_rows(table).into_iter().collect();
+        ok_json(json!({ "table": table, "rows": rows }))
+    }
+
+    /// Debug: dependency map + store overview.
+    async fn debug_deps_handler(&self) -> ApiResponse {
+        let circuit = self.processor.read().await;
+        ok_json(json!({
+            "dependency_map": circuit.dependency_map_dump(),
+            "tables_in_store": circuit.table_names(),
+            "view_count": circuit.view_count(),
+        }))
+    }
+
+    /// 503 with the `SspError` shape when the SSP isn't `Ready`.
+    async fn ready_gate(&self) -> Option<ApiResponse> {
+        let status = *self.status.read().await;
+        if status != SspStatus::Ready {
+            return Some(ApiResponse::json(
+                503,
+                json!({
+                    "code": crate::status::error_codes::NOT_READY,
+                    "message": format!("SSP is in {:?} state", status),
+                }),
+            ));
+        }
+        None
+    }
+
+    /// `POST /crdt/apply` — merge a Loro update into `_00_crdt[<field>]`.
+    async fn crdt_apply_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        if let Some(gate) = self.ready_gate().await {
+            return Some(gate);
+        }
+        let Ok(payload) = serde_json::from_slice::<crate::crdt::ApplyRequest>(&req.body) else {
+            return Some(err_json(422, "bad_body", "invalid crdt apply payload"));
+        };
+        match self.crdt_cache.apply(self.platform.db.as_ref(), &payload).await {
+            Ok(resp) => Some(ok_json(json!({ "rev": resp.rev }))),
+            Err(e) => {
+                error!(error = %e, "CRDT apply failed");
+                Some(err_json(400, "crdt_apply_failed", e.to_string()))
+            }
+        }
+    }
+
+    /// `POST /view/unregister` — remove a view + delete its `_00_list_ref` edges.
+    async fn unregister_view_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        if let Some(gate) = self.ready_gate().await {
+            return Some(gate);
+        }
+        let Ok(payload) = serde_json::from_slice::<ssp_protocol::ViewUnregisterRequest>(&req.body)
+        else {
+            return Some(err_json(422, "bad_body", "invalid unregister payload"));
+        };
+        debug!("Unregistering view: {}", payload.id);
+
+        // Look up the auth_id from the View before removing it, so the edge
+        // cleanup targets the right per-user `_00_list_ref_user_<id>`.
+        let auth_id = {
+            let circuit = self.processor.read().await;
+            circuit.get_view(&payload.id).map(|v| v.auth_id.clone()).unwrap_or_default()
+        };
+        {
+            let mut circuit = self.processor.write().await;
+            circuit.remove_query(&payload.id);
+        }
+        self.view_metrics.write().await.remove(&payload.id);
+        self.platform.telemetry.gauge_add("view_count", -1);
+
+        // Delete all edges for this incantation via the Db port.
+        let incantation_id = crate::edges::format_incantation_id(&payload.id);
+        let list_ref = crate::tables::list_ref_table(self.ref_mode, &auth_id);
+        // Bind the incantation as a record (single-arg type::record parses the
+        // full `_00_query:<key>` faithfully).
+        let stmt = format!("DELETE (type::record($from))->{list_ref}");
+        if let Err(e) = self
+            .platform
+            .db
+            .query(&stmt, &[("from", json!(incantation_id))])
+            .await
+        {
+            error!("Failed to delete edges for view {}: {}", incantation_id, e);
+        }
+
+        Some(ok_json(Value::Null))
+    }
+
+    /// `POST /view/register` — create/refresh a view and seed its edges.
+    async fn register_view_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        use ssp::circuit::view::OutputFormat;
+
+        if let Some(gate) = self.ready_gate().await {
+            return Some(gate);
+        }
+        let Ok(payload) = serde_json::from_slice::<Value>(&req.body) else {
+            return Some(err_json(422, "bad_body", "invalid register payload"));
+        };
+
+        // Parse + validate under the read lock (permission injection). Failures
+        // are 400 with the offending table named.
+        let data = {
+            let circuit = self.processor.read().await;
+            match ssp::service::view::prepare_registration_dbsp(
+                payload,
+                circuit.permissions(),
+                circuit.link_targets(),
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    error!(target: "ssp::policy", error = %e, "Rejected view registration");
+                    return Some(err_json(400, "rejected", e.to_string()));
+                }
+            }
+        };
+
+        // Auth identity for per-user routing (anon remap when enabled).
+        let auth_id = {
+            let raw = data.metadata.get("authId").and_then(|v| v.as_str()).unwrap_or("");
+            if raw.is_empty() && self.anonymous_live_queries {
+                ssp_protocol::ANON_AUTH_ID.to_string()
+            } else {
+                raw.to_string()
+            }
+        };
+
+        // Lazy-define per-user tables (idempotent; no-op in Single mode).
+        if let Err(e) =
+            crate::tables::ensure_user_tables(self.platform.db.as_ref(), self.ref_mode, &auth_id)
+                .await
+        {
+            error!(error = %e, auth_id = %auth_id, "Failed to ensure per-user tables");
+            return Some(err_json(500, "db_error", "Database error"));
+        }
+
+        let raw_id = data.metadata.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let incantation_id = crate::edges::format_incantation_id(raw_id);
+
+        let view_existed = {
+            let circuit = self.processor.read().await;
+            circuit.get_view(&data.plan.id).is_some()
+        };
+
+        let meta_str = |k: &str| data.metadata.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        if view_existed {
+            info!(target: "ssp::edges", view_id = %incantation_id, "View already existed - updating metadata only");
+            // Refresh clientId/lastActiveAt/auth_id on the _00_query row.
+            let stmt = "UPDATE type::record($id) SET clientId = <string>$clientId, \
+                        auth_id = <string>$authId, lastActiveAt = <datetime>$lastActiveAt";
+            if let Err(e) = self
+                .platform
+                .db
+                .query(
+                    stmt,
+                    &[
+                        ("id", json!(incantation_id)),
+                        ("clientId", json!(meta_str("clientId"))),
+                        ("authId", json!(auth_id)),
+                        ("lastActiveAt", json!(meta_str("lastActiveAt"))),
+                    ],
+                )
+                .await
+            {
+                error!("Failed to update incantation metadata: {}", e);
+            }
+            return Some(ok_json(Value::Null));
+        }
+
+        debug!("Registering view: {}", data.plan.id);
+
+        let register_start = web_time::Instant::now();
+        let update = {
+            let mut circuit = self.processor.write().await;
+            circuit.add_query_with_auth(
+                data.plan.clone(),
+                data.safe_params,
+                Some(OutputFormat::Streaming),
+                auth_id.clone(),
+            )
+        };
+        let registration_time_ms = register_start.elapsed().as_secs_f64() * 1000.0;
+        self.platform.telemetry.gauge_add("view_count", 1);
+
+        // Seed an empty per-view metrics slot.
+        self.view_metrics
+            .write()
+            .await
+            .entry(data.plan.id.clone())
+            .or_default();
+
+        let params = data.metadata.get("safe_params").cloned().unwrap_or(Value::Null);
+        let initial_row_count = update.as_ref().map(|d| d.records.len() as i64).unwrap_or(0);
+
+        // createdAt is DEFAULT time::now() READONLY (set only on insert);
+        // counters default to 0 if absent.
+        let stmt = "UPSERT type::record($id) SET clientId = <string>$clientId, \
+                    auth_id = <string>$authId, surql = <string>$surql, params = $params, \
+                    ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt, \
+                    registrationTime = <float>$registrationTime, rowCount = <int>$rowCount";
+        if let Err(e) = self
+            .platform
+            .db
+            .query(
+                stmt,
+                &[
+                    ("id", json!(incantation_id)),
+                    ("clientId", json!(meta_str("clientId"))),
+                    ("authId", json!(auth_id)),
+                    ("surql", json!(meta_str("sql"))),
+                    ("params", params),
+                    ("ttl", json!(meta_str("ttl"))),
+                    ("lastActiveAt", json!(meta_str("lastActiveAt"))),
+                    ("registrationTime", json!(registration_time_ms)),
+                    ("rowCount", json!(initial_row_count)),
+                ],
+            )
+            .await
+        {
+            error!("Failed to upsert incantation metadata: {}", e);
+            return Some(err_json(500, "db_error", "Database error"));
+        }
+
+        // Initial edges → coalescing flusher; direct write if the flusher is gone.
+        if let Some(delta) = update {
+            if let Err(send_err) = self.edge_update_tx.send(vec![delta]) {
+                let circuit = self.processor.read().await;
+                crate::edges::run_edge_writes(
+                    self.platform.db.as_ref(),
+                    &[&send_err.0[0]],
+                    &circuit,
+                    self.ref_mode,
+                    self.platform.telemetry.as_ref(),
+                )
+                .await;
+            }
+        }
+
+        Some(ok_json(Value::Null))
+    }
+
+    /// `POST /ingest` — the change-push entry. SurrealDB `DEFINE EVENT`s post
+    /// each mutation here: route jobs, step the circuit, fan out edge writes.
+    async fn ingest_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
+        use ssp::circuit::{Change, ChangeSet, Operation};
+
+        if let Some(gate) = self.ready_gate().await {
+            return Some(gate);
+        }
+        let Ok(payload) = serde_json::from_slice::<ssp_protocol::IngestRequest>(&req.body) else {
+            error!("Invalid ingest JSON payload");
+            return Some(ApiResponse::json(400, Value::Null));
+        };
+        let Some(op) = Operation::from_str(&payload.op) else {
+            warn!(op = %payload.op, "Invalid operation type");
+            return Some(ApiResponse::json(400, Value::Null));
+        };
+
+        let start = crate::now_epoch_ms();
+        let clean = ssp::sanitizer::normalize_record(payload.record.clone());
+        let db = self.platform.db.as_ref();
+
+        // Pre-emptively create / drop the user's dedicated tables so the
+        // client's post-auth LIVE doesn't race lazy creation.
+        if payload.table == "user" && op == Operation::Create {
+            if let Err(e) =
+                crate::tables::ensure_user_tables(db, self.ref_mode, &payload.id).await
+            {
+                warn!(target: "ssp::ingest", error = %e, auth_id = %payload.id, "Pre-emptive ensure_user_tables failed");
+            }
+        }
+        if payload.table == "user" && op == Operation::Delete {
+            if let Err(e) = crate::tables::drop_user_tables(db, self.ref_mode, &payload.id).await {
+                warn!(target: "ssp::ingest", error = %e, auth_id = %payload.id, "drop_user_tables failed");
+            }
+        }
+
+        // Job routing.
+        if let Some(backend_info) = self.job_config.job_tables.get(&payload.table).cloned() {
+            let is_assigned =
+                self.standalone || payload.job_assignee.as_deref() == Some(self.ssp_id.as_str());
+
+            if is_assigned && op == Operation::Create {
+                if payload.record.get("status").and_then(|v| v.as_str()) == Some("pending") {
+                    self.route_pending_job(&payload, &backend_info).await;
+                }
+            } else if is_assigned && op == Operation::Update {
+                self.maybe_enqueue_recurring_poke(&backend_info, &payload.id, &payload.record).await;
+            }
+        }
+
+        // Step the circuit.
+        let change = match op {
+            Operation::Create => Change::create(&payload.table, &payload.id, clean),
+            Operation::Update => Change::update(&payload.table, &payload.id, clean),
+            Operation::Delete => Change::delete(&payload.table, &payload.id),
+        };
+        let step_start = web_time::Instant::now();
+        let deltas = {
+            let mut circuit = self.processor.write().await;
+            circuit.step(ChangeSet { changes: vec![change] })
+        };
+        let materialization_time_ms = step_start.elapsed().as_secs_f64() * 1000.0;
+        self.platform.telemetry.counter("ingest", 1);
+
+        if !deltas.is_empty() {
+            // Fan out edge writes off the request path. Waiting on `_00_version`
+            // ensures the list_ref UPDATE lands AFTER the source row is readable
+            // downstream (see docs/surrealdb-bugs/ws-row-cache-stale-after-update.md).
+            let expected_version = payload
+                .record
+                .get("_00_rv")
+                .and_then(|v| v.as_i64())
+                .filter(|&v| v > 0);
+            let row_id = payload.id.clone();
+            let record_counts: Vec<usize> = deltas.iter().map(|d| d.records.len()).collect();
+            let view_ids: Vec<String> = deltas.iter().map(|d| d.query_id.clone()).collect();
+
+            let db_c = Arc::clone(&self.platform.db);
+            let scheduler_c = Arc::clone(&self.platform.scheduler);
+            let telemetry_c = Arc::clone(&self.platform.telemetry);
+            let edge_tx = self.edge_update_tx.clone();
+            let processor_c = Arc::clone(&self.processor);
+            let view_metrics_c = Arc::clone(&self.view_metrics);
+            let ref_mode = self.ref_mode;
+
+            self.platform.spawner.spawn(Box::pin(async move {
+                if let Some(expected) = expected_version {
+                    wait_for_row_committed(
+                        db_c.as_ref(),
+                        scheduler_c.as_ref(),
+                        &row_id,
+                        expected,
+                        std::time::Duration::from_secs(5),
+                    )
+                    .await;
+                }
+                if let Err(send_err) = edge_tx.send(deltas) {
+                    let deltas = send_err.0;
+                    let refs: Vec<&ssp::circuit::ViewDelta> = deltas.iter().collect();
+                    let circuit = processor_c.read().await;
+                    crate::edges::run_edge_writes(db_c.as_ref(), &refs, &circuit, ref_mode, telemetry_c.as_ref()).await;
+                }
+                persist_view_metrics(db_c.as_ref(), &view_metrics_c, record_counts, view_ids, materialization_time_ms).await;
+            }));
+        }
+
+        // Orphan-proof delete: drop every edge pointing at the deleted record,
+        // independently of the circuit deltas (the circuit cache can be
+        // incomplete after a missed ingest / restart).
+        if op == Operation::Delete {
+            if let Some(owner) = payload.record.get("owner").and_then(|v| v.as_str()) {
+                if valid_record_id(&payload.id) {
+                    let list_ref = crate::tables::list_ref_table(self.ref_mode, owner);
+                    // out is a validated record-id literal.
+                    let stmt = format!("DELETE {list_ref} WHERE out = {}", payload.id);
+                    let db_c = Arc::clone(&self.platform.db);
+                    let id_log = payload.id.clone();
+                    self.platform.spawner.spawn(Box::pin(async move {
+                        if let Err(e) = db_c.query(&stmt, &[]).await {
+                            error!(target: "ssp::ingest", id = %id_log, error = %e, "list_ref delete cleanup failed");
+                        }
+                    }));
+                }
+            }
+            if self.anonymous_live_queries && valid_record_id(&payload.id) {
+                let stmt = format!("DELETE _00_list_ref_anon WHERE out = {}", payload.id);
+                let db_c = Arc::clone(&self.platform.db);
+                self.platform.spawner.spawn(Box::pin(async move {
+                    let _ = db_c.query(&stmt, &[]).await;
+                }));
+            }
+        }
+
+        self.platform
+            .telemetry
+            .histogram_ms("ingest_duration", crate::now_epoch_ms().saturating_sub(start) as f64);
+        Some(ApiResponse::json(200, Value::Null))
+    }
+
+    /// Queue a pending job created via ingest (with optional delay window).
+    async fn route_pending_job(
+        &self,
+        payload: &ssp_protocol::IngestRequest,
+        backend_info: &crate::jobs::BackendInfo,
+    ) {
+        let timeout_override = payload.record.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let job_entry = crate::jobs::JobEntry::from_record(
+            payload.id.clone(),
+            backend_info.base_url.clone(),
+            backend_info.auth_token.clone(),
+            &payload.record,
+            backend_info.effective_timeout(timeout_override),
+        );
+        let delay_ms = payload.record.get("delay").and_then(|v| v.as_u64()).unwrap_or(0);
+        let job_id = job_entry.id.clone();
+
+        if !self.job_control.mark_enqueued(&job_id) {
+            debug!(job_id = %job_id, "Skipping enqueue — already queued");
+            return;
+        }
+        if !self.standalone {
+            if let Err(e) =
+                crate::jobs::set_assignee_helper(self.platform.db.as_ref(), &job_id, &self.ssp_id).await
+            {
+                warn!(job_id = %job_id, error = %e, "Failed to persist job assignee");
+            }
+        }
+        if delay_ms == 0 {
+            if let Err(e) = self.job_queue_tx.send(job_entry).await {
+                self.job_control.clear_enqueued(&job_id);
+                error!(error = %e, "Failed to queue job");
+            }
+        } else {
+            // Delayed: hold the enqueued mark across a port sleep, then send.
+            let tx = self.job_queue_tx.clone();
+            let job_control = self.job_control.clone();
+            let scheduler = Arc::clone(&self.platform.scheduler);
+            let delay = std::time::Duration::from_millis(delay_ms);
+            self.platform.spawner.spawn(Box::pin(async move {
+                scheduler.sleep(delay).await;
+                if let Err(e) = tx.send(job_entry).await {
+                    job_control.clear_enqueued(&job_id);
+                    error!(job_id = %job_id, error = %e, "Failed to queue delayed job");
+                }
+            }));
+        }
+    }
+
+    /// A recurring schedule's clock was bumped (manual "poke" = run now).
+    async fn maybe_enqueue_recurring_poke(
+        &self,
+        backend_info: &crate::jobs::BackendInfo,
+        id: &str,
+        record: &Value,
+    ) {
+        let recurring = record.get("recurring").and_then(|v| v.as_bool()).unwrap_or(false);
+        let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if !recurring || status != "pending" {
+            return;
+        }
+        // Distinguish a poke (next_run_at = now) from the runner's re-arm
+        // (future) using the value CARRIED in this event, not a row read (the
+        // event fires inside the writer's tx — a row read can see the stale
+        // pre-update value). Empty ⇒ run now.
+        let next_run_at = record.get("next_run_at").and_then(|v| v.as_str()).unwrap_or("");
+        let due = if next_run_at.is_empty() {
+            true
+        } else {
+            match self
+                .platform
+                .db
+                .query(crate::jobs::POKE_DUE_SQL, &[("nra", json!(next_run_at))])
+                .await
+            {
+                Ok(rows) => rows.first().and_then(|v| v.as_bool()).unwrap_or(false),
+                Err(e) => {
+                    warn!(job_id = %id, error = %e, "Recurring poke due-check failed");
+                    return;
+                }
+            }
+        };
+        if !due {
+            return;
+        }
+        if !self.job_control.mark_enqueued(id) {
+            return; // already queued/in-flight; that run re-arms on completion
+        }
+        if !self.standalone {
+            if let Err(e) =
+                crate::jobs::set_assignee_helper(self.platform.db.as_ref(), id, &self.ssp_id).await
+            {
+                warn!(job_id = %id, error = %e, "Failed to persist assignee for poked job");
+            }
+        }
+        let timeout_override = record.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
+        let job_entry = crate::jobs::JobEntry::from_record(
+            id.to_string(),
+            backend_info.base_url.clone(),
+            backend_info.auth_token.clone(),
+            record,
+            backend_info.effective_timeout(timeout_override),
+        );
+        info!(job_id = %id, "Recurring poke: enqueuing immediate run");
+        if let Err(e) = self.job_queue_tx.send(job_entry).await {
+            self.job_control.clear_enqueued(id);
+            error!(job_id = %id, error = %e, "Failed to enqueue poked job");
+        }
+    }
+
+    // --- Timer-driven sweeps (invoked from Runtime::on_timer) ----------------
+
+    /// Recover stuck `pending` + orphaned `processing` job rows across every
+    /// configured job table (standalone recovery). Over the `Db` port.
+    pub async fn job_recovery_sweep(&self) {
+        for (table, backend) in &self.job_config.job_tables {
+            if let Err(e) = self.recover_job_table(table, backend).await {
+                warn!(target: "ssp::job_recovery", table = %table, error = %e, "Recovery sweep failed for table");
+            }
+        }
+    }
+
+    async fn recover_job_table(
+        &self,
+        table: &str,
+        backend: &crate::jobs::BackendInfo,
+    ) -> Result<(), crate::ports::DbError> {
+        let db = self.platform.db.as_ref();
+
+        // 1. Due pending rows older than the grace window.
+        let pending_q = format!(
+            "SELECT {fields} FROM {table} \
+             WHERE status = 'pending' AND updated_at < time::now() - {grace}s AND {due}",
+            fields = RECOVERY_FIELDS,
+            grace = JOB_RECOVERY_PENDING_GRACE_SECS,
+            due = crate::jobs::PENDING_DUE_CLAUSE,
+        );
+        for row in rows_of(db.query(&pending_q, &[]).await?) {
+            if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
+                if crate::jobs::enqueue_recovered(&self.job_control, &self.job_queue_tx, backend, id, &row).await {
+                    warn!(target: "ssp::job_recovery", job_id = %id, "Re-enqueued stuck pending job");
+                }
+            }
+        }
+
+        // 2. Orphaned processing rows (processing far longer than any job runs).
+        let stale_q = format!(
+            "SELECT {fields} FROM {table} WHERE status = 'processing' AND updated_at < time::now() - {stale}s",
+            fields = RECOVERY_FIELDS,
+            stale = JOB_RECOVERY_STALE_PROCESSING_SECS,
+        );
+        for row in rows_of(db.query(&stale_q, &[]).await?) {
+            let Some(id) = row.get("id").and_then(|v| v.as_str()) else { continue };
+            if self.job_control.is_inflight(id) {
+                continue; // never touch a request in-flight on this node
+            }
+            if let Err(e) = crate::jobs::update_status_helper(db, id, "pending").await {
+                warn!(target: "ssp::job_recovery", job_id = %id, error = %e, "Failed to reset stale processing job");
+                continue;
+            }
+            if crate::jobs::enqueue_recovered(&self.job_control, &self.job_queue_tx, backend, id, &row).await {
+                warn!(target: "ssp::job_recovery", job_id = %id, "Recovered orphaned processing job");
+            }
+        }
+        Ok(())
+    }
+
+    /// One TTL sweep over this node's ports (see [`ttl_cleanup_sweep`]).
+    pub async fn ttl_cleanup_sweep(&self) -> usize {
+        ttl_cleanup_sweep(
+            self.platform.db.as_ref(),
+            &self.processor,
+            self.platform.telemetry.as_ref(),
+            self.ref_mode,
+        )
+        .await
+    }
+}
+
+/// One TTL sweep: delete every expired query view (its `_00_query` row, its
+/// per-user `_00_list_ref` edges, the in-memory circuit view) + drop any
+/// per-user table that no longer backs a live query. Free fn over the `Db` +
+/// `Telemetry` ports so the VM shell (and its DB integration tests) can call it
+/// without an `SspNode`, while `SspNode::ttl_cleanup_sweep` delegates here —
+/// single implementation, no drift.
+pub async fn ttl_cleanup_sweep(
+    db: &dyn Db,
+    processor: &Arc<RwLock<Circuit>>,
+    telemetry: &dyn Telemetry,
+    ref_mode: ssp_protocol::RefMode,
+) -> usize {
+    // Expired queries as "<id>|<auth_id>" strings (scalar String reads cleanly).
+    let rows: Vec<String> = match db
+        .query(
+            "SELECT VALUE (<string>id + '|' + <string>(auth_id OR '')) \
+             FROM _00_query WHERE lastActiveAt + ttl < time::now()",
+            &[],
+        )
+        .await
+    {
+        Ok(results) => results
+            .into_iter()
+            .next()
+            .and_then(|v| v.as_array().cloned())
+            .map(|a| a.into_iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+        Err(e) => {
+            error!("TTL cleanup: query failed: {}", e);
+            return 0;
+        }
+    };
+
+    let count = rows.len();
+    let mut cleaned: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for row in rows {
+        let mut parts = row.splitn(2, '|');
+        let id = parts.next().unwrap_or_default();
+        let auth_id = parts.next().unwrap_or_default().to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let raw = id.strip_prefix("_00_query:").unwrap_or(id).to_string();
+        cleanup_expired_query(db, processor, telemetry, &raw, &auth_id, ref_mode).await;
+        if !auth_id.is_empty() {
+            cleaned.insert(auth_id);
+        }
+    }
+
+    for auth_id in &cleaned {
+        if let Err(e) = crate::tables::drop_user_table_if_unused(db, ref_mode, auth_id).await {
+            warn!(auth_id = %auth_id, error = %e, "TTL cleanup: drop_user_table_if_unused failed");
+        }
+    }
+    if let Err(e) = crate::tables::drop_orphaned_user_tables(db, ref_mode).await {
+        warn!(error = %e, "TTL cleanup: drop_orphaned_user_tables failed");
+    }
+    if count > 0 {
+        info!(count, "TTL cleanup sweep completed");
+    }
+    count
+}
+
+/// Delete one expired query iff its TTL is still expired (guards a heartbeat
+/// racing the sweep), plus its edges + circuit view.
+async fn cleanup_expired_query(
+    db: &dyn Db,
+    processor: &Arc<RwLock<Circuit>>,
+    telemetry: &dyn Telemetry,
+    query_id: &str,
+    auth_id: &str,
+    ref_mode: ssp_protocol::RefMode,
+) {
+    let list_ref = crate::tables::list_ref_table(ref_mode, auth_id);
+
+    // Conditional delete; `RETURN array::len(...)` reads back the count.
+    let deleted: i64 = match db
+        .query(
+            "LET $d = (DELETE type::record('_00_query', $qid) \
+             WHERE lastActiveAt + ttl < time::now() RETURN BEFORE); \
+             RETURN array::len($d);",
+            &[("qid", json!(query_id))],
+        )
+        .await
+    {
+        Ok(results) => results.get(1).and_then(|v| v.as_i64()).unwrap_or(0),
+        Err(e) => {
+            error!(query_id = %query_id, error = %e, "TTL cleanup: delete failed");
+            return;
+        }
+    };
+    if deleted == 0 {
+        debug!(query_id = %query_id, "TTL cleanup: query refreshed, skipping");
+        return;
+    }
+
+    let edge_delete = format!("DELETE type::record('_00_query', $qid)->{list_ref}");
+    if let Err(e) = db.query(&edge_delete, &[("qid", json!(query_id))]).await {
+        error!(query_id = %query_id, error = %e, "TTL cleanup: edge delete failed");
+    }
+
+    processor.write().await.remove_query(query_id);
+    telemetry.gauge_add("view_count", -1);
+    telemetry.counter("ttl_cleanup", 1);
+    info!(query_id = %query_id, "TTL cleanup: query expired and removed");
+}
+
+/// First statement's rows as owned `Value`s (the flattened SELECT result is an
+/// array; a bare object becomes a one-element list).
+fn rows_of(results: Vec<Value>) -> Vec<Value> {
+    match results.into_iter().next() {
+        Some(Value::Array(rows)) => rows,
+        Some(other @ Value::Object(_)) => vec![other],
+        _ => Vec::new(),
+    }
+}
+
+/// Poll `_00_version` until the source row reaches `expected_version`, so the
+/// deferred list_ref writes land after the source row is readable downstream.
+/// Returns `true` if observed within `timeout`, `false` on timeout (caller
+/// proceeds anyway). Times through the `Scheduler` port so it is portable.
+async fn wait_for_row_committed(
+    db: &dyn Db,
+    scheduler: &dyn crate::ports::Scheduler,
+    row_id: &str,
+    expected_version: i64,
+    timeout: std::time::Duration,
+) -> bool {
+    if !valid_record_id(row_id) {
+        return false;
+    }
+    let start = web_time::Instant::now();
+    let mut backoff_ms: u64 = 10;
+    while start.elapsed() < timeout {
+        if let Ok(rows) = db
+            .query(
+                "SELECT VALUE version FROM ONLY _00_version WHERE record_id = type::record($rid) LIMIT 1",
+                &[("rid", json!(row_id))],
+            )
+            .await
+        {
+            if let Some(v) = rows.first().and_then(|v| v.as_i64()) {
+                if v >= expected_version {
+                    return true;
+                }
+            }
+        }
+        scheduler.sleep(std::time::Duration::from_millis(backoff_ms)).await;
+        if backoff_ms < 80 {
+            backoff_ms *= 2;
+        }
+    }
+    false
+}
+
+/// Update the in-memory rolling latency window per affected view and persist
+/// row count + percentiles onto each `_00_query` row.
+async fn persist_view_metrics(
+    db: &dyn Db,
+    view_metrics: &crate::view_metrics::ViewMetrics,
+    row_counts: Vec<usize>,
+    view_ids: Vec<String>,
+    materialization_time_ms: f64,
+) {
+    if view_ids.is_empty() {
+        return;
+    }
+    let snapshots: Vec<_> = {
+        let mut map = view_metrics.write().await;
+        view_ids
+            .iter()
+            .zip(row_counts.iter())
+            .map(|(view_id, row_count)| {
+                let entry = map.entry(view_id.clone()).or_default();
+                entry.record_sample(materialization_time_ms);
+                entry.update_count = entry.update_count.saturating_add(1);
+                (view_id.clone(), *row_count, entry.update_count, entry.percentiles())
+            })
+            .collect()
+    };
+
+    for (view_id, row_count, update_count, percentiles) in snapshots {
+        let incantation_id = crate::edges::format_incantation_id(&view_id);
+        let (p55, p90, p99) = match percentiles {
+            Some(t) => (json!(t.0), json!(t.1), json!(t.2)),
+            None => (Value::Null, Value::Null, Value::Null),
+        };
+        let stmt = "UPDATE type::record($id) SET \
+            rowCount = <int>$rowCount, updateCount = <int>$updateCount, \
+            lastIngestLatency = <float>$lastIngestLatency, \
+            materializationP55 = $p55, materializationP90 = $p90, materializationP99 = $p99";
+        if let Err(e) = db
+            .query(
+                stmt,
+                &[
+                    ("id", json!(incantation_id)),
+                    ("rowCount", json!(row_count as i64)),
+                    ("updateCount", json!(update_count as i64)),
+                    ("lastIngestLatency", json!(materialization_time_ms)),
+                    ("p55", p55),
+                    ("p90", p90),
+                    ("p99", p99),
+                ],
+            )
+            .await
+        {
+            warn!(target: "ssp::view_metrics", error = %e, view_id = %incantation_id, "Failed to persist per-view metrics");
+        }
+    }
+}
+
+fn valid_record_id(id: &str) -> bool {
+    matches!(id.split_once(':'), Some((t, k)) if !t.is_empty() && !k.is_empty())
+}
+
+/// Wipe the in-memory circuit and every view edge in the database. Used by
+/// the `/reset` route and by the standalone restore path (the restored dump
+/// carries pre-restore `_00_list_ref*` rows that no longer match any circuit).
+pub async fn wipe_circuit_and_edges(
+    db: &dyn Db,
+    processor: &Arc<RwLock<Circuit>>,
+    telemetry: &dyn Telemetry,
+    ref_mode: ssp_protocol::RefMode,
+) {
+    let old_view_count = {
+        let mut circuit = processor.write().await;
+        let count = circuit.view_count();
+        *circuit = Circuit::new();
+        count
+    };
+
+    telemetry.gauge_add("view_count", -(old_view_count as i64));
+
+    // Delete all edges. In dedicated mode that's every
+    // `_00_list_ref_user_*` table; single mode is just the global one.
+    match ref_mode {
+        ssp_protocol::RefMode::Single => {
+            if let Err(e) = db.query("DELETE _00_list_ref", &[]).await {
+                error!("Failed to delete all edges on reset: {}", e);
+            }
+        }
+        ssp_protocol::RefMode::Dedicated => {
+            // Walk every per-user list_ref table and wipe it. Cheap because
+            // this path is only used in tests / explicit resets / restores.
+            match db.query("INFO FOR DB", &[]).await {
+                Ok(results) => {
+                    let tables = results
+                        .first()
+                        .and_then(|v| v.get("tables"))
+                        .and_then(|t| t.as_object())
+                        .cloned()
+                        .unwrap_or_default();
+                    for name in tables.keys() {
+                        if !name.starts_with("_00_list_ref_user_") {
+                            continue;
+                        }
+                        if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                            continue;
+                        }
+                        let stmt = format!("DELETE {}", name);
+                        if let Err(e) = db.query(&stmt, &[]).await {
+                            error!(table = %name, "Failed to delete edges on reset: {}", e);
+                        }
+                    }
+                }
+                Err(e) => error!("Failed to enumerate edge tables on reset: {}", e),
+            }
+        }
+    }
+}

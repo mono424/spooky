@@ -9,8 +9,8 @@ export const dbConfig: SyncedDbConfig<typeof schema> = {
   schema: schema,
   schemaSurql: SURQL_SCHEMA,
   database: {
-    namespace: 'main',
-    database: 'example',
+    namespace: import.meta.env.VITE_DB_NS || 'main',
+    database: import.meta.env.VITE_DB_DB || 'example',
     endpoint: import.meta.env.VITE_DB_ENDPOINT || 'ws://localhost:8666/rpc',
     store: 'memory',
     persistenceClient: 'localstorage',

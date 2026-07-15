@@ -56,6 +56,21 @@ pub struct SurrealClient {
     auth_header: String,
 }
 
+/// Normalize a SurrealDB endpoint to an HTTP(S) URL for the `/sql` transport.
+/// External endpoints (e.g. SurrealDB Cloud) are often given as `wss://…`/`ws://…`
+/// for the RPC socket, but this client speaks HTTP — ureq rejects the `wss`/`ws`
+/// scheme ("Unknown Scheme"). The host is identical, so swap the scheme.
+fn to_http_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/');
+    if let Some(rest) = trimmed.strip_prefix("wss://") {
+        format!("https://{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("ws://") {
+        format!("http://{rest}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
 impl SurrealClient {
     pub fn new(url: &str, namespace: &str, database: &str, username: &str, password: &str) -> Self {
         let credentials = format!("{}:{}", username, password);
@@ -64,7 +79,7 @@ impl SurrealClient {
             base64::engine::general_purpose::STANDARD.encode(credentials)
         );
         Self {
-            url: url.trim_end_matches('/').to_string(),
+            url: to_http_url(url),
             namespace: namespace.to_string(),
             database: database.to_string(),
             auth_header,
@@ -74,7 +89,7 @@ impl SurrealClient {
     /// Create a client without authentication (for unauthenticated SurrealDB instances).
     pub fn new_unauthenticated(url: &str, namespace: &str, database: &str) -> Self {
         Self {
-            url: url.trim_end_matches('/').to_string(),
+            url: to_http_url(url),
             namespace: namespace.to_string(),
             database: database.to_string(),
             auth_header: String::new(),
@@ -334,6 +349,19 @@ impl MigrationDB for SurrealClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_to_http_url_normalizes_ws_schemes() {
+        assert_eq!(to_http_url("wss://db.example.com"), "https://db.example.com");
+        assert_eq!(to_http_url("ws://localhost:8000"), "http://localhost:8000");
+        assert_eq!(
+            to_http_url("https://db.example.com/"),
+            "https://db.example.com"
+        );
+        assert_eq!(to_http_url("http://localhost:8000"), "http://localhost:8000");
+        // Scheme conversion also strips the trailing slash.
+        assert_eq!(to_http_url("wss://db.example.com/"), "https://db.example.com");
+    }
 
     #[test]
     fn test_new_constructs_basic_auth_header() {

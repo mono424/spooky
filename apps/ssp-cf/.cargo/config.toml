@@ -1,0 +1,7 @@
+# getrandom 0.3 (via ssp → ulid → rand) needs an explicit JS backend on
+# wasm32-unknown-unknown — same pattern as packages/ssp-node and ssp-wasm.
+[build]
+target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

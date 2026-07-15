@@ -134,6 +134,44 @@ impl Default for HostingMode {
     }
 }
 
+/// A single secret-bearing scalar that is either a literal value or a reference
+/// to a key in the encrypted vault. Mirrors the literal-vs-`vault:` distinction
+/// of `EnvSource`, but for one value (used by SurrealDB credentials). Resolved
+/// against the tenant's decrypted vault at deploy time.
+///
+/// YAML shapes:
+///   password: root                    # literal
+///   password: { vault: DB_PASSWORD }  # pulled from the vault
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum SecretValue {
+    Literal(String),
+    Vault {
+        #[serde(rename = "vault")]
+        vault: String,
+    },
+}
+
+impl SecretValue {
+    /// The vault key this value references, or `None` if it is a literal.
+    pub fn vault_key(&self) -> Option<&str> {
+        match self {
+            SecretValue::Vault { vault } => Some(vault.as_str()),
+            SecretValue::Literal(_) => None,
+        }
+    }
+
+    /// Literal value, or empty string for an unresolved vault reference. For
+    /// local contexts (dev/mcp/verify) where vault resolution does not apply —
+    /// vault-backed credentials only take effect on external cloud deploys.
+    pub fn literal_or_default(&self) -> String {
+        match self {
+            SecretValue::Literal(s) => s.clone(),
+            SecretValue::Vault { .. } => String::new(),
+        }
+    }
+}
+
 pub const DEFAULT_SCHEMA_PATH: &str = "src/schema.surql";
 pub const DEFAULT_MIGRATIONS_DIR: &str = "migrations";
 pub const DEFAULT_BUCKETS_DIR: &str = "src/buckets";
@@ -156,16 +194,20 @@ pub enum SurrealDbConfig {
         namespace: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         database: Option<String>,
-        /// "cloud" (default) or "external"
+        /// "cloud" (default) or "external". Credentials below (endpoint/
+        /// username/password) are only valid when this is "external".
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hosting: Option<HostingMode>,
-        /// Required when hosting is "external" — the SurrealDB endpoint URL
+        /// Required when hosting is "external" — the SurrealDB endpoint URL.
+        /// Literal or `{ vault: KEY }`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        endpoint: Option<String>,
+        endpoint: Option<SecretValue>,
+        /// External DB auth username. Literal or `{ vault: KEY }`. Default "root".
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        username: Option<String>,
+        username: Option<SecretValue>,
+        /// External DB auth password. Literal or `{ vault: KEY }`. Default "root".
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        password: Option<String>,
+        password: Option<SecretValue>,
     },
 }
 
@@ -176,10 +218,12 @@ pub struct ResolvedSurrealDb {
     pub namespace: String,
     pub database: String,
     pub hosting: HostingMode,
-    /// Only `Some` when `hosting == External`.
-    pub endpoint: Option<String>,
-    pub username: String,
-    pub password: String,
+    /// Only `Some` when `hosting == External`. Unresolved — a literal or a
+    /// `{ vault: KEY }` reference resolved against the vault at deploy time.
+    pub endpoint: Option<SecretValue>,
+    /// Unresolved username/password (literal or `{ vault: KEY }`); default "root".
+    pub username: SecretValue,
+    pub password: SecretValue,
 }
 
 impl ResolvedSurrealDb {
@@ -191,8 +235,8 @@ impl ResolvedSurrealDb {
                 database: "main".to_string(),
                 hosting: HostingMode::Cloud,
                 endpoint: None,
-                username: "root".to_string(),
-                password: "root".to_string(),
+                username: SecretValue::Literal("root".to_string()),
+                password: SecretValue::Literal("root".to_string()),
             },
             Some(SurrealDbConfig::Full {
                 version,
@@ -210,8 +254,12 @@ impl ResolvedSurrealDb {
                 database: database.clone().unwrap_or_else(|| "main".to_string()),
                 hosting: hosting.clone().unwrap_or_default(),
                 endpoint: endpoint.clone(),
-                username: username.clone().unwrap_or_else(|| "root".to_string()),
-                password: password.clone().unwrap_or_else(|| "root".to_string()),
+                username: username
+                    .clone()
+                    .unwrap_or_else(|| SecretValue::Literal("root".to_string())),
+                password: password
+                    .clone()
+                    .unwrap_or_else(|| SecretValue::Literal("root".to_string())),
             },
             None => Self {
                 version: DEFAULT_SURREALDB_VERSION.to_string(),
@@ -219,8 +267,8 @@ impl ResolvedSurrealDb {
                 database: "main".to_string(),
                 hosting: HostingMode::Cloud,
                 endpoint: None,
-                username: "root".to_string(),
-                password: "root".to_string(),
+                username: SecretValue::Literal("root".to_string()),
+                password: SecretValue::Literal("root".to_string()),
             },
         }
     }
@@ -228,6 +276,47 @@ impl ResolvedSurrealDb {
     pub fn validate(&self) -> Result<()> {
         if self.hosting == HostingMode::External && self.endpoint.is_none() {
             bail!("SurrealDB hosting is 'external' but no endpoint URL was provided");
+        }
+        Ok(())
+    }
+
+    /// Literal username for local (dev/mcp/verify) use. See
+    /// [`SecretValue::literal_or_default`].
+    pub fn username_literal(&self) -> String {
+        self.username.literal_or_default()
+    }
+
+    /// Literal password for local (dev/mcp/verify) use.
+    pub fn password_literal(&self) -> String {
+        self.password.literal_or_default()
+    }
+
+    /// Literal endpoint for local (dev/mcp/verify) use, if set.
+    pub fn endpoint_literal(&self) -> Option<String> {
+        self.endpoint.as_ref().map(|e| e.literal_or_default())
+    }
+}
+
+impl SurrealDbConfig {
+    /// Validate credential placement on the RAW config (before defaults are
+    /// applied), so we can tell whether the user explicitly set a credential.
+    /// endpoint/username/password are only meaningful for external hosting; the
+    /// managed ("cloud") DB generates its own root password.
+    pub fn validate_raw(&self) -> Result<()> {
+        if let SurrealDbConfig::Full {
+            hosting,
+            endpoint,
+            username,
+            password,
+            ..
+        } = self
+        {
+            let is_external = matches!(hosting, Some(HostingMode::External));
+            if !is_external
+                && (endpoint.is_some() || username.is_some() || password.is_some())
+            {
+                bail!("SurrealDB credentials (endpoint/username/password) are only valid with hosting: external");
+            }
         }
         Ok(())
     }
@@ -813,6 +902,9 @@ impl Sp00kyConfig {
 
     /// Validate hosting configuration for SurrealDB and all apps.
     pub fn validate(&self) -> Result<()> {
+        if let Some(cfg) = &self.surrealdb {
+            cfg.validate_raw()?;
+        }
         self.resolved_surrealdb().validate()?;
         for (name, app) in &self.apps {
             app.validate(name)?;
@@ -1329,6 +1421,26 @@ pub struct AppDeployConfig {
     /// Command override for the container (replaces ENTRYPOINT/CMD in image)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cmd: Option<String>,
+    /// Static-frontend hosting (free/Cloudflare plan): build the SPA and ship the
+    /// output dir to Cloudflare Workers Static Assets instead of a Docker image.
+    #[serde(rename = "static", default, skip_serializing_if = "Option::is_none")]
+    pub static_site: Option<StaticDeployConfig>,
+}
+
+/// Static SPA hosting config (`deploy.static`) for the free/Cloudflare plan.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct StaticDeployConfig {
+    /// Build command run in the app dir before upload (e.g. "npm run build").
+    /// Optional — omit if the output dir already holds a built SPA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+    /// Directory (relative to the app dir) holding the built static site.
+    #[serde(default = "default_static_dir")]
+    pub dir: String,
+}
+
+fn default_static_dir() -> String {
+    "dist".to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1568,12 +1680,31 @@ pub fn load_config(path: &Path) -> Sp00kyConfig {
 
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return default_config(),
+        Err(e) => {
+            eprintln!(
+                "\x1b[33mwarning\x1b[0m: could not read {}: {} — using defaults",
+                path.display(),
+                e
+            );
+            return default_config();
+        }
     };
 
     match serde_yaml::from_str(&content) {
         Ok(c) => c,
-        Err(_) => default_config(),
+        Err(e) => {
+            // Loud, not silent: a malformed manifest otherwise degrades quietly to
+            // an empty config (no slug, no cloudApi → commands hit the wrong/prod
+            // API and fail with confusing DNS errors). Surface the exact parse
+            // error and location so the user can fix the manifest.
+            eprintln!(
+                "\x1b[31merror\x1b[0m: failed to parse {}:\n  {}\n\
+                 Falling back to default configuration — fix the manifest, then re-run.",
+                path.display(),
+                e
+            );
+            default_config()
+        }
     }
 }
 
@@ -2209,5 +2340,73 @@ mod env_source_tests {
         let d2: AppDeployConfig =
             serde_yaml::from_str("dockerfile: Dockerfile\nport: 8080\n").expect("parse");
         assert_eq!(d2.grpc_port, None);
+    }
+}
+
+#[cfg(test)]
+mod surrealdb_tests {
+    use super::*;
+
+    fn cfg(yaml: &str) -> Sp00kyConfig {
+        serde_yaml::from_str(yaml).expect("yaml parse")
+    }
+
+    #[test]
+    fn cloud_with_password_is_rejected() {
+        let c = cfg("surrealdb:\n  hosting: cloud\n  password: secret\n");
+        let err = c.validate().expect_err("cloud + password must error");
+        assert!(err.to_string().contains("only valid with hosting: external"));
+    }
+
+    #[test]
+    fn cloud_with_endpoint_is_rejected() {
+        // hosting omitted defaults to cloud.
+        let c = cfg("surrealdb:\n  endpoint: https://db.example.com\n");
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn external_without_endpoint_is_rejected() {
+        let c = cfg("surrealdb:\n  hosting: external\n");
+        let err = c.validate().expect_err("external needs endpoint");
+        assert!(err.to_string().contains("no endpoint"));
+    }
+
+    #[test]
+    fn external_with_literal_creds_validates() {
+        let c = cfg(
+            "surrealdb:\n  hosting: external\n  endpoint: https://db.example.com\n  username: root\n  password: hunter2\n",
+        );
+        c.validate().expect("external + literal creds should validate");
+        let r = c.resolved_surrealdb();
+        assert_eq!(r.hosting, HostingMode::External);
+        assert_eq!(r.username.literal_or_default(), "root");
+        assert_eq!(r.password.literal_or_default(), "hunter2");
+        assert!(r.username.vault_key().is_none());
+    }
+
+    #[test]
+    fn external_with_vault_password_parses_as_reference() {
+        let c = cfg(
+            "surrealdb:\n  hosting: external\n  endpoint: { vault: DB_ENDPOINT }\n  password: { vault: DB_PASSWORD }\n",
+        );
+        c.validate().expect("external + vault creds should validate");
+        let r = c.resolved_surrealdb();
+        assert_eq!(r.password.vault_key(), Some("DB_PASSWORD"));
+        assert_eq!(
+            r.endpoint.as_ref().and_then(|e| e.vault_key()),
+            Some("DB_ENDPOINT")
+        );
+        // Literal accessors are empty for an unresolved vault ref.
+        assert_eq!(r.password.literal_or_default(), "");
+    }
+
+    #[test]
+    fn defaults_are_root_literals() {
+        let c = cfg("surrealdb:\n  namespace: main\n");
+        let r = c.resolved_surrealdb();
+        assert_eq!(r.username.literal_or_default(), "root");
+        assert_eq!(r.password.literal_or_default(), "root");
+        assert_eq!(r.hosting, HostingMode::Cloud);
     }
 }

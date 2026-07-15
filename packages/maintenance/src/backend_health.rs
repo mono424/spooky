@@ -1,9 +1,32 @@
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use crate::config::BackendHealthConfig;
+/// A backend service to health-check periodically.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BackendHealthConfig {
+    pub name: String,
+    pub url: String,
+    pub healthcheck: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub env: Option<Vec<String>>,
+}
+
+/// Parse backend health targets from the environment. `SPKY_BACKENDS` is the
+/// canonical variable; `SPKY_SCHEDULER_BACKENDS` is accepted as a fallback for
+/// existing deployments.
+pub fn backends_from_env() -> Vec<BackendHealthConfig> {
+    let json = std::env::var("SPKY_BACKENDS")
+        .or_else(|_| std::env::var("SPKY_SCHEDULER_BACKENDS"));
+    match json {
+        Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
+        Err(_) => vec![],
+    }
+}
 
 /// Shared backend configs that can be updated at runtime (e.g. via PUT /backends).
 pub type SharedBackendConfigs = Arc<RwLock<Vec<BackendHealthConfig>>>;
@@ -106,18 +129,77 @@ pub fn create_health_cache(backends: &[BackendHealthConfig]) -> BackendHealthCac
     Arc::new(RwLock::new(entries))
 }
 
-/// Spawn a background task that periodically health-checks all backends.
-/// Reads from `SharedBackendConfigs` on each tick so live updates via
-/// `update_backends()` are picked up without restarting.
+/// Build the short-timeout client the health checks use.
+pub fn health_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap_or_default()
+}
+
+/// One health-check sweep over every configured backend, updating the cache.
+/// Reads from `SharedBackendConfigs` so live updates via `update_backends()`
+/// are picked up. Used by the scheduler's monitor loop and, timer-driven, by
+/// the standalone SSP's `BackendHealth` wakeup.
+pub async fn check_backends_once(
+    configs: &SharedBackendConfigs,
+    cache: &BackendHealthCache,
+    http_client: &reqwest::Client,
+) {
+    let backends = configs.read().await.clone();
+
+    for backend in &backends {
+        let health_url = format!(
+            "{}{}",
+            backend.url.trim_end_matches('/'),
+            backend.healthcheck
+        );
+
+        let start = Instant::now();
+        let (status, response_time_ms) = match http_client.get(&health_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                (BackendStatus::Healthy, start.elapsed().as_millis() as u64)
+            }
+            Ok(resp) => {
+                warn!(
+                    backend = %backend.name,
+                    status_code = resp.status().as_u16(),
+                    "Backend health check returned non-success"
+                );
+                (BackendStatus::Unhealthy, start.elapsed().as_millis() as u64)
+            }
+            Err(e) => {
+                warn!(
+                    backend = %backend.name,
+                    error = %e,
+                    "Backend health check failed"
+                );
+                (BackendStatus::Unreachable, start.elapsed().as_millis() as u64)
+            }
+        };
+
+        let now = SystemTime::now();
+        let mut entries = cache.write().await;
+        if let Some(entry) = entries.iter_mut().find(|e| e.name == backend.name) {
+            entry.status = status;
+            entry.last_checked = Some(now);
+            entry.response_time_ms = Some(response_time_ms);
+            if status == BackendStatus::Healthy {
+                entry.last_healthy = Some(now);
+            }
+        }
+    }
+}
+
+/// Spawn a background task that periodically health-checks all backends
+/// (the scheduler's loop-based flavor; the standalone SSP drives
+/// [`check_backends_once`] from its timer dispatcher instead).
 pub fn start_backend_health_monitor(
     configs: SharedBackendConfigs,
     cache: BackendHealthCache,
     interval_secs: u64,
 ) {
-    let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .unwrap_or_default();
+    let http_client = health_http_client();
 
     info!(interval_secs, "Starting backend health monitor");
 
@@ -126,50 +208,7 @@ pub fn start_backend_health_monitor(
         interval.tick().await;
 
         loop {
-            let backends = configs.read().await.clone();
-
-            for backend in &backends {
-                let health_url = format!(
-                    "{}{}",
-                    backend.url.trim_end_matches('/'),
-                    backend.healthcheck
-                );
-
-                let start = Instant::now();
-                let (status, response_time_ms) = match http_client.get(&health_url).send().await {
-                    Ok(resp) if resp.status().is_success() => {
-                        (BackendStatus::Healthy, start.elapsed().as_millis() as u64)
-                    }
-                    Ok(resp) => {
-                        warn!(
-                            backend = %backend.name,
-                            status_code = resp.status().as_u16(),
-                            "Backend health check returned non-success"
-                        );
-                        (BackendStatus::Unhealthy, start.elapsed().as_millis() as u64)
-                    }
-                    Err(e) => {
-                        warn!(
-                            backend = %backend.name,
-                            error = %e,
-                            "Backend health check failed"
-                        );
-                        (BackendStatus::Unreachable, start.elapsed().as_millis() as u64)
-                    }
-                };
-
-                let now = SystemTime::now();
-                let mut entries = cache.write().await;
-                if let Some(entry) = entries.iter_mut().find(|e| e.name == backend.name) {
-                    entry.status = status;
-                    entry.last_checked = Some(now);
-                    entry.response_time_ms = Some(response_time_ms);
-                    if status == BackendStatus::Healthy {
-                        entry.last_healthy = Some(now);
-                    }
-                }
-            }
-
+            check_backends_once(&configs, &cache, &http_client).await;
             interval.tick().await;
         }
     });
