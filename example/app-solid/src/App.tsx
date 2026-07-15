@@ -190,6 +190,12 @@ export default function App() {
           <span class="text-sm text-zinc-400">Connecting...</span>
         </div>
       }
+      preload={(db) =>
+        // Gate first-load UI on the thread list (+ authors) so Home paints from
+        // cache instantly. Blocks only on the very first load; warm reloads
+        // resolve immediately (nothing fetched — freshens when useQuery mounts).
+        db.preload(db.query('thread').related('author').orderBy('title', 'asc').limit(10).build())
+      }
       onError={(error) => console.error('Failed to initialize database:', error)}
       onReady={(db) => {
         // Expose the client for e2e diagnostics (e.g.

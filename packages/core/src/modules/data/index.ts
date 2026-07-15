@@ -763,27 +763,7 @@ export class DataModule<S extends SchemaStructure> {
     if (rows.length === 0) return;
 
     const tableName = queryState.config.tableName;
-    const batch: CacheRecord[] = rows.map((record) => ({
-      table: tableName,
-      op: 'CREATE' as const,
-      record,
-      version: (record._00_rv as number) || 1,
-    }));
-
-    // Flicker-free related data on cold first paint: a `.related()` query's
-    // rows arrive with their child rows EMBEDDED (the correlated subquery,
-    // e.g. `(SELECT * FROM comment WHERE game=$parent.id) AS comments`). The
-    // primary batch above persists only the parent table, so the immediate
-    // `materializeRecords` below would re-run the correlated surql against a
-    // local DB with no child rows and overwrite the embedded result with
-    // empties. Extract those embedded children (any nesting depth) and
-    // persist them as their own records so the re-materialization finds them.
-    const seen = new Set<string>(rows.map((r) => encodeRecordId(r.id)));
-    for (const record of rows) {
-      this.collectEmbeddedChildren(record, batch, seen);
-    }
-
-    await this.cache.saveBatch(batch);
+    await this.buildAndSaveCacheBatch(tableName, rows);
 
     // Prime remoteArray from the hydrated id+version pairs: `materializeRecords`
     // prefers it for windowed queries (correct window) and it feeds the version
@@ -797,6 +777,78 @@ export class DataModule<S extends SchemaStructure> {
     if (subscribers) {
       for (const cb of subscribers) cb(queryState.records);
     }
+  }
+
+  /**
+   * Build the cache batch for a set of one-shot rows and persist it to the
+   * local DB + in-browser SSP. Maps each row to a `CREATE` op on its own table
+   * and extracts EMBEDDED related children (any nesting depth) as their own
+   * records — a `.related()` query returns its children embedded, and a later
+   * correlated re-materialization needs them present as standalone rows.
+   * Shared by `applyHydration` (live registration) and `persistSnapshot`
+   * (preload).
+   */
+  private async buildAndSaveCacheBatch(
+    tableName: string,
+    rows: RecordWithId[]
+  ): Promise<void> {
+    const batch: CacheRecord[] = rows.map((record) => ({
+      table: tableName,
+      op: 'CREATE' as const,
+      record,
+      version: (record._00_rv as number) || 1,
+    }));
+
+    const seen = new Set<string>(rows.map((r) => encodeRecordId(r.id)));
+    for (const record of rows) {
+      this.collectEmbeddedChildren(record, batch, seen);
+    }
+
+    await this.cache.saveBatch(batch);
+  }
+
+  /**
+   * Preload/prewarm: persist one-shot rows (and their embedded related children)
+   * into the local cache WITHOUT registering a query — no `activeQueries` entry,
+   * no `_00_query` view, no TTL heartbeat. The rows live in the local DB as
+   * ordinary bodies (never GC'd on their own) so a later `useQuery` seeds its
+   * first paint from them instantly, then registers a live view to freshen.
+   */
+  async persistSnapshot(tableName: string, rows: RecordWithId[]): Promise<void> {
+    if (rows.length === 0) return;
+    await this.buildAndSaveCacheBatch(tableName, rows);
+  }
+
+  /**
+   * Read the durable preload freshness marker for a query hash, or null if this
+   * query was never preloaded in the current bucket. Co-located with the cached
+   * rows (per-bucket `_00_preload` table) so a bucket switch that clears the
+   * data also clears the marker — a stale marker can't claim "warm" when the
+   * rows are gone. Any read error is treated as cold.
+   */
+  async getPreloadMarker(
+    hash: string
+  ): Promise<{ fetchedAt: number; rowCount: number } | null> {
+    try {
+      const row = await this.local.getById('_00_preload', hash);
+      if (!row) return null;
+      return {
+        fetchedAt: Number((row as any).fetchedAt) || 0,
+        rowCount: Number((row as any).rowCount) || 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Stamp the preload freshness marker after a successful snapshot fetch. */
+  async writePreloadMarker(hash: string, rowCount: number): Promise<void> {
+    await this.local.upsert(
+      '_00_preload',
+      hash,
+      { fetchedAt: Date.now(), rowCount },
+      'replace'
+    );
   }
 
   /** True while ≥1 live subscriber is watching this query (refcount guard). */

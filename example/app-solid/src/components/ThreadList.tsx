@@ -1,6 +1,6 @@
 import { For, Show, createSignal, createEffect, onCleanup } from 'solid-js';
 import { useNavigate } from '@solidjs/router';
-import { useQuery, useDb } from '@spooky-sync/client-solid';
+import { useQuery, useDb, createPreload } from '@spooky-sync/client-solid';
 import { createHotkey } from '../lib/keyboard';
 import type { schema } from '../schema.gen';
 import { ProfilePicture } from './ProfilePicture';
@@ -163,7 +163,23 @@ export function ThreadList() {
             </Show>
           }
         >
-          {(thread, index) => (
+          {(thread, index) => {
+            // Prewarm each thread's detail data (author + first 3 comments with
+            // their authors) into the local cache so opening the thread paints
+            // instantly instead of waiting on the network. Snapshot-only: no
+            // live view is registered until the detail actually mounts.
+            createPreload(db, () =>
+              db
+                .query('thread')
+                .where({ id: thread.id })
+                .related('author')
+                .related('comments', (q) =>
+                  q.related('author').orderBy('created_at', 'desc').limit(3)
+                )
+                .one()
+                .build()
+            );
+            return (
             <div
               data-thread-index={index()}
               onMouseDown={() => handleThreadClick(thread.id.split(':')[1])}
@@ -214,7 +230,8 @@ export function ThreadList() {
                 </div>
               </div>
             </div>
-          )}
+            );
+          }}
         </For>
       </div>
     </div>

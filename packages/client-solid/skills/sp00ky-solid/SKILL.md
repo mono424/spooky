@@ -51,6 +51,7 @@ function App() {
 |------|------|-------------|
 | `config` | `SyncedDbConfig<S>` | Same as `Sp00kyConfig` from core |
 | `fallback` | `JSX.Element` | Shown while the database is initializing |
+| `preload` | `(db: SyncedDb<S>) => Promise<void>` | Prewarm essential data before revealing the UI. Runs after `init()`; `fallback` stays until it resolves. See [Preload](#preload). |
 | `onReady` | `(db: SyncedDb<S>) => void` | Called when initialization succeeds |
 | `onError` | `(error: Error) => void` | Called if initialization fails |
 | `children` | `JSX.Element` | App content, rendered after init |
@@ -133,6 +134,75 @@ You can also pass the `SyncedDb` instance directly (legacy):
 
 ```tsx
 const posts = useQuery(db, db.query('post').build());
+```
+
+## Preload
+
+Prewarm a query's results (and any embedded `.related()` children) into the local cache so a
+later `useQuery` for the same data paints instantly instead of waiting on the network. Preload
+does NOT register a live view — it's a one-shot snapshot; the data freshens on use, when the
+real `useQuery` mounts.
+
+### `db.preload(query, options?)` — awaitable, cache-aware
+
+```tsx
+// Cold (first load, nothing cached): fetches + persists, and the promise
+// AWAITS it — so you can block on it.
+// Warm (already cached in this bucket): returns instantly, never blocks.
+await db.preload(db.query('config').build());
+```
+
+Behavior:
+
+- **Cold** — no local copy in the current bucket → fetch one-shot from the remote, store locally,
+  and the returned promise resolves only after that completes. Awaiting it blocks.
+- **Warm** — a copy already exists → resolves immediately, never touches the network by default.
+  Freshness is tracked with a durable per-bucket marker, so "warm" survives reloads and a bucket
+  switch correctly resets to cold.
+
+`options`:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `refresh` | `'onUse' \| 'background' \| 'stale'` | What to do when warm. `onUse` (default): nothing — data freshens when `useQuery` mounts. `background`: return instantly + one silent refetch. `stale`: refetch only if older than `staleTime`. |
+| `staleTime` | `QueryTimeToLive` | For `refresh: 'stale'`. Max age before a warm copy is refetched (default `'1h'`). |
+
+```tsx
+// Refetch in the background once per session, but only if the cache is > 1 day old:
+await db.preload(db.query('config').build(), { refresh: 'stale', staleTime: '1d' });
+```
+
+### Blocking first-load: `Sp00kyProvider` `preload` prop
+
+Gate the whole app on essential data. The `fallback` stays visible until preload resolves; on
+warm loads it's instant, so there's no perceptible gate after the first run.
+
+```tsx
+<Sp00kyProvider
+  config={config}
+  fallback={<Splash />}
+  preload={(db) => db.preload(db.query('config').build())}
+>
+  <App />
+</Sp00kyProvider>
+```
+
+### `createPreload(query, options?)` — reactive, fire-and-forget
+
+For prewarming data the user is likely to open next (e.g. the detail view for each row in a
+list). Reactive and non-blocking; mirrors `useQuery`'s overloads and `enabled` option, plus the
+`refresh`/`staleTime` options above.
+
+```tsx
+import { createPreload } from '@spooky-sync/client-solid';
+
+// Inside a list row — warm the detail query so navigation is instant:
+createPreload(() =>
+  db.query('thread').where({ id: thread.id })
+    .related('author')
+    .related('comments', (q) => q.related('author').orderBy('created_at', 'desc').limit(3))
+    .one().build()
+);
 ```
 
 ## useDb
@@ -257,8 +327,9 @@ The job's `status` field transitions through: `pending` → `processing` → `su
 The package re-exports commonly needed types:
 
 ```typescript
-import { RecordId, Uuid } from '@spooky-sync/client-solid';
+import { RecordId, Uuid, useQuery, createPreload } from '@spooky-sync/client-solid';
 import type {
   Model, GenericModel, QueryResult, TableModel, TableNames, GetTable,
+  PreloadOptions, PreloadRefresh,
 } from '@spooky-sync/client-solid';
 ```

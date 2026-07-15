@@ -11,6 +11,7 @@ A SurrealDB client for Solid.js with automatic cache synchronization and live qu
 - **Type-Safe**: Full TypeScript support with generated schema types
 - **Reactive**: Seamless integration with Solid.js reactivity
 - **Offline Support**: Local cache works even when remote is temporarily unavailable
+- **Preload / Prewarm**: Warm data into the local cache ahead of time so screens open instantly — awaitable to gate first load, reactive to prefetch what's next
 
 ## Quick Start
 
@@ -214,6 +215,25 @@ const liveQuery = await db.query.thread
   .find({ status: 'active' }) // ✅ Status field is type-checked
   .orderBy('created_at', 'desc'); // ✅ Field names autocompleted
 ```
+
+### Preload / Prewarm
+
+Warm a query's results into the local cache before they're needed, so a later `useQuery` paints
+instantly instead of waiting on the network. Preload is a one-shot snapshot — it does not register
+a live view; the data freshens on use when the real `useQuery` mounts.
+
+```typescript
+// Awaitable + cache-aware: blocks on the FIRST load (nothing cached), returns
+// instantly on later loads (already cached). Great for gating the UI on config.
+await db.preload(db.query('config').build());
+
+// Opt into a one-time background refresh when the cache is stale:
+await db.preload(db.query('config').build(), { refresh: 'stale', staleTime: '1d' });
+```
+
+Block first-load UI on essential data via the `Sp00kyProvider` `preload` prop, or reactively
+prefetch what the user is likely to open next with `createPreload(() => …build())`. Full details
+in the [SKILL guide](./skills/sp00ky-solid/SKILL.md#preload).
 
 ## Documentation
 

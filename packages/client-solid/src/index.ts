@@ -7,6 +7,8 @@ import {
   type UpdateOptions,
   type RunOptions,
   type SyncHealth,
+  type PreloadOptions,
+  type PreloadRefresh,
 } from '@spooky-sync/core';
 
 import type {
@@ -20,6 +22,7 @@ import type {
   RelationshipFieldsFromSchema,
   GetRelationship,
   RelatedFieldMapEntry,
+  FinalQuery,
   InnerQuery,
   BackendNames,
   BackendRoutes,
@@ -39,6 +42,8 @@ import { RecordId, Uuid, type Surreal } from 'surrealdb';
 export { RecordId, Uuid };
 export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/models';
 export { useQuery } from './lib/use-query';
+export { createPreload } from './lib/create-preload';
+export type { PreloadOptions, PreloadRefresh } from '@spooky-sync/core';
 export { useSyncStatus, type UseSyncStatus } from './lib/use-sync-status';
 export type { SyncHealth, SyncHealthStatus, SyncHealthConfig } from '@spooky-sync/core';
 export { useCrdtField } from './lib/use-crdt-field';
@@ -184,6 +189,19 @@ export class SyncedDb<S extends SchemaStructure> {
       throw new Error('Only string ID or RecordId selectors are supported currently with core');
     }
     await this.sp00ky.delete(tableName as string, id);
+  }
+
+  /**
+   * Preload/prewarm a built query into the local cache without registering a
+   * live view. Fetches once and stores the rows (+ embedded related children)
+   * locally so a later `useQuery` for the same data paints instantly. Best-effort.
+   */
+  public async preload(
+    finalQuery: FinalQuery<S, any, any, any, any, Sp00kyQueryResultPromise>,
+    options?: PreloadOptions
+  ): Promise<void> {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    await this.sp00ky.preload(finalQuery, options);
   }
 
   /**

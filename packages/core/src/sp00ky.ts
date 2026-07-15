@@ -5,6 +5,7 @@ import type {
   QueryStatusCallback,
   Sp00kyQueryResultPromise,
   PersistenceClient,
+  PreloadOptions,
   UpdateOptions,
   RunOptions,
   SyncHealth} from './types';
@@ -17,6 +18,7 @@ import type { LocalStore } from './services/database/index';
 import type { UpEvent } from './modules/sync/index';
 import { Sp00kySync } from './modules/sync/index';
 import type {
+  FinalQuery,
   GetTable,
   InnerQuery,
   QueryOptions,
@@ -44,7 +46,7 @@ import { FeatureFlagModule, FeatureFlagHandle } from './modules/feature-flag/ind
 import type { FeatureFlagOptions } from './modules/feature-flag/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { ANON_USER_ID, bucketIdForUser } from './modules/ref-tables';
-import { parseParams, encodeRecordId } from './utils/index';
+import { parseParams, encodeRecordId, parseDuration } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
 
@@ -128,6 +130,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
   private devTools: DevToolsService;
   private crdtManager: CrdtManager;
   private featureFlags!: FeatureFlagModule<S>;
+  // Query hashes already preloaded this session — skip redundant one-shot
+  // fetches when the same preload query is requested again (e.g. a list row
+  // re-rendering). Cleared on process/session end only.
+  private preloadedHashes = new Set<number>();
 
   private logger: ReturnType<typeof createLogger>;
   public auth: AuthService<S>;
@@ -719,6 +725,90 @@ export class Sp00kyClient<S extends SchemaStructure> {
     });
 
     return hash;
+  }
+
+  /**
+   * Smart, awaitable preload/prewarm into the LOCAL cache — without registering a
+   * live view (NO `_00_query`, NO subscription, NO TTL heartbeat).
+   *
+   * Cache-aware via a durable per-bucket freshness marker (`_00_preload`):
+   * - COLD (never preloaded in this bucket): fetch the query one-shot from the
+   *   remote, persist the rows (+ embedded `.related()` children), stamp the
+   *   marker — and AWAIT it. This is the "smart waiting" first load: callers can
+   *   `await db.preload(...)` to hold the UI until the data is ready.
+   * - WARM (marker present): return instantly — NEVER blocks. `refresh` decides
+   *   whether to also kick a one-time silent refetch (see {@link PreloadOptions}).
+   *   Default `onUse` does nothing; the data freshens when the real `useQuery`
+   *   mounts and registers its live view.
+   *
+   * Best-effort: any fetch failure (offline, etc.) is a no-op warn (no marker
+   * written, so it's retried next load). Deduped per session by query hash.
+   */
+  async preload(
+    finalQuery: FinalQuery<S, any, any, any, any, any>,
+    options?: PreloadOptions
+  ): Promise<void> {
+    const q = finalQuery.innerQuery;
+    if (this.preloadedHashes.has(q.hash)) return;
+
+    const tableName = q.tableName;
+    const tableSchema = this.config.schema.tables.find((t) => t.name === tableName);
+    if (!tableSchema) {
+      throw new Error(`Table ${tableName} not found`);
+    }
+    const params = parseParams(tableSchema.columns, q.selectQuery.vars ?? {});
+    const hashKey = String(q.hash);
+
+    const marker = await this.dataModule.getPreloadMarker(hashKey);
+
+    // COLD → fetch + persist + stamp, awaited so the caller can block on it.
+    if (!marker) {
+      const rowCount = await this.fetchAndPersist(q, tableName, params);
+      if (rowCount >= 0) {
+        await this.dataModule.writePreloadMarker(hashKey, rowCount);
+        this.preloadedHashes.add(q.hash);
+      }
+      return;
+    }
+
+    // WARM → never block. Mark handled for this session, then optionally refresh.
+    this.preloadedHashes.add(q.hash);
+    const refresh = options?.refresh ?? 'onUse';
+    if (refresh === 'onUse') return;
+
+    if (refresh === 'stale') {
+      const maxAgeMs = parseDuration(options?.staleTime ?? '1h');
+      if (Date.now() - marker.fetchedAt <= maxAgeMs) return; // still fresh
+    }
+
+    // `background`, or `stale` past its staleTime → one-time silent refetch.
+    void this.fetchAndPersist(q, tableName, params).then((rowCount) => {
+      if (rowCount >= 0) return this.dataModule.writePreloadMarker(hashKey, rowCount);
+    });
+  }
+
+  /**
+   * One-shot remote fetch + local persist for a preload query. Returns the row
+   * count on success, or -1 on failure (best-effort: logged, never thrown) so
+   * the caller skips stamping the freshness marker and retries next load.
+   */
+  private async fetchAndPersist(
+    q: InnerQuery<any, any, any>,
+    tableName: string,
+    params: Record<string, any>
+  ): Promise<number> {
+    try {
+      const [rows] = await this.remote.query<[RecordWithId[]]>(q.selectQuery.query, params);
+      const list = rows ?? [];
+      await this.dataModule.persistSnapshot(tableName, list);
+      return list.length;
+    } catch (err) {
+      this.logger.warn(
+        { err, hash: q.hash, Category: 'sp00ky-client::Sp00kyClient::preload' },
+        'Preload fetch failed; data will be fetched on demand'
+      );
+      return -1;
+    }
   }
 
   async queryRaw(sql: string, params: Record<string, any>, ttl: QueryTimeToLive) {

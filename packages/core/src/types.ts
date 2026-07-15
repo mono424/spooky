@@ -69,6 +69,24 @@ export type QueryTimeToLive =
   | '1d';
 
 /**
+ * Refresh behavior for `preload` when the data is already cached locally (warm).
+ * The FIRST load (cold) always fetches + blocks regardless.
+ * - `onUse` (default): do nothing when warm — the data freshens on use, when the
+ *   real `useQuery` mounts and registers its live view. No network on load.
+ * - `background`: return instantly, but kick a one-time silent refetch.
+ * - `stale`: like `background`, but only if the cached copy is older than
+ *   `staleTime`.
+ */
+export type PreloadRefresh = 'onUse' | 'background' | 'stale';
+
+export interface PreloadOptions {
+  /** How to refresh when the query is already cached locally. Default `onUse`. */
+  refresh?: PreloadRefresh;
+  /** For `refresh: 'stale'` — max age before a warm copy is refetched. Default `1h`. */
+  staleTime?: QueryTimeToLive;
+}
+
+/**
  * Result object returned when a query is registered or executed.
  */
 export interface Sp00kyQueryResult {

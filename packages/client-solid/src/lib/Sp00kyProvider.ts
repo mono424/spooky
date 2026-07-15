@@ -10,6 +10,15 @@ export interface Sp00kyProviderProps<S extends SchemaStructure> {
   fallback?: JSX.Element;
   onError?: (error: Error) => void;
   onReady?: (db: SyncedDb<S>) => void;
+  /**
+   * Prewarm data into the local cache before revealing the UI. Runs after
+   * `init()`; the `fallback` stays visible until it resolves. Use awaitable
+   * `db.preload(...)` calls here to gate first-load on essential data (e.g.
+   * config). On warm loads preload returns instantly, so there's no perceptible
+   * gate after the first run. Best-effort: a rejection is caught and the UI is
+   * revealed anyway.
+   */
+  preload?: (db: SyncedDb<S>) => Promise<void>;
   children: JSX.Element;
 }
 
@@ -29,6 +38,16 @@ export function Sp00kyProvider<S extends SchemaStructure>(
     try {
       const instance = new SyncedDb<S>(merged.config);
       await instance.init();
+      // Gate first-load UI on prewarmed data. Best-effort: never let a preload
+      // failure keep the app stuck on the fallback.
+      if (merged.preload) {
+        try {
+          await merged.preload(instance);
+        } catch (e) {
+          // oxlint-disable-next-line no-console
+          console.error('Sp00kyProvider: preload failed; revealing UI anyway', e);
+        }
+      }
       setDb(() => instance);
       merged.onReady?.(instance);
     } catch (e) {
