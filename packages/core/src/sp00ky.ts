@@ -510,15 +510,32 @@ export class Sp00kyClient<S extends SchemaStructure> {
   private ensureLocalBucket(userId: string | null): Promise<void> {
     const target = bucketIdForUser(userId);
     this.pendingBucketTarget = target;
+    // Close the query gate SYNCHRONOUSLY the instant a switch is pending — the
+    // AuthProvider's own auth subscriber fires right after this (same tick) and
+    // enables queries, and `doSwitchBucket` only runs a microtask later on the
+    // chain. Without closing the gate here, that query is issued through the
+    // still-open gate and is in-flight on the local wasm engine when
+    // `switchStore` closes the client — which wedges the engine (every
+    // subsequent query, including provisioning, hangs → no view ever registers).
+    // No-op when already on the target bucket.
+    const needsSwitch = this.local.currentBucketId !== target;
+    const release = needsSwitch ? this.local.beginSwitch() : null;
     this.bucketSwitchChain = this.bucketSwitchChain.then(async () => {
-      if (this.pendingBucketTarget !== target) return; // superseded by a newer flip
-      if (this.local.currentBucketId === target) return;
-      await this.doSwitchBucket(target);
+      // Superseded by a newer flip, or already on target: reopen the gate we
+      // closed above and skip the switch.
+      if (this.pendingBucketTarget !== target || this.local.currentBucketId === target) {
+        release?.();
+        return;
+      }
+      await this.doSwitchBucket(target, release);
     });
     // Isolate chain failures per-caller: a failed switch must not poison every
-    // future switch. The caller (auth listener) logs it.
+    // future switch. The caller (auth listener) logs it. Reopen the gate on
+    // failure so the client never gets stuck closed.
     const result = this.bucketSwitchChain;
-    this.bucketSwitchChain = this.bucketSwitchChain.catch(() => {});
+    this.bucketSwitchChain = this.bucketSwitchChain.catch(() => {
+      release?.();
+    });
     return result;
   }
 
@@ -542,7 +559,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
    * re-homed keeping their hashes, sync resumed on the new bucket's own
    * outbox, and every query re-registered remotely to refill from the server.
    */
-  private async doSwitchBucket(target: string): Promise<void> {
+  private async doSwitchBucket(target: string, gateRelease?: (() => void) | null): Promise<void> {
     this.logger.info(
       { target, from: this.local.currentBucketId, Category: 'sp00ky-client::Sp00kyClient::doSwitchBucket' },
       'Switching local bucket'
@@ -552,7 +569,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
     this.dataModule.quiesce();
     this.crdtManager.closeAll({ flush: false });
 
-    const reopen = this.local.beginSwitch();
+    // Reuse the gate the caller (`ensureLocalBucket`) closed synchronously; only
+    // open our own if called without one (keeps the gate continuously closed
+    // from the auth flip through the swap — no window for a racing query).
+    const reopen = gateRelease ?? this.local.beginSwitch();
     try {
       await this.local.switchStore(target);
       if (this.local.usesSurqlSchema) {

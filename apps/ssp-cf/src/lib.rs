@@ -211,6 +211,7 @@ struct NodeConfigCf {
     auth_secret: String,
     ssp_id: String,
     job_config: String, // SPKY_JOB_CONFIG JSON (outbox backend routing)
+    ref_mode: ssp_protocol::RefMode,
 }
 
 fn read_config(env: &Env) -> Result<NodeConfigCf> {
@@ -227,6 +228,13 @@ fn read_config(env: &Env) -> Result<NodeConfigCf> {
             if v.is_empty() { "cf-ssp".to_string() } else { v }
         },
         job_config: var("SPKY_JOB_CONFIG"),
+        // Must match the client's `refMode` (sp00ky.yml). Default Dedicated —
+        // core's default (see ssp-node config.rs) and the common case; a
+        // client/node mismatch wedges cross-session sync (views never register).
+        ref_mode: match var("SPKY_REF_MODE").to_ascii_lowercase().as_str() {
+            "single" => ssp_protocol::RefMode::Single,
+            _ => ssp_protocol::RefMode::Dedicated,
+        },
     })
 }
 
@@ -317,6 +325,7 @@ impl SspNodeDo {
             auth_secret: String::new(),
             ssp_id: "cf-ssp".to_string(),
             job_config: String::new(),
+            ref_mode: ssp_protocol::RefMode::Dedicated,
         });
 
         let http: Arc<dyn HttpClient> = Arc::new(CfHttp);
@@ -368,7 +377,7 @@ fn build_node(platform: Platform, cfg: &NodeConfigCf) -> SspNode {
         job_queue_tx,
         ssp_id: cfg.ssp_id.clone(),
         auth_secret: cfg.auth_secret.clone(),
-        ref_mode: ssp_protocol::RefMode::Single,
+        ref_mode: cfg.ref_mode,
         version: env!("CARGO_PKG_VERSION"),
         surrealdb_version: "external".to_string(),
         advertise_ip: None,

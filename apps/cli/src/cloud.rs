@@ -2654,6 +2654,9 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
         "upgrade_infra": upgrade,
         "clean": clean,
         "ssp_job_config": ssp_job_config,
+        // Free plan: the app's refMode must reach the SSP Worker so its ref mode
+        // matches the client's — a mismatch wedges cross-session sync.
+        "ref_mode": config.resolved_ref_mode().as_str(),
         // Partial deploy: control plane merges these apps over the previous
         // deployment instead of treating them as the complete desired set.
         "partial": is_partial,
