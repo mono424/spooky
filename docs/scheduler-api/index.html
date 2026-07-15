@@ -7,9 +7,9 @@
 <pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word" tabindex="0" data-language="yaml"><code><span class="line"><span style="color:#22863A;--shiki-dark:#85E89D">ingest_host</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#005CC5;--shiki-dark:#79B8FF">0.0.0.0</span><span style="color:#6A737D;--shiki-dark:#6A737D">   # optional; falls back to 0.0.0.0</span></span>
 <span class="line"><span style="color:#22863A;--shiki-dark:#85E89D">ingest_port</span><span style="color:#24292E;--shiki-dark:#E1E4E8">: </span><span style="color:#005CC5;--shiki-dark:#79B8FF">9667</span></span></code></pre>
 <p>A subset of fields can also be overridden with <code>SPKY_*</code> env vars
-(<code>SPKY_DB_WS</code>, <code>SPKY_DB_NS</code>, <code>SPKY_DB_NAME</code>, <code>SPKY_DB_USER</code>,
+(<code>SPKY_DB_URL</code> (or legacy <code>SPKY_DB_WS</code>), <code>SPKY_DB_NS</code>, <code>SPKY_DB_NAME</code>, <code>SPKY_DB_USER</code>,
 <code>SPKY_DB_PASS</code>, <code>SPKY_SCHEDULER_ID</code>,
-<code>SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS</code>, <code>SPKY_SCHEDULER_BACKENDS</code>).
+<code>SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS</code>, <code>SPKY_BACKENDS</code> (or legacy <code>SPKY_SCHEDULER_BACKENDS</code>)).
 The bind host/port are YAML-only.</p>
 <h2 id="authentication">Authentication</h2>
 <p>Currently, the Scheduler API does not require authentication. Implement network-level security (firewalls, VPCs) to protect these endpoints.</p>
@@ -392,13 +392,13 @@ The bind host/port are YAML-only.</p>
 <p><strong>Environment Variables (overrides for YAML fields):</strong></p>
 <ul>
 <li><code>SPKY_SCHEDULER_ID</code> - Unique scheduler identifier (defaults to <code>scheduler-&lt;uuid&gt;</code>)</li>
-<li><code>SPKY_DB_WS</code> - SurrealDB WebSocket URL (overrides <code>db.url</code>)</li>
+<li><code>SPKY_DB_URL</code> - SurrealDB URL (overrides <code>db.url</code>; HTTP engine — <code>ws://</code> values are accepted and normalized). <code>SPKY_DB_WS</code> is read as a legacy fallback.</li>
 <li><code>SPKY_DB_NS</code> - SurrealDB namespace (overrides <code>db.namespace</code>)</li>
 <li><code>SPKY_DB_NAME</code> - SurrealDB database (overrides <code>db.database</code>)</li>
 <li><code>SPKY_DB_USER</code> - SurrealDB username (overrides <code>db.username</code>)</li>
 <li><code>SPKY_DB_PASS</code> - SurrealDB password (overrides <code>db.password</code>)</li>
 <li><code>SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS</code> - Override for <code>snapshot_update_interval_secs</code> (default: <code>300</code>)</li>
-<li><code>SPKY_SCHEDULER_BACKENDS</code> - JSON-encoded backend list (job-runner configuration)</li>
+<li><code>SPKY_BACKENDS</code> - JSON-encoded backend health-check list (<code>SPKY_SCHEDULER_BACKENDS</code> accepted as legacy fallback)</li>
 <li><code>SPKY_BOOTSTRAP_PAGE_SIZE</code> - Rows read per bootstrap page from the replica (default: <code>500</code>)</li>
 <li><code>SPKY_AUTH_SECRET</code> - Optional shared secret; when set, SSP clients are required to send <code>Authorization: Bearer &lt;secret&gt;</code> on <code>/proxy/*</code></li>
 </ul>
