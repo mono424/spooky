@@ -88,7 +88,10 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Upgrade npm for OIDC support
-        run: npm install -g npm@latest
+        # Pin to npm@11: npm@latest (12.x) requires node ^22.22.2/^24.15.0, which
+        # the pinned runner node (22.14.0) doesn't satisfy → EBADENGINE. npm@11
+        # still supports OIDC trusted publishing + --provenance.
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -248,7 +251,10 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC support
-        run: npm install -g npm@latest
+        # Pin to npm@11: npm@latest (12.x) requires node ^22.22.2/^24.15.0, which
+        # the pinned runner node (22.14.0) doesn't satisfy → EBADENGINE. npm@11
+        # still supports OIDC trusted publishing + --provenance.
+        run: npm install -g npm@11
 
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -289,7 +295,10 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Upgrade npm for OIDC support
-        run: npm install -g npm@latest
+        # Pin to npm@11: npm@latest (12.x) requires node ^22.22.2/^24.15.0, which
+        # the pinned runner node (22.14.0) doesn't satisfy → EBADENGINE. npm@11
+        # still supports OIDC trusted publishing + --provenance.
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
