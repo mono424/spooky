@@ -89,9 +89,18 @@ pub fn build_edge_batch(
     let mut batch = EdgeBatch::default();
 
     for (idx, delta) in deltas.iter().enumerate() {
-        // Skip deltas with no primary-window change (a delta carrying only
-        // subquery items is not emitted here — long-standing behavior).
-        if delta.additions.is_empty() && delta.updates.is_empty() && delta.removals.is_empty() {
+        // Skip deltas with nothing to write. A delta that changes ONLY subquery
+        // children (a comment added to a thread already in the view — the
+        // parent's membership is unchanged) still carries `subquery_items` that
+        // must become `_00_list_ref` edges, so it must NOT be skipped. Skipping
+        // it (the old behavior) is why reverse-link children like comments never
+        // synced while forward links, whose delta also carried a parent
+        // addition/content-update, worked.
+        if delta.additions.is_empty()
+            && delta.updates.is_empty()
+            && delta.removals.is_empty()
+            && delta.subquery_items.is_empty()
+        {
             continue;
         }
 
