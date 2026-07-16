@@ -939,6 +939,44 @@ mod tests {
         }
     }
 
+    // Regression for the production "comments vanish" bug: a reverse
+    // one-to-many subquery that is BOTH windowed (ORDER BY + LIMIT) AND carries
+    // a nested subquery (comment -> author) must still extract its parent_key.
+    // If parent_key comes back None, `compute_current_subquery_set` skips the
+    // subquery entirely (circuit.rs) and no `_00_list_ref` edges are written,
+    // so comments never sync to clients. Mirrors the real threads query.
+    #[test]
+    fn test_windowed_reverse_subquery_with_nested_child_extracts_parent_key() {
+        let sql = "SELECT *, \
+             (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author, \
+             (SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author \
+              FROM comment WHERE thread=$parent.id ORDER BY created_at desc LIMIT 10) AS comments \
+             FROM thread";
+        let result = convert_surql_to_dbsp(sql).expect("Failed to parse SQL");
+        let operator: Operator = serde_json::from_value(result).expect("Failed to deserialize");
+
+        let Operator::Project { projections, .. } = operator else {
+            panic!("Expected Project operator at top level");
+        };
+        let comments = projections
+            .iter()
+            .find_map(|p| match p {
+                Projection::Subquery { alias, parent_key, .. } if alias == "comments" => {
+                    Some(parent_key.clone())
+                }
+                _ => None,
+            })
+            .expect("Expected a `comments` subquery projection");
+
+        let pk = comments.expect(
+            "`comments` subquery must have a parent_key — without it the SSP emits no \
+             _00_list_ref edges and comments never reach clients (production bug)",
+        );
+        // reverse one-to-many: child comment.thread = parent thread.id
+        assert_eq!(pk.child_field, "thread", "comments correlate on comment.thread");
+        assert_eq!(pk.parent_field, "id", "…against the parent thread's id");
+    }
+
     fn link_map(pairs: &[(&str, &str, &str)]) -> LinkMap {
         let mut m = LinkMap::new();
         for (table, field, target) in pairs {

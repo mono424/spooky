@@ -1255,6 +1255,68 @@ mod tests {
         }
     }
 
+    // A reverse one-to-many subquery (comments-style): child.<fk> = parent.id,
+    // with a real parent_key set (unlike `subquery_query`, which leaves it None).
+    fn reverse_subquery_query(
+        id: &str,
+        parent_table: &str,
+        child_table: &str,
+        child_fk: &str,
+    ) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Project {
+                input: Box::new(OperatorPlan::Scan {
+                    table: parent_table.to_string(),
+                }),
+                projections: vec![
+                    Projection::All,
+                    Projection::Subquery {
+                        alias: "children".to_string(),
+                        plan: Box::new(OperatorPlan::Scan {
+                            table: child_table.to_string(),
+                        }),
+                        parent_key: Some(crate::operator::plan::SubqueryParentKey {
+                            child_field: child_fk.to_string(),
+                            parent_field: "id".to_string(),
+                        }),
+                    },
+                ],
+            },
+        }
+    }
+
+    // Regression for the production "comments vanish" bug. A `.related()`
+    // reverse one-to-many child (e.g. a thread's comments) must be emitted in
+    // the ViewDelta's `subquery_items` — that's what the edge writer turns into
+    // a `_00_list_ref` edge the client syncs. The initial registration snapshot
+    // (add_query) must include already-present children, or a page reload shows
+    // no comments even though they exist.
+    #[test]
+    fn reverse_subquery_snapshot_emits_child_edges() {
+        let mut circuit = Circuit::new();
+        circuit.load(vec![
+            Record::new("thread", "thread:1", json!({ "title": "Hello" })),
+            Record::new(
+                "comment",
+                "comment:1",
+                json!({ "text": "hi", "thread": "thread:1" }),
+            ),
+        ]);
+
+        let delta = circuit
+            .add_query(reverse_subquery_query("q1", "thread", "comment", "thread"), None, None)
+            .expect("registration must yield an initial delta");
+
+        assert!(
+            delta.subquery_items.iter().any(|it| it.id == "comment:1"),
+            "initial snapshot must emit the reverse subquery child as a subquery_item so an \
+             _00_list_ref edge is written — else comments never reach the client (prod bug). \
+             got subquery_items: {:?}",
+            delta.subquery_items
+        );
+    }
+
     #[test]
     fn subquery_table_create_emits_content_update() {
         let mut circuit = Circuit::new();

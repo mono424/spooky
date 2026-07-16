@@ -142,6 +142,52 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
     Ok(content)
 }
 
+/// Build the per-table sp00ky ingest/versioning events (`_00_<table>_mutation`
+/// and `_00_<table>_delete`) for the server schema.
+///
+/// These events are what make change-detection work: on every mutation
+/// SurrealDB `http::post($sp00ky_endpoint + '/ingest', …)`, which steps the
+/// SSP's circuit and produces the `_00_list_ref` deltas clients live on.
+/// Without them nothing reaches the SSP incrementally — realtime dies and
+/// data only appears when a client re-registers its query (a reload).
+///
+/// The VM path applies these via `migrate::apply_internal_schema`, but the
+/// free/Cloudflare `push` path (`build_server_schema`) does NOT emit them, so
+/// `spky push` must append this. Uses `DEFINE EVENT OVERWRITE`, so it is safe
+/// to (re-)apply to an existing database.
+pub fn build_server_events(config: &SchemaBuilderConfig) -> Result<String> {
+    let raw_content = fs::read_to_string(&config.input_path).context(format!(
+        "Failed to read input schema file: {:?}",
+        config.input_path
+    ))?;
+    // Match `build_server_schema`'s user-portion transforms so parsed table
+    // shapes agree (CRDT field rewrite + backend-appended tables like the
+    // outbox `job` table).
+    let mut content = rewrite_crdt_cursor_fields(&raw_content);
+    let mut backend_processor = BackendProcessor::new();
+    if let Some(config_path) = &config.config_path {
+        if config_path.exists() {
+            backend_processor.process(config_path)?;
+            content.push('\n');
+            content.push_str(&backend_processor.schema_appends);
+        }
+    }
+
+    let mut parser = SchemaParser::new();
+    parser
+        .parse_file(&content)
+        .context("Failed to parse schema for sp00ky event generation")?;
+
+    Ok(crate::sp00ky::generate_sp00ky_events(
+        &parser.tables,
+        &content,
+        false, // is_client = false (server-side events)
+        &config.mode,
+        config.endpoint.as_deref(),
+        config.secret.as_deref(),
+    ))
+}
+
 /// Build the `FOR create, update WHERE ...` expression for `_00_crdt` and
 /// `_00_cursor`. For each parent table that has at least one `@crdt`-annotated
 /// field, take its table-level UPDATE expression and rewrite all
@@ -470,6 +516,88 @@ mod tests {
         assert!(
             got.contains("out = $parent.record_id"),
             "expected `out = $parent.record_id` in output: {got}"
+        );
+    }
+
+    fn write_tmp_schema(body: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let p = std::env::temp_dir().join(format!(
+            "spky_schema_test_{}_{}.surql",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&p, body).unwrap();
+        p
+    }
+
+    // Regression: the free/Cloudflare `push` path must ship the per-table
+    // ingest events. Without them SurrealDB never POSTs mutations to the SSP's
+    // `/ingest`, so no `_00_list_ref` deltas are produced and realtime silently
+    // dies (data only reappears on a client re-register / page reload). This is
+    // the exact production bug on the free plan.
+    #[test]
+    fn build_server_events_emits_ingest_events_for_http_mode() {
+        let path = write_tmp_schema(
+            "DEFINE TABLE thread SCHEMAFULL;\n\
+             DEFINE FIELD title ON thread TYPE string;\n\
+             DEFINE FIELD author ON thread TYPE record<user>;\n\
+             DEFINE TABLE comment SCHEMAFULL;\n\
+             DEFINE FIELD thread ON comment TYPE record<thread>;\n",
+        );
+        let config = SchemaBuilderConfig {
+            input_path: path.clone(),
+            config_path: None,
+            mode: DeployMode::Singlenode,
+            endpoint: None,
+            secret: None,
+            include_functions: false,
+        };
+        let events = build_server_events(&config).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        for table in ["thread", "comment"] {
+            assert!(
+                events.contains(&format!("DEFINE EVENT OVERWRITE _00_{table}_mutation")),
+                "missing {table} mutation event in:\n{events}"
+            );
+            assert!(
+                events.contains(&format!("DEFINE EVENT OVERWRITE _00_{table}_delete")),
+                "missing {table} delete event in:\n{events}"
+            );
+        }
+        assert!(
+            events.contains("http::post($sp00ky_endpoint + '/ingest'"),
+            "ingest events must POST to the SSP's /ingest (realtime depends on it):\n{events}"
+        );
+    }
+
+    // The whole pushed schema (what `spky push` sends the free node) must carry
+    // the ingest events, not just the meta tables/functions.
+    #[test]
+    fn pushed_free_plan_schema_includes_ingest_events() {
+        let path = write_tmp_schema(
+            "DEFINE TABLE thread SCHEMAFULL;\n\
+             DEFINE FIELD title ON thread TYPE string;\n",
+        );
+        let config = SchemaBuilderConfig {
+            input_path: path.clone(),
+            config_path: None,
+            mode: DeployMode::Singlenode,
+            endpoint: None,
+            secret: None,
+            include_functions: false,
+        };
+        // Mirror `push_schema_inner`: server schema + appended ingest events.
+        let mut sql = build_server_schema(&config).unwrap();
+        sql.push('\n');
+        sql.push_str(&build_server_events(&config).unwrap());
+        std::fs::remove_file(&path).ok();
+
+        assert!(
+            sql.contains("DEFINE EVENT OVERWRITE _00_thread_mutation")
+                && sql.contains("http::post($sp00ky_endpoint + '/ingest'"),
+            "pushed free-plan schema is missing the /ingest events → realtime would be broken"
         );
     }
 }

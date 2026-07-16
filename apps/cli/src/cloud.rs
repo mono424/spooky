@@ -4235,8 +4235,18 @@ pub(crate) fn push_schema_inner(client: &mut CloudClient, slug: &str, pid: &str)
         secret: None,
         include_functions: false,
     };
-    let sql = crate::schema_builder::build_server_schema(&builder_config)
+    let mut sql = crate::schema_builder::build_server_schema(&builder_config)
         .context("failed to build schema")?;
+
+    // Append the per-table ingest/versioning events. `build_server_schema`
+    // omits them (the VM path applies them separately via
+    // `apply_internal_schema`), but the free/Cloudflare node has no such step —
+    // without these events SurrealDB never POSTs mutations to the SSP's
+    // `/ingest`, so no incremental updates reach the node and realtime is dead.
+    let events = crate::schema_builder::build_server_events(&builder_config)
+        .context("failed to build sp00ky ingest events")?;
+    sql.push('\n');
+    sql.push_str(&events);
 
     println!("Pushing schema for '{}' ({} bytes)...", slug, sql.len());
     client
