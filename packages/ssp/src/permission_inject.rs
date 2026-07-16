@@ -114,8 +114,33 @@ fn inject_node(
         OperatorPlan::Project { input, projections } => {
             inject_node(input, perms, params, links)?;
             for proj in projections.iter_mut() {
-                if let Projection::Subquery { plan, .. } = proj {
-                    inject_node(plan, perms, params, links)?;
+                if let Projection::Subquery { alias, plan, .. } = proj {
+                    // A subquery over a table this node can't authorize must NOT
+                    // abort the whole registration — that would take its sibling
+                    // subqueries down with it. The classic case: a free/Cloudflare
+                    // deployment lacks the devOnly outbox `job` table, but the
+                    // client's ThreadDetail query still projects `jobs` alongside
+                    // `author` + `comments`; rejecting the view made comments never
+                    // sync (they only survived via preload, vanishing on reload).
+                    // Degrade this subquery to EMPTY (fail-closed: `Filter{.., False}`
+                    // yields no rows even if the table exists but is denied) and keep
+                    // the rest of the view working.
+                    if let Err(e) = inject_node(plan, perms, params, links) {
+                        tracing::warn!(
+                            target: "ssp::policy",
+                            alias = %alias,
+                            error = %e,
+                            "subquery permission injection failed — yielding an empty subquery instead of rejecting the view"
+                        );
+                        let inner = std::mem::replace(
+                            plan.as_mut(),
+                            OperatorPlan::Scan { table: String::new() },
+                        );
+                        **plan = OperatorPlan::Filter {
+                            input: Box::new(inner),
+                            predicate: Predicate::False,
+                        };
+                    }
                 }
             }
         }
@@ -276,6 +301,73 @@ mod tests {
             m.entry(t.to_string()).or_default().insert(f.to_string(), target.to_string());
         }
         m
+    }
+
+    /// Recursively collect every `Projection::Subquery { alias, plan }` in a plan.
+    fn collect_subqueries<'a>(plan: &'a OperatorPlan, out: &mut Vec<(String, &'a OperatorPlan)>) {
+        match plan {
+            OperatorPlan::Project { input, projections } => {
+                collect_subqueries(input, out);
+                for p in projections {
+                    if let Projection::Subquery { alias, plan, .. } = p {
+                        out.push((alias.clone(), plan.as_ref()));
+                        collect_subqueries(plan, out);
+                    }
+                }
+            }
+            OperatorPlan::Filter { input, .. }
+            | OperatorPlan::Limit { input, .. }
+            | OperatorPlan::Distinct { input } => collect_subqueries(input, out),
+            OperatorPlan::Join { left, right, .. }
+            | OperatorPlan::SemiJoin { left, right, .. }
+            | OperatorPlan::AntiJoin { left, right, .. }
+            | OperatorPlan::Union { left, right } => {
+                collect_subqueries(left, out);
+                collect_subqueries(right, out);
+            }
+            OperatorPlan::Scan { .. } => {}
+        }
+    }
+
+    /// A subquery over a table with NO registered permission (e.g. the devOnly
+    /// outbox `job` absent from a free/Cloudflare deployment) must NOT reject the
+    /// whole view — it degrades to an empty (`Filter{.., False}`) subquery while
+    /// sibling subqueries (`author`, `comments`) keep working. Regression for
+    /// "comments vanish on reload": the client's ThreadDetail query projects
+    /// `jobs` next to `comments`, and rejecting it made the comments view never
+    /// register (comments only survived via preload).
+    #[test]
+    fn unpermitted_subquery_table_degrades_to_empty_not_rejection() {
+        let sql = "SELECT *, \
+            (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author, \
+            (SELECT * FROM comment WHERE thread=$parent.id ORDER BY created_at desc LIMIT 10) AS comments, \
+            (SELECT * FROM job WHERE assigned_to=$parent.id LIMIT 1) AS jobs \
+            FROM thread WHERE id = $id";
+        let mut plan: OperatorPlan =
+            serde_json::from_value(converter::convert_surql_to_dbsp(sql).unwrap()).unwrap();
+
+        // thread/user/comment are permitted; `job` is deliberately ABSENT.
+        let perms = perms_with(&[("thread", "true"), ("user", "true"), ("comment", "true")]);
+        let params = json!({ "auth": { "id": "user:u" }, "id": "thread:t" });
+
+        // Before the fix this returned Err (default-deny on `job`) and the whole
+        // registration aborted. It must now succeed.
+        inject_permissions(&mut plan, &perms, Some(&params))
+            .expect("view with an unpermitted subquery table must still register");
+
+        let mut subs = Vec::new();
+        collect_subqueries(&plan, &mut subs);
+        let jobs = subs.iter().find(|(a, _)| a == "jobs").expect("jobs subquery present");
+        assert!(
+            matches!(jobs.1, OperatorPlan::Filter { predicate: Predicate::False, .. }),
+            "jobs subquery must be forced empty (Filter False); got {:?}",
+            jobs.1
+        );
+        let comments = subs.iter().find(|(a, _)| a == "comments").expect("comments subquery present");
+        assert!(
+            !matches!(comments.1, OperatorPlan::Filter { predicate: Predicate::False, .. }),
+            "comments subquery must NOT be emptied — it is permitted"
+        );
     }
 
     /// An outbox permission that traverses a record link
