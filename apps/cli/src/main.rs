@@ -1285,7 +1285,25 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
             // `option<string>`.
             if let Some((table_name, field_name)) = extract_table_and_field_name(trimmed) {
                 if field_name != "id" {
-                    let mut modified_line = make_field_nullable(line);
+                    // Gather the full statement (a DEFINE FIELD may span several
+                    // lines, e.g. a trailing `VALUE time::now();`) so the VALUE
+                    // strip below sees the whole clause, not just the first line.
+                    let mut stmt = String::new();
+                    let mut trailing = String::new();
+                    while i < lines.len() {
+                        if let Some(idx) = lines[i].find(';') {
+                            stmt.push_str(&lines[i][..idx]);
+                            trailing = lines[i][idx + 1..].to_string();
+                            i += 1;
+                            break;
+                        }
+                        stmt.push_str(lines[i]);
+                        stmt.push(' ');
+                        i += 1;
+                    }
+                    let stmt = stmt.split_whitespace().collect::<Vec<_>>().join(" ");
+
+                    let mut modified_line = make_field_nullable(&stmt);
                     if let Some(anns) =
                         field_annotations.get(&(table_name.clone(), field_name.clone()))
                     {
@@ -1295,9 +1313,21 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                             modified_line = rewritten;
                         }
                     }
+                    // Strip server write-time `VALUE <expr>` clauses. The local
+                    // cache stores values synced from the server verbatim; the
+                    // cache write is an UPSERT, so a surviving `VALUE time::now()`
+                    // (or `VALUE $auth.id`, …) would RE-EVALUATE on every write and
+                    // overwrite the synced value — e.g. every thread/comment ends
+                    // up with `created_at` = the moment it was cached, so they all
+                    // show the same date.
+                    modified_line = strip_value_clause(&modified_line);
+                    modified_line.push(';');
+
                     modified_lines.push(modified_line.clone());
                     result.push(modified_line);
-                    i += 1;
+                    if !trailing.trim().is_empty() {
+                        result.push(trailing);
+                    }
                     continue;
                 }
             }
@@ -1308,6 +1338,34 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
     }
 
     Ok(result.join("\n"))
+}
+
+/// Remove a top-level `VALUE <expr>` clause from a single-line DEFINE FIELD
+/// statement (semicolon already stripped by the caller). `VALUE` is a SERVER
+/// write-time computation (`time::now()`, `$auth.id`, …) that the client cache
+/// must never re-evaluate — a cache UPSERT would otherwise overwrite the synced
+/// value. The clause spans ` VALUE ` up to the next top-level clause keyword
+/// (ASSERT / PERMISSIONS / COMMENT) or the end of the statement.
+fn strip_value_clause(stmt: &str) -> String {
+    let upper = stmt.to_ascii_uppercase();
+    let Some(vpos) = upper.find(" VALUE ") else {
+        return stmt.to_string();
+    };
+    let after = vpos + " VALUE ".len();
+    let rest_upper = &upper[after..];
+    let mut end = stmt.len();
+    for kw in [" ASSERT ", " PERMISSIONS ", " COMMENT "] {
+        if let Some(p) = rest_upper.find(kw) {
+            end = end.min(after + p);
+        }
+    }
+    let mut out = stmt[..vpos].trim_end().to_string();
+    let tail = stmt[end..].trim_start();
+    if !tail.is_empty() {
+        out.push(' ');
+        out.push_str(tail);
+    }
+    out
 }
 
 /// Make a DEFINE FIELD line nullable by wrapping its TYPE in option<>
@@ -3245,5 +3303,61 @@ mod make_field_nullable_tests {
     fn any_type_is_not_wrapped() {
         let line = "DEFINE FIELD payload ON TABLE event TYPE any";
         assert_eq!(make_field_nullable(line), line);
+    }
+}
+
+#[cfg(test)]
+mod client_schema_value_strip_tests {
+    use super::{filter_schema_for_client, strip_value_clause};
+    use crate::parser::SchemaParser;
+
+    #[test]
+    fn strips_value_at_end_of_statement() {
+        let s = "DEFINE FIELD created_at ON TABLE comment TYPE option<datetime> VALUE time::now()";
+        assert_eq!(
+            strip_value_clause(s),
+            "DEFINE FIELD created_at ON TABLE comment TYPE option<datetime>"
+        );
+    }
+
+    #[test]
+    fn strips_value_but_keeps_following_assert_and_permissions() {
+        let s = "DEFINE FIELD content ON TABLE comment TYPE option<string> VALUE string::trim($value) ASSERT $value != NONE PERMISSIONS FULL";
+        assert_eq!(
+            strip_value_clause(s),
+            "DEFINE FIELD content ON TABLE comment TYPE option<string> ASSERT $value != NONE PERMISSIONS FULL"
+        );
+    }
+
+    #[test]
+    fn leaves_statements_without_value_untouched() {
+        let s = "DEFINE FIELD title ON TABLE thread TYPE option<string> PERMISSIONS FULL";
+        assert_eq!(strip_value_clause(s), s);
+    }
+
+    // The production bug: a `VALUE time::now()` on the CLIENT schema re-evaluates
+    // on every cache UPSERT, so every synced row's `created_at` becomes the sync
+    // time (all threads/comments show the same date). The client-schema filter
+    // must drop the VALUE clause — even when it sits on its own line.
+    #[test]
+    fn filter_drops_multiline_value_timenow_from_client_schema() {
+        let src = "DEFINE TABLE comment SCHEMAFULL PERMISSIONS FULL;\n\
+                   DEFINE FIELD created_at ON TABLE comment TYPE datetime\n    \
+                   VALUE time::now();\n\
+                   DEFINE FIELD content ON TABLE comment TYPE string;\n";
+        let mut parser = SchemaParser::new();
+        parser.parse_file(src).unwrap();
+        let out = filter_schema_for_client(src, &parser).unwrap();
+
+        assert!(
+            !out.to_uppercase().contains("VALUE TIME::NOW")
+                && !out.to_uppercase().contains("VALUE  TIME"),
+            "client schema must not carry `VALUE time::now()`; got:\n{out}"
+        );
+        // The field itself must survive (nullable-wrapped), just without VALUE.
+        assert!(
+            out.contains("DEFINE FIELD created_at ON TABLE comment TYPE option<datetime>"),
+            "created_at field must remain (sans VALUE); got:\n{out}"
+        );
     }
 }

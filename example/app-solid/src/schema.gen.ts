@@ -83,54 +83,6 @@ export const schema = {
       primaryKey: ['id'] as const
     },
     /**
-     * `job` table.
-     *
-     * Relationships:
-     * - `assigned_to` → `thread` (one)
-     *
-     * @example
-     * const rows = useQuery(() => db.query('job').orderBy('id', 'asc').limit(20).build());
-     */
-    {
-      name: 'job' as const,
-      columns: {
-        /**
-         * `id` — string
-         *
-         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
-         */
-        id: { type: 'string' as const, recordId: true, optional: false },
-        /**
-         * `assigned_to` — string
-         *
-         * Record ID. Pass the full `'<table>:<id>'` string when reading or writing.
-         */
-        assigned_to: { type: 'string' as const, recordId: true, optional: false },
-        assignee: { type: 'string' as const, optional: true },
-        /**
-         * `created_at?` — string
-         *
-         * ISO-8601 datetime string.
-         */
-        created_at: { type: 'string' as const, dateTime: true, optional: true },
-        delay: { type: 'number' as const, optional: false },
-        errors: { type: 'string' as const, optional: false },
-        max_retries: { type: 'number' as const, optional: false },
-        path: { type: 'string' as const, optional: false },
-        payload: { type: 'string' as const, optional: false },
-        retries: { type: 'number' as const, optional: false },
-        retry_strategy: { type: 'string' as const, optional: false },
-        status: { type: 'string' as const, optional: false },
-        /**
-         * `updated_at` — string
-         *
-         * ISO-8601 datetime string.
-         */
-        updated_at: { type: 'string' as const, dateTime: true, optional: false },
-      },
-      primaryKey: ['id'] as const
-    },
-    /**
      * `share_link` table.
      *
      * Relationships:
@@ -184,7 +136,6 @@ export const schema = {
      * Relationships:
      * - `author` → `user` (one)
      * - `comments` → `comment` (many)
-     * - `jobs` → `job` (many)
      * - `share_links` → `share_link` (many)
      *
      * @example
@@ -225,9 +176,8 @@ export const schema = {
         published: { type: 'boolean' as const, optional: true },
         title: { type: 'string' as const, optional: false },
         title_suggestion: { type: 'string' as const, optional: true },
-        comments: { type: 'string' as const, optional: true },
-        jobs: { type: 'string' as const, optional: true },
-        share_links: { type: 'string' as const, optional: true },
+        comments: { type: 'string' as const, array: true, optional: true },
+        share_links: { type: 'string' as const, array: true, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -255,9 +205,9 @@ export const schema = {
         share_privkey: { type: 'string' as const, optional: true },
         share_pubkey: { type: 'string' as const, optional: true },
         username: { type: 'string' as const, optional: false },
-        comments: { type: 'string' as const, optional: true },
-        share_links: { type: 'string' as const, optional: true },
-        threads: { type: 'string' as const, optional: true },
+        comments: { type: 'string' as const, array: true, optional: true },
+        share_links: { type: 'string' as const, array: true, optional: true },
+        threads: { type: 'string' as const, array: true, optional: true },
       },
       primaryKey: ['id'] as const
     },
@@ -272,12 +222,6 @@ export const schema = {
     {
       from: 'comment' as const,
       field: 'thread' as const,
-      to: 'thread' as const,
-      cardinality: 'one' as const
-    },
-    {
-      from: 'job' as const,
-      field: 'assigned_to' as const,
       to: 'thread' as const,
       cardinality: 'one' as const
     },
@@ -303,12 +247,6 @@ export const schema = {
       from: 'thread' as const,
       field: 'comments' as const,
       to: 'comment' as const,
-      cardinality: 'many' as const
-    },
-    {
-      from: 'thread' as const,
-      field: 'jobs' as const,
-      to: 'job' as const,
       cardinality: 'many' as const
     },
     {
@@ -347,27 +285,6 @@ export const schema = {
     },
   ],
   backends: {
-    "api": {
-      outboxTable: 'job' as const,
-      routes: {
-        "/share/accept": {
-          args: {
-            "jwt": {
-              type: 'string' as const,
-              optional: false as const
-            },
-          }
-        },
-        "/spookify": {
-          args: {
-            "id": {
-              type: 'string' as const,
-              optional: false as const
-            },
-          }
-        },
-      }
-    },
   },
 } as const;
 
@@ -390,26 +307,21 @@ export const SURQL_SCHEMA = `-- ################################################
 DEFINE TABLE user SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD username ON TABLE user TYPE option<string>
-ASSERT $value != NONE AND string::len($value) > 3
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD username ON TABLE user TYPE option<string> ASSERT $value != NONE AND string::len($value) > 3 PERMISSIONS FOR select WHERE true FOR create WHERE true FOR update WHERE $access = "account" AND id = $auth.id;
 
 DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;
 
 
 
-DEFINE FIELD profile_picture ON TABLE user TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD profile_picture ON TABLE user TYPE option<string> PERMISSIONS FOR select WHERE true FOR create, update WHERE $access = "account" AND id = $auth.id;
 
 -- Ed25519 public key (PEM SPKI). Read by anyone — used to verify share-link
 -- JWTs the user has signed.
-DEFINE FIELD share_pubkey ON TABLE user TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD share_pubkey ON TABLE user TYPE option<string> PERMISSIONS FOR select WHERE true FOR create WHERE true FOR update WHERE $access = "account" AND id = $auth.id;
 
 -- Matching Ed25519 private key (PEM PKCS8). Readable only by the owning
 -- user, like \`password\` but author-scoped instead of always-denied.
-DEFINE FIELD share_privkey ON TABLE user TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD share_privkey ON TABLE user TYPE option<string> PERMISSIONS FOR select WHERE $access = "account" AND id = $auth.id FOR create WHERE true FOR update WHERE $access = "account" AND id = $auth.id;
 
 -- ##################################################################
 -- THREAD TABLE
@@ -438,14 +350,14 @@ DEFINE FIELD title_suggestion ON TABLE thread TYPE option<string>;
 
 DEFINE FIELD content_suggestion ON TABLE thread TYPE option<string>;
 
-DEFINE FIELD author ON TABLE thread TYPE option<record<user>>; -- @parent
+DEFINE FIELD author ON TABLE thread TYPE option<record<user>>;
+ -- @parent
 
-DEFINE FIELD created_at ON TABLE thread TYPE option<datetime>
-    VALUE time::now();
+DEFINE FIELD created_at ON TABLE thread TYPE option<datetime>;
 
-DEFINE FIELD active ON TABLE thread TYPE option<bool> VALUE $value OR false;
+DEFINE FIELD active ON TABLE thread TYPE option<bool>;
 
-DEFINE FIELD published ON TABLE thread TYPE option<bool> VALUE $value OR false;
+DEFINE FIELD published ON TABLE thread TYPE option<bool>;
 
 -- ##################################################################
 -- COMMENT TABLE
@@ -454,15 +366,14 @@ DEFINE FIELD published ON TABLE thread TYPE option<bool> VALUE $value OR false;
 DEFINE TABLE comment SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD thread ON TABLE comment TYPE option<record<thread>>; -- @parent
+DEFINE FIELD thread ON TABLE comment TYPE option<record<thread>>;
+ -- @parent
 
-DEFINE FIELD content ON TABLE comment TYPE option<string>
-    ASSERT $value != NONE AND string::len($value) > 0;
+DEFINE FIELD content ON TABLE comment TYPE option<string> ASSERT $value != NONE AND string::len($value) > 0;
 
 DEFINE FIELD author ON TABLE comment TYPE option<record<user>>;
 
-DEFINE FIELD created_at ON TABLE comment TYPE option<datetime>
-    VALUE time::now();
+DEFINE FIELD created_at ON TABLE comment TYPE option<datetime>;
 
 -- ##################################################################
 -- RELATION TABLES
@@ -488,12 +399,12 @@ DEFINE EVENT comment_created ON TABLE comment WHEN $event = "CREATE" THEN
 DEFINE TABLE share_link SCHEMAFULL
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD issuer     ON TABLE share_link TYPE option<record<user>> VALUE $auth.id;
-DEFINE FIELD thread     ON TABLE share_link TYPE option<record<thread>>;
-DEFINE FIELD jwt        ON TABLE share_link TYPE option<string>;
-DEFINE FIELD jti        ON TABLE share_link TYPE option<string>;
-DEFINE FIELD exp        ON TABLE share_link TYPE option<datetime>;
-DEFINE FIELD created_at ON TABLE share_link TYPE option<datetime> VALUE time::now();
+DEFINE FIELD issuer ON TABLE share_link TYPE option<record<user>>;
+DEFINE FIELD thread ON TABLE share_link TYPE option<record<thread>>;
+DEFINE FIELD jwt ON TABLE share_link TYPE option<string>;
+DEFINE FIELD jti ON TABLE share_link TYPE option<string>;
+DEFINE FIELD exp ON TABLE share_link TYPE option<datetime>;
+DEFINE FIELD created_at ON TABLE share_link TYPE option<datetime>;
 DEFINE INDEX unique_share_jti ON TABLE share_link FIELDS jti UNIQUE;
 
 -- Only root may CREATE a \`collaborates_on\` edge — the JWT-verifying API
@@ -504,57 +415,6 @@ DEFINE TABLE collaborates_on SCHEMAFULL TYPE RELATION FROM user TO thread
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
 DEFINE INDEX unique_collab ON TABLE collaborates_on FIELDS in, out UNIQUE;
-
-
--- Backend Schema: api
--- ##################################################################
--- API OUTBOX TABLE
--- ##################################################################
-
-DEFINE TABLE job SCHEMAFULL
-PERMISSIONS FOR select, create, update, delete WHERE true;
-
-DEFINE FIELD assigned_to ON TABLE job TYPE option<record<thread>>
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD path ON TABLE job TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD payload ON TABLE job TYPE any
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 0
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD max_retries ON TABLE job TYPE option<int> DEFAULT ALWAYS 3;
-
--- Minimum time (milliseconds) the job stays pending before it is eligible to run.
-DEFINE FIELD delay ON TABLE job TYPE option<int> DEFAULT ALWAYS 0
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD retry_strategy ON TABLE job TYPE option<string> DEFAULT ALWAYS "linear"
-ASSERT $value IN ["linear", "exponential"]
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD status ON TABLE job TYPE option<string> DEFAULT ALWAYS "pending"
-ASSERT $value IN ["pending", "processing", "success", "failed"]
-PERMISSIONS FOR select, create, update WHERE true;
-
--- Owning SSP node id (ssp_id) once a job is accepted; used by cluster recovery
--- to detect orphaned jobs. Written server-side (root) only, never by clients.
-DEFINE FIELD assignee ON TABLE job TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD errors ON TABLE job TYPE option<array<object>> DEFAULT ALWAYS []
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD updated_at ON TABLE job TYPE option<datetime>
-DEFAULT ALWAYS time::now()
-PERMISSIONS FOR select, create, update WHERE true;
-
-DEFINE FIELD created_at ON TABLE job TYPE option<datetime>
-VALUE time::now()
-PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
 -- SPOOKY INCANTATION
@@ -605,55 +465,40 @@ DEFINE FIELD IF NOT EXISTS updated_at ON _00_stream_processor_state TYPE datetim
 DEFINE TABLE _00_query SCHEMALESS
 PERMISSIONS FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD surql ON TABLE _00_query TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD surql ON TABLE _00_query TYPE option<string> PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD localArray ON TABLE _00_query TYPE any
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD localArray ON TABLE _00_query TYPE any PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD remoteArray ON TABLE _00_query TYPE any
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD remoteArray ON TABLE _00_query TYPE any PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD lastActiveAt ON TABLE _00_query TYPE option<datetime> DEFAULT time::now()
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD lastActiveAt ON TABLE _00_query TYPE option<datetime> DEFAULT time::now() PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD ttl ON TABLE _00_query TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD ttl ON TABLE _00_query TYPE option<string> PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD tableName ON TABLE _00_query TYPE option<string>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD tableName ON TABLE _00_query TYPE option<string> PERMISSIONS FOR select, create, update WHERE true;
 
 -- Metrics: lifecycle and per-query observability. Rolling-window percentiles
 -- are computed in the client (DataModule) from the last N materialization
 -- samples and persisted on each ingest so devtools can read them without
 -- re-running the query.
 
-DEFINE FIELD createdAt ON TABLE _00_query TYPE option<datetime> DEFAULT time::now() READONLY
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD createdAt ON TABLE _00_query TYPE option<datetime> DEFAULT time::now() READONLY PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD registrationTime ON TABLE _00_query TYPE option<float>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD registrationTime ON TABLE _00_query TYPE option<float> PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD materializationP55 ON TABLE _00_query TYPE option<float>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD materializationP55 ON TABLE _00_query TYPE option<float> PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD materializationP90 ON TABLE _00_query TYPE option<float>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD materializationP90 ON TABLE _00_query TYPE option<float> PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD materializationP99 ON TABLE _00_query TYPE option<float>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD materializationP99 ON TABLE _00_query TYPE option<float> PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD lastIngestLatency ON TABLE _00_query TYPE option<float>
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD lastIngestLatency ON TABLE _00_query TYPE option<float> PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD updateCount ON TABLE _00_query TYPE option<int> DEFAULT 0
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD updateCount ON TABLE _00_query TYPE option<int> DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD rowCount ON TABLE _00_query TYPE option<int> DEFAULT 0
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD rowCount ON TABLE _00_query TYPE option<int> DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 
-DEFINE FIELD errorCount ON TABLE _00_query TYPE option<int> DEFAULT 0
-PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD errorCount ON TABLE _00_query TYPE option<int> DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 
 -- ==================================================
 -- SPOOKY EVENTS
@@ -681,14 +526,31 @@ PERMISSIONS FOR select, create, update WHERE true;
 -- snapshot directly; \`@crdt @cursor\` fields hold an
 -- \`option<object> FLEXIBLE\` of shape \`{ state, cursors }\` (rewritten
 -- by the schema-builder). Same shape on client and server.
+
+-- ==================================================
+-- SPOOKY USER FEATURE (per-user materialized flag assignments)
+--
+-- Server-materialized, root-only writes (see meta_tables_remote.surql for the
+-- scoped \`select WHERE user = $auth.id\` rule). Synced DOWN read-only so the
+-- feature-flag resolver can run its one shared live query
+-- (\`SELECT key, variant, payload FROM _00_user_feature\`) on the client. This
+-- table MUST be declared here, or the synced rows have no local table to land
+-- in and every flag silently falls back to its default (a flag gated fail-open
+-- then shows for everyone). SCHEMALESS so a synced row is never dropped on a
+-- field/type mismatch; the local cache is single-user, so permissions are
+-- WHERE true (the codegen rewrites them anyway).
+-- ==================================================
+
+DEFINE TABLE _00_user_feature SCHEMALESS
+PERMISSIONS FOR select, create, update, delete WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_pending_mutations TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_query TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_schema TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE _00_stream_processor_state TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
+DEFINE FIELD _00_rv ON TABLE _00_user_feature TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE collaborates_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE comment TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE commented_on TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
-DEFINE FIELD _00_rv ON TABLE job TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE share_link TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE thread TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
 DEFINE FIELD _00_rv ON TABLE user TYPE int DEFAULT 0 PERMISSIONS FOR select, create, update WHERE true;
@@ -707,20 +569,6 @@ THEN {
 
 -- Table: comment Client Deletion
 DEFINE EVENT OVERWRITE _00_comment_client_delete ON TABLE comment
-WHEN $event = "DELETE"
-THEN {
-    -- No-op for now.
-};
-
--- Table: job Client Mutation
-DEFINE EVENT OVERWRITE _00_job_client_mutation ON TABLE job
-WHEN $before != $after AND $event != "DELETE"
-THEN {
-    -- No-op for now. Client mutation sync logic moved to DBSP.
-};
-
--- Table: job Client Deletion
-DEFINE EVENT OVERWRITE _00_job_client_delete ON TABLE job
 WHEN $event = "DELETE"
 THEN {
     -- No-op for now.
