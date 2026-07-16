@@ -876,8 +876,11 @@ export class DataModule<S extends SchemaStructure> {
     hash: string
   ): Promise<{ fetchedAt: number; rowCount: number } | null> {
     try {
-      const row = await this.local.getById('_00_preload', hash);
-      if (!row) return null;
+      // Pass a real RecordId: a bare string id hits the SurrealDB engine's
+      // `FROM ONLY $__id` as a plain string, which "selects" the string itself
+      // (a truthy non-row) instead of the record — misread as a warm marker.
+      const row = await this.local.getById('_00_preload', new RecordId('_00_preload', hash));
+      if (!row || typeof row !== 'object') return null;
       return {
         fetchedAt: Number((row as any).fetchedAt) || 0,
         rowCount: Number((row as any).rowCount) || 0,
@@ -900,9 +903,12 @@ export class DataModule<S extends SchemaStructure> {
 
   /** Stamp the preload freshness marker after a successful snapshot fetch. */
   async writePreloadMarker(hash: string, rowCount: number): Promise<void> {
+    // RecordId, not a bare string: the SurrealDB engine binds the id verbatim,
+    // and `UPSERT <string>` is an InternalError — the marker silently never
+    // landed (the write is awaited inside preload's best-effort catch).
     await this.local.upsert(
       '_00_preload',
-      hash,
+      new RecordId('_00_preload', hash),
       { fetchedAt: Date.now(), rowCount },
       'replace'
     );

@@ -15,6 +15,7 @@ import type {
 } from './cache-engine';
 import { stableKey } from './relation-resolver';
 import { surql } from '../../utils/surql';
+import { RecordId } from 'surrealdb';
 
 /**
  * Default local cache backend: the in-browser SurrealDB-WASM store. Implemented
@@ -83,25 +84,41 @@ export class SurrealCacheEngine extends LocalDatabaseService implements LocalCac
     return result;
   }
 
-  async getById(_table: string, id: Id): Promise<Row | null> {
-    const [row] = await this.query<[Row | null]>('SELECT * FROM ONLY $__id;', { __id: id });
-    return row ?? null;
+  /**
+   * Coerce the contract's `Id` (a RecordId, a stable `table:id` string, or a
+   * bare id + the verb's `table` param) to a real RecordId. SurrealDB binds
+   * `$__id` verbatim: a plain string makes `FROM ONLY $__id` "select" the
+   * string itself (a truthy non-row) and `UPSERT $__id` an InternalError, so
+   * string ids silently broke every id-verb on this engine.
+   */
+  private toRecordId(table: string, id: Id): unknown {
+    if (typeof id !== 'string') return id;
+    const raw = id.startsWith(`${table}:`) ? id.slice(table.length + 1) : id;
+    return new RecordId(table, raw);
   }
 
-  async upsert(_table: string, id: Id, data: Row, mode: 'replace' | 'merge'): Promise<void> {
+  async getById(table: string, id: Id): Promise<Row | null> {
+    const [row] = await this.query<[Row | null]>('SELECT * FROM ONLY $__id;', {
+      __id: this.toRecordId(table, id),
+    });
+    // `FROM ONLY <non-record>` echoes the value back; only a real row counts.
+    return row && typeof row === 'object' ? row : null;
+  }
+
+  async upsert(table: string, id: Id, data: Row, mode: 'replace' | 'merge'): Promise<void> {
     const sql = mode === 'merge' ? surql.upsertMerge('__id', '__data') : surql.upsert('__id', '__data');
-    await this.query(surql.seal(sql), { __id: id, __data: data });
+    await this.query(surql.seal(sql), { __id: this.toRecordId(table, id), __data: data });
   }
 
-  async patch(_table: string, id: Id, patches: unknown[]): Promise<void> {
+  async patch(table: string, id: Id, patches: unknown[]): Promise<void> {
     await this.query(surql.seal('UPDATE ONLY $__id PATCH $__patches'), {
-      __id: id,
+      __id: this.toRecordId(table, id),
       __patches: patches,
     });
   }
 
-  async delete(_table: string, id: Id): Promise<void> {
-    await this.query(surql.seal(surql.delete('__id')), { __id: id });
+  async delete(table: string, id: Id): Promise<void> {
+    await this.query(surql.seal(surql.delete('__id')), { __id: this.toRecordId(table, id) });
   }
 
   /**
