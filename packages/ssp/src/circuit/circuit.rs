@@ -1317,6 +1317,41 @@ mod tests {
         );
     }
 
+    // ssp-cf (Cloudflare Durable Object) hibernates and rehydrates the circuit
+    // via `save()`/`restore()`. This mimics that path: a node with data in its
+    // store is saved, restored, and only THEN does a client register the
+    // thread-detail query. The reverse `comments` subquery must still emit the
+    // child from the restored store. If restore drops the child collection
+    // (kept alive only by an active view before), comments never reach clients
+    // — the production bug where authors work but comments vanish.
+    #[test]
+    fn reverse_subquery_emits_after_save_restore() {
+        let mut a = Circuit::new();
+        a.load(vec![
+            Record::new("thread", "thread:1", json!({ "title": "Hello" })),
+            Record::new(
+                "comment",
+                "comment:1",
+                json!({ "text": "hi", "thread": "thread:1" }),
+            ),
+        ]);
+
+        let blob = a.save().expect("save");
+        let mut b = Circuit::restore(&blob).expect("restore");
+
+        let delta = b
+            .add_query(reverse_subquery_query("q1", "thread", "comment", "thread"), None, None)
+            .expect("registration on the restored circuit must yield an initial delta");
+
+        assert!(
+            delta.subquery_items.iter().any(|it| it.id == "comment:1"),
+            "after save/restore (ssp-cf rehydration), the reverse `comments` subquery must \
+             still emit comment:1 — else the restored node writes no comment edge and comments \
+             vanish. subquery_items: {:?}",
+            delta.subquery_items
+        );
+    }
+
     #[test]
     fn subquery_table_create_emits_content_update() {
         let mut circuit = Circuit::new();
