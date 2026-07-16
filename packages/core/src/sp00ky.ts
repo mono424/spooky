@@ -589,6 +589,11 @@ export class Sp00kyClient<S extends SchemaStructure> {
       await this.streamProcessor.reset();
       this.streamProcessor.setPermissions(extractSelectPermissions(this.config.schemaSurql));
       this.cache.clearVersionLookups();
+      // Preload dedup is per-bucket: the `_00_preload` markers + cached rows it
+      // guards live in the local store we just swapped away from. Keeping the
+      // hashes would make `preload()` skip warming the NEW bucket (its store is
+      // empty), so every thread/comment prewarm silently no-ops after login.
+      this.preloadedHashes.clear();
     } finally {
       reopen();
     }

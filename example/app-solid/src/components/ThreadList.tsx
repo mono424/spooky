@@ -46,6 +46,31 @@ export function ThreadList() {
 
   const threads = () => threadsResult.data() || [];
 
+  // Prewarm the home screen: snapshot every visible thread together with its
+  // author and its 10 most-recent comments (each with their author) into the
+  // local cache, mirroring the list's current sort so the same threads are
+  // warmed. Opening any thread then paints its detail instantly from cache
+  // instead of waiting on the network. Snapshot-only — no live view is
+  // registered until the detail actually mounts.
+  createPreload(db, () => {
+    let q = db
+      .query('thread')
+      .related('author')
+      .related('comments', (c) =>
+        c.related('author').orderBy('created_at', 'desc').limit(10)
+      );
+    if (sort() === 'a-z') {
+      q = q.orderBy('title', 'asc');
+    } else if (sort() === 'z-a') {
+      q = q.orderBy('title', 'desc');
+    } else if (sort() === 'newest') {
+      q = q.orderBy('created_at', 'desc');
+    } else {
+      q = q.orderBy('created_at', 'asc');
+    }
+    return q.limit(10).build();
+  });
+
   // Reset selection when threads change
   createEffect(() => {
     threads();
@@ -164,21 +189,9 @@ export function ThreadList() {
           }
         >
           {(thread, index) => {
-            // Prewarm each thread's detail data (author + first 3 comments with
-            // their authors) into the local cache so opening the thread paints
-            // instantly instead of waiting on the network. Snapshot-only: no
-            // live view is registered until the detail actually mounts.
-            createPreload(db, () =>
-              db
-                .query('thread')
-                .where({ id: thread.id })
-                .related('author')
-                .related('comments', (q) =>
-                  q.related('author').orderBy('created_at', 'desc').limit(3)
-                )
-                .one()
-                .build()
-            );
+            // Detail data (author + 10 comments) is prewarmed for the whole
+            // home screen by the single `createPreload` above — no per-row
+            // preload needed here.
             return (
             <div
               data-thread-index={index()}

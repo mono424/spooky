@@ -739,13 +739,45 @@ export class DataModule<S extends SchemaStructure> {
         batch.push({
           table,
           op: 'CREATE',
-          record: (tableSchema
-            ? cleanRecord(tableSchema.columns, child)
-            : child) as RecordWithId,
+          // Flatten the child too: a nested comment carries its own embedded
+          // `author` object which the schemafull `record<user>` field would
+          // reject. (Its author is captured as a separate row by the recursion
+          // above.)
+          record: this.flattenRelationsForStorage(child, tableSchema),
           version: (child._00_rv as number) || 1,
         });
       }
     }
+  }
+
+  /**
+   * Prepare a subquery-bearing row (preload / hydration) for the schemafull
+   * local store: replace an embedded FORWARD-relation object (`author = { id, … }`)
+   * with its RecordId so a `record<…>` field coerces, and DROP reverse-subquery
+   * ARRAYS (`comments = [ … ]`) since their rows are cached separately as their
+   * own bodies. A flat record — as the live `SELECT * FROM $ids` sync returns,
+   * with relations already RecordIds — passes through unchanged.
+   */
+  private flattenRelationsForStorage(
+    record: Record<string, any>,
+    tableSchema?: { columns: Record<string, any> }
+  ): RecordWithId {
+    const isEmbeddedRecord = (v: unknown): boolean =>
+      !!v &&
+      typeof v === 'object' &&
+      !(v instanceof RecordId) &&
+      (v as { id?: unknown }).id instanceof RecordId;
+    const flat: Record<string, any> = {};
+    for (const [k, v] of Object.entries(record)) {
+      if (isEmbeddedRecord(v)) {
+        flat[k] = (v as { id: unknown }).id;
+      } else if (Array.isArray(v) && v.some(isEmbeddedRecord)) {
+        continue;
+      } else {
+        flat[k] = v;
+      }
+    }
+    return (tableSchema ? cleanRecord(tableSchema.columns, flat) : flat) as RecordWithId;
   }
 
   /**
@@ -792,10 +824,18 @@ export class DataModule<S extends SchemaStructure> {
     tableName: string,
     rows: RecordWithId[]
   ): Promise<void> {
+    const tableSchema = this.schema.tables.find((t) => t.name === tableName);
     const batch: CacheRecord[] = rows.map((record) => ({
       table: tableName,
       op: 'CREATE' as const,
-      record,
+      // Flatten embedded relations first: a preload/hydration row can carry a
+      // forward relation as a full nested OBJECT (`author = { id, … }`) and a
+      // reverse subquery as an array of objects (`comments = [ … ]`). The
+      // schemafull local field is `record<user>`, which rejects an object
+      // (`Couldn't coerce … found { id: …, username: … }`) and would throw the
+      // WHOLE batch. Store the parent with `author` as its RecordId and drop the
+      // subquery arrays — the children are cached as their own rows below.
+      record: this.flattenRelationsForStorage(record, tableSchema),
       version: (record._00_rv as number) || 1,
     }));
 
