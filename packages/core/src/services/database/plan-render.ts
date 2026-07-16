@@ -26,7 +26,16 @@ function bind(ctx: RenderCtx, value: unknown): string {
 }
 
 function renderComparisonSurql(c: WhereComparison, ctx: RenderCtx): string {
-  const right = c.paramRef ? `$${c.paramRef}` : bind(ctx, c.value);
+  const rawRight = c.paramRef ? `$${c.paramRef}` : bind(ctx, c.value);
+  // `id` is a RecordId, but correlation/filter values arrive as record-id
+  // STRINGS (e.g. "thread:abc"). On SurrealDB `id = "thread:abc"` never matches
+  // (string ≠ record), so a base select filtered by id (e.g. the ThreadDetail
+  // query `… FROM thread WHERE id = $id`) resolves empty — and its whole
+  // `.related()` subtree (author, comments) then loads nothing. Coerce with
+  // `type::record(<string> …)` (idempotent if already a RecordId), mirroring
+  // renderRelationFetchSurql's matchField coercion.
+  const right =
+    c.field === 'id' ? `type::record(<string> ${rawRight})` : rawRight;
   return c.swap ? `${right} ${c.op} ${c.field}` : `${c.field} ${c.op} ${right}`;
 }
 

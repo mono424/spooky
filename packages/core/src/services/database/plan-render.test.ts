@@ -42,6 +42,54 @@ describe('renderBaseSelectSurql', () => {
   });
 });
 
+// Regression guard for the "authors + comments don't load" class: any filter on
+// a RecordId column (`id`) must coerce its string value with
+// `type::record(<string> …)`. On SurrealDB `id = "thread:x"` (string) never
+// matches a RecordId, so a base select filtered by id resolves EMPTY and its
+// whole `.related()` subtree (author, comments) loads nothing. The string-based
+// MemStore in relation-resolver.test.ts can't catch this (it compares keys as
+// strings), so these assert the rendered SurrealQL directly — both the parent
+// (base select) and child (relation fetch) sides.
+describe('record-id coercion (authors/comments loading regression)', () => {
+  it('coerces a base-select `id = <value>` filter to a record id', () => {
+    const plan: QueryPlan = { table: 'thread', where: [{ field: 'id', op: '=', value: 'thread:abc' }] };
+    const { sql, vars } = renderBaseSelectSurql(plan);
+    expect(sql).toBe('SELECT * FROM thread WHERE id = type::record(<string> $__p0);');
+    expect(vars).toEqual({ __p0: 'thread:abc' });
+  });
+
+  it('coerces a base-select `id = $paramRef` filter (the ThreadDetail path)', () => {
+    const plan: QueryPlan = { table: 'thread', where: [{ field: 'id', op: '=', value: undefined, paramRef: 'id' }] };
+    const { sql } = renderBaseSelectSurql(plan, { id: 'thread:abc' });
+    expect(sql).toBe('SELECT * FROM thread WHERE id = type::record(<string> $id);');
+  });
+
+  it('does NOT coerce non-id fields (plain string/bool columns stay literal)', () => {
+    const plan: QueryPlan = {
+      table: 'thread',
+      where: [{ field: 'title', op: '=', value: 'hi' }, { field: 'published', op: '=', value: true }],
+    };
+    const { sql } = renderBaseSelectSurql(plan);
+    expect(sql).toBe('SELECT * FROM thread WHERE title = $__p0 AND published = $__p1;');
+  });
+
+  it('coerces `id` inside an OR group too', () => {
+    const plan: QueryPlan = {
+      table: 'thread',
+      where: [{ or: [{ field: 'id', op: '=', value: 'thread:a' }, { field: 'id', op: '=', value: 'thread:b' }] }],
+    };
+    const { sql } = renderBaseSelectSurql(plan);
+    expect(sql).toBe(
+      'SELECT * FROM thread WHERE (id = type::record(<string> $__p0) OR id = type::record(<string> $__p1));'
+    );
+  });
+
+  it('relation fetch coerces its matchField keys (the .118 fix — kept locked)', () => {
+    const { sql } = renderRelationFetchSurql({ table: 'user', matchField: 'id', keys: ['user:1'] });
+    expect(sql).toContain('id IN $__keys.map(|$__k| type::record(<string> $__k))');
+  });
+});
+
 describe('renderRelationFetchSurql', () => {
   it('builds a WHERE ... IN $__keys batch fetch, omitting LIMIT', () => {
     const { sql, vars } = renderRelationFetchSurql({
