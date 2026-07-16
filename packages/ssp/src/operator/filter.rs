@@ -135,9 +135,19 @@ fn check_predicate_recursive(
                 None => return false,
             };
 
-            let actual = store
-                .get_row_by_key_or_deleted(key)
-                .and_then(|r| resolve_field(Some(r), field).cloned());
+            // `id` is the record KEY, not a body field — the row object carries
+            // no "id" entry, so `resolve_field` returns None and every
+            // `WHERE id = <record>` comparison would fail (threads never match,
+            // so a parent-filtered detail query registers an empty view and its
+            // reverse subqueries — e.g. `comments` — never sync). Mirror the
+            // `Prefix` branch above and compare against the key directly.
+            let actual = if field.segments().len() == 1 && field.segments()[0] == "id" {
+                Some(Sp00kyValue::Str(key.to_string()))
+            } else {
+                store
+                    .get_row_by_key_or_deleted(key)
+                    .and_then(|r| resolve_field(Some(r), field).cloned())
+            };
 
             if let Some(actual) = actual {
                 let ord = compare_values(Some(&actual), Some(&target));

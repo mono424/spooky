@@ -59,6 +59,81 @@ const DETAIL_SQL: &str = "SELECT *, \
     (SELECT * FROM job WHERE assigned_to=$parent.id ORDER BY created_at desc LIMIT 1) AS jobs \
     FROM thread";
 
+/// The EXACT surql the app's query builder renders for ThreadDetail (captured
+/// via packages/query-builder repro). Unlike DETAIL_SQL it filters the parent
+/// thread with `WHERE id = $id` (a bound param) — the real prod path. If the
+/// parameterised parent filter changes how the reverse `comments` subquery is
+/// planned/emitted, the comments edge goes missing exactly as in production.
+const DETAIL_SQL_CLIENT: &str = "SELECT *, \
+    (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author, \
+    (SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author \
+     FROM comment WHERE thread=$parent.id ORDER BY created_at desc LIMIT 10) AS comments, \
+    (SELECT * FROM job WHERE assigned_to=$parent.id AND path = \"/spookify\" ORDER BY created_at desc LIMIT 1) AS jobs \
+    FROM thread WHERE id = $id";
+
+// Faithful prod reproduction: the client's real ThreadDetail surql, with the
+// parent thread pinned by `WHERE id = $id` and $id bound. Assert the reverse
+// `comments` subquery still writes a non-NONE-parent edge. If this fails while
+// register_writes_comments_edge_with_parent (no parent filter) passes, the bug
+// is the parameterised parent filter dropping the reverse subquery.
+#[tokio::test]
+async fn client_detail_query_with_parent_filter_writes_comments_edge() {
+    let raw = mem().await;
+    raw.query("CREATE type::record('_00_query', 'detail') SET clientId = 'c1', auth_id = 'user:a';")
+        .await
+        .unwrap();
+    let db = MemDb(Arc::clone(&raw));
+
+    let mut circuit = Circuit::new();
+    circuit.load(vec![
+        Record::new("user", "user:u", json!({ "username": "alice" })),
+        Record::new("thread", "thread:t", json!({ "title": "Hello", "author": "user:u" })),
+        Record::new(
+            "comment",
+            "comment:c",
+            json!({ "text": "hi", "thread": "thread:t", "author": "user:u", "created_at": "2026-01-01T00:00:00Z" }),
+        ),
+    ]);
+
+    let root: OperatorPlan =
+        serde_json::from_value(converter::convert_surql_to_dbsp(DETAIL_SQL_CLIENT).unwrap()).unwrap();
+    let plan = QueryPlan { id: "view:detail".to_string(), root };
+    let delta = circuit
+        .add_query_with_auth(
+            plan,
+            Some(json!({ "id": "thread:t" })),
+            Some(OutputFormat::Streaming),
+            "user:a".to_string(),
+        )
+        .expect("registration must yield an initial delta");
+
+    let aliases: Vec<&str> = delta.subquery_items.iter().map(|i| i.alias.as_str()).collect();
+    assert!(
+        aliases.contains(&"comments"),
+        "the parameterised-parent client query emitted NO comments subquery item — reverse \
+         subquery dropped when parent is filtered by `WHERE id = $id`. aliases: {aliases:?}"
+    );
+
+    run_edge_writes(&db, &[&delta], &circuit, RefMode::Dedicated, &NoopTelemetry).await;
+
+    let table = ssp_protocol::list_ref_table_for(RefMode::Dedicated, "user:a");
+    let mut resp = raw
+        .query(format!("SELECT parent_rel, (parent IS NOT NONE) AS has_parent FROM {table};"))
+        .await
+        .unwrap();
+    let rows: Vec<Value> = resp.take(0).unwrap();
+    let comment_edge = rows.iter().find(|r| r["parent_rel"] == json!("comments"));
+    assert!(
+        comment_edge.is_some(),
+        "client ThreadDetail query wrote NO comments edge in {table} — matches the live bug. edges: {rows:?}"
+    );
+    assert_eq!(
+        comment_edge.unwrap()["has_parent"],
+        json!(true),
+        "comments edge has parent = NONE → client filters it out. edges: {rows:?}"
+    );
+}
+
 #[tokio::test]
 async fn register_writes_comments_edge_with_parent() {
     let raw = mem().await;
