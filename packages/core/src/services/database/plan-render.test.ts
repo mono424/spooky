@@ -51,7 +51,7 @@ describe('renderRelationFetchSurql', () => {
       where: [{ field: 'hidden', op: '=', value: false }],
       orderBy: [['rank', 'asc']],
     });
-    expect(sql).toBe('SELECT * FROM comment WHERE post IN $__keys AND hidden = $__p0 ORDER BY rank asc;');
+    expect(sql).toBe('SELECT * FROM comment WHERE post IN $__keys.map(|$__k| type::record(<string> $__k)) AND hidden = $__p0 ORDER BY rank asc;');
     expect(vars).toEqual({ __keys: ['post:1', 'post:2'], __p0: false });
   });
 });

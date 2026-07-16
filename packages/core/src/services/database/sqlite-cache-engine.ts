@@ -106,8 +106,11 @@ export class SqliteCacheEngine implements LocalStore {
   // ---- worker plumbing -----------------------------------------------------
 
   private spawnWorker(): Worker {
-    // The worker is a separate module entry; the bundler rewrites this URL.
-    const worker = new Worker(new URL('./sqlite-worker.ts', import.meta.url), { type: 'module' });
+    // The worker is a separate tsdown entry emitted at `dist/sqlite-worker.js`
+    // (see tsdown.config.ts). This URL must point at the emitted `.js` so it
+    // resolves after bundling into the flat `dist/index.js`; a `.ts` here ships
+    // a dangling reference the consumer's bundler can't resolve.
+    const worker = new Worker(new URL('./sqlite-worker.js', import.meta.url), { type: 'module' });
     worker.onmessage = (ev: MessageEvent) => {
       const { id, ok, error, ...rest } = ev.data ?? {};
       const p = this.pending.get(id);

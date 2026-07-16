@@ -77,7 +77,12 @@ export function renderRelationFetchSurql(req: RelationFetch): RenderedQuery {
   const ctx: RenderCtx = { vars: { __keys: req.keys }, n: 0 };
   const projection =
     req.select && req.select.length > 0 ? ['id', ...req.select].join(', ') : '*';
-  let sql = `SELECT ${projection} FROM ${req.table} WHERE ${req.matchField} IN $__keys`;
+  // The correlation keys arrive as record-id STRINGS (`"user:abc"`), but the
+  // matched column (`id`, or a `record<…>` foreign key) is a RecordId. In
+  // SurrealDB `id IN ["user:abc"]` never matches (string ≠ record), so every
+  // `.related()` field would resolve empty. Coerce each key to a record id with
+  // `type::record(<string> …)` (idempotent if a key is already a RecordId).
+  let sql = `SELECT ${projection} FROM ${req.table} WHERE ${req.matchField} IN $__keys.map(|$__k| type::record(<string> $__k))`;
   if (req.where && req.where.length > 0) {
     sql += ` AND ${renderWhereSurql(req.where, ctx)}`;
   }

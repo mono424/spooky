@@ -60,6 +60,15 @@ pub struct SurrealClient {
 /// External endpoints (e.g. SurrealDB Cloud) are often given as `wss://…`/`ws://…`
 /// for the RPC socket, but this client speaks HTTP — ureq rejects the `wss`/`ws`
 /// scheme ("Unknown Scheme"). The host is identical, so swap the scheme.
+/// Backtick-quote a SurrealDB identifier (namespace/database name) so names with
+/// characters that aren't valid in a bare ident — most notably a hyphen, which
+/// the parser would otherwise read as subtraction (`sp00ky-demo` → `sp00ky - demo`,
+/// failing with "Cannot perform subtraction") — are treated as a single literal
+/// name. Any backtick inside the name is escaped by doubling.
+fn quote_ident(name: &str) -> String {
+    format!("`{}`", name.replace('`', "``"))
+}
+
 fn to_http_url(url: &str) -> String {
     let trimmed = url.trim_end_matches('/');
     if let Some(rest) = trimmed.strip_prefix("wss://") {
@@ -243,7 +252,8 @@ impl SurrealClient {
     pub fn reset_database(&self) -> Result<()> {
         let query = format!(
             "USE NS {}; REMOVE DATABASE {};",
-            self.namespace, self.database
+            quote_ident(&self.namespace),
+            quote_ident(&self.database)
         );
         send_raw_sql(
             &format!("{}/sql", self.url),
@@ -261,7 +271,9 @@ impl SurrealClient {
     pub fn ensure_ns_db(&self) -> Result<()> {
         let query = format!(
             "DEFINE NAMESPACE IF NOT EXISTS {}; USE NS {}; DEFINE DATABASE IF NOT EXISTS {};",
-            self.namespace, self.namespace, self.database
+            quote_ident(&self.namespace),
+            quote_ident(&self.namespace),
+            quote_ident(&self.database)
         );
         send_raw_sql(
             &format!("{}/sql", self.url),
