@@ -15,6 +15,7 @@ import {
   createLocalEngine,
 } from './services/database/index';
 import type { LocalStore } from './services/database/index';
+import { StaleEpochError } from './services/database/index';
 import type { UpEvent } from './modules/sync/index';
 import { Sp00kySync } from './modules/sync/index';
 import type {
@@ -102,6 +103,12 @@ export class BucketHandle {
  */
 const LAST_BUCKET_KEY = 'sp00ky:last_bucket';
 
+// Max age of a `_00_preload` marker for which instant-hydrate is skipped —
+// a query preloaded this recently already painted from local rows and the
+// register lifecycle re-syncs it, so the one-shot hydrate fetch would be a
+// duplicate round trip. Matches `preload()`'s default `staleTime`.
+const HYDRATE_PRELOAD_FRESH: QueryTimeToLive = '1h';
+
 function readBootBucketHint(): string | null {
   try {
     return typeof localStorage !== 'undefined' ? localStorage.getItem(LAST_BUCKET_KEY) : null;
@@ -134,6 +141,12 @@ export class Sp00kyClient<S extends SchemaStructure> {
   // fetches when the same preload query is requested again (e.g. a list row
   // re-rendering). Cleared on process/session end only.
   private preloadedHashes = new Set<number>();
+  // In-flight background init chains (instant-hydrate + register enqueue) keyed
+  // by registration hash. Concurrent mounts of the same query reuse the one
+  // chain instead of double-hydrating and double-enqueuing `register`.
+  // Sequential re-mounts intentionally start a fresh chain — the unconditional
+  // `register` re-enqueue is what freshens a warm preload on use.
+  private pendingQueryInits = new Map<string, Promise<void>>();
 
   private logger: ReturnType<typeof createLogger>;
   public auth: AuthService<S>;
@@ -705,31 +718,96 @@ export class Sp00kyClient<S extends SchemaStructure> {
       q.selectQuery.plan
     );
 
-    // Instant-hydrate: for a cold query, fetch its rows one-shot from the remote
-    // (its own surql, run directly like useRemote) and display them NOW; the full
-    // realtime registration proceeds below. Hydrated rows carry their `_00_rv`
-    // versions so the registration's syncRecords skips re-pulling unchanged bodies.
-    // Best-effort: any failure (e.g. offline) just falls through to registration.
+    // Local-first paint: the hash is returned as soon as the LOCAL registration
+    // above completes — `queryState.records` is already seeded from the local
+    // cache/SSP snapshot, so `useQuery` subscribes and paints from memory with
+    // zero network on the paint path. Instant-hydrate and the `register`
+    // down-event continue in a background chain (hydrate strictly before
+    // enqueue, so a stale one-shot snapshot can never land after the sync's
+    // authoritative `_00_list_ref` overwrite). Concurrent mounts of the same
+    // query share one chain; a sequential re-mount starts a fresh one so its
+    // `register` re-enqueue keeps freshening warm data on use.
+    if (!this.pendingQueryInits.has(hash)) {
+      const chain = this.finishQueryInit(hash, q, params).finally(() => {
+        this.pendingQueryInits.delete(hash);
+      });
+      this.pendingQueryInits.set(hash, chain);
+    }
+
+    return hash;
+  }
+
+  /**
+   * Background tail of {@link initQuery}: instant-hydrate (when the query is
+   * cold AND wasn't freshly preloaded) followed by enqueuing the `register`
+   * down-event. Never rejects — both halves catch and log, so `void`-ing the
+   * returned promise can't produce an unhandled rejection.
+   *
+   * The fresh-preload skip: rows a recent `preload()` persisted are already in
+   * the local cache and were part of the first paint; the register lifecycle
+   * re-syncs them authoritatively, so the one-shot hydrate fetch would be a
+   * pure duplicate round trip. "Fresh" = preloaded this session
+   * (`preloadedHashes`) or a `_00_preload` marker younger than
+   * HYDRATE_PRELOAD_FRESH. Both are per-bucket (the Set is cleared on bucket
+   * switch, the marker table lives in the bucket), so neither can claim
+   * freshness across auth contexts.
+   */
+  private async finishQueryInit(
+    hash: string,
+    q: InnerQuery<any, any, any>,
+    params: Record<string, any>
+  ): Promise<void> {
     if (this.config.instantHydrate !== false && this.dataModule.isCold(hash)) {
       try {
-        const [rows] = await this.remote.query<[RecordWithId[]]>(q.selectQuery.query, params);
-        await this.dataModule.applyHydration(hash, rows ?? []);
+        const preloadFresh =
+          this.preloadedHashes.has(q.hash) ||
+          (await this.dataModule.isPreloadFresh(
+            String(q.hash),
+            parseDuration(HYDRATE_PRELOAD_FRESH)
+          ));
+        if (!preloadFresh) {
+          // Fence against bucket switches: rows fetched under the previous
+          // auth context must not hydrate the new bucket's query state — the
+          // rebind's re-registration refills it from the right context.
+          const epoch = this.local.epoch;
+          const [rows] = await this.remote.query<[RecordWithId[]]>(q.selectQuery.query, params);
+          if (epoch === this.local.epoch) {
+            await this.dataModule.applyHydration(hash, rows ?? []);
+          }
+        } else {
+          this.logger.debug(
+            { hash, Category: 'sp00ky-client::Sp00kyClient::instantHydrate' },
+            'Skipping instant hydrate; preload marker fresh'
+          );
+        }
       } catch (err) {
-        this.logger.warn(
-          { err, hash, Category: 'sp00ky-client::Sp00kyClient::instantHydrate' },
-          'Instant hydrate failed; proceeding with registration'
-        );
+        if (err instanceof StaleEpochError) {
+          this.logger.debug(
+            { hash, Category: 'sp00ky-client::Sp00kyClient::instantHydrate' },
+            'Dropped instant hydrate from before a bucket switch'
+          );
+        } else {
+          this.logger.warn(
+            { err, hash, Category: 'sp00ky-client::Sp00kyClient::instantHydrate' },
+            'Instant hydrate failed; proceeding with registration'
+          );
+        }
       }
     }
 
-    await this.sync.enqueueDownEvent({
-      type: 'register',
-      payload: {
-        hash,
-      },
-    });
-
-    return hash;
+    try {
+      await this.sync.enqueueDownEvent({
+        type: 'register',
+        payload: {
+          hash,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        { err, hash, Category: 'sp00ky-client::Sp00kyClient::initQuery' },
+        'Failed to enqueue register down-event'
+      );
+    }
   }
 
   /**

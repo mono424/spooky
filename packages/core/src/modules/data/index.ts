@@ -794,8 +794,14 @@ export class DataModule<S extends SchemaStructure> {
     queryState.hydrated = true; // run-once, even when the remote returns nothing
     if (rows.length === 0) return;
 
+    const epoch = this.local.epoch;
     const tableName = queryState.config.tableName;
     await this.buildAndSaveCacheBatch(tableName, rows);
+    // Bucket switched while we persisted: these rows were fetched under the
+    // previous auth context — don't let them prime the new bucket's query
+    // state; the rebind's re-registration refills it. (saveBatch's own epoch
+    // fence usually catches this, but the switch can land between it and here.)
+    if (epoch !== this.local.epoch) return;
 
     // Prime remoteArray from the hydrated id+version pairs: `materializeRecords`
     // prefers it for windowed queries (correct window) and it feeds the version
@@ -879,6 +885,17 @@ export class DataModule<S extends SchemaStructure> {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * True when this query's preload marker exists and is younger than
+   * `maxAgeMs`. Used by instant-hydrate to skip its one-shot fetch for rows a
+   * recent `preload()` already persisted (the register lifecycle re-syncs them
+   * authoritatively). Missing or unreadable markers are treated as stale.
+   */
+  async isPreloadFresh(hashKey: string, maxAgeMs: number): Promise<boolean> {
+    const marker = await this.getPreloadMarker(hashKey);
+    return marker !== null && Date.now() - marker.fetchedAt <= maxAgeMs;
   }
 
   /** Stamp the preload freshness marker after a successful snapshot fetch. */
