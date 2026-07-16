@@ -372,9 +372,18 @@ class SchemaAwareQueryModifierBuilderImpl<
       );
 
       if (!relationship) {
-        throw new Error(
-          `Relationship '${String(relatedField)}' not found for table '${this.tableName}'`
-        );
+        // No such relationship in the client schema — e.g. a table owned by a
+        // devOnly backend (the outbox `job`) that a free/Cloudflare deployment
+        // never provisions, so codegen omits it + its relationships. Skip the
+        // projection instead of throwing, which would take the whole query
+        // (and its other `.related()` siblings — author, comments) down.
+        // Mirrors the server's "unpermitted subquery → empty" degradation.
+        if (typeof console !== 'undefined') {
+          console.warn(
+            `[sp00ky] .related('${String(relatedField)}') skipped — no such relationship on '${this.tableName}' in the client schema`
+          );
+        }
+        return this as any;
       }
 
       const relatedTable = relationship.to;
@@ -522,7 +531,15 @@ export class QueryBuilder<
     );
 
     if (!relationship) {
-      throw new Error(`Relationship '${String(field)}' not found for table '${this.tableName}'`);
+      // See the note on the other `.related()` overload: skip an unknown
+      // relationship (warn) rather than throwing, so a table absent from the
+      // client schema (e.g. the free-plan `job` outbox) can't crash the query.
+      if (typeof console !== 'undefined') {
+        console.warn(
+          `[sp00ky] .related('${String(field)}') skipped — no such relationship on '${this.tableName}' in the client schema`
+        );
+      }
+      return this as any;
     }
 
     // Determine cardinality and modifier based on arguments

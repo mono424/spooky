@@ -251,6 +251,23 @@ describe('Relationship Queries', () => {
       'SELECT *, (SELECT *, (SELECT * FROM user WHERE id=$parent.author LIMIT 1)[0] AS author FROM comment WHERE thread=$parent.id) AS comments FROM thread;'
     );
   });
+
+  // An unknown relationship (e.g. a table owned by a devOnly backend that a
+  // free/Cloudflare deployment never provisions, so codegen drops it from the
+  // client schema) must be SKIPPED, not throw — otherwise it takes the whole
+  // query (and its other `.related()` siblings) down. This is what left the
+  // ThreadDetail page stuck on "Loading..." when `jobs` disappeared.
+  it('skips an unknown relationship instead of throwing', () => {
+    const builder = new QueryBuilder(testSchema, 'thread', (q) => q.selectQuery);
+    expect(() => {
+      builder.related('author' as any);
+      builder.related('does_not_exist' as any); // must NOT throw
+    }).not.toThrow();
+    const result = builder.build().run();
+    // The valid relation is still projected; the unknown one is simply absent.
+    expect(result.query).toContain('AS author');
+    expect(result.query).not.toContain('does_not_exist');
+  });
 });
 
 describe('buildQueryFromOptions', () => {
