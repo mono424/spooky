@@ -77,12 +77,21 @@ jobs:
           test -f "$BUNDLE_DIR/index_bg.wasm" || { echo "missing $BUNDLE_DIR/index_bg.wasm"; exit 1; }
 
           # Base64 the bundle into the JSON payload the admin endpoint expects
-          # (matches spooky-cloud/scripts/publish-ssp-wasm.sh).
-          JS_B64="$(base64 -w0 "$BUNDLE_DIR/index.js")"
-          WASM_B64="$(base64 -w0 "$BUNDLE_DIR/index_bg.wasm")"
+          # (matches spooky-cloud/scripts/publish-ssp-wasm.sh). The wasm is
+          # ~5.5 MB base64-encoded, which blows past ARG_MAX if passed to `jq
+          # --arg` ("jq: Argument list too long"), so build the JSON in python,
+          # reading the files directly instead of through the shell arg vector.
           PAYLOAD="$(mktemp)"
-          jq -n --arg v "$VERSION" --arg js "$JS_B64" --arg wasm "$WASM_B64" \
-            '{version:$v, index_js_b64:$js, index_wasm_b64:$wasm}' > "$PAYLOAD"
+          python3 - "$VERSION" "$BUNDLE_DIR/index.js" "$BUNDLE_DIR/index_bg.wasm" "$PAYLOAD" <<'PY'
+          import sys, base64, json
+          version, js_path, wasm_path, out = sys.argv[1:5]
+          with open(js_path, "rb") as f:
+              js_b64 = base64.b64encode(f.read()).decode()
+          with open(wasm_path, "rb") as f:
+              wasm_b64 = base64.b64encode(f.read()).decode()
+          with open(out, "w") as f:
+              json.dump({"version": version, "index_js_b64": js_b64, "index_wasm_b64": wasm_b64}, f)
+          PY
 
           echo "Publishing ssp-cf '$VERSION' -> $SPOOKY_API_URL"
           curl -fsS -X POST "$SPOOKY_API_URL/v1/admin/ssp-wasm/versions" \
