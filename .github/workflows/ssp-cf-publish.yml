@@ -1,0 +1,92 @@
+name: Publish ssp-cf worker
+
+# The free/Cloudflare-plan SSP node (`apps/ssp-cf`, a Durable Object) is NOT a
+# Docker image, so `docker-publish.yml` never ships it — historically it was
+# built + uploaded by hand (`spooky-cloud/scripts/publish-ssp-wasm.sh`), which
+# is why the deployed node froze behind the released code. This builds the
+# worker on every release tag and registers it with the control plane's
+# `base_image_versions` registry (role `ssp-cf`), so the next free-plan deploy
+# (or `spky deploy --upgrade`) picks up the new version.
+#
+# Requires two repo secrets (skips cleanly if the API URL is absent):
+#   SPOOKY_API_URL   e.g. https://api-stg.sp00ky.cloud
+#   SSP_CF_ADMIN_KEY control-plane admin key (sent as `Authorization: AdminKey …`)
+
+on:
+  push:
+    tags:
+      - "sp00ky/v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish-ssp-cf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: meta
+        run: echo "version=${GITHUB_REF#refs/tags/sp00ky/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if control-plane API is not configured
+        id: guard
+        env:
+          SPOOKY_API_URL: ${{ secrets.SPOOKY_API_URL }}
+        run: |
+          if [ -z "$SPOOKY_API_URL" ]; then
+            echo "SPOOKY_API_URL not set — skipping ssp-cf publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust (wasm32)
+        if: steps.guard.outputs.skip != 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust
+        if: steps.guard.outputs.skip != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/ssp-cf
+
+      - name: Install worker-build
+        if: steps.guard.outputs.skip != 'true'
+        run: cargo install -q worker-build
+
+      - name: Build ssp-cf worker
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: apps/ssp-cf
+        run: worker-build --release
+
+      - name: Publish to control-plane registry
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          SPOOKY_API_URL: ${{ secrets.SPOOKY_API_URL }}
+          ADMIN_API_KEY: ${{ secrets.SSP_CF_ADMIN_KEY }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="apps/ssp-cf/build"
+          test -f "$BUNDLE_DIR/index.js" || { echo "missing $BUNDLE_DIR/index.js"; exit 1; }
+          test -f "$BUNDLE_DIR/index_bg.wasm" || { echo "missing $BUNDLE_DIR/index_bg.wasm"; exit 1; }
+
+          # Base64 the bundle into the JSON payload the admin endpoint expects
+          # (matches spooky-cloud/scripts/publish-ssp-wasm.sh).
+          JS_B64="$(base64 -w0 "$BUNDLE_DIR/index.js")"
+          WASM_B64="$(base64 -w0 "$BUNDLE_DIR/index_bg.wasm")"
+          PAYLOAD="$(mktemp)"
+          jq -n --arg v "$VERSION" --arg js "$JS_B64" --arg wasm "$WASM_B64" \
+            '{version:$v, index_js_b64:$js, index_wasm_b64:$wasm}' > "$PAYLOAD"
+
+          echo "Publishing ssp-cf '$VERSION' -> $SPOOKY_API_URL"
+          curl -fsS -X POST "$SPOOKY_API_URL/v1/admin/ssp-wasm/versions" \
+            -H "Authorization: AdminKey $ADMIN_API_KEY" \
+            -H "Content-Type: application/json" \
+            --data @"$PAYLOAD"
+          echo
