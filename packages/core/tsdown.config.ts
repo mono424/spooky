@@ -53,6 +53,19 @@ const versionDefinePlugin = {
   },
 };
 
+// The SQLite worker URL is written as `./sqlite-worker.ts` in source so Vite's
+// src-bundling consumers (the example app aliases core to `src`) resolve it.
+// In the published build the worker is emitted at `dist/sqlite-worker.js`, so
+// rewrite the reference to `.js` here — otherwise the flat `dist/index.js`
+// carries a dangling `.ts` URL that a consumer's bundler can't resolve.
+const sqliteWorkerUrlPlugin = {
+  name: 'sp00ky-sqlite-worker-url',
+  transform(code: string) {
+    if (!code.includes('sqlite-worker.ts')) return null;
+    return code.split('sqlite-worker.ts').join('sqlite-worker.js');
+  },
+};
+
 export default defineConfig({
   // `sqlite-worker` is emitted at `dist/sqlite-worker.js` (top level, NOT under
   // services/database) so the `new URL('./sqlite-worker.js', import.meta.url)`
@@ -68,5 +81,5 @@ export default defineConfig({
   dts: true,
   clean: true,
   hash: false,
-  plugins: [versionDefinePlugin],
+  plugins: [versionDefinePlugin, sqliteWorkerUrlPlugin],
 });

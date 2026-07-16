@@ -106,11 +106,14 @@ export class SqliteCacheEngine implements LocalStore {
   // ---- worker plumbing -----------------------------------------------------
 
   private spawnWorker(): Worker {
-    // The worker is a separate tsdown entry emitted at `dist/sqlite-worker.js`
-    // (see tsdown.config.ts). This URL must point at the emitted `.js` so it
-    // resolves after bundling into the flat `dist/index.js`; a `.ts` here ships
-    // a dangling reference the consumer's bundler can't resolve.
-    const worker = new Worker(new URL('./sqlite-worker.js', import.meta.url), { type: 'module' });
+    // Source references the `.ts` so the monorepo's src-bundling consumers
+    // (e.g. the example app, which aliases `@spooky-sync/core` to `src`) resolve
+    // it — Vite handles `.ts` workers. For the published package, the tsdown
+    // build rewrites this to `./sqlite-worker.js` (the top-level emitted entry;
+    // see tsdown.config.ts), which the flat `dist/index.js` resolves. The worker
+    // (+ `@sqlite.org/sqlite-wasm`) still loads lazily — only when `localEngine:
+    // 'sqlite'` is used.
+    const worker = new Worker(new URL('./sqlite-worker.ts', import.meta.url), { type: 'module' });
     worker.onmessage = (ev: MessageEvent) => {
       const { id, ok, error, ...rest } = ev.data ?? {};
       const p = this.pending.get(id);
