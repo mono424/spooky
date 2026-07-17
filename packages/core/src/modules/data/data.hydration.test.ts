@@ -4,11 +4,9 @@ import { DataModule } from './index';
 import type { QueryState } from '../../types';
 
 /**
- * Tests for instant-hydrate's DataModule half: `applyHydration` (run-once,
+ * Tests for instant-hydrate's DataModule half: `applyHydration` — run-once,
  * remoteArray priming, subscriber notify, and the epoch guard added when the
- * hydrate fetch moved off the paint path into a background chain) and
- * `isPreloadFresh` (the marker check that lets a freshly-preloaded query skip
- * the duplicate one-shot fetch entirely).
+ * hydrate fetch moved off the paint path into a background chain.
  */
 
 function makeLogger(): any {
@@ -118,33 +116,27 @@ describe('DataModule.applyHydration', () => {
   });
 });
 
-describe('DataModule.isPreloadFresh', () => {
-  const maxAgeMs = 60_000;
-
-  function makeDm(getById: (table: string, id: string) => Promise<any>) {
+describe('DataModule.getPreloadMarker', () => {
+  function makeDm(getById: (table: string, id: unknown) => Promise<any>) {
     const local: any = { getById };
     return new DataModule({} as any, local, schema, makeLogger(), 100);
   }
 
-  it('true for a marker younger than maxAgeMs', async () => {
-    const dm = makeDm(async () => ({ fetchedAt: Date.now() - 1_000, rowCount: 5 }));
-    expect(await dm.isPreloadFresh('123', maxAgeMs)).toBe(true);
+  it('returns the marker fields for a real row', async () => {
+    const dm = makeDm(async () => ({ fetchedAt: 123, rowCount: 5 }));
+    expect(await dm.getPreloadMarker('h')).toEqual({ fetchedAt: 123, rowCount: 5 });
   });
 
-  it('false for a marker older than maxAgeMs', async () => {
-    const dm = makeDm(async () => ({ fetchedAt: Date.now() - maxAgeMs - 1, rowCount: 5 }));
-    expect(await dm.isPreloadFresh('123', maxAgeMs)).toBe(false);
+  it('returns null on a miss and on a non-object echo (SurrealDB string quirk)', async () => {
+    expect(await makeDm(async () => null).getPreloadMarker('h')).toBeNull();
+    // `FROM ONLY <string>` used to echo the id string back — must not read as warm.
+    expect(await makeDm(async () => 'h' as any).getPreloadMarker('h')).toBeNull();
   });
 
-  it('false when no marker exists', async () => {
-    const dm = makeDm(async () => null);
-    expect(await dm.isPreloadFresh('123', maxAgeMs)).toBe(false);
-  });
-
-  it('false when the marker read throws (treated as cold)', async () => {
+  it('returns null when the read throws', async () => {
     const dm = makeDm(async () => {
       throw new Error('boom');
     });
-    expect(await dm.isPreloadFresh('123', maxAgeMs)).toBe(false);
+    expect(await dm.getPreloadMarker('h')).toBeNull();
   });
 });

@@ -103,12 +103,6 @@ export class BucketHandle {
  */
 const LAST_BUCKET_KEY = 'sp00ky:last_bucket';
 
-// Max age of a `_00_preload` marker for which instant-hydrate is skipped —
-// a query preloaded this recently already painted from local rows and the
-// register lifecycle re-syncs it, so the one-shot hydrate fetch would be a
-// duplicate round trip. Matches `preload()`'s default `staleTime`.
-const HYDRATE_PRELOAD_FRESH: QueryTimeToLive = '1h';
-
 function readBootBucketHint(): string | null {
   try {
     return typeof localStorage !== 'undefined' ? localStorage.getItem(LAST_BUCKET_KEY) : null;
@@ -738,47 +732,29 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   /**
-   * Background tail of {@link initQuery}: instant-hydrate (when the query is
-   * cold AND wasn't freshly preloaded) followed by enqueuing the `register`
-   * down-event. Never rejects — both halves catch and log, so `void`-ing the
-   * returned promise can't produce an unhandled rejection.
-   *
-   * The fresh-preload skip: rows a recent `preload()` persisted are already in
-   * the local cache and were part of the first paint; the register lifecycle
-   * re-syncs them authoritatively, so the one-shot hydrate fetch would be a
-   * pure duplicate round trip. "Fresh" = preloaded this session
-   * (`preloadedHashes`) or a `_00_preload` marker younger than
-   * HYDRATE_PRELOAD_FRESH. Both are per-bucket (the Set is cleared on bucket
-   * switch, the marker table lives in the bucket), so neither can claim
-   * freshness across auth contexts.
+   * Background tail of {@link initQuery}: instant-hydrate (opt-in via
+   * `config.instantHydrate`, and only when the query is cold) followed by
+   * enqueuing the `register` down-event. Never rejects — both halves catch and
+   * log, so `void`-ing the returned promise can't produce an unhandled
+   * rejection. By default (hydrate off) the register lifecycle is the single
+   * freshness path; the one-shot fetch is an optimization apps enable
+   * explicitly, and it runs regardless of preload state — cache-first delivery
+   * never depends on WHY rows are cached.
    */
   private async finishQueryInit(
     hash: string,
     q: InnerQuery<any, any, any>,
     params: Record<string, any>
   ): Promise<void> {
-    if (this.config.instantHydrate !== false && this.dataModule.isCold(hash)) {
+    if (this.config.instantHydrate === true && this.dataModule.isCold(hash)) {
       try {
-        const preloadFresh =
-          this.preloadedHashes.has(q.hash) ||
-          (await this.dataModule.isPreloadFresh(
-            String(q.hash),
-            parseDuration(HYDRATE_PRELOAD_FRESH)
-          ));
-        if (!preloadFresh) {
-          // Fence against bucket switches: rows fetched under the previous
-          // auth context must not hydrate the new bucket's query state — the
-          // rebind's re-registration refills it from the right context.
-          const epoch = this.local.epoch;
-          const [rows] = await this.remote.query<[RecordWithId[]]>(q.selectQuery.query, params);
-          if (epoch === this.local.epoch) {
-            await this.dataModule.applyHydration(hash, rows ?? []);
-          }
-        } else {
-          this.logger.debug(
-            { hash, Category: 'sp00ky-client::Sp00kyClient::instantHydrate' },
-            'Skipping instant hydrate; preload marker fresh'
-          );
+        // Fence against bucket switches: rows fetched under the previous
+        // auth context must not hydrate the new bucket's query state — the
+        // rebind's re-registration refills it from the right context.
+        const epoch = this.local.epoch;
+        const [rows] = await this.remote.query<[RecordWithId[]]>(q.selectQuery.query, params);
+        if (epoch === this.local.epoch) {
+          await this.dataModule.applyHydration(hash, rows ?? []);
         }
       } catch (err) {
         if (err instanceof StaleEpochError) {

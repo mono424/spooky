@@ -163,16 +163,16 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    */
   refSyncIntervalMs?: number;
   /**
-   * Instant-hydrate cold queries: when a query is registered with no server
-   * result yet, run its surql directly on the remote (one-shot) and display
-   * the result as soon as it lands, while the full realtime registration
-   * proceeds in the background. The hydrated rows are ingested with their
-   * versions so the registration's `syncRecords` skips re-pulling unchanged
-   * bodies. The fetch runs OFF the paint path — `useQuery` resolves and paints
-   * from the local cache immediately, and hydrate only fills in what's
-   * missing. Skipped entirely when the query was `preload()`ed recently (its
-   * rows are already local and fresh; the registration re-syncs them), so a
-   * preloaded screen costs zero duplicate fetches. Defaults to `true`.
+   * OPT-IN instant-hydrate for cold queries: when enabled and a query is
+   * registered with no server result yet, its surql also runs directly on the
+   * remote (one-shot, in the background, OFF the paint path) so rows can land
+   * before the full register lifecycle completes. Hydrated rows carry their
+   * `_00_rv` versions so the registration's `syncRecords` skips re-pulling
+   * unchanged bodies. Regardless of this flag, `useQuery` always resolves and
+   * paints from the local cache immediately — however the rows got there
+   * (preload, prior sync). Default `false`: the register lifecycle
+   * (`fn::query::register` → `_00_list_ref` → record sync) is the single
+   * freshness path and no duplicate one-shot fetches are made.
    */
   instantHydrate?: boolean;
   /**

@@ -890,17 +890,6 @@ export class DataModule<S extends SchemaStructure> {
     }
   }
 
-  /**
-   * True when this query's preload marker exists and is younger than
-   * `maxAgeMs`. Used by instant-hydrate to skip its one-shot fetch for rows a
-   * recent `preload()` already persisted (the register lifecycle re-syncs them
-   * authoritatively). Missing or unreadable markers are treated as stale.
-   */
-  async isPreloadFresh(hashKey: string, maxAgeMs: number): Promise<boolean> {
-    const marker = await this.getPreloadMarker(hashKey);
-    return marker !== null && Date.now() - marker.fetchedAt <= maxAgeMs;
-  }
-
   /** Stamp the preload freshness marker after a successful snapshot fetch. */
   async writePreloadMarker(hash: string, rowCount: number): Promise<void> {
     // RecordId, not a bare string: the SurrealDB engine binds the id verbatim,

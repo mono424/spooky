@@ -5,11 +5,12 @@ import { Sp00kyClient } from './sp00ky';
 
 // Guards for the local-first paint contract of `Sp00kyClient.initQuery`:
 // the hash must resolve (and the hook paint from local cache) without any
-// network on the awaited path, while instant-hydrate + the `register`
-// down-event run in a background chain that (a) keeps hydrate strictly
-// before the enqueue, (b) skips the duplicate one-shot fetch for freshly
-// preloaded queries, (c) never rejects, and (d) is shared by concurrent
-// mounts of the same query.
+// network on the awaited path, while the opt-in instant-hydrate + the
+// `register` down-event run in a background chain that (a) keeps hydrate
+// strictly before the enqueue, (b) hydrates only when `instantHydrate:
+// true` (default off — the register lifecycle is the single freshness
+// path), (c) never rejects, and (d) is shared by concurrent mounts of the
+// same query.
 //
 // Structural half: like sp00ky.auth-order.test.ts, a regex over the source
 // catches the ordering regressions a runtime mock can't cheaply cover
@@ -73,7 +74,6 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
   let calls: string[];
   let enqueued: any[];
   let epoch: number;
-  let preloadFresh: boolean;
   let cold: boolean;
   let remoteImpl: () => Promise<any>;
 
@@ -81,7 +81,6 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
     calls = [];
     enqueued = [];
     epoch = 1;
-    preloadFresh = false;
     cold = true;
     remoteImpl = async () => {
       calls.push('fetch');
@@ -112,7 +111,6 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
       },
       dataModule: {
         isCold: () => cold,
-        isPreloadFresh: async () => preloadFresh,
         applyHydration: async () => {
           calls.push('hydrate');
         },
@@ -121,22 +119,16 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
     });
   });
 
-  it('cold path: fetch → hydrate → enqueue, in order', async () => {
+  it('cold path with hydrate enabled: fetch → hydrate → enqueue, in order', async () => {
     await client.finishQueryInit(hash, q, {});
     expect(calls).toEqual(['fetch', 'hydrate', 'enqueue']);
     expect(enqueued).toEqual([{ type: 'register', payload: { hash } }]);
   });
 
-  it('session-preloaded query skips the fetch but still enqueues register', async () => {
+  it('a preloaded query still hydrates when enabled — cache-first never depends on WHY rows are cached', async () => {
     client.preloadedHashes.add(q.hash);
     await client.finishQueryInit(hash, q, {});
-    expect(calls).toEqual(['enqueue']);
-  });
-
-  it('fresh preload marker skips the fetch but still enqueues register', async () => {
-    preloadFresh = true;
-    await client.finishQueryInit(hash, q, {});
-    expect(calls).toEqual(['enqueue']);
+    expect(calls).toEqual(['fetch', 'hydrate', 'enqueue']);
   });
 
   it('warm query (not cold) goes straight to enqueue', async () => {
@@ -164,7 +156,13 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
     expect(calls).toEqual(['fetch', 'enqueue']);
   });
 
-  it('instantHydrate: false disables the hydrate fetch entirely', async () => {
+  it('default (instantHydrate unset) does not hydrate — register lifecycle is the only freshness path', async () => {
+    delete client.config.instantHydrate;
+    await client.finishQueryInit(hash, q, {});
+    expect(calls).toEqual(['enqueue']);
+  });
+
+  it('instantHydrate: false does not hydrate', async () => {
     client.config.instantHydrate = false;
     await client.finishQueryInit(hash, q, {});
     expect(calls).toEqual(['enqueue']);
