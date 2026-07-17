@@ -9,13 +9,20 @@
  * to an in-memory DB when OPFS is unavailable.
  *
  * Message protocol (request/response keyed by `id`):
- *   { id, type: 'open',  payload: { dbName, useOpfs } }
- *   { id, type: 'exec',  payload: { sql, bind } }  -> { id, ok, rows }
- *   { id, type: 'run',   payload: { sql, bind } }  -> { id, ok }
- *   { id, type: 'batch', payload: [{ sql, bind }] } (atomic BEGIN/COMMIT)
+ *   { id, type: 'open',   payload: { dbName, useOpfs } }
+ *   { id, type: 'exec',   payload: { sql, bind } }  -> { id, ok, rows }
+ *   { id, type: 'run',    payload: { sql, bind } }  -> { id, ok }
+ *   { id, type: 'batch',  payload: [{ sql, bind }] } (atomic BEGIN/COMMIT)
+ *   { id, type: 'select', payload: { plan, params } } -> { id, ok, rows, relationFetches }
  *   { id, type: 'close' }
+ *
+ * `select` executes a whole QueryPlan — table creation, base select, the full
+ * `.related()` tree (shared `resolveRelations`), and JSON row parsing — in ONE
+ * round-trip, returning structured-clone row objects. This is the first-load
+ * hot path; the per-statement ops remain for the write/shim paths.
  */
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
+import { executeSelect, type SelectDb } from './sqlite-select';
 
 interface Stmt {
   sql: string;
@@ -78,13 +85,31 @@ function batch(stmts: Stmt[]): void {
   }
 }
 
+// ==================== worker-side plan execution ('select') ====================
+
+/** DB handle for `executeSelect` (see `sqlite-select.ts`, the unit-testable
+ *  plan executor). `knownTables` is cleared on open/close — a bucket switch
+ *  spawns a fresh worker anyway. */
+const selectDb: SelectDb = {
+  exec: (sql, bind) => exec(sql, bind) as { data: string }[],
+  run,
+  knownTables: new Set<string>(),
+};
+
 self.onmessage = async (ev: MessageEvent) => {
   const { id, type, payload } = ev.data ?? {};
+  // `wt` (worker time) lets the main thread split a round-trip into actual DB
+  // work vs postMessage/queue overhead (see `__sqliteStats`).
+  const t0 = performance.now();
   try {
     let result: unknown;
     switch (type) {
       case 'open':
+        selectDb.knownTables.clear();
         result = await open(payload.dbName, payload.useOpfs);
+        break;
+      case 'select':
+        result = await executeSelect(payload.plan, payload.params ?? {}, selectDb);
         break;
       case 'exec':
         result = { rows: exec(payload.sql, payload.bind) };
@@ -100,12 +125,18 @@ self.onmessage = async (ev: MessageEvent) => {
       case 'close':
         db?.close();
         db = null;
+        selectDb.knownTables.clear();
         result = {};
         break;
       default:
         throw new Error(`sqlite worker: unknown message ${type}`);
     }
-    (self as unknown as Worker).postMessage({ id, ok: true, ...(result as object) });
+    (self as unknown as Worker).postMessage({
+      id,
+      ok: true,
+      wt: performance.now() - t0,
+      ...(result as object),
+    });
   } catch (err) {
     (self as unknown as Worker).postMessage({
       id,

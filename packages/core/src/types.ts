@@ -117,6 +117,13 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
     store?: StoreType;
     /** Authentication token. */
     token?: string;
+    /**
+     * SQLite engine only: execute `select` plans (base rows + relation tree +
+     * row parsing) inside the worker as ONE round-trip instead of one hop per
+     * table/relation level. Defaults to true; set false to force the legacy
+     * multi-hop path (escape hatch while the worker-side path beds in).
+     */
+    workerSelect?: boolean;
   };
   /** The schema definition. */
   schema: S;

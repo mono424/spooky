@@ -39,6 +39,9 @@ class FakeWorker {
       } else if (msg.type === 'exec') {
         if (!this.dbOpen) { ok = false; error = 'sqlite: DB not open'; }
         else rest = { rows: [] };
+      } else if (msg.type === 'select') {
+        if (!this.dbOpen) { ok = false; error = 'sqlite: DB not open'; }
+        else rest = { rows: [], relationFetches: 0 };
       } else if (msg.type === 'run' || msg.type === 'batch') {
         if (!this.dbOpen) { ok = false; error = 'sqlite: DB not open'; }
       }

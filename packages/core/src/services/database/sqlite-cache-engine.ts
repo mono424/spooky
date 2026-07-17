@@ -1,5 +1,12 @@
 import { applyPatch, type Operation } from 'fast-json-patch';
-import type { QueryPlan, WhereNode, WhereComparison } from '@spooky-sync/query-builder';
+import type { QueryPlan, RelationPlan, WhereNode } from '@spooky-sync/query-builder';
+import {
+  renderOrderSql,
+  renderWhereSql,
+  reviveRow,
+  serializeRow,
+  project,
+} from './sqlite-plan-sql';
 import type { Logger } from '../logger/index';
 import type { Sp00kyConfig } from '../../types';
 import type { SealedQuery } from '../../utils/surql';
@@ -60,6 +67,10 @@ export class SqliteCacheEngine implements LocalStore {
   private storeEpoch = 0;
   private knownTables = new Set<string>();
   private useOpfs: boolean;
+  /** Whether `select` runs as one worker round-trip (plan executed in-worker).
+   *  Flipped off at runtime if the worker script predates the `select` op
+   *  (stale cached bundle) — degrade to the legacy multi-hop path, don't break. */
+  private workerSelect: boolean;
   private events: DatabaseEventSystem = createDatabaseEventSystem();
   private bucketId = 'anon';
   /** Schemaless — tables are created lazily on first write; no migrator. */
@@ -68,9 +79,10 @@ export class SqliteCacheEngine implements LocalStore {
   constructor(
     private config: Sp00kyConfig<any>['database'],
     private logger: Logger,
-    opts: { useOpfs?: boolean } = {}
+    opts: { useOpfs?: boolean; workerSelect?: boolean } = {}
   ) {
     this.useOpfs = opts.useOpfs ?? true;
+    this.workerSelect = opts.workerSelect ?? config.workerSelect ?? true;
   }
 
   get epoch(): number {
@@ -144,7 +156,12 @@ export class SqliteCacheEngine implements LocalStore {
   private opQueue: Promise<unknown> = Promise.resolve();
 
   private call<T = any>(type: string, payload?: unknown): Promise<T> {
-    const run = () => this.rawCall<T>(type, payload);
+    const enqueuedAt = performance.now();
+    const run = () => {
+      // Time spent waiting behind other ops in the queue, not doing work.
+      getStats().queueWaitMs += performance.now() - enqueuedAt;
+      return this.rawCall<T>(type, payload);
+    };
     const result = this.opQueue.then(run, run);
     // Keep the chain alive regardless of individual failures.
     this.opQueue = result.then(
@@ -170,10 +187,18 @@ export class SqliteCacheEngine implements LocalStore {
     const done = () => {
       s.inFlight--;
     };
+    const sentAt = performance.now();
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
         resolve: (v: T) => {
           done();
+          // Split the round-trip: `wt` is time inside the worker's handler,
+          // the remainder is postMessage + scheduling overhead.
+          const wt = (v as { wt?: unknown } | null)?.wt;
+          if (typeof wt === 'number') {
+            s.workerMs += wt;
+            s.rpcOverheadMs += Math.max(0, performance.now() - sentAt - wt);
+          }
           resolve(v);
         },
         reject: (e: unknown) => {
@@ -264,12 +289,68 @@ export class SqliteCacheEngine implements LocalStore {
 
   private async execRows(sql: string, bind: unknown[]): Promise<Row[]> {
     const { rows } = await this.call<{ rows: { data: string }[] }>('exec', { sql, bind });
-    return (rows ?? []).map((r) => reviveRow(r.data));
+    const s = getStats();
+    const t0 = performance.now();
+    const out = (rows ?? []).map((r) => {
+      s.bytesParsed += r.data.length;
+      return reviveRow(r.data);
+    });
+    s.parseMs += performance.now() - t0;
+    s.rowsParsed += out.length;
+    return out;
   }
 
   // ---- reads ---------------------------------------------------------------
 
   async select(plan: QueryPlan, params: Record<string, unknown> = {}): Promise<Row[]> {
+    if (this.workerSelect) {
+      // ONE round-trip: the worker executes the whole plan (table creation,
+      // base select, relation tree, JSON parse) and returns structured-clone
+      // rows. The legacy path below pays a postMessage hop per table/relation
+      // level plus main-thread parsing — the dominant first-load cost.
+      //
+      // Normalize before postMessage: class-instance VALUES (RecordId & co) →
+      // their `stableKey` string. structuredClone strips a class instance to a
+      // bare plain object — and surrealdb's RecordId keeps its data behind
+      // getters (no own properties), so it clones to `{}`: the worker would
+      // filter on garbage. Applies to params AND to values baked inside the
+      // plan (where nodes, relation sub-wheres, window ids).
+      // Param KEYS must pass through untouched — `comparisonSql` resolves
+      // `paramRef` via hasOwnProperty, and a dropped key silently falls back to
+      // the baked literal (the crossed-results class fixed in aa4af79b).
+      const normPlan = normalizePlanForClone(plan);
+      const normParams: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(params)) normParams[k] = toCloneSafe(v);
+      try {
+        const res = await this.call<{ rows: Row[]; relationFetches?: number }>('select', {
+          plan: normPlan,
+          params: normParams,
+        });
+        getStats().relationFetches += res.relationFetches ?? 0;
+        return res.rows ?? [];
+      } catch (err) {
+        // Stale worker script without the 'select' op: fall back for good.
+        if (err instanceof Error && err.message.includes('unknown message')) {
+          this.workerSelect = false;
+          this.logger.warn(
+            { err, Category: 'sp00ky-client::SqliteCacheEngine::select' },
+            'Worker lacks select op (stale script?) — falling back to multi-hop select'
+          );
+        } else {
+          throw err;
+        }
+      }
+    }
+    return this.selectLegacy(plan, params);
+  }
+
+  /** Pre-worker-select path: one worker round-trip per table/relation level,
+   *  rows parsed on the main thread. Kept as the `workerSelect:false` escape
+   *  hatch and the stale-worker fallback. */
+  private async selectLegacy(
+    plan: QueryPlan,
+    params: Record<string, unknown> = {}
+  ): Promise<Row[]> {
     // Window materialization: base rows are exactly `plan.ids`, ordered.
     if (plan.ids) {
       const result = await this.selectByIds(plan.table, plan.ids, {
@@ -297,6 +378,7 @@ export class SqliteCacheEngine implements LocalStore {
   }
 
   async fetchRelation(req: RelationFetch): Promise<Row[]> {
+    getStats().relationFetches++;
     await this.ensureTable(req.table);
     const keys = req.keys.map(stableKey);
     const placeholders = keys.map(() => '?').join(', ');
@@ -617,119 +699,99 @@ interface SqliteStats {
   inFlight: number;
   maxInFlight: number;
   byType: Record<string, number>;
+  /** Time ops spent waiting behind the opQueue before dispatch. */
+  queueWaitMs: number;
+  /** Time inside the worker's message handler (actual SQLite work). */
+  workerMs: number;
+  /** Round-trip time minus workerMs: postMessage + scheduling overhead. */
+  rpcOverheadMs: number;
+  /** Main-thread JSON parse/revive of returned rows. */
+  parseMs: number;
+  rowsParsed: number;
+  bytesParsed: number;
+  /** Relation-resolver fan-out fetches (one worker round-trip each). */
+  relationFetches: number;
 }
 
+const EMPTY_STATS: SqliteStats = {
+  roundTrips: 0,
+  batchStatements: 0,
+  maxBatch: 0,
+  inFlight: 0,
+  maxInFlight: 0,
+  byType: {},
+  queueWaitMs: 0,
+  workerMs: 0,
+  rpcOverheadMs: 0,
+  parseMs: 0,
+  rowsParsed: 0,
+  bytesParsed: 0,
+  relationFetches: 0,
+};
+
 /** Live stats, inspectable in the browser console via `__sqliteStats`. Counts
- *  worker round-trips (the sync-down cost driver), batch sizes, and queue depth
- *  (`maxInFlight`) so a churn OOM can be measured rather than guessed. */
+ *  worker round-trips (the sync-down cost driver), batch sizes, queue depth
+ *  (`maxInFlight`), and the latency split of each round-trip (queue wait vs
+ *  worker time vs RPC overhead vs main-thread row parsing) so first-load cost
+ *  can be measured rather than guessed. */
 function getStats(): SqliteStats {
   const g = globalThis as unknown as { __sqliteStats?: SqliteStats };
   if (!g.__sqliteStats) {
-    g.__sqliteStats = {
-      roundTrips: 0,
-      batchStatements: 0,
-      maxBatch: 0,
-      inFlight: 0,
-      maxInFlight: 0,
-      byType: {},
-    };
+    g.__sqliteStats = { ...EMPTY_STATS, byType: {} };
+  } else {
+    // Backfill fields added since the object was created (HMR / older bundle).
+    for (const [k, v] of Object.entries(EMPTY_STATS)) {
+      if ((g.__sqliteStats as any)[k] === undefined) (g.__sqliteStats as any)[k] = v;
+    }
   }
   return g.__sqliteStats;
 }
 
-// ==================== SQL rendering ====================
+// SQL rendering + row (de)serialization live in `sqlite-plan-sql.ts`, shared
+// with the worker (worker-side plan execution renders the same SQL).
 
-function renderOrderSql(orderBy: OrderBy): string {
-  return ` ORDER BY ${orderBy
-    .map(([f, d]) => `json_extract(data, '$.${f}') ${d === 'desc' ? 'DESC' : 'ASC'}`)
-    .join(', ')}`;
+// ==================== structured-clone normalization ====================
+
+/**
+ * Make a bind/param value safe to cross the worker boundary. structuredClone
+ * keeps plain data intact but strips a CLASS instance to a bare object — and
+ * surrealdb's `RecordId` stores its fields behind getters (zero own
+ * properties), so it clones to `{}`. Convert such instances to their
+ * `stableKey` string (the exact value `scalar()` would bind on the main
+ * thread), leave everything clone-representable untouched.
+ */
+function toCloneSafe(v: unknown): unknown {
+  if (v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v) || v instanceof Uint8Array || v instanceof Date) return v;
+  const proto = Object.getPrototypeOf(v);
+  if (proto === Object.prototype || proto === null) return v;
+  return stableKey(v);
 }
 
-function comparisonSql(
-  c: WhereComparison,
-  bind: unknown[],
-  params: Record<string, unknown>
-): string {
-  const lhs = c.field === 'id' ? 'id' : `json_extract(data, '$.${c.field}')`;
-  // Prefer the query's own param so a filter materializes from `params` (the
-  // query's identity), not a baked literal. A pure `$`-ref has no `value`; a
-  // slave-mode node keeps `value` as a fallback for a param absent from params.
-  const useParam =
-    c.paramRef !== undefined &&
-    (c.value === undefined || Object.prototype.hasOwnProperty.call(params, c.paramRef));
-  const value = useParam ? params[c.paramRef!] : c.value;
-  bind.push(scalar(value));
-  const op = c.op === '!=' ? '!=' : c.op;
-  return c.swap ? `? ${op} ${lhs}` : `${lhs} ${op} ?`;
+function normalizeWhereForClone(nodes: WhereNode[] | undefined): WhereNode[] | undefined {
+  if (!nodes) return nodes;
+  return nodes.map((n) =>
+    'or' in n
+      ? { or: n.or.map((c) => ({ ...c, value: toCloneSafe(c.value) })) }
+      : { ...n, value: toCloneSafe(n.value) }
+  );
 }
 
-function renderWhereSql(
-  nodes: WhereNode[],
-  bind: unknown[],
-  params: Record<string, unknown>
-): string {
-  return nodes
-    .map((node) => {
-      if ('or' in node) {
-        return `(${node.or.map((c) => comparisonSql(c, bind, params)).join(' OR ')})`;
-      }
-      return comparisonSql(node, bind, params);
-    })
-    .join(' AND ');
+function normalizeRelationForClone(r: RelationPlan): RelationPlan {
+  return {
+    ...r,
+    where: normalizeWhereForClone(r.where),
+    relations: r.relations?.map(normalizeRelationForClone),
+  };
 }
 
-// ==================== value (de)serialization ====================
-
-/** A comparable scalar for SQL binding: record links → `table:id`, everything
- *  else passed through (numbers/strings/bools). */
-function scalar(value: unknown): unknown {
-  if (value == null) return null;
-  if (typeof value === 'object') return stableKey(value);
-  return value;
-}
-
-function serializeRow(row: Row): string {
-  return JSON.stringify(row, (_k, v) => {
-    if (v instanceof Uint8Array) return { __u8: toBase64(v) };
-    if (v && typeof v === 'object') {
-      const rid = v as { tb?: unknown; id?: unknown };
-      if (rid.tb !== undefined && rid.id !== undefined) return stableKey(v);
-    }
-    return v;
-  });
-}
-
-function reviveRow(json: string): Row {
-  // Fast path: the per-key reviver is only needed to rebuild `Uint8Array`s from
-  // `{__u8}` tags. Most rows (e.g. game bodies) have none — a plain parse avoids
-  // invoking a JS callback for every key of every row on the read hot path.
-  if (json.indexOf('"__u8"') === -1) return JSON.parse(json);
-  return JSON.parse(json, (_k, v) => {
-    if (v && typeof v === 'object' && typeof (v as any).__u8 === 'string') {
-      return fromBase64((v as any).__u8);
-    }
-    return v;
-  });
-}
-
-function project(row: Row, fields: string[]): Row {
-  const out: Row = {};
-  for (const f of ['id', ...fields]) if (f in row) out[f] = row[f];
-  return out;
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return typeof btoa !== 'undefined' ? btoa(bin) : Buffer.from(bytes).toString('base64');
-}
-
-function fromBase64(b64: string): Uint8Array {
-  if (typeof atob !== 'undefined') {
-    const bin = atob(b64);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    return out;
-  }
-  return new Uint8Array(Buffer.from(b64, 'base64'));
+/** Normalize every baked value a plan carries (where trees, window ids) for
+ *  the postMessage to the worker's `select` op. */
+function normalizePlanForClone(plan: QueryPlan): QueryPlan {
+  return {
+    ...plan,
+    ids: plan.ids?.map(stableKey),
+    where: normalizeWhereForClone(plan.where),
+    relations: plan.relations?.map(normalizeRelationForClone),
+  };
 }
