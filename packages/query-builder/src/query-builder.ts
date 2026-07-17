@@ -887,7 +887,10 @@ function buildQueryPlan<TModel extends GenericModel, IsOne extends boolean>(
     ? (parseObjectIdsToRecordId(options.where, tableName) as Record<string, unknown>)
     : undefined;
   if (parsedWhere && Object.keys(parsedWhere).length > 0) {
-    const nodes = buildWhereNodes(parsedWhere);
+    // slaveToParams: top-level filters materialize from `params` (the query's
+    // identity), not a baked literal — see buildWhereNodes. Prevents a query's
+    // rows ever coming from a different query's plan.
+    const nodes = buildWhereNodes(parsedWhere, true);
     if (nodes.length > 0) plan.where = nodes;
   }
 
@@ -992,16 +995,36 @@ function buildRelationPlan(
  * / equality handling in {@link buildQueryFromOptions}. A `$`-prefixed `_val`
  * becomes a `paramRef` (with the leading `$` stripped).
  */
-function buildWhereNodes(parsedWhere: Record<string, unknown>): WhereNode[] {
-  const toComparison = (field: string, value: unknown): WhereComparison => {
+/**
+ * @param slaveToParams When true, top-level plain/operator-literal comparisons
+ *   ALSO carry a `paramRef` equal to the field name — the same var name
+ *   `buildQueryFromOptions` binds the value under (`field = $field`). The
+ *   engines then materialize by reading `params[field]` (falling back to the
+ *   baked `value` when the param is absent), so a query's rows are slaved to
+ *   its `params` (its identity) and can never come from a different query's
+ *   baked plan. Only safe at the TOP LEVEL, where the field is a schema column
+ *   that survives `parseParams` and the caller passes `params`. NOT used for
+ *   relation sub-wheres (rendered with a params-less ctx) or `_or` branches
+ *   (bound under synthetic `or0…` names that `parseParams` strips) — those
+ *   stay baked.
+ */
+function buildWhereNodes(
+  parsedWhere: Record<string, unknown>,
+  slaveToParams = false
+): WhereNode[] {
+  const toComparison = (field: string, value: unknown, slave: boolean): WhereComparison => {
     if (value && typeof value === 'object' && '_op' in value && '_val' in value) {
       const { _op, _val, _swap } = value as ComparisonOp;
       if (typeof _val === 'string' && _val.startsWith('$')) {
         return { field, op: _op, value: undefined, paramRef: _val.slice(1), swap: _swap };
       }
-      return { field, op: _op, value: _val, swap: _swap };
+      // Literal operand: keep `value` as a fallback and add `paramRef: field`
+      // (slave mode) so materialization reads the query's own `params[field]`.
+      return slave
+        ? { field, op: _op, value: _val, paramRef: field, swap: _swap }
+        : { field, op: _op, value: _val, swap: _swap };
     }
-    return { field, op: '=', value };
+    return slave ? { field, op: '=', value, paramRef: field } : { field, op: '=', value };
   };
 
   const nodes: WhereNode[] = [];
@@ -1011,14 +1034,16 @@ function buildWhereNodes(parsedWhere: Record<string, unknown>): WhereNode[] {
       for (const branch of value) {
         if (branch && typeof branch === 'object') {
           for (const [bField, bVal] of Object.entries(branch as Record<string, unknown>)) {
-            or.push(toComparison(bField, bVal));
+            // OR branches bind under synthetic `or0…` names (see
+            // buildQueryFromOptions) that parseParams strips — keep them baked.
+            or.push(toComparison(bField, bVal, false));
           }
         }
       }
       if (or.length > 0) nodes.push({ or });
       continue;
     }
-    nodes.push(toComparison(key, value));
+    nodes.push(toComparison(key, value, slaveToParams));
   }
   return nodes;
 }

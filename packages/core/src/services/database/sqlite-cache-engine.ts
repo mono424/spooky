@@ -651,7 +651,13 @@ function comparisonSql(
   params: Record<string, unknown>
 ): string {
   const lhs = c.field === 'id' ? 'id' : `json_extract(data, '$.${c.field}')`;
-  const value = c.paramRef ? params[c.paramRef] : c.value;
+  // Prefer the query's own param so a filter materializes from `params` (the
+  // query's identity), not a baked literal. A pure `$`-ref has no `value`; a
+  // slave-mode node keeps `value` as a fallback for a param absent from params.
+  const useParam =
+    c.paramRef !== undefined &&
+    (c.value === undefined || Object.prototype.hasOwnProperty.call(params, c.paramRef));
+  const value = useParam ? params[c.paramRef!] : c.value;
   bind.push(scalar(value));
   const op = c.op === '!=' ? '!=' : c.op;
   return c.swap ? `? ${op} ${lhs}` : `${lhs} ${op} ?`;

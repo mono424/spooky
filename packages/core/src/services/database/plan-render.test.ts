@@ -73,6 +73,32 @@ describe('record-id coercion (authors/comments loading regression)', () => {
     expect(sql).toBe('SELECT * FROM thread WHERE title = $__p0 AND published = $__p1;');
   });
 
+  // Regression guard for the thread-detail "crossed results → 404" bug: a
+  // slave-mode node carries BOTH a baked `value` and a `paramRef` (= the field
+  // name). Materialization MUST bind `params[paramRef]` (the query's identity),
+  // NOT the baked value — otherwise a stale/other plan whose baked id ≠ the
+  // query's params would surface a different record's row. So rendering a plan
+  // baked to id-A with params for id-B must filter by B.
+  it('slave-mode node binds params over the baked value (records follow identity)', () => {
+    const planBakedToA: QueryPlan = {
+      table: 'thread',
+      where: [{ field: 'id', op: '=', value: 'thread:A', paramRef: 'id' }],
+    };
+    const { sql, vars } = renderBaseSelectSurql(planBakedToA, { id: 'thread:B' });
+    expect(sql).toBe('SELECT * FROM thread WHERE id = type::record(<string> $id);');
+    expect(vars).toEqual({ id: 'thread:B' }); // B wins — the baked A is ignored
+  });
+
+  it('slave-mode node falls back to the baked value when the param is absent', () => {
+    const plan: QueryPlan = {
+      table: 'thread',
+      where: [{ field: 'id', op: '=', value: 'thread:A', paramRef: 'id' }],
+    };
+    const { sql, vars } = renderBaseSelectSurql(plan, {}); // no params.id
+    expect(sql).toBe('SELECT * FROM thread WHERE id = type::record(<string> $__p0);');
+    expect(vars).toEqual({ __p0: 'thread:A' });
+  });
+
   it('coerces `id` inside an OR group too', () => {
     const plan: QueryPlan = {
       table: 'thread',

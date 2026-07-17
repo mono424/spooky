@@ -26,7 +26,15 @@ function bind(ctx: RenderCtx, value: unknown): string {
 }
 
 function renderComparisonSurql(c: WhereComparison, ctx: RenderCtx): string {
-  const rawRight = c.paramRef ? `$${c.paramRef}` : bind(ctx, c.value);
+  // Prefer the query's own param (`paramRef`) so a filter materializes from
+  // `params` (the query's identity), not a baked literal — this is what slaves
+  // a query's rows to its id. A pure `$`-ref node has no `value`, so it always
+  // uses the param. A slave-mode node also carries `value` as a fallback for
+  // when the param is absent (e.g. a non-column field stripped by parseParams).
+  const useParam =
+    c.paramRef !== undefined &&
+    (c.value === undefined || Object.prototype.hasOwnProperty.call(ctx.vars, c.paramRef));
+  const rawRight = useParam ? `$${c.paramRef}` : bind(ctx, c.value);
   // `id` is a RecordId, but correlation/filter values arrive as record-id
   // STRINGS (e.g. "thread:abc"). On SurrealDB `id = "thread:abc"` never matches
   // (string ≠ record), so a base select filtered by id (e.g. the ThreadDetail

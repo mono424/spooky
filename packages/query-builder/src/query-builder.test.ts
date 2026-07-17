@@ -302,6 +302,28 @@ describe('buildQueryFromOptions', () => {
 
     expect(result.query).toBe('LIVE SELECT * FROM user WHERE username = $username;');
   });
+
+  // Regression guard for the thread-detail "crossed results → 404" bug: the
+  // engine-neutral plan's top-level WHERE must reference the SAME var the surql
+  // binds (`$username`), so materialization (`select(plan, params)`) filters by
+  // the query's own `params` (its identity) instead of a baked literal that
+  // could belong to another query's plan. So the top-level plan node must carry
+  // `paramRef` equal to the surql var name.
+  it('top-level plan WHERE uses paramRef matching the surql var (slaved to params)', () => {
+    const result = buildQueryFromOptions<TableModel<(typeof testSchema)['tables'][0]>, boolean>(
+      'SELECT',
+      'user',
+      { where: { username: 'john' } },
+      testSchema
+    );
+    // surql binds $username …
+    expect(result.query).toBe('SELECT * FROM user WHERE username = $username;');
+    expect(result.vars).toEqual({ username: 'john' });
+    // … and the plan references that same var, not just a baked literal.
+    expect(result.plan?.where).toEqual([
+      { field: 'username', op: '=', value: 'john', paramRef: 'username' },
+    ]);
+  });
 });
 
 describe('RecordId Parsing', () => {
