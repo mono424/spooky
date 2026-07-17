@@ -14,6 +14,7 @@ use crate::surreal_client::MigrationDB;
 use crate::{
     CloudBackupCommands, CloudBillingCommands, CloudDomainCommands, CloudKeyCommands,
     CloudLinkCommands, CloudTeamCommands, CloudVaultCommands, EnvCommands, EnvResetCommands,
+    NoticeCommands,
 };
 
 /// Load vault environment variables for dev mode via the Cloud API.
@@ -5642,6 +5643,116 @@ fn domain_remove(domain: String) -> Result<()> {
 
     client.delete(&format!("/v1/projects/{}/domains/{}", pid, domain))?;
     println!("Disconnected {}.", domain);
+    Ok(())
+}
+
+const NOTICE_TYPES: &[&str] = &[
+    "investigating",
+    "identified",
+    "resolved",
+    "maintenance",
+    "update",
+];
+
+pub fn notice(
+    message: Option<String>,
+    notice_type: String,
+    timeout: String,
+    action: Option<NoticeCommands>,
+) -> Result<()> {
+    match action {
+        Some(NoticeCommands::List) => notice_list(),
+        Some(NoticeCommands::Remove { id }) => notice_remove(id),
+        None => {
+            let msg = message.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Provide a message, e.g. `spky notice \"We are investigating...\"` \
+                     (or `spky notice list` / `spky notice remove <id>`)."
+                )
+            })?;
+            notice_post(msg, notice_type, timeout)
+        }
+    }
+}
+
+fn notice_post(message: String, notice_type: String, timeout: String) -> Result<()> {
+    let t = notice_type.to_lowercase();
+    if !NOTICE_TYPES.contains(&t.as_str()) {
+        anyhow::bail!(
+            "Invalid --type '{}'. Valid types: {}",
+            notice_type,
+            NOTICE_TYPES.join(", ")
+        );
+    }
+    let dur = humantime::parse_duration(timeout.trim())
+        .map_err(|_| anyhow::anyhow!("Invalid --timeout '{}'. Use durations like 30m, 2h, 7d.", timeout))?;
+
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    let (slug, pid) = resolve_project_id(&mut client)?;
+
+    let resp = client.post(
+        &format!("/v1/projects/{}/notices", pid),
+        &serde_json::json!({ "type": t, "body": message, "expires_in_seconds": dur.as_secs() }),
+    )?;
+    let data: serde_json::Value = resp.into_json()?;
+
+    println!("Posted {} notice.", t);
+    println!("  id:      {}", data["id"].as_str().unwrap_or("?"));
+    println!("  expires: {}", data["expires_at"].as_str().unwrap_or("-"));
+    println!("  page:    {}/v1/uptime/{}", api_base_url(), slug);
+    Ok(())
+}
+
+fn notice_list() -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    let resp = client.get(&format!("/v1/projects/{}/notices", pid))?;
+    let data: Vec<serde_json::Value> = resp.into_json()?;
+    if data.is_empty() {
+        println!("No active notices. Post one with `spky notice \"<message>\"`.");
+        return Ok(());
+    }
+
+    println!("{:<38} {:<15} {:<18} {}", "ID", "TYPE", "EXPIRES", "MESSAGE");
+    for n in &data {
+        let t = n["type"].as_str().unwrap_or("-");
+        let dot = match t {
+            "resolved" => "\x1b[32m●\x1b[0m",                      // green
+            "investigating" | "identified" => "\x1b[33m●\x1b[0m", // yellow
+            "maintenance" => "\x1b[34m●\x1b[0m",                   // blue
+            _ => "\x1b[90m●\x1b[0m",                               // grey (update)
+        };
+        let expires = n["expires_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| {
+                dt.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "-".into());
+        println!(
+            "{:<38} {} {:<13} {:<18} {}",
+            n["id"].as_str().unwrap_or("-"),
+            dot,
+            t,
+            expires,
+            n["body"].as_str().unwrap_or("-"),
+        );
+    }
+    Ok(())
+}
+
+fn notice_remove(id: String) -> Result<()> {
+    let creds = ensure_login()?;
+    let mut client = CloudClient::new(&creds);
+    let (_slug, pid) = resolve_project_id(&mut client)?;
+
+    client.delete(&format!("/v1/projects/{}/notices/{}", pid, id))?;
+    println!("Removed notice {}.", id);
     Ok(())
 }
 

@@ -260,6 +260,21 @@ enum Commands {
         #[command(subcommand)]
         action: CloudDomainCommands,
     },
+    /// Post a status notice to the project's public uptime page
+    #[command(args_conflicts_with_subcommands = true)]
+    Notice {
+        /// The notice message to publish (e.g. "We are investigating elevated error rates").
+        /// A message that is literally "list" or "remove" is parsed as the subcommand instead.
+        message: Option<String>,
+        /// Notice type: investigating | identified | resolved | maintenance | update
+        #[arg(long = "type", value_name = "TYPE", default_value = "update")]
+        notice_type: String,
+        /// How long the notice stays visible, e.g. 30m, 2h, 7d
+        #[arg(long, default_value = "24h")]
+        timeout: String,
+        #[command(subcommand)]
+        action: Option<NoticeCommands>,
+    },
     /// Manage database backups
     Backup {
         #[command(subcommand)]
@@ -681,6 +696,17 @@ pub enum CloudDomainCommands {
     Remove {
         /// The custom domain to disconnect
         domain: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum NoticeCommands {
+    /// List active notices
+    List,
+    /// Remove a notice by id
+    Remove {
+        /// Notice id (from `spky notice list`)
+        id: String,
     },
 }
 
@@ -2775,6 +2801,9 @@ fn main() -> Result<()> {
         // ── Resources ──────────────────────────────────────────────────────
         Some(Commands::Env { action }) => cloud::env_group(action),
         Some(Commands::Domain { action }) => cloud::domain(action),
+        Some(Commands::Notice { message, notice_type, timeout, action }) => {
+            cloud::notice(message, notice_type, timeout, action)
+        }
         Some(Commands::Backup { action }) => cloud::backup(action),
         Some(Commands::Link { action }) => cloud::link(action),
         Some(Commands::Flag { action }) => flag::run(action),
