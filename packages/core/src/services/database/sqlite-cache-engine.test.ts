@@ -1,9 +1,97 @@
 import { describe, it, expect } from 'vitest';
 import { RecordId } from 'surrealdb';
-import { pureWriteOpResult } from './sqlite-cache-engine';
+import { pureWriteOpResult, SqliteCacheEngine } from './sqlite-cache-engine';
 import { translateSurql } from './surql-translate';
 import type { SqlOp } from './surql-translate';
 import { surql } from '../../utils/surql';
+
+function makeLogger(): any {
+  const noop = () => {};
+  const l: any = { debug: noop, info: noop, warn: noop, error: noop, trace: noop };
+  l.child = () => l;
+  return l;
+}
+
+/**
+ * A fake Worker that models the real SQLite worker's open/closed lifecycle:
+ * `open` opens the DB, `close` closes it, and `exec`/`run` REJECT with
+ * "sqlite: DB not open" when the DB isn't currently open — exactly the failure
+ * the fix targets. Records every message `type` (across worker generations) so
+ * tests can also inspect dispatch order.
+ */
+class FakeWorker {
+  onmessage: ((ev: any) => void) | null = null;
+  onerror: any = null;
+  onmessageerror: any = null;
+  private dbOpen = false;
+  constructor(private log: string[]) {}
+  postMessage(msg: any) {
+    this.log.push(msg.type);
+    Promise.resolve().then(() => {
+      let ok = true;
+      let error: string | undefined;
+      let rest: Record<string, unknown> = {};
+      if (msg.type === 'open') {
+        this.dbOpen = true;
+        rest = { persisted: true };
+      } else if (msg.type === 'close') {
+        this.dbOpen = false;
+      } else if (msg.type === 'exec') {
+        if (!this.dbOpen) { ok = false; error = 'sqlite: DB not open'; }
+        else rest = { rows: [] };
+      } else if (msg.type === 'run' || msg.type === 'batch') {
+        if (!this.dbOpen) { ok = false; error = 'sqlite: DB not open'; }
+      }
+      this.onmessage?.({ data: { id: msg.id, ok, error, ...rest } });
+    });
+  }
+  terminate() {}
+}
+
+// Regression: switchBucket must run close → reopen as a single serialized
+// opQueue entry. Otherwise a read/write enqueued during an auth/bucket change
+// dispatches to the just-closed worker → "sqlite: DB not open" (the crash on
+// sign-in). The invariant: no `exec` may appear between a `close` and the next
+// `open` in the message stream.
+describe('SqliteCacheEngine.switchBucket serialization', () => {
+  it('never dispatches an op to a closed DB during a bucket switch', async () => {
+    const log: string[] = [];
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger());
+    // Replicate the real spawnWorker's onmessage wiring (resolve/reject pending).
+    (engine as any).spawnWorker = () => {
+      const w = new FakeWorker(log);
+      w.onmessage = (ev: any) => {
+        const { id, ok, error, ...rest } = ev.data ?? {};
+        const p = (engine as any).pending.get(id);
+        if (!p) return;
+        (engine as any).pending.delete(id);
+        if (ok) p.resolve(rest);
+        else p.reject(new Error(error));
+      };
+      return w as unknown as Worker;
+    };
+
+    await engine.connect('anon');
+    expect(log).toContain('open');
+
+    // Fire a switch and a concurrent read (exactly what the sign-in query
+    // re-registration does). With the old non-atomic switch the read's `exec`
+    // dispatched to the closed/terminated worker and REJECTED ("sqlite: DB not
+    // open" / "not connected") — the uncaught crash. The atomic switch makes the
+    // read wait for the reopen and resolve against the new bucket.
+    const switching = engine.switchBucket('user:abc');
+    const reading = engine.getById('_00_query', 'h1');
+    await expect(Promise.all([switching, reading])).resolves.toBeDefined();
+    await expect(reading).resolves.toBeNull(); // missing row → null, not a throw
+
+    // And the close→reopen ran with no op wedged between them.
+    const closeIdx = log.indexOf('close');
+    const openAfter = log.indexOf('open', closeIdx + 1);
+    expect(openAfter).toBeGreaterThan(closeIdx);
+    expect(log.slice(closeIdx + 1, openAfter)).not.toContain('exec');
+    expect(engine.currentBucketId).toBe('user:abc');
+  });
+});
 
 // `pureWriteOpResult` is the single source of truth for what a pure-write op
 // contributes to a query's per-statement results. The batched fast path in

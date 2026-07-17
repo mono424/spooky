@@ -185,9 +185,14 @@ export class SqliteCacheEngine implements LocalStore {
     });
   }
 
-  async connect(bucketId: string): Promise<void> {
+  /**
+   * Spawn the worker and open `bucketId`'s DB. Uses {@link rawCall} (NOT
+   * {@link call}) so it can run as the body of an already-queued opQueue entry
+   * without re-queuing onto itself. Callers must run it through the opQueue.
+   */
+  private async openInternal(bucketId: string): Promise<void> {
     this.worker = this.spawnWorker();
-    const { persisted } = await this.call<{ persisted: boolean }>('open', {
+    const { persisted } = await this.rawCall<{ persisted: boolean }>('open', {
       dbName: bucketId,
       useOpfs: this.useOpfs,
     });
@@ -199,18 +204,43 @@ export class SqliteCacheEngine implements LocalStore {
     );
   }
 
+  /** Enqueue `fn` as a single serialized opQueue entry (mirrors {@link call}'s
+   *  chaining) so it can't interleave with reads/writes at the worker. */
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.opQueue.then(fn, fn);
+    this.opQueue = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  async connect(bucketId: string): Promise<void> {
+    // Serialize through the opQueue so an op racing boot can't dispatch to a
+    // half-open worker.
+    await this.enqueue(() => this.openInternal(bucketId));
+  }
+
   async switchBucket(bucketId: string): Promise<void> {
     this.storeEpoch++;
-    if (this.worker) {
-      try {
-        await this.call('close');
-      } catch {
-        /* ignore */
+    // Run close → terminate → reopen as ONE opQueue entry. Previously `close`
+    // and the new `open` were separate entries, so a query's `exec` (e.g. the
+    // query re-registration fired by an auth/bucket change) could slot in
+    // between and dispatch to the just-closed worker → "sqlite: DB not open".
+    // As a single entry, every other op runs fully before the close or after
+    // the reopen — never against a closed DB.
+    await this.enqueue(async () => {
+      if (this.worker) {
+        try {
+          await this.rawCall('close');
+        } catch {
+          /* ignore */
+        }
+        this.worker.terminate();
+        this.worker = null;
       }
-      this.worker.terminate();
-      this.worker = null;
-    }
-    await this.connect(bucketId);
+      await this.openInternal(bucketId);
+    });
   }
 
   async close(): Promise<void> {
