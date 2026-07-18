@@ -4182,6 +4182,22 @@ fn parse_time_anchor(input: &str) -> Result<chrono::DateTime<chrono::Utc>> {
     Ok(chrono::Utc::now() - chrono_dur)
 }
 
+/// `spky stats` — live resource graphs for the current project's deployment.
+pub fn stats(window: Option<String>, filter: Option<Vec<String>>) -> Result<()> {
+    let creds = require_credentials()?;
+    let mut client = CloudClient::new(&creds);
+    let (slug, pid) = resolve_project_id(&mut client)?;
+
+    crate::stats_tui::run(crate::stats_tui::StatsArgs {
+        base_url: client.base_url.clone(),
+        auth_header: client.auth_header(),
+        pid,
+        slug,
+        window: window.unwrap_or_else(|| "15m".to_string()),
+        filter,
+    })
+}
+
 pub fn logs(args: LogsArgs) -> Result<()> {
     let LogsArgs {
         filter,

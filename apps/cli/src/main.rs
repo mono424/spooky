@@ -26,6 +26,7 @@ mod schema_builder;
 mod schema_diff;
 mod schema_extract;
 mod sp00ky;
+mod stats_tui;
 mod surreal_client;
 mod verify;
 
@@ -176,6 +177,16 @@ enum Commands {
     },
     /// Show deployment status
     Status,
+    /// Live resource graphs (CPU, memory, disk & network) for the cloud deployment
+    Stats {
+        /// History window to backfill, e.g. 15m, 1h, 24h (default 15m)
+        #[arg(long)]
+        window: Option<String>,
+        /// Only show specific services (comma-separated roles or app names,
+        /// e.g. --filter backend,surrealdb or --filter api)
+        #[arg(long, value_delimiter = ',')]
+        filter: Option<Vec<String>>,
+    },
     /// Tail or browse logs from the cloud deployment
     Logs {
         /// Filter by service(s): surrealdb, scheduler, ssp, backend, frontend.
@@ -2796,6 +2807,7 @@ fn main() -> Result<()> {
             cloud::deploy(upgrade, clean, only)
         }
         Some(Commands::Status) => cloud::status(),
+        Some(Commands::Stats { window, filter }) => cloud::stats(window, filter),
         Some(Commands::Logs {
             filter,
             split,
