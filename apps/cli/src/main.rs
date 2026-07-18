@@ -689,6 +689,9 @@ pub enum CloudDomainCommands {
         /// Which app to serve (frontend or exposed backend name); defaults to the primary frontend
         #[arg(long)]
         app: Option<String>,
+        /// Attach the domain to the project's public status page instead of an app (Pro)
+        #[arg(long)]
+        status: bool,
     },
     /// List connected custom domains and their status
     List,

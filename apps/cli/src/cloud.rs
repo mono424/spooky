@@ -5654,20 +5654,23 @@ fn print_deployment_details(data: &serde_json::Value) {
 
 pub fn domain(action: CloudDomainCommands) -> Result<()> {
     match action {
-        CloudDomainCommands::Add { domain, app } => domain_add(domain, app),
+        CloudDomainCommands::Add { domain, app, status } => domain_add(domain, app, status),
         CloudDomainCommands::List => domain_list(),
         CloudDomainCommands::Remove { domain } => domain_remove(domain),
     }
 }
 
-fn domain_add(domain: String, app: Option<String>) -> Result<()> {
+fn domain_add(domain: String, app: Option<String>, status: bool) -> Result<()> {
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
     let (_slug, pid) = resolve_project_id(&mut client)?;
 
+    // A status domain attaches to the project's status page, not an app, so the
+    // `app` flag is ignored server-side for kind=status.
+    let kind = if status { "status" } else { "app" };
     let resp = client.post(
         &format!("/v1/projects/{}/domains", pid),
-        &serde_json::json!({ "domain": domain, "app": app.unwrap_or_default() }),
+        &serde_json::json!({ "domain": domain, "app": app.unwrap_or_default(), "kind": kind }),
     )?;
     let data: serde_json::Value = resp.into_json()?;
 
