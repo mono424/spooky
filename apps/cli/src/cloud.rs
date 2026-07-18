@@ -1890,17 +1890,25 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
             dockerfile_path.display(),
             context_dir.display()
         );
+        let mut docker_build_args = vec![
+            "build".to_string(),
+            "--platform".to_string(),
+            "linux/amd64".to_string(),
+            "-t".to_string(),
+            image_tag.clone(),
+            "-f".to_string(),
+            dockerfile_path.to_string_lossy().to_string(),
+        ];
+        // Build-time args (deploy.build_args): resolved from the same env shapes
+        // as runtime env (incl. vault), passed only to `docker build`. Never added
+        // to the container's runtime env. Mirrors the git-linked builder.
+        for kv in resolve_env_for_deploy(&deploy.build_args, config_dir, &mut client, &pid) {
+            docker_build_args.push("--build-arg".to_string());
+            docker_build_args.push(kv);
+        }
+        docker_build_args.push(context_dir.to_string_lossy().to_string());
         let build_status = std::process::Command::new("docker")
-            .args([
-                "build",
-                "--platform",
-                "linux/amd64",
-                "-t",
-                &image_tag,
-                "-f",
-                &dockerfile_path.to_string_lossy(),
-                &context_dir.to_string_lossy(),
-            ])
+            .args(&docker_build_args)
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
             .status()
@@ -2155,6 +2163,7 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
                             timeout: None,
                             timeout_overridable: None,
                             cmd: None,
+                            build_args: None,
                             static_site: None,
                         });
                     backend_manifests.push(build_backend_manifest(
@@ -2279,6 +2288,7 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
                 timeout: None,
                 timeout_overridable: None,
                 cmd: None,
+                build_args: None,
                 static_site: None,
             });
         backend_manifests.push(build_backend_manifest(
@@ -2456,6 +2466,26 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
             build_args.push("--build-arg".to_string());
             build_args.push(format!("VITE_DB_ENDPOINT={}", endpoint));
             println!("  DB endpoint: {}", endpoint);
+        }
+        // Frontend env (sp00ky.yml env.vault whitelist, e.g. VITE_GOOGLE_CLIENT_ID,
+        // VITE_TWITCH_CLIENT_ID) must reach the build as --build-arg: a static SPA
+        // bakes import.meta.env at `vite build` time, so runtime container env is
+        // useless. Mirror the git-linked builder (spooky-cloud internal/linking).
+        // VITE_DB_ENDPOINT is auto-derived above; skip a vault duplicate so it wins.
+        for kv in &user_env {
+            if let Some((k, _)) = kv.split_once('=') {
+                if k == "VITE_DB_ENDPOINT" {
+                    continue;
+                }
+                build_args.push("--build-arg".to_string());
+                build_args.push(kv.clone());
+            }
+        }
+        // Explicit deploy.build_args (build-time only, resolved incl. vault). Applied
+        // after env so they win on key clash. Never enters runtime env.
+        for kv in resolve_env_for_deploy(&frontend_deploy.build_args, config_dir, &mut client, &pid) {
+            build_args.push("--build-arg".to_string());
+            build_args.push(kv);
         }
         build_args.push(context_dir.to_string_lossy().to_string());
 

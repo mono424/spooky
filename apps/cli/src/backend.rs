@@ -1421,6 +1421,12 @@ pub struct AppDeployConfig {
     /// Command override for the container (replaces ENTRYPOINT/CMD in image)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cmd: Option<String>,
+    /// Build-time secrets/args passed to `docker build --build-arg` (any app
+    /// type). Same shape as `env` (inline map, `vault:` whitelist, dotenv path).
+    /// Build-time only — never injected into the container's runtime env. Keep in
+    /// sync with spooky-cloud's linking builder (`deploy.build_args`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_args: Option<EnvConfig>,
     /// Static-frontend hosting (free/Cloudflare plan): build the SPA and ship the
     /// output dir to Cloudflare Workers Static Assets instead of a Docker image.
     #[serde(rename = "static", default, skip_serializing_if = "Option::is_none")]
