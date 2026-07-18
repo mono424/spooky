@@ -4946,6 +4946,12 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                         &fn_endpoint,
                         "",
                     );
+                    // Raw execute (not apply_remote_functions_if_changed) on
+                    // purpose: `/backups/reset` wipes the DB and this flow does
+                    // NOT re-apply the internal schema (internal_schema: None
+                    // above), so _00_schema_state doesn't exist here — there's no
+                    // stored hash to consult or keep in sync, and the next full
+                    // `spky deploy` re-applies (and re-hashes) everything anyway.
                     match surreal_client.execute(&functions_sql) {
                         Ok(_) => println!("  Remote functions applied."),
                         Err(e) => println!("  Warning: remote functions: {:?}", e),

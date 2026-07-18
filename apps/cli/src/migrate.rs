@@ -855,6 +855,9 @@ mod tests {
         executed_queries: RefCell<Vec<String>>,
         recorded: RefCell<Vec<(String, String, String)>>,
         fail_execute: RefCell<bool>,
+        // Hash returned for a `SELECT hash FROM _00_schema_state:<id>` query, to
+        // exercise the schema-hash skip path. None => the row doesn't exist yet.
+        stored_hash: RefCell<Option<String>>,
     }
 
     impl MockDB {
@@ -864,6 +867,7 @@ mod tests {
                 executed_queries: RefCell::new(vec![]),
                 recorded: RefCell::new(vec![]),
                 fail_execute: RefCell::new(false),
+                stored_hash: RefCell::new(None),
             }
         }
 
@@ -875,6 +879,20 @@ mod tests {
 
         fn set_fail_execute(&self, fail: bool) {
             *self.fail_execute.borrow_mut() = fail;
+        }
+
+        fn set_stored_hash(&self, hash: &str) {
+            *self.stored_hash.borrow_mut() = Some(hash.to_string());
+        }
+
+        /// Number of times the given SQL body was executed (excludes the hash
+        /// SELECT/UPSERT bookkeeping queries).
+        fn execute_count(&self, sql: &str) -> usize {
+            self.executed_queries
+                .borrow()
+                .iter()
+                .filter(|q| q.as_str() == sql)
+                .count()
         }
     }
 
@@ -896,6 +914,17 @@ mod tests {
                 anyhow::bail!("Mock execute failure");
             }
             self.executed_queries.borrow_mut().push(query.to_string());
+            // Answer the schema-hash read with the configured stored hash.
+            if query.starts_with("SELECT hash FROM _00_schema_state") {
+                let result = match self.stored_hash.borrow().as_ref() {
+                    Some(h) => serde_json::json!([{ "hash": h }]),
+                    None => serde_json::json!([]),
+                };
+                return Ok(vec![SurrealResponse {
+                    status: "OK".to_string(),
+                    result: Some(result),
+                }]);
+            }
             Ok(vec![SurrealResponse {
                 status: "OK".to_string(),
                 result: None,
@@ -939,11 +968,48 @@ mod tests {
         }
     }
 
-    /// Compute the checksum of a string (matching what checksum() does for file contents).
-    fn checksum_str(content: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        format!("{:x}", hasher.finalize())
+    // `checksum_str` is the crate helper (super::checksum_str), in scope via
+    // `use super::*`.
+
+    // ── schema-hash skip tests (apply_remote_functions_if_changed) ──────
+    #[test]
+    fn test_remote_fns_applies_when_no_stored_hash() {
+        let mock = MockDB::new(); // stored_hash = None
+        let sql = "DEFINE FUNCTION OVERWRITE fn::x() { RETURN 1; };";
+        apply_remote_functions_if_changed(&mock, sql).unwrap();
+        assert_eq!(mock.execute_count(sql), 1, "should apply when nothing stored");
+        // hash recorded afterwards
+        assert!(mock
+            .executed_queries
+            .borrow()
+            .iter()
+            .any(|q| q.contains("UPSERT _00_schema_state:remote_fns")));
+    }
+
+    #[test]
+    fn test_remote_fns_skips_when_hash_matches() {
+        let sql = "DEFINE FUNCTION OVERWRITE fn::x() { RETURN 1; };";
+        let mock = MockDB::new();
+        mock.set_stored_hash(&checksum_str(sql));
+        apply_remote_functions_if_changed(&mock, sql).unwrap();
+        assert_eq!(
+            mock.execute_count(sql),
+            0,
+            "should skip the execute when the hash matches"
+        );
+    }
+
+    #[test]
+    fn test_remote_fns_applies_when_hash_differs() {
+        let sql = "DEFINE FUNCTION OVERWRITE fn::x() { RETURN 2; };";
+        let mock = MockDB::new();
+        mock.set_stored_hash("deadbeef_stale_hash");
+        apply_remote_functions_if_changed(&mock, sql).unwrap();
+        assert_eq!(
+            mock.execute_count(sql),
+            1,
+            "should re-apply when the stored hash differs"
+        );
     }
 
     // ── sanitize_name tests ─────────────────────────────────────────────
