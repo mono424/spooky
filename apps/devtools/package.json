@@ -1,6 +1,6 @@
 {
   "name": "@spooky-sync/devtools",
-  "version": "0.0.1-canary.138",
+  "version": "0.0.1-canary.139",
   "description": "Chrome DevTools extension for debugging and inspecting Sp00ky state",
   "private": true,
   "type": "module",
