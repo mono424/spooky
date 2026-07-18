@@ -34,7 +34,11 @@ let db: {
   close: () => void;
 } | null = null;
 
-async function open(dbName: string, useOpfs: boolean): Promise<{ persisted: boolean }> {
+async function open(
+  dbName: string,
+  useOpfs: boolean,
+  systemTables: readonly string[] = []
+): Promise<{ persisted: boolean }> {
   const sqlite3: any = await sqlite3InitModule();
   let persisted = false;
   if (useOpfs && sqlite3.installOpfsSAHPoolVfs) {
@@ -47,6 +51,12 @@ async function open(dbName: string, useOpfs: boolean): Promise<{ persisted: bool
     }
   }
   if (!db) db = new sqlite3.oo1.DB(':memory:', 'c');
+  // Physically create the internal `_00_*` tables the client reads before any
+  // write (DEFINE is a noop on this engine, so the migrator can't). Prevents
+  // "no such table: _00_query" on a fresh bucket right after signup.
+  for (const t of systemTables) {
+    db!.exec({ sql: `CREATE TABLE IF NOT EXISTS "${t}" (id TEXT PRIMARY KEY, data TEXT NOT NULL)` });
+  }
   // Retry (rather than instantly failing with SQLITE_BUSY=5) if a lock is held.
   // Combined with the engine's single-flight op queue, overlap is avoided.
   // `cache_size` is negated → KiB (here 32 MiB) so SQLite's page cache can't
@@ -106,7 +116,10 @@ self.onmessage = async (ev: MessageEvent) => {
     switch (type) {
       case 'open':
         selectDb.knownTables.clear();
-        result = await open(payload.dbName, payload.useOpfs);
+        result = await open(payload.dbName, payload.useOpfs, payload.systemTables);
+        // The freshly seeded system tables exist — record them so the select
+        // path doesn't redundantly re-issue CREATE TABLE for each.
+        for (const t of (payload.systemTables ?? []) as string[]) selectDb.knownTables.add(t);
         break;
       case 'select':
         result = await executeSelect(payload.plan, payload.params ?? {}, selectDb);

@@ -34,6 +34,21 @@ import type { EngineTx, Id, LocalStore, OrderBy, RelationFetch, Row } from './ca
  * full merged row is only materialized for a LET-wrapped upsert (see the 'let'
  * case). delete/deleteAll yield `[]`; noop yields `null`.
  */
+/**
+ * The `_00_*` internal tables the client relies on. The LocalMigrator DEFINEs
+ * them, but every DEFINE lowers to a noop on the SQLite engine, so they must be
+ * created physically at open (see `openInternal`) or a read-before-first-write
+ * on a fresh bucket throws "no such table". Keep in sync with the systemSchema
+ * block in `local-migrator.ts`.
+ */
+const SYSTEM_TABLES = [
+  '_00_stream_processor_state',
+  '_00_query',
+  '_00_preload',
+  '_00_schema',
+  '_00_pending_mutations',
+] as const;
+
 export function pureWriteOpResult(op: SqlOp): unknown {
   switch (op.kind) {
     case 'upsert':
@@ -217,11 +232,22 @@ export class SqliteCacheEngine implements LocalStore {
    */
   private async openInternal(bucketId: string): Promise<void> {
     this.worker = this.spawnWorker();
+    // Seed the `_00_*` system tables as part of `open` (worker-side, one round
+    // trip). The LocalMigrator DEFINEs them, but `translateSurql` lowers every
+    // DEFINE to a noop on this engine (SQLite has no DDL vocabulary), so
+    // provisioning never actually creates them — they were only made lazily on
+    // first WRITE. A fresh bucket (e.g. right after signup) that READS one first
+    // (the sync layer selects `_00_query` before any row lands) hit
+    // "no such table: _00_query" and the client wedged on "Loading database".
+    // Creating them inside `open` guarantees any access order is safe without
+    // adding ops to the engine's queue.
     const { persisted } = await this.rawCall<{ persisted: boolean }>('open', {
       dbName: bucketId,
       useOpfs: this.useOpfs,
+      systemTables: SYSTEM_TABLES,
     });
     this.knownTables.clear();
+    for (const t of SYSTEM_TABLES) this.knownTables.add(t);
     this.bucketId = bucketId;
     this.logger.info(
       { bucketId, persisted, Category: 'sp00ky-client::SqliteCacheEngine::connect' },

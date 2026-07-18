@@ -96,6 +96,45 @@ describe('SqliteCacheEngine.switchBucket serialization', () => {
   });
 });
 
+// Regression: DEFINE is a noop on this engine, so the `_00_*` internal tables
+// the migrator DEFINEs are never physically created — a fresh bucket that READS
+// one before any write (the sync layer selects `_00_query` at startup) threw
+// "no such table: _00_query" and wedged the client on "Loading database". The
+// fix seeds them inside `open`; assert the open message carries them.
+describe('SqliteCacheEngine system-table seeding', () => {
+  it('passes the _00_* system tables to the worker open (fresh-bucket safe)', async () => {
+    const msgs: any[] = [];
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger());
+    (engine as any).spawnWorker = () => {
+      const w: any = { onmessage: null, onerror: null, onmessageerror: null, terminate() {} };
+      w.postMessage = (msg: any) => {
+        msgs.push(msg);
+        Promise.resolve().then(() => {
+          const rest = msg.type === 'open' ? { persisted: true } : {};
+          w.onmessage?.({ data: { id: msg.id, ok: true, ...rest } });
+        });
+      };
+      // Wire pending resolution like the real spawnWorker.
+      const inner = w.onmessage;
+      w.onmessage = (ev: any) => {
+        const { id, ok, error, ...rest } = ev.data ?? {};
+        const p = (engine as any).pending.get(id);
+        if (!p) return;
+        (engine as any).pending.delete(id);
+        if (ok) p.resolve(rest);
+        else p.reject(new Error(error));
+        void inner;
+      };
+      return w as unknown as Worker;
+    };
+
+    await engine.connect('user:fresh');
+    const open = msgs.find((m) => m.type === 'open');
+    expect(open?.payload?.systemTables).toContain('_00_query');
+    expect(open?.payload?.systemTables).toContain('_00_pending_mutations');
+  });
+});
+
 // `pureWriteOpResult` is the single source of truth for what a pure-write op
 // contributes to a query's per-statement results. The batched fast path in
 // `query()` and the per-op `execOp` path BOTH route through it, so a caller that
