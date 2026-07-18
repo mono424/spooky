@@ -75,13 +75,18 @@ pub(crate) fn scan_migrations(migrations_dir: &Path) -> Result<Vec<FilesystemMig
     Ok(migrations)
 }
 
+/// Compute SHA-256 checksum of a string.
+pub(crate) fn checksum_str(content: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
 /// Compute SHA-256 checksum of a file's contents.
 pub(crate) fn checksum(path: &Path) -> Result<String> {
     let content = fs::read_to_string(path)
         .context(format!("Failed to read file for checksum: {:?}", path))?;
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(checksum_str(&content))
 }
 
 /// Sanitize a migration name: lowercase, replace spaces/hyphens with underscores.
@@ -619,6 +624,76 @@ fn make_defines_overwrite(sql: &str) -> String {
     result
 }
 
+/// True when a full schema re-apply is forced (bypass the hash-skip). Set by the
+/// `--force-schema` flag (which exports this env) or by exporting it directly.
+/// Read from the env so every apply path — deploy phase 1 & 2, `migrate prod`,
+/// `migrate apply`, `dev`, `backup restore` — is covered without threading a
+/// `force` parameter through every call site.
+fn force_schema_reapply() -> bool {
+    std::env::var("SPKY_FORCE_SCHEMA").is_ok()
+}
+
+/// Read the stored schema hash for `id` from `_00_schema_state`. Returns `None`
+/// when the table doesn't exist yet (first apply), the row is missing, or the
+/// query errors — all of which mean "no stored hash, apply".
+fn read_stored_schema_hash(client: &dyn MigrationDB, id: &str) -> Option<String> {
+    // Access by record id (`_00_schema_state:<id>`) — `id` is SurrealDB's
+    // built-in record identifier, so a `WHERE id = '<id>'` filter would never
+    // match the string against the full record id.
+    let q = format!("SELECT hash FROM _00_schema_state:{};", id);
+    let responses = client.execute(&q).ok()?;
+    // execute() returns one SurrealResponse per statement; take the first OK one
+    // with a non-empty result array and read its `hash` field.
+    for r in responses {
+        if r.status != "OK" {
+            continue;
+        }
+        if let Some(arr) = r.result.as_ref().and_then(|v| v.as_array()) {
+            if let Some(hash) = arr
+                .first()
+                .and_then(|row| row.get("hash"))
+                .and_then(|h| h.as_str())
+            {
+                return Some(hash.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Record the applied schema hash for `id` in `_00_schema_state` (best-effort:
+/// a failure here only costs a redundant re-apply next time, so it warns rather
+/// than failing the migration).
+fn record_schema_hash(client: &dyn MigrationDB, id: &str, hash: &str) {
+    let q = format!(
+        "UPSERT _00_schema_state:{id} SET hash = '{hash}', updated_at = time::now();",
+        id = id,
+        hash = hash
+    );
+    if let Err(e) = client.execute(&q) {
+        println!("  {YELLOW}Warning: failed to record schema hash for '{id}': {e:?}{RESET}");
+    }
+}
+
+/// Apply the remote-functions SQL blob, skipping the execute when its hash is
+/// unchanged from the last successful apply (unless `SPKY_FORCE_SCHEMA` is set).
+/// Shared by the deploy path (cloud.rs) and the migration engine
+/// (sp00ky_engine.rs) so the skip logic lives in one place.
+pub fn apply_remote_functions_if_changed(client: &dyn MigrationDB, sql: &str) -> Result<()> {
+    let hash = checksum_str(sql);
+    if !force_schema_reapply() && read_stored_schema_hash(client, "remote_fns").as_deref() == Some(&hash)
+    {
+        println!("  {DIM}Remote functions unchanged, skipping.{RESET}");
+        return Ok(());
+    }
+    client
+        .execute(sql)
+        .context("Failed to apply remote functions")?;
+    record_schema_hash(client, "remote_fns", &hash);
+    println!("  Remote functions applied.");
+    Ok(())
+}
+
 /// Apply internal Sp00ky schema (meta tables + per-table events) after user migrations.
 ///
 /// This is idempotent — all statements use `DEFINE ... OVERWRITE` or `DEFINE ... SCHEMALESS`.
@@ -699,7 +774,21 @@ pub fn apply_internal_schema(
     );
     internal_sql.push_str(&sp00ky_events);
 
-    // 4. Execute against DB
+    // 4. Skip when the assembled schema is byte-identical to the last applied one.
+    // Every statement is `DEFINE ... OVERWRITE`, so re-running is safe but forces
+    // SurrealDB to re-do all that DDL (meta tables + 2 events per user table) —
+    // the dominant cost. Hash over the FINAL assembled bytes (post substitution,
+    // post OVERWRITE injection, post per-table events) so any real change busts it.
+    let hash = checksum_str(&internal_sql);
+    if !force_schema_reapply()
+        && read_stored_schema_hash(client, "internal").as_deref() == Some(&hash)
+    {
+        println!("  {DIM}Internal schema unchanged, skipping.{RESET}");
+        println!("────────────────────────────────────────────────────────\n");
+        return Ok(());
+    }
+
+    // 5. Execute against DB
     println!(
         "  + Executing internal schema ({} bytes)...",
         internal_sql.len()
@@ -707,6 +796,11 @@ pub fn apply_internal_schema(
     client
         .execute(&internal_sql)
         .context("Failed to apply internal Sp00ky schema")?;
+
+    // Record the applied hash only after a successful execute. The
+    // _00_schema_state table is defined by the internal_sql we just ran, so it
+    // exists by now.
+    record_schema_hash(client, "internal", &hash);
 
     println!("  {GREEN}Internal Sp00ky schema applied successfully.{RESET}");
     println!("────────────────────────────────────────────────────────\n");

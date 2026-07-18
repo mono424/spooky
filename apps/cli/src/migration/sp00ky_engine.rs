@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use crate::backend::DeployMode;
-use crate::surreal_client::{MigrationDB, SurrealClient};
+use crate::surreal_client::SurrealClient;
 
 use super::engine::{MigrationEngine, MigrationInfo};
 
@@ -81,7 +81,7 @@ impl MigrationEngine for Sp00kyEngine {
         // 1. User migrations (delegated to inner engine)
         self.inner.apply()?;
 
-        // 2. Remote functions (if configured)
+        // 2. Remote functions (if configured) — skipped when unchanged.
         if let Some(ref rf) = self.remote_functions {
             let client = self.make_client();
             let sql = crate::schema_builder::build_remote_functions_schema(
@@ -89,10 +89,7 @@ impl MigrationEngine for Sp00kyEngine {
                 &rf.endpoint,
                 &rf.secret,
             );
-            client
-                .execute(&sql)
-                .context("Failed to apply remote functions")?;
-            println!("  Remote functions applied.");
+            crate::migrate::apply_remote_functions_if_changed(&client, &sql)?;
         }
 
         // 3. Internal sp00ky schema (if configured)

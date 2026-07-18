@@ -1486,9 +1486,9 @@ fn apply_remote_fns_and_internal_schema(
 
     let functions_sql =
         crate::schema_builder::build_remote_functions_schema(&mode, &fn_endpoint, &auth_secret);
-    match surreal_client.execute(&functions_sql) {
-        Ok(_) => println!("  ▸ Remote functions applied."),
-        Err(e) => println!("  ▸ Warning: failed to apply remote functions: {:?}", e),
+    if let Err(e) = crate::migrate::apply_remote_functions_if_changed(&surreal_client, &functions_sql)
+    {
+        println!("  ▸ Warning: failed to apply remote functions: {:?}", e);
     }
 
     let int_schema = config.resolved_schema();
@@ -2700,11 +2700,20 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
             if let Ok(status_resp) = client.get(&format!("/v1/projects/{}/deployment", pid)) {
                 if let Ok(status_data) = status_resp.into_json::<serde_json::Value>() {
                     if let Some(db_url) = status_data["urls"]["surrealdb"].as_str() {
-                        // Wait for SurrealDB to be reachable via public URL
+                        // Wait for SurrealDB to be reachable via public URL. A
+                        // freshly re-provisioned DB VM's public URL routing/TLS
+                        // can lag well past a minute, so wait on a deadline
+                        // (default 5 min, SPKY_DB_READY_TIMEOUT_SECS) rather than
+                        // a fixed 30 attempts — otherwise real pending migrations
+                        // get silently skipped on a slow-to-warm VM. Any HTTP
+                        // response (even an auth error) means reachable; only a
+                        // connect/timeout error keeps us waiting.
                         print!("  ▸ Connecting to SurrealDB");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
                         let mut db_ready = false;
-                        for _ in 0..30 {
-                            // Bounded probe: without .timeout a half-open
+                        let deadline = std::time::Instant::now() + db_ready_timeout();
+                        while std::time::Instant::now() < deadline {
+                            // Bounded per-probe timeout: without it a half-open
                             // connection blocks this check forever.
                             let check = ureq::post(&format!("{}/sql", db_url))
                                 .set("Accept", "application/json")
@@ -2715,14 +2724,19 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
                                 break;
                             }
                             print!(".");
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
                             thread::sleep(Duration::from_secs(2));
                         }
                         println!();
 
                         if !db_ready {
                             println!(
-                                "  ▸ Warning: SurrealDB not reachable at {}, skipping migrations.",
-                                db_url
+                                "  ▸ WARNING: SurrealDB not reachable at {} after {}s — \
+                                 pending migrations were NOT applied. Run `spky migrate prod` \
+                                 once the database is up (raise the wait with \
+                                 SPKY_DB_READY_TIMEOUT_SECS).",
+                                db_url,
+                                db_ready_timeout().as_secs()
                             );
                         } else {
                             let resolved = config.resolved_surrealdb();
@@ -3170,6 +3184,17 @@ fn events_read_timeout() -> Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(120);
+    Duration::from_secs(secs)
+}
+
+/// How long to wait for a freshly-provisioned SurrealDB VM's public URL to
+/// become reachable before giving up and skipping migrations (default 5 min).
+fn db_ready_timeout() -> Duration {
+    let secs = std::env::var("SPKY_DB_READY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(300);
     Duration::from_secs(secs)
 }
 

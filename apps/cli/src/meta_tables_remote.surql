@@ -173,3 +173,17 @@ DEFINE INDEX OVERWRITE idx_user_feature_user_key ON TABLE _00_user_feature COLUM
 DEFINE FUNCTION OVERWRITE fn::feature::hash($key: string, $user_id: string) -> int {
   RETURN <int> (<int> ('0x' + string::slice(crypto::sha256($key + ':' + $user_id), 0, 8))) % 100;
 };
+
+-- ==================================================
+-- SPOOKY SCHEMA STATE
+-- Stores a hash of the last-applied assembled internal schema and remote
+-- functions blob, so spky migrate/deploy can skip re-applying them when the
+-- desired state is byte-identical to what is already on the server. Rows are
+-- keyed by id: internal (meta tables + per-table events) and remote_fns (the
+-- remote-functions blob). See apply_internal_schema and
+-- apply_remote_functions_if_changed in apps/cli/src/migrate.rs. Mirrors the
+-- client-side _00_schema/local-migrator.ts hash-skip pattern.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_schema_state SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE hash ON TABLE _00_schema_state TYPE string;
+DEFINE FIELD OVERWRITE updated_at ON TABLE _00_schema_state TYPE datetime VALUE time::now();

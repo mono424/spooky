@@ -169,6 +169,10 @@ enum Commands {
         /// running service is left untouched. Omit to deploy everything.
         #[arg(long, value_delimiter = ',')]
         only: Vec<String>,
+        /// Force re-applying the internal schema + remote functions even when
+        /// unchanged (bypasses the schema-hash skip). Use for drift recovery.
+        #[arg(long)]
+        force_schema: bool,
     },
     /// Show deployment status
     Status,
@@ -1049,6 +1053,10 @@ enum MigrateCommands {
         /// SSP/Scheduler auth secret
         #[arg(long)]
         secret: Option<String>,
+        /// Force re-applying the internal schema + remote functions even when
+        /// unchanged (bypasses the schema-hash skip). Use for drift recovery.
+        #[arg(long)]
+        force_schema: bool,
     },
     /// Apply pending migrations to the project's Sp00ky Cloud deployment (no deploy).
     ///
@@ -1073,6 +1081,10 @@ enum MigrateCommands {
         /// Skip the production confirmation prompt
         #[arg(long)]
         yes: bool,
+        /// Force re-applying the internal schema + remote functions even when
+        /// unchanged (bypasses the schema-hash skip). Use for drift recovery.
+        #[arg(long)]
+        force_schema: bool,
     },
     /// Show migration status
     Status {
@@ -1600,7 +1612,11 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             mode,
             endpoint,
             secret,
+            force_schema,
         } => {
+            if force_schema {
+                std::env::set_var("SPKY_FORCE_SCHEMA", "1");
+            }
             let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
             let sp00ky_config = backend::load_config(&config_file);
             let resolved = sp00ky_config.resolved_schema();
@@ -1651,7 +1667,11 @@ fn handle_migrate(action: MigrateCommands) -> Result<()> {
             endpoint,
             secret,
             yes,
+            force_schema,
         } => {
+            if force_schema {
+                std::env::set_var("SPKY_FORCE_SCHEMA", "1");
+            }
             let config_file = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
             let sp00ky_config = backend::load_config(&config_file);
             let resolved = sp00ky_config.resolved_schema();
@@ -2768,7 +2788,13 @@ fn main() -> Result<()> {
             upgrade,
             clean,
             only,
-        }) => cloud::deploy(upgrade, clean, only),
+            force_schema,
+        }) => {
+            if force_schema {
+                std::env::set_var("SPKY_FORCE_SCHEMA", "1");
+            }
+            cloud::deploy(upgrade, clean, only)
+        }
         Some(Commands::Status) => cloud::status(),
         Some(Commands::Logs {
             filter,
