@@ -3,6 +3,7 @@ import type { LocalStore, RemoteDatabaseService } from '../../services/database/
 import type { Logger } from '../../services/logger/index';
 import type { Uuid } from 'surrealdb';
 import { CrdtField } from './crdt-field';
+import { loadLoro } from './loro-loader';
 import { parseRecordIdString } from '../../utils/index';
 
 export { CrdtField, cursorColorFromName, CURSOR_COLORS } from './crdt-field';
@@ -101,7 +102,10 @@ export class CrdtManager {
       );
     }
 
-    crdtField = new CrdtField(field, cursorsEnabled, initialCrdtState, this.logger);
+    // Load loro lazily (usually already resolved — the client preloads it at
+    // startup when `config.crdt` is on).
+    const { LoroDoc } = await loadLoro();
+    crdtField = new CrdtField(field, cursorsEnabled, LoroDoc, initialCrdtState, this.logger);
     crdtField.startSync(this.local, this.remote, recordId, this.sessionId, this.debounceMs);
     this.fields.set(key, crdtField);
 

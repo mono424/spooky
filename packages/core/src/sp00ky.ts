@@ -43,6 +43,7 @@ import { EventSystem } from './events/index';
 import { CacheModule } from './modules/cache/index';
 import type { RecordWithId } from './modules/cache/index';
 import { CrdtManager, CrdtField } from './modules/crdt/index';
+import { preloadLoro } from './modules/crdt/loro-loader';
 import { FeatureFlagModule, FeatureFlagHandle } from './modules/feature-flag/index';
 import type { FeatureFlagOptions } from './modules/feature-flag/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
@@ -195,6 +196,11 @@ export class Sp00kyClient<S extends SchemaStructure> {
       },
       'Sp00kyClient initialized'
     );
+
+    // Preload the loro CRDT engine at startup (fetches the chunk on page load)
+    // so the first `openCrdtField` doesn't block on a network round-trip. Left
+    // off, loro is never loaded unless a CRDT field is explicitly opened.
+    if (config.crdt) void preloadLoro();
 
     // The default ('surrealdb') engine is a SurrealCacheEngine — a drop-in
     // subclass of LocalDatabaseService that adds the engine-neutral verb surface

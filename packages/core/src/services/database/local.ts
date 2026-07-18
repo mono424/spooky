@@ -1,6 +1,5 @@
 import type { Diagnostic} from 'surrealdb';
 import { applyDiagnostics, DateTime, RecordId, Surreal } from 'surrealdb';
-import { createWasmWorkerEngines } from '@surrealdb/wasm';
 import type { Sp00kyConfig } from '../../types';
 import type { Logger } from '../logger/index';
 import { AbstractDatabaseService } from './database';
@@ -30,21 +29,41 @@ export function bucketStoreName(bucketId: string): string {
   return `sp00ky-${bucketId}`;
 }
 
-function createLocalSurrealClient(logger: Logger): Surreal {
+/** Shared codec: mirrors SurrealDB RecordId/DateTime into our own encodings. */
+const localCodecOptions = {
+  valueDecodeVisitor(value: unknown) {
+    if (value instanceof RecordId) {
+      return encodeRecordId(value);
+    }
+
+    if (value instanceof DateTime) {
+      return value.toDate();
+    }
+
+    return value;
+  },
+};
+
+/**
+ * Engine-less Surreal client used as the constructor placeholder. Building this
+ * pulls in NO `@surrealdb/wasm` — the ~6 MB wasm engine is deferred to
+ * {@link createLocalSurrealClient}, which runs lazily in `connect`/`switchStore`.
+ * `connect()` replaces `this.client` with an engine-backed client before any
+ * query runs, so this bare client is never actually opened against a store.
+ */
+function createBareSurrealClient(): Surreal {
+  return new Surreal({ codecOptions: localCodecOptions });
+}
+
+/**
+ * Engine-backed client. Dynamically imports `@surrealdb/wasm` so the wasm engine
+ * only enters the graph as a separate chunk fetched on first connect (module-
+ * cached thereafter — `switchStore`'s await is instant).
+ */
+async function createLocalSurrealClient(logger: Logger): Promise<Surreal> {
+  const { createWasmWorkerEngines } = await import('@surrealdb/wasm');
   return new Surreal({
-    codecOptions: {
-      valueDecodeVisitor(value) {
-        if (value instanceof RecordId) {
-          return encodeRecordId(value);
-        }
-
-        if (value instanceof DateTime) {
-          return value.toDate();
-        }
-
-        return value;
-      },
-    },
+    codecOptions: localCodecOptions,
     engines: applyDiagnostics(
       createWasmWorkerEngines(),
       ({ key, type, phase, ...other }: Diagnostic) => {
@@ -87,7 +106,9 @@ export class LocalDatabaseService extends AbstractDatabaseService {
 
   constructor(config: Sp00kyConfig<any>['database'], logger: Logger) {
     const events = createDatabaseEventSystem();
-    super(createLocalSurrealClient(logger), logger, events);
+    // Placeholder client with no wasm engine; `connect()` swaps in the real
+    // engine-backed client (built lazily) before any query is issued.
+    super(createBareSurrealClient(), logger, events);
     this.config = config;
   }
 
@@ -159,6 +180,10 @@ export class LocalDatabaseService extends AbstractDatabaseService {
     );
 
     this.registerUnloadClose();
+    // Build the real engine-backed client lazily here (first `@surrealdb/wasm`
+    // load), replacing the constructor's engine-less placeholder before any
+    // query runs.
+    this.client = await createLocalSurrealClient(this.logger);
     await this.openWithRecovery(this.client, storeUrl, namespace, database, bucketId, store);
   }
 
@@ -195,7 +220,7 @@ export class LocalDatabaseService extends AbstractDatabaseService {
       return;
     }
 
-    const next = createLocalSurrealClient(this.logger);
+    const next = await createLocalSurrealClient(this.logger);
     this.pendingSwitchClient = next;
     try {
       await this.openWithRecovery(

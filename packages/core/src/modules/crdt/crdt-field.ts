@@ -1,4 +1,4 @@
-import { LoroDoc } from 'loro-crdt';
+import type { LoroDoc } from 'loro-crdt';
 import type { LocalStore, RemoteDatabaseService } from '../../services/database/index';
 import type { Logger } from '../../services/logger/index';
 import { parseRecordIdString } from '../../utils/index';
@@ -59,9 +59,15 @@ export class CrdtField {
 
   get onCursorUpdate() { return this._onCursorUpdate; }
 
+  /**
+   * @param LoroDocClass the `LoroDoc` constructor, injected by the caller after
+   *   awaiting {@link loadLoro} — keeps `loro-crdt` out of this module's static
+   *   import graph so it only ships to apps that use CRDT fields.
+   */
   constructor(
     private fieldName: string,
     cursorsEnabled: boolean,
+    LoroDocClass: typeof LoroDoc,
     initialState?: Uint8Array,
     logger?: Logger | null,
   ) {
@@ -72,7 +78,7 @@ export class CrdtField {
     }
     this.logger = logger ?? null;
     this.cursorsEnabled = cursorsEnabled;
-    this.doc = new LoroDoc();
+    this.doc = new LoroDocClass();
     if (initialState && initialState.length > 0) {
       // Tolerance: catch bad-snapshot data (corrupt blob, stale legacy
       // value left over from a pre-`bytes` migration) so the editor still

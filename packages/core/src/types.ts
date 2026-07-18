@@ -163,6 +163,14 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    */
   crdtDebounceMs?: number;
   /**
+   * Enable collaborative CRDT fields. When `true`, the `loro-crdt` engine is
+   * preloaded at client startup (fetched as a separate chunk on page load) so
+   * the first `openCrdtField` is instant. When omitted/`false`, loro is never
+   * loaded unless a CRDT field is explicitly opened — keeping the loro chunk
+   * out of apps that don't use collaboration. Defaults to `false`.
+   */
+  crdt?: boolean;
+  /**
    * Cadence (ms) for the `_00_list_ref` poll that catches cross-session
    * UPDATEs the SurrealDB v3 LIVE-permission gap drops. Lower = faster
    * convergence + more query load; higher = the inverse. Non-positive
