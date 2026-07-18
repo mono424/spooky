@@ -543,8 +543,12 @@ enum JobsCommands {
         /// Job id, e.g. `job:abc123`
         id: String,
     },
-    /// Delete every terminal job (status success or failed) from all job tables
-    Clear,
+    /// Delete terminal jobs (success/failed) from all job tables; use --all to also clear pending
+    Clear {
+        /// Also clear pending (queued) jobs. Running (processing) jobs are never deleted — use `jobs kill` for those
+        #[arg(short = 'A', long)]
+        all: bool,
+    },
 }
 
 #[derive(ClapArgs, Debug)]

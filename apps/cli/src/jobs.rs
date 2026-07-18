@@ -67,7 +67,7 @@ pub fn run(
         Some(JobsCommands::Get { id, json }) => get(&client, &tables, id, json),
         Some(JobsCommands::Kill { id }) => kill(&client, &id),
         Some(JobsCommands::Retry { id }) => retry(&client, &id),
-        Some(JobsCommands::Clear) => clear(&client, &tables),
+        Some(JobsCommands::Clear { all }) => clear(&client, &tables, all),
     }
 }
 
@@ -680,16 +680,23 @@ fn retry(client: &SurrealClient, id: &str) -> Result<()> {
 // `spky jobs clear`
 // =============================================================
 
-/// Delete every terminal job (status `success` or `failed`) from all discovered
-/// job tables. Terminal jobs are finished history — unlike kill/retry there's no
+/// Delete jobs from all discovered job tables. By default only terminal jobs
+/// (status `success` or `failed`) are removed — finished history, with no
 /// in-flight pickup to coordinate with the SSP, so a plain `DELETE` is correct.
-fn clear(client: &SurrealClient, tables: &BTreeMap<String, String>) -> Result<()> {
+/// With `all`, pending (queued) jobs are also dropped. `processing` (in-flight)
+/// jobs are NEVER deleted — killing a job mid-run is `spky jobs kill`'s domain.
+fn clear(client: &SurrealClient, tables: &BTreeMap<String, String>, all: bool) -> Result<()> {
     let mut total = 0usize;
     for table in tables.keys() {
         // `table` is a config-derived identifier (same direct interpolation the
         // SELECTs use); `RETURN BEFORE` yields the deleted rows so we can count.
-        let query =
-            format!("DELETE {table} WHERE status = 'success' OR status = 'failed' RETURN BEFORE;");
+        // `all` widens the terminal set to include pending, but always spares
+        // `processing` so a running job is never yanked out from under the SSP.
+        let query = if all {
+            format!("DELETE {table} WHERE status != 'processing' RETURN BEFORE;")
+        } else {
+            format!("DELETE {table} WHERE status = 'success' OR status = 'failed' RETURN BEFORE;")
+        };
         let responses = client
             .execute(&query)
             .with_context(|| format!("Failed to clear jobs in '{}'", table))?;
@@ -705,9 +712,14 @@ fn clear(client: &SurrealClient, tables: &BTreeMap<String, String>) -> Result<()
         total += n;
     }
     if total == 0 {
-        println!("No failed or successful jobs to clear.");
+        if all {
+            println!("No jobs to clear.");
+        } else {
+            println!("No failed or successful jobs to clear.");
+        }
     } else {
-        println!("\nCleared {GREEN}{total}{RESET} terminal job(s).");
+        let kind = if all { "job(s)" } else { "terminal job(s)" };
+        println!("\nCleared {GREEN}{total}{RESET} {kind}.");
     }
     Ok(())
 }
