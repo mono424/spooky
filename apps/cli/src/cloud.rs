@@ -325,6 +325,7 @@ impl CloudClient {
         match ureq::get(&url)
             .set("Authorization", &self.auth_header())
             .set("Accept", "application/json")
+            .timeout(Duration::from_secs(60))
             .call()
         {
             Ok(resp) => Ok(resp),
@@ -335,6 +336,7 @@ impl CloudClient {
                 match ureq::get(&url)
                     .set("Authorization", &self.auth_header())
                     .set("Accept", "application/json")
+                    .timeout(Duration::from_secs(60))
                     .call()
                 {
                     Ok(resp) => Ok(resp),
@@ -363,6 +365,7 @@ impl CloudClient {
         match ureq::post(&url)
             .set("Authorization", &self.auth_header())
             .set("Accept", "application/json")
+            .timeout(Duration::from_secs(60))
             .send_json(body.clone())
         {
             Ok(resp) => Ok(resp),
@@ -373,6 +376,7 @@ impl CloudClient {
                 match ureq::post(&url)
                     .set("Authorization", &self.auth_header())
                     .set("Accept", "application/json")
+                    .timeout(Duration::from_secs(60))
                     .send_json(body.clone())
                 {
                     Ok(resp) => Ok(resp),
@@ -2676,7 +2680,11 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
     println!();
 
     // Phase 1: Stream events until infra is ready (migrating state)
-    let phase1_raw = stream_deployment_events(&client, &pid)?;
+    let phase1_raw = stream_deployment_events(
+        &client,
+        &pid,
+        &["migrating", "running", "failed", "destroyed"],
+    )?;
     let (phase1_status, phase1_error) = if let Some((s, e)) = phase1_raw.split_once('|') {
         (s.to_string(), Some(e.to_string()))
     } else {
@@ -2696,8 +2704,11 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
                         print!("  ▸ Connecting to SurrealDB");
                         let mut db_ready = false;
                         for _ in 0..30 {
+                            // Bounded probe: without .timeout a half-open
+                            // connection blocks this check forever.
                             let check = ureq::post(&format!("{}/sql", db_url))
                                 .set("Accept", "application/json")
+                                .timeout(Duration::from_secs(8))
                                 .send_string("INFO FOR KV;");
                             if check.is_ok() {
                                 db_ready = true;
@@ -2769,7 +2780,8 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
             )?;
 
             // Stream events until fully running
-            let phase2_raw = stream_deployment_events(&client, &pid)?;
+            let phase2_raw =
+                stream_deployment_events(&client, &pid, &["running", "failed", "destroyed"])?;
             let (phase2_status, phase2_error) = if let Some((s, e)) = phase2_raw.split_once('|') {
                 (s.to_string(), Some(e.to_string()))
             } else {
@@ -3147,11 +3159,87 @@ fn render_vm_table(
 
 /// Stream SSE deployment events and return the final status when the stream closes.
 /// Uses an animated inline table with spinner for in-progress services.
-fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
+/// Per-read timeout for the deployment SSE stream. A silently dead connection
+/// (dropped by a NAT/LB without a FIN) otherwise blocks the reader FOREVER —
+/// the classic "deploy stuck on migrations" hang: the deployment finishes
+/// server-side while the CLI sits in a blocking read. On timeout we fall back
+/// to polling the deployment status endpoint instead of failing the deploy.
+fn events_read_timeout() -> Duration {
+    let secs = std::env::var("SPKY_DEPLOY_EVENTS_READ_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(120);
+    Duration::from_secs(secs)
+}
+
+/// Overall deadline for the status-poll fallback (default 30 min).
+fn deploy_poll_deadline() -> Duration {
+    let secs = std::env::var("SPKY_DEPLOY_POLL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(1800);
+    Duration::from_secs(secs)
+}
+
+/// Poll the deployment status endpoint until it reaches one of
+/// `terminal_statuses`. Fallback path for when the SSE stream dies or goes
+/// silent; bounded by `deploy_poll_deadline()`.
+fn poll_deployment_status(
+    client: &CloudClient,
+    pid: &str,
+    terminal_statuses: &[&str],
+) -> Result<String> {
+    let url = format!("{}/v1/projects/{}/deployment", client.base_url, pid);
+    let deadline = std::time::Instant::now() + deploy_poll_deadline();
+    loop {
+        if let Ok(resp) = ureq::get(&url)
+            .set("Authorization", &format!("Bearer {}", client.token))
+            .set("Accept", "application/json")
+            .timeout(Duration::from_secs(30))
+            .call()
+        {
+            if let Ok(data) = resp.into_json::<serde_json::Value>() {
+                let dep = data.get("deployment").unwrap_or(&data);
+                let status = dep["status"].as_str().unwrap_or("");
+                if terminal_statuses.contains(&status) {
+                    let error = dep["error"].as_str().unwrap_or("");
+                    return Ok(if error.is_empty() {
+                        status.to_string()
+                    } else {
+                        format!("{}|{}", status, error)
+                    });
+                }
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            bail!(
+                "Timed out waiting for the deployment to reach one of {:?} \
+                 (raise with SPKY_DEPLOY_POLL_TIMEOUT_SECS)",
+                terminal_statuses
+            );
+        }
+        thread::sleep(Duration::from_secs(5));
+    }
+}
+
+fn stream_deployment_events(
+    client: &CloudClient,
+    pid: &str,
+    terminal_statuses: &[&str],
+) -> Result<String> {
     use std::sync::{Arc, Mutex};
 
     let events_url = format!("{}/v1/projects/{}/deployment/events", client.base_url, pid);
-    let sse_result = ureq::get(&events_url)
+    // Bounded reads: without timeout_read a half-dead SSE connection blocks
+    // `reader.lines()` indefinitely (no error, no EOF). See events_read_timeout.
+    let agent = ureq::builder()
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(events_read_timeout())
+        .build();
+    let sse_result = agent
+        .get(&events_url)
         .set("Authorization", &format!("Bearer {}", client.token))
         .set("Accept", "text/event-stream")
         .call();
@@ -3200,11 +3288,17 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
 
             let mut final_status = String::new();
             let mut deploy_error = String::new();
+            let mut stream_died = false;
 
             for line in reader.lines() {
                 let line = match line {
                     Ok(l) => l,
-                    Err(_) => break,
+                    Err(_) => {
+                        // Read error or per-read timeout — the stream died
+                        // without the server closing it cleanly.
+                        stream_died = true;
+                        break;
+                    }
                 };
                 let data = match line.strip_prefix("data: ") {
                     Some(d) => d,
@@ -3260,6 +3354,15 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
                                 _ => println!("  ▸ {}", status),
                             }
                         }
+
+                        // Return as soon as the phase we're waiting on is
+                        // reached. Waiting for the server to close the stream
+                        // instead (the old behavior) hangs the CLI forever
+                        // when the control plane keeps the connection open
+                        // after the terminal event.
+                        if terminal_statuses.contains(&status) {
+                            break;
+                        }
                     }
                     _ => {}
                 }
@@ -3277,6 +3380,15 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
                 println!(); // final newline after table
             }
 
+            // Stream ended without a terminal status (died mid-flight, or the
+            // server closed early): the deployment is still progressing
+            // server-side, so poll the status endpoint instead of hanging or
+            // failing.
+            if stream_died || !terminal_statuses.contains(&final_status.as_str()) {
+                println!("  ▸ Event stream interrupted; polling deployment status...");
+                return poll_deployment_status(client, pid, terminal_statuses);
+            }
+
             if deploy_error.is_empty() {
                 Ok(final_status)
             } else {
@@ -3287,8 +3399,10 @@ fn stream_deployment_events(client: &CloudClient, pid: &str) -> Result<String> {
             let body = resp.into_string().unwrap_or_default();
             bail!("Failed to stream events (HTTP {}): {}", code, body);
         }
-        Err(ureq::Error::Transport(t)) => {
-            bail!("Connection error: {}", t);
+        Err(ureq::Error::Transport(_)) => {
+            // Couldn't even open the stream — fall straight back to polling.
+            println!("  ▸ Event stream unavailable; polling deployment status...");
+            poll_deployment_status(client, pid, terminal_statuses)
         }
     }
 }
