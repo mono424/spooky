@@ -57,6 +57,7 @@ describe('DataModule.runRecurring', () => {
     expect(record.next_run_at).toBeInstanceOf(Date);
     expect(record.assigned_to).toBe(CONN);
     expect(record.path).toBe('/syncGames');
+    expect(record.status).toBe('pending');
     expect(JSON.parse(record.payload)).toEqual({ connection: CONN });
   });
 
@@ -100,6 +101,21 @@ describe('DataModule.runRecurring', () => {
     await expect(
       dm.runRecurring('gamesync' as any, '/syncGames' as any, { connection: CONN } as any, { interval: 300000 } as any)
     ).rejects.toThrow(/assignedTo/);
+  });
+});
+
+describe('DataModule.run', () => {
+  it('creates the one-shot job with status pending so the optimistic row reads in-flight', async () => {
+    const { dm, create } = makeDm([]);
+    await dm.run('gamesync' as any, '/syncGames' as any, { connection: CONN } as any, { assignedTo: CONN });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    const [id, record] = create.mock.calls[0] as [string, any];
+    expect(id.startsWith('job:')).toBe(true);
+    // The schema's DEFAULT ALWAYS "pending" only runs server-side; without the
+    // explicit field the local optimistic row has status undefined and
+    // in-flight indicators miss it until the first server echo.
+    expect(record.status).toBe('pending');
   });
 });
 

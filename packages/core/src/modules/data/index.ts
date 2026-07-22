@@ -1205,6 +1205,11 @@ export class DataModule<S extends SchemaStructure> {
     const record: Record<string, unknown> = {
       path,
       payload: JSON.stringify(payload),
+      // Set explicitly: the schema's DEFAULT ALWAYS "pending" is server-side
+      // only. An optimistic local create without it surfaces with status
+      // undefined, so in-flight indicators keyed on pending/processing stay
+      // off until the first server echo (seconds on a delayed job).
+      status: 'pending',
       max_retries: options?.max_retries ?? 3,
       retry_strategy: options?.retry_strategy ?? 'linear',
     };
