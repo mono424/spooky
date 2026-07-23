@@ -36,7 +36,7 @@ where
     // `strip_reserved_keys`.
     let mut pairs: Vec<(String, Value)> = records
         .into_iter()
-        .map(|(id, value)| (id, strip_reserved_keys(value)))
+        .map(|(id, value)| (normalize_record_id(&id), strip_reserved_keys(value)))
         .collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -50,6 +50,20 @@ where
     }
 
     format!("{}{}", HASH_PREFIX, hasher.finalize().to_hex())
+}
+
+/// Strip SurrealDB's identifier escaping (`⟨...⟩` and backticks) from a record
+/// id so both hash producers agree on one spelling. Table names that are not
+/// plain identifiers (e.g. the `_00_*` synced meta tables, whose leading
+/// underscore makes some serializers emit `⟨_00_app_release⟩:web` while others
+/// emit `_00_app_release:web`) otherwise hash differently on the scheduler and
+/// SSP sides and crash-loop the SSP on a false integrity mismatch.
+pub fn normalize_record_id(id: &str) -> String {
+    if id.contains('\u{27e8}') || id.contains('`') {
+        id.chars().filter(|c| *c != '\u{27e8}' && *c != '\u{27e9}' && *c != '`').collect()
+    } else {
+        id.to_string()
+    }
 }
 
 /// Hash for an empty table — useful when comparing tables that exist on one
@@ -80,6 +94,17 @@ fn strip_reserved_keys(value: Value) -> Value {
         Value::Object(map) => Value::Object(
             map.into_iter()
                 .filter(|(k, v)| !k.starts_with("_00_") && !v.is_null())
+                .map(|(k, v)| {
+                    // The row's own `id` field carries the same
+                    // escaping ambiguity as the pair key (see
+                    // `normalize_record_id`) — normalize it too.
+                    if k == "id" {
+                        if let Value::String(s) = &v {
+                            return (k, Value::String(normalize_record_id(s)));
+                        }
+                    }
+                    (k, v)
+                })
                 .collect(),
         ),
         other => other,

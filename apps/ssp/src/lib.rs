@@ -892,10 +892,29 @@ pub async fn run_server() -> anyhow::Result<()> {
                                 let guard = processor.read().await;
                                 guard.compute_table_hashes()
                             };
-                            let diffs = ssp_protocol::snapshot_hash::diff_table_hashes(
+                            let mut diffs = ssp_protocol::snapshot_hash::diff_table_hashes(
                                 &expected_hashes,
                                 &actual,
                             );
+                            // Synced `_00_*` meta tables (feature flags, app
+                            // releases) are low-stakes announcement data — a
+                            // hash mismatch there must degrade to a warning,
+                            // never crash-loop the SSP and take sync down for
+                            // every real table (observed live when
+                            // _00_app_release first joined the snapshot).
+                            diffs.retain(|d| {
+                                let meta = ssp_protocol::SYNCED_META_TABLES
+                                    .contains(&d.table.as_str());
+                                if meta {
+                                    warn!(
+                                        table = %d.table,
+                                        expected = %d.a,
+                                        actual = %d.b,
+                                        "Ignoring integrity mismatch on synced meta table"
+                                    );
+                                }
+                                !meta
+                            });
                             if !diffs.is_empty() {
                                 for d in &diffs {
                                     error!(
