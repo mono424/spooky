@@ -1263,7 +1263,7 @@ async fn self_bootstrap_with_metadata(
     let table_defs: Vec<(String, String)> = match info_json.get("tables") {
         Some(Value::Object(tables_map)) => tables_map
             .iter()
-            .filter(|(name, _)| !name.starts_with("_00_"))
+            .filter(|(name, _)| !ssp_protocol::table_excluded_from_sync(name))
             .filter(|(name, def)| {
                 let nosync = def
                     .as_str()

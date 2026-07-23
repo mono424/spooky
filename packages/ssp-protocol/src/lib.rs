@@ -69,6 +69,20 @@ pub fn define_str_is_nosync(define_table: &str) -> bool {
     define_table.contains(NOSYNC_TABLE_COMMENT)
 }
 
+/// `_00_*` meta tables that DO participate in sync: server-written rows the
+/// client subscribes to live (feature-flag assignments, app-release
+/// announcements). Every other `_00_*` table stays runtime-internal and is
+/// excluded from snapshots, bootstrap loads and integrity hashes.
+pub const SYNCED_META_TABLES: &[&str] = &["_00_user_feature", "_00_app_release"];
+
+/// True when `table` must be excluded from sync machinery (snapshot clone,
+/// circuit bootstrap, integrity hashing): any `_00_*` table except the
+/// explicitly synced meta tables above. Shared so the scheduler and the SSP
+/// agree on the exact same table set (a mismatch breaks integrity hashes).
+pub fn table_excluded_from_sync(table: &str) -> bool {
+    table.starts_with("_00_") && !SYNCED_META_TABLES.contains(&table)
+}
+
 /// Sanitize a user record id (e.g. `"user:abc123"`) into the segment
 /// that goes into a dedicated table name (e.g. `"abc123"`). Returns
 /// `None` if the id is empty, missing the `user:` prefix, or contains

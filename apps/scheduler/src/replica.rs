@@ -357,7 +357,7 @@ impl Replica {
         let tables: Vec<String> = match info.get("tables") {
             Some(Value::Object(tables_map)) => tables_map
                 .iter()
-                .filter(|(name, _)| !name.starts_with("_00_"))
+                .filter(|(name, _)| !ssp_protocol::table_excluded_from_sync(name))
                 .filter(|(name, def)| {
                     let nosync = def
                         .as_str()
@@ -689,7 +689,7 @@ impl Replica {
 
     /// Apply a single record event to the snapshot
     pub async fn apply(&mut self, table: &str, op: RecordOp, id: &str, record: Option<Value>) -> Result<()> {
-        if !table.starts_with("_00_") {
+        if !ssp_protocol::table_excluded_from_sync(table) {
             self.known_tables.insert(table.to_string());
         }
         let thing_id = build_thing_id(table, id);
@@ -850,7 +850,7 @@ impl Replica {
         let tables: Vec<String> = match info.get("tables") {
             Some(Value::Object(tables_map)) => tables_map
                 .keys()
-                .filter(|name| !name.starts_with("_00_"))
+                .filter(|name| !ssp_protocol::table_excluded_from_sync(name))
                 .cloned()
                 .collect(),
             _ => vec!["thread".to_string(), "job".to_string(), "user".to_string()],

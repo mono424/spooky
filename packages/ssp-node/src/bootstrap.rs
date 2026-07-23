@@ -130,7 +130,7 @@ pub async fn rebuild_from_db(
     let table_defs: Vec<(String, String)> = match info_json.get("tables") {
         Some(Value::Object(tables_map)) => tables_map
             .iter()
-            .filter(|(name, _)| !name.starts_with("_00_"))
+            .filter(|(name, _)| !ssp_protocol::table_excluded_from_sync(name))
             .filter(|(name, def)| {
                 let nosync =
                     def.as_str().map(ssp_protocol::define_str_is_nosync).unwrap_or(false);
@@ -305,7 +305,7 @@ pub async fn catch_up_from_db(
     let table_defs: Vec<(String, String)> = match info_json.get("tables") {
         Some(Value::Object(m)) => m
             .iter()
-            .filter(|(name, _)| !name.starts_with("_00_"))
+            .filter(|(name, _)| !ssp_protocol::table_excluded_from_sync(name))
             .filter(|(_, def)| !def.as_str().map(ssp_protocol::define_str_is_nosync).unwrap_or(false))
             .map(|(n, d)| (n.clone(), d.as_str().unwrap_or("").to_string()))
             .collect(),
