@@ -47,6 +47,12 @@ const SYSTEM_TABLES = [
   '_00_preload',
   '_00_schema',
   '_00_pending_mutations',
+  // Server-written, synced-down meta tables (see meta_tables_client.surql).
+  // DEFINE is a noop on this engine, so without seeding them here their synced
+  // rows have no local table to land in: feature flags silently fall back to
+  // defaults and app-release update notifications never show.
+  '_00_user_feature',
+  '_00_app_release',
 ] as const;
 
 export function pureWriteOpResult(op: SqlOp): unknown {

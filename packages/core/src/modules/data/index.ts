@@ -1779,7 +1779,16 @@ export class DataModule<S extends SchemaStructure> {
     tableName: T;
     plan?: QueryPlan;
   }): Promise<QueryState> {
-    const tableSchema = this.schema.tables.find((t) => t.name === tableName);
+    // `_00_*` meta tables (feature flags, app releases) are framework-owned:
+    // they exist in the client db schema by construction but are never part of
+    // the app's generated `schema.tables`, so give them an empty column map
+    // instead of the not-found error (which silently broke every meta-table
+    // live query, e.g. feature flags never updating on this path).
+    const tableSchema =
+      this.schema.tables.find((t) => t.name === tableName) ??
+      (String(tableName).startsWith('_00_')
+        ? ({ name: tableName, columns: {} } as any)
+        : undefined);
     if (!tableSchema) {
       throw new Error(`Table ${tableName} not found`);
     }

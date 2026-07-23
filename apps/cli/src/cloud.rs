@@ -1581,9 +1581,15 @@ pub(crate) fn write_app_release_row(
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
         .collect();
+    // DELETE + CREATE instead of UPSERT: the SSP circuit skips `_00_*` tables
+    // at bootstrap, so an UPDATE for a row the circuit has never seen carries
+    // weight 0 and no delta reaches subscribed clients. A CREATE always adds
+    // membership (+1), so the announcement is delivered even right after an
+    // SSP restart.
     let q = format!(
-        "UPSERT _00_app_release:{app} SET app = '{app}', version = '{version}', \
-         cache_bust = {cache_bust}, mandatory = {mandatory}, released_at = time::now();",
+        "DELETE _00_app_release:{app}; CREATE _00_app_release:{app} SET app = '{app}', \
+         version = '{version}', cache_bust = {cache_bust}, mandatory = {mandatory}, \
+         released_at = time::now();",
         app = safe_app,
         version = safe_version,
         cache_bust = cache_bust,
