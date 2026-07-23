@@ -325,6 +325,76 @@ pub fn generate_sp00ky_events(
     }
     events.push_str("};\n\n");
 
+    // ===================================================================
+    // _00_app_release (per-frontend current-version announcements)
+    // ===================================================================
+    // Written root-only by `spky deploy` / `spky release` / the git-linked
+    // builder, never through the client up-queue - same situation as
+    // _00_user_feature above, so it needs the same explicit ingest-notify
+    // events for a row change to reach already-subscribed clients live.
+    events.push_str("-- Table: _00_app_release Mutation (server-written; ingest-notify)\n");
+    events.push_str("DEFINE EVENT OVERWRITE _00_app_release_mutation ON TABLE _00_app_release\n");
+    events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
+    events.push_str("    LET $sp00ky_ver_rec = IF $event = \"CREATE\" {\n");
+    events.push_str(
+        "        (CREATE _00_version SET record_id = $after.id, version = 1 RETURN AFTER)\n",
+    );
+    events.push_str("    } ELSE {\n");
+    events.push_str(
+        "        (UPDATE _00_version SET version += 1 WHERE record_id = $after.id RETURN AFTER)\n",
+    );
+    events.push_str("    };\n");
+    events.push_str("    LET $plain_after = {\n");
+    events.push_str("        id: <string>($after.id OR \"\"),\n");
+    events.push_str("        app: $after.app,\n");
+    events.push_str("        version: $after.version,\n");
+    events.push_str("        cache_bust: $after.cache_bust,\n");
+    events.push_str("        mandatory: $after.mandatory,\n");
+    events.push_str("        released_at: <string>($after.released_at OR \"\"),\n");
+    events.push_str("        _00_rv: (SELECT VALUE version FROM ONLY _00_version WHERE record_id = $after.id)\n");
+    events.push_str("    };\n");
+    if is_http {
+        events.push_str("    LET $payload = {\n");
+        events.push_str("        table: '_00_app_release',\n");
+        events.push_str("        op: $event,\n");
+        events.push_str("        id: <string>($after.id OR \"\"),\n");
+        events.push_str("        record: $plain_after,\n");
+        events.push_str("        hash: \"\"\n");
+        events.push_str("    };\n");
+        events.push_str("    http::post($sp00ky_endpoint + '/ingest', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });\n");
+    } else {
+        events.push_str("    mod::dbsp::ingest('_00_app_release', $event, <string>($after.id OR \"\"), $plain_after);\n");
+        events.push_str("    mod::dbsp::save_state(NONE);\n");
+    }
+    events.push_str("};\n\n");
+
+    events.push_str("-- Table: _00_app_release Deletion (ingest-notify)\n");
+    events.push_str("DEFINE EVENT OVERWRITE _00_app_release_delete ON TABLE _00_app_release\n");
+    events.push_str("WHEN $event = \"DELETE\"\nTHEN {\n");
+    events.push_str("    DELETE _00_version WHERE record_id = $before.id;\n");
+    events.push_str("    LET $plain_before = {\n");
+    events.push_str("        id: <string>($before.id OR \"\"),\n");
+    events.push_str("        app: $before.app,\n");
+    events.push_str("        version: $before.version,\n");
+    events.push_str("        cache_bust: $before.cache_bust,\n");
+    events.push_str("        mandatory: $before.mandatory,\n");
+    events.push_str("        released_at: <string>($before.released_at OR \"\")\n");
+    events.push_str("    };\n");
+    if is_http {
+        events.push_str("    LET $payload = {\n");
+        events.push_str("        table: '_00_app_release',\n");
+        events.push_str("        op: \"DELETE\",\n");
+        events.push_str("        id: <string>($before.id OR \"\"),\n");
+        events.push_str("        record: $plain_before,\n");
+        events.push_str("        hash: \"\"\n");
+        events.push_str("    };\n");
+        events.push_str("    http::post($sp00ky_endpoint + '/ingest', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });\n");
+    } else {
+        events.push_str("    mod::dbsp::ingest('_00_app_release', \"DELETE\", <string>($before.id OR \"\"), $plain_before);\n");
+        events.push_str("    mod::dbsp::save_state(NONE);\n");
+    }
+    events.push_str("};\n\n");
+
     events
 }
 

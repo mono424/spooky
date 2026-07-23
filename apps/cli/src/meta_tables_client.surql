@@ -134,3 +134,17 @@ DEFINE FIELD IF NOT EXISTS data ON _00_pending_mutations TYPE option<object> FLE
 
 DEFINE TABLE _00_user_feature SCHEMALESS
     PERMISSIONS FOR select, create, update, delete WHERE true;
+
+-- ==================================================
+-- SPOOKY APP RELEASE (per-frontend current-version announcements)
+--
+-- Server-written (root-only) release rows, synced DOWN read-only so the
+-- app-release resolver can run its one shared live query
+-- (`SELECT * FROM _00_app_release`) on the client. Must be declared here or
+-- the synced rows have no local table to land in (same trap as
+-- _00_user_feature above). SCHEMALESS so a synced row is never dropped on a
+-- field/type mismatch.
+-- ==================================================
+
+DEFINE TABLE _00_app_release SCHEMALESS
+    PERMISSIONS FOR select, create, update, delete WHERE true;

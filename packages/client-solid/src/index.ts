@@ -48,6 +48,11 @@ export { useSyncStatus, type UseSyncStatus } from './lib/use-sync-status';
 export type { SyncHealth, SyncHealthStatus, SyncHealthConfig } from '@spooky-sync/core';
 export { useCrdtField } from './lib/use-crdt-field';
 export { useFeatureFlag, type UseFeatureFlag } from './lib/use-feature-flag';
+export {
+  useAppRelease,
+  type UseAppRelease,
+  type UseAppReleaseOptions,
+} from './lib/use-app-release';
 export { useFileUpload, type FileUploadResult } from './lib/use-file-upload';
 export { useDownloadFile, type UseDownloadFileOptions, type UseDownloadFileResult } from './lib/use-download-file';
 export { Sp00kyProvider, type Sp00kyProviderProps } from './lib/Sp00kyProvider';

@@ -175,6 +175,29 @@ DEFINE FUNCTION OVERWRITE fn::feature::hash($key: string, $user_id: string) -> i
 };
 
 -- ==================================================
+-- SPOOKY APP RELEASE (per-frontend "current version" announcements)
+-- One row per frontend app, keyed by name (_00_app_release:<app>). Written
+-- root-only: `spky deploy` UPSERTs it after every successful frontend deploy
+-- (version = the frontend's package.json version), the git-linked builder
+-- mirrors that, and `spky release` sets it manually. Readable by everyone
+-- (incl. anonymous live queries) so running clients can compare against their
+-- built-in version and offer/force a reload. cache_bust asks the client to
+-- clear caches on that reload; mandatory means reload/update without asking.
+-- Synced to clients via the explicit ingest-notify events in sp00ky.rs (the
+-- _00_user_feature path) - _00_ tables are excluded from the snapshot clone.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_app_release SCHEMAFULL
+    PERMISSIONS
+      FOR select WHERE true
+      FOR create, update, delete NONE;
+
+DEFINE FIELD OVERWRITE app ON TABLE _00_app_release TYPE string;
+DEFINE FIELD OVERWRITE version ON TABLE _00_app_release TYPE string;
+DEFINE FIELD OVERWRITE cache_bust ON TABLE _00_app_release TYPE option<bool>;
+DEFINE FIELD OVERWRITE mandatory ON TABLE _00_app_release TYPE option<bool>;
+DEFINE FIELD OVERWRITE released_at ON TABLE _00_app_release TYPE datetime DEFAULT time::now();
+
+-- ==================================================
 -- SPOOKY SCHEMA STATE
 -- Stores a hash of the last-applied assembled internal schema and remote
 -- functions blob, so spky migrate/deploy can skip re-applying them when the

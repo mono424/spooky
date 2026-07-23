@@ -174,6 +174,36 @@ enum Commands {
         /// unchanged (bypasses the schema-hash skip). Use for drift recovery.
         #[arg(long)]
         force_schema: bool,
+        /// Mark this deploy's frontend release rows with cache_bust = true:
+        /// clients reloading onto the new version clear service-worker caches
+        /// first. Use when a previous deploy is wedged behind stale caches.
+        #[arg(long)]
+        cache_bust: bool,
+        /// Mark this deploy's frontend release rows with mandatory = true:
+        /// clients reload onto the new version immediately instead of being
+        /// offered a notification. Broken-build kill-switch.
+        #[arg(long)]
+        mandatory: bool,
+    },
+    /// Announce an app release to running clients without deploying: updates
+    /// the app's `_00_app_release` row (same write `spky deploy` does for
+    /// frontends automatically). Clients using the SDK's app-release hook see
+    /// the new version live and offer/force a reload.
+    Release {
+        /// App name from sp00ky.yml (e.g. `web`)
+        app: String,
+        /// Version to announce (X.Y.Z). Defaults to the frontend's
+        /// package.json version.
+        #[arg(long)]
+        version: Option<String>,
+        /// Ask clients to clear service-worker caches when reloading onto
+        /// this version.
+        #[arg(long)]
+        cache_bust: bool,
+        /// Force clients to reload/update immediately instead of offering a
+        /// notification.
+        #[arg(long)]
+        mandatory: bool,
     },
     /// Show deployment status
     Status,
@@ -2804,12 +2834,20 @@ fn main() -> Result<()> {
             clean,
             only,
             force_schema,
+            cache_bust,
+            mandatory,
         }) => {
             if force_schema {
                 std::env::set_var("SPKY_FORCE_SCHEMA", "1");
             }
-            cloud::deploy(upgrade, clean, only)
+            cloud::deploy(upgrade, clean, only, cache_bust, mandatory)
         }
+        Some(Commands::Release {
+            app,
+            version,
+            cache_bust,
+            mandatory,
+        }) => cloud::release(app, version, cache_bust, mandatory),
         Some(Commands::Status) => cloud::status(),
         Some(Commands::Stats { window, filter }) => cloud::stats(window, filter),
         Some(Commands::Logs {

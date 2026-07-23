@@ -8,4 +8,11 @@ export {
   type FeatureFlagOptions,
   type FeatureFlagSnapshot,
 } from './modules/feature-flag/index';
+export {
+  AppReleaseModule,
+  AppReleaseHandle,
+  type AppReleaseOptions,
+  type AppReleaseSnapshot,
+} from './modules/app-release/index';
+export { semverGt } from './utils/semver';
 export { fileToUint8Array, textToHtml } from './utils/index';

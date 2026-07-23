@@ -46,6 +46,8 @@ import { CrdtManager, CrdtField } from './modules/crdt/index';
 import { preloadLoro } from './modules/crdt/loro-loader';
 import { FeatureFlagModule, FeatureFlagHandle } from './modules/feature-flag/index';
 import type { FeatureFlagOptions } from './modules/feature-flag/index';
+import { AppReleaseModule, AppReleaseHandle } from './modules/app-release/index';
+import type { AppReleaseOptions } from './modules/app-release/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { ANON_USER_ID, bucketIdForUser } from './modules/ref-tables';
 import { parseParams, encodeRecordId, parseDuration } from './utils/index';
@@ -132,6 +134,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
   private devTools: DevToolsService;
   private crdtManager: CrdtManager;
   private featureFlags!: FeatureFlagModule<S>;
+  private appReleases!: AppReleaseModule<S>;
   // Query hashes already preloaded this session — skip redundant one-shot
   // fetches when the same preload query is requested again (e.g. a list row
   // re-rendering). Cleared on process/session end only.
@@ -285,6 +288,15 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // on `_00_user_feature` and the auth subscription to re-register handles
     // when the signed-in user changes.
     this.featureFlags = new FeatureFlagModule({
+      dataModule: this.dataModule,
+      sync: this.sync,
+      auth: this.auth,
+      logger,
+    });
+
+    // App release announcements (world-readable `_00_app_release`, written by
+    // spky deploy/release). Same shared-live-query design as feature flags.
+    this.appReleases = new AppReleaseModule({
       dataModule: this.dataModule,
       sync: this.sync,
       auth: this.auth,
@@ -503,6 +515,12 @@ export class Sp00kyClient<S extends SchemaStructure> {
         'FeatureFlagModule initialized'
       );
 
+      this.appReleases.init();
+      this.logger.debug(
+        { Category: 'sp00ky-client::Sp00kyClient::init' },
+        'AppReleaseModule initialized'
+      );
+
       this.logger.info(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
         'Sp00kyClient initialization completed successfully'
@@ -636,6 +654,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
 
   async close() {
     await this.featureFlags.closeAll();
+    await this.appReleases.closeAll();
     this.crdtManager.closeAll();
     await this.local.close();
     await this.remote.close();
@@ -652,6 +671,17 @@ export class Sp00kyClient<S extends SchemaStructure> {
    */
   feature(key: string, options?: FeatureFlagOptions): FeatureFlagHandle {
     return this.featureFlags.feature(key, options);
+  }
+
+  /**
+   * Observe the announced release of an app (`_00_app_release:<app>`, written
+   * by `spky deploy` / `spky release`). The handle's `snapshot()` carries the
+   * announced version plus the cache-bust/mandatory flags, and
+   * `updateAvailable(currentVersion)` compares it semver-wise against the
+   * running build. World-readable; writes are root-only.
+   */
+  appRelease(app: string, options?: AppReleaseOptions): AppReleaseHandle {
+    return this.appReleases.release(app, options);
   }
 
   authenticate(token: string) {

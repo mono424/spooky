@@ -1509,6 +1509,154 @@ fn apply_remote_fns_and_internal_schema(
     }
 }
 
+/// Version of a frontend app, read from the `version` field of the
+/// package.json in its app dir (deploy.context, falling back to the dev
+/// workdir). None when no versioned package.json is found — the release row
+/// is then skipped with a warning rather than announcing a bogus version.
+pub(crate) fn frontend_package_version(
+    config_dir: &std::path::Path,
+    app: &backend::AppConfig,
+) -> Option<String> {
+    let mut dirs: Vec<String> = Vec::new();
+    if let Some(deploy) = &app.deploy {
+        if let Some(ctx) = &deploy.context {
+            dirs.push(ctx.clone());
+        }
+    }
+    if let Some(backend::BackendDevConfig::Typed(t)) = &app.dev {
+        let wd = match t {
+            backend::BackendDevTypedConfig::Npm { workdir, .. } => workdir,
+            backend::BackendDevTypedConfig::Docker { workdir, .. } => workdir,
+            backend::BackendDevTypedConfig::Uv { workdir, .. } => workdir,
+        };
+        if let Some(wd) = wd {
+            dirs.push(wd.clone());
+        }
+    }
+    for dir in dirs {
+        let pkg_path = config_dir.join(&dir).join("package.json");
+        let Ok(raw) = fs::read_to_string(&pkg_path) else {
+            continue;
+        };
+        let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if let Some(v) = pkg.get("version").and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// UPSERT the `_00_app_release:<app>` row announcing `version` as the current
+/// release of frontend `app`. Root-only write; synced live to clients via the
+/// `_00_app_release` ingest-notify events (sp00ky.rs), where SDK hooks like
+/// `useAppRelease` compare it against the running build and offer/force a
+/// reload. Best-effort like `record_schema_hash`: a failure only means clients
+/// aren't nudged, never a failed deploy.
+pub(crate) fn write_app_release_row(
+    db_url: &str,
+    db_password: &str,
+    namespace: &str,
+    database: &str,
+    app_name: &str,
+    version: &str,
+    cache_bust: bool,
+    mandatory: bool,
+) {
+    let surreal_client = if db_password.is_empty() {
+        crate::surreal_client::SurrealClient::new_unauthenticated(db_url, namespace, database)
+    } else {
+        crate::surreal_client::SurrealClient::new(db_url, namespace, database, "root", db_password)
+    };
+    // App names come from sp00ky.yml keys (identifier-safe) and the version
+    // from a parsed package.json; sanitize anyway since this lands in a query.
+    let safe_app: String = app_name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    let safe_version: String = version
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
+        .collect();
+    let q = format!(
+        "UPSERT _00_app_release:{app} SET app = '{app}', version = '{version}', \
+         cache_bust = {cache_bust}, mandatory = {mandatory}, released_at = time::now();",
+        app = safe_app,
+        version = safe_version,
+        cache_bust = cache_bust,
+        mandatory = mandatory,
+    );
+    match surreal_client.query(&q) {
+        Ok(_) => println!(
+            "  ▸ Release row updated: {} -> v{}{}{}",
+            safe_app,
+            safe_version,
+            if cache_bust { " [cache-bust]" } else { "" },
+            if mandatory { " [mandatory]" } else { "" },
+        ),
+        Err(e) => println!(
+            "  ▸ Warning: failed to update release row for '{}' ({e:?}); clients will not be notified.",
+            safe_app
+        ),
+    }
+}
+
+/// `spky release <app>`: manually announce a release by updating the app's
+/// `_00_app_release` row on the cloud deployment — the same write `spky
+/// deploy` performs automatically for frontends, for when you need to (re)set
+/// the flags or announce a version without deploying (e.g. after a git-linked
+/// deploy that should have been cache-busting, or a store rollout of a mobile
+/// app the CLI never deploys).
+pub fn release(
+    app: String,
+    version: Option<String>,
+    cache_bust: bool,
+    mandatory: bool,
+) -> Result<()> {
+    let config_path = std::env::current_dir()?.join("sp00ky.yml");
+    let config = backend::load_config(&config_path);
+    let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+
+    let version = match version {
+        Some(v) => v,
+        None => {
+            let frontend = config
+                .frontend()
+                .filter(|(n, _)| *n == app)
+                .map(|(_, a)| a)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "'{}' is not a frontend in sp00ky.yml — pass --version <v> explicitly.",
+                        app
+                    )
+                })?;
+            frontend_package_version(config_dir, frontend).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No versioned package.json found for frontend '{}' — pass --version <v>.",
+                    app
+                )
+            })?
+        }
+    };
+
+    let cloud = resolve_cloud_surreal(&config_path)?;
+    let resolved = config.resolved_surrealdb();
+    write_app_release_row(
+        &cloud.url,
+        &cloud.password,
+        &resolved.namespace,
+        &resolved.database,
+        &app,
+        &version,
+        cache_bust,
+        mandatory,
+    );
+    Ok(())
+}
+
 /// Resolve the full EnvConfig for cloud deploy, returning "KEY=VAL" strings.
 fn resolve_env_for_deploy(
     env: &Option<backend::EnvConfig>,
@@ -1759,7 +1907,13 @@ fn deploy_static_frontend_cloudflare(
     Ok(())
 }
 
-pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
+pub fn deploy(
+    upgrade: bool,
+    clean: bool,
+    only: Vec<String>,
+    cache_bust: bool,
+    mandatory: bool,
+) -> Result<()> {
     // Guided flow: ensure login → project → billing before expensive work
     let creds = ensure_login()?;
     let mut client = CloudClient::new(&creds);
@@ -2885,6 +3039,37 @@ pub fn deploy(upgrade: bool, clean: bool, only: Vec<String>) -> Result<()> {
                                         );
                                     } else {
                                         println!("  ▸ Data plane healthy after re-apply.");
+                                    }
+                                }
+
+                                // Announce the deployed frontend to running
+                                // clients: UPSERT its `_00_app_release` row with
+                                // the version from the app's package.json. SDK
+                                // hooks (useAppRelease) compare against the
+                                // running build and offer a reload — mandatory
+                                // reloads immediately, cache_bust clears SW
+                                // caches on that reload.
+                                if frontend_selected {
+                                    if let Some((frontend_name, frontend_app)) = config.frontend() {
+                                        let db_password = status["surrealdb_password"]
+                                            .as_str()
+                                            .unwrap_or("");
+                                        match frontend_package_version(config_dir, frontend_app) {
+                                            Some(version) => write_app_release_row(
+                                                db_url,
+                                                db_password,
+                                                &resolved.namespace,
+                                                &resolved.database,
+                                                frontend_name,
+                                                &version,
+                                                cache_bust,
+                                                mandatory,
+                                            ),
+                                            None => println!(
+                                                "  ▸ Warning: no versioned package.json found for frontend '{}'; release row not updated.",
+                                                frontend_name
+                                            ),
+                                        }
                                     }
                                 }
                             }
@@ -7130,6 +7315,54 @@ fn env_change_passphrase() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod app_release_tests {
+    use super::*;
+
+    fn frontend_app(yaml: &str) -> backend::AppConfig {
+        serde_yaml::from_str(yaml).expect("valid app config yaml")
+    }
+
+    #[test]
+    fn version_read_from_deploy_context_package_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_dir = dir.path().join("webapp");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(app_dir.join("package.json"), r#"{"version":"1.2.3"}"#).unwrap();
+        let app = frontend_app("type: frontend\ndeploy:\n  context: ./webapp\n");
+        assert_eq!(
+            frontend_package_version(dir.path(), &app),
+            Some("1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn version_falls_back_to_dev_workdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let app_dir = dir.path().join("devapp");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(app_dir.join("package.json"), r#"{"version":"0.9.0"}"#).unwrap();
+        let app =
+            frontend_app("type: frontend\ndev:\n  type: npm\n  script: dev\n  workdir: ./devapp\n");
+        assert_eq!(
+            frontend_package_version(dir.path(), &app),
+            Some("0.9.0".to_string())
+        );
+    }
+
+    #[test]
+    fn missing_or_unversioned_package_json_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = frontend_app("type: frontend\ndeploy:\n  context: ./nope\n");
+        assert_eq!(frontend_package_version(dir.path(), &app), None);
+        let app_dir = dir.path().join("empty");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(app_dir.join("package.json"), r#"{"name":"x"}"#).unwrap();
+        let app = frontend_app("type: frontend\ndeploy:\n  context: ./empty\n");
+        assert_eq!(frontend_package_version(dir.path(), &app), None);
+    }
 }
 
 #[cfg(test)]
