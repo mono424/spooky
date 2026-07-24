@@ -5,8 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::backend::{
-    AppConfig, AppType, AuthConfig, AuthType, BackendMethod, MethodType, Sp00kyConfig,
-    YAML_SCHEMA_COMMENT,
+    AppConfig, AppType, AuthConfig, AuthType, BackendMethod, MethodType, YAML_SCHEMA_COMMENT,
 };
 
 // ── Outbox schema template ──────────────────────────────────────────────────
@@ -117,14 +116,20 @@ pub fn add_api(
         }
     };
 
-    // Step 2: Load or create config
-    let mut sp00ky_config: Sp00kyConfig = if config_path.exists() {
+    // Step 2: Load or create config. We work at the raw-YAML level (not the
+    // typed `Sp00kyConfig`) so a project that pulls apps in via
+    // `apps.<name>.path` — whose reference-only entries would not deserialize
+    // into a strict `AppConfig` — round-trips untouched and is never inlined.
+    let mut root: serde_yaml::Value = if config_path.exists() {
         let content = fs::read_to_string(&config_path)
             .context(format!("Failed to read config: {:?}", config_path))?;
         serde_yaml::from_str(&content).context("Failed to parse sp00ky.yml")?
     } else {
-        Sp00kyConfig::default()
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
     };
+    if !matches!(root, serde_yaml::Value::Mapping(_)) {
+        root = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
 
     // Step 3: OpenAPI spec path
     let spec_path_str = if let Some(s) = spec {
@@ -163,7 +168,11 @@ pub fn add_api(
     };
 
     // Sanity check: no duplicate
-    if sp00ky_config.apps.contains_key(&backend_name) {
+    if root
+        .get("apps")
+        .and_then(|a| a.get(backend_name.as_str()))
+        .is_some()
+    {
         bail!("App '{}' already exists in sp00ky.yml", backend_name);
     }
 
@@ -281,10 +290,28 @@ pub fn add_api(
         env: None,
     };
 
-    sp00ky_config.apps.insert(backend_name.clone(), new_app);
+    // Insert the new app as a YAML node under `apps`, creating the map if the
+    // file had none. Existing entries (including `path:` references) are left
+    // byte-for-byte as authored.
+    let new_app_value =
+        serde_yaml::to_value(&new_app).context("Failed to serialize new app to YAML")?;
+    if let serde_yaml::Value::Mapping(root_map) = &mut root {
+        let apps_key = serde_yaml::Value::String("apps".to_string());
+        let apps = root_map
+            .entry(apps_key)
+            .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        if let serde_yaml::Value::Mapping(apps_map) = apps {
+            apps_map.insert(
+                serde_yaml::Value::String(backend_name.clone()),
+                new_app_value,
+            );
+        } else {
+            bail!("`apps` in sp00ky.yml is not a mapping");
+        }
+    }
 
     let yaml_output =
-        serde_yaml::to_string(&sp00ky_config).context("Failed to serialize config to YAML")?;
+        serde_yaml::to_string(&root).context("Failed to serialize config to YAML")?;
     let yaml_output = format!("{}\n{}", YAML_SCHEMA_COMMENT, yaml_output);
 
     fs::write(&config_path, &yaml_output)

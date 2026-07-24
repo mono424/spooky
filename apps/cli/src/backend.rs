@@ -176,6 +176,10 @@ pub const DEFAULT_SCHEMA_PATH: &str = "src/schema.surql";
 pub const DEFAULT_MIGRATIONS_DIR: &str = "migrations";
 pub const DEFAULT_BUCKETS_DIR: &str = "src/buckets";
 pub const DEFAULT_CONFIG_PATH: &str = "sp00ky.yml";
+/// Per-service config file placed in a backend service's own directory and
+/// pulled into the root manifest via `apps.<name>.path: ./svc`. Holds a bare
+/// single-app config (an `AppConfig` body).
+pub const APP_INCLUDE_FILENAME: &str = "sp00ky.app.yml";
 pub const YAML_SCHEMA_COMMENT: &str =
     "# yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json";
 
@@ -1696,7 +1700,8 @@ pub fn load_config(path: &Path) -> Sp00kyConfig {
         }
     };
 
-    match serde_yaml::from_str(&content) {
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    match parse_config_with_includes(&content, base_dir) {
         Ok(c) => c,
         Err(e) => {
             // Loud, not silent: a malformed manifest otherwise degrades quietly to
@@ -1712,6 +1717,181 @@ pub fn load_config(path: &Path) -> Sp00kyConfig {
             default_config()
         }
     }
+}
+
+/// Parse manifest text into a `Sp00kyConfig`, first resolving any
+/// `apps.<name>.path` service includes at the raw-YAML level so that the typed
+/// `AppConfig` never sees a reference-only entry. This is the single canonical
+/// parse used by both `load_config` and `BackendProcessor::process`.
+pub fn parse_config_with_includes(content: &str, base_dir: &Path) -> Result<Sp00kyConfig> {
+    let mut root: serde_yaml::Value =
+        serde_yaml::from_str(content).context("failed to parse sp00ky manifest")?;
+    resolve_app_includes(&mut root, base_dir)?;
+    serde_yaml::from_value(root).context("failed to interpret sp00ky manifest")
+}
+
+/// Keys inside an `AppConfig` (and its nested `deploy`/`dev`/`method` objects)
+/// whose values are file paths resolved relative to the ROOT manifest dir.
+/// When an app is pulled in from `apps.<name>.path: ./svc`, these are rebased
+/// by prefixing the service dir so they still resolve against the root dir.
+///
+/// MUST track `AppConfig`'s path-bearing fields (see `AppConfig`,
+/// `AppDeployConfig`, `BackendMethod`, `BackendDevTypedConfig`). Non-path
+/// fields (e.g. `baseUrl` is a URL, `deploy.static.build` is a shell command,
+/// docker `volumes` use the absolute `${PROJECT_DIR}`) are intentionally
+/// excluded.
+fn rebase_app_paths(app: &mut serde_yaml::Value, service_rel: &str) {
+    // Top-level path fields.
+    for key in ["spec"] {
+        rebase_string_at(app, key, service_rel);
+    }
+    // Nested one-level path fields, keyed by parent object.
+    let nested: &[(&str, &[&str])] = &[
+        ("method", &["schema"]),
+        ("dev", &["file", "workdir"]),
+        ("deploy", &["dockerfile", "context"]),
+    ];
+    for (parent, keys) in nested {
+        if let Some(obj) = app.get_mut(parent) {
+            for key in *keys {
+                rebase_string_at(obj, key, service_rel);
+            }
+        }
+    }
+    // deploy.static.dir
+    if let Some(static_obj) = app.get_mut("deploy").and_then(|d| d.get_mut("static")) {
+        rebase_string_at(static_obj, "dir", service_rel);
+    }
+    // `env` may be a bare dotenv path string, or a `{ dev, cloud }` map whose
+    // string entries are dotenv paths. Vault/inline-map forms are left alone.
+    match app.get_mut("env") {
+        Some(serde_yaml::Value::String(s)) => {
+            if is_rebasable_path(s) {
+                *s = joined_rel(service_rel, s);
+            }
+        }
+        Some(env @ serde_yaml::Value::Mapping(_)) => {
+            for key in ["dev", "cloud"] {
+                rebase_string_at(env, key, service_rel);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// If `parent[key]` is a rebasable relative path string, prefix it with the
+/// service dir. No-op when the key is absent or not a plain string.
+fn rebase_string_at(parent: &mut serde_yaml::Value, key: &str, service_rel: &str) {
+    if let Some(serde_yaml::Value::String(s)) = parent.get_mut(key) {
+        if is_rebasable_path(s) {
+            *s = joined_rel(service_rel, s);
+        }
+    }
+}
+
+/// A value is rebasable when it looks like a relative filesystem path: not
+/// absolute, not a URL, and not a `${PROJECT_DIR}`-anchored docker mount.
+fn is_rebasable_path(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('/')
+        && !s.contains("://")
+        && !s.starts_with('$')
+}
+
+/// Join a service-relative dir with a path written relative to that service,
+/// yielding a path relative to the root manifest dir (forward slashes).
+fn joined_rel(service_rel: &str, value: &str) -> String {
+    let service_rel = service_rel.strip_prefix("./").unwrap_or(service_rel);
+    let value = value.strip_prefix("./").unwrap_or(value);
+    Path::new(service_rel)
+        .join(value)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// Recursively merge `overlay` into `base`: for two mappings, each overlay key
+/// is merged into the matching base key (recursing when both are mappings);
+/// any other overlay value replaces the base value outright. Implements the
+/// "main overrides sub" precedence.
+fn merge_value(base: &mut serde_yaml::Value, overlay: serde_yaml::Value) {
+    match (base, overlay) {
+        (serde_yaml::Value::Mapping(base_map), serde_yaml::Value::Mapping(overlay_map)) => {
+            for (k, v) in overlay_map {
+                match base_map.get_mut(&k) {
+                    Some(existing) => merge_value(existing, v),
+                    None => {
+                        base_map.insert(k, v);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+/// Resolve `apps.<name>.path` service includes in place. For every app entry
+/// that carries a `path`, load `<path>/sp00ky.app.yml` (a bare `AppConfig`),
+/// rebase its relative paths against the root manifest dir, then overlay the
+/// remaining root-entry keys on top (main overrides sub). Entries without a
+/// `path` are left untouched.
+fn resolve_app_includes(root: &mut serde_yaml::Value, base_dir: &Path) -> Result<()> {
+    let apps = match root.get_mut("apps") {
+        Some(serde_yaml::Value::Mapping(apps)) => apps,
+        _ => return Ok(()),
+    };
+
+    // Collect names to resolve first to avoid borrow juggling while mutating.
+    let names: Vec<serde_yaml::Value> = apps
+        .iter()
+        .filter(|(_, v)| v.get("path").and_then(|p| p.as_str()).is_some())
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    for name in names {
+        let entry = apps.get(&name).cloned().unwrap_or(serde_yaml::Value::Null);
+        let service_rel = entry
+            .get("path")
+            .and_then(|p| p.as_str())
+            .expect("filtered for path")
+            .to_string();
+
+        let include_path = base_dir.join(&service_rel).join(APP_INCLUDE_FILENAME);
+        let sub_content = fs::read_to_string(&include_path).with_context(|| {
+            format!(
+                "app '{}' references path '{}' but {} could not be read",
+                value_key_str(&name),
+                service_rel,
+                include_path.display()
+            )
+        })?;
+        let mut sub: serde_yaml::Value = serde_yaml::from_str(&sub_content).with_context(|| {
+            format!("failed to parse app include {}", include_path.display())
+        })?;
+        if !matches!(sub, serde_yaml::Value::Mapping(_)) {
+            bail!(
+                "app include {} must be a mapping (a bare single-app config)",
+                include_path.display()
+            );
+        }
+
+        rebase_app_paths(&mut sub, &service_rel);
+
+        // Overlay the root entry (minus `path`) on top of the sub-file base.
+        let mut overrides = entry;
+        if let serde_yaml::Value::Mapping(map) = &mut overrides {
+            map.remove(serde_yaml::Value::String("path".to_string()));
+        }
+        merge_value(&mut sub, overrides);
+
+        apps.insert(name, sub);
+    }
+
+    Ok(())
+}
+
+/// Best-effort rendering of a mapping key for error messages.
+fn value_key_str(v: &serde_yaml::Value) -> String {
+    v.as_str().map(String::from).unwrap_or_else(|| format!("{:?}", v))
 }
 
 fn default_config() -> Sp00kyConfig {
@@ -1743,10 +1923,10 @@ impl BackendProcessor {
         let config_str = fs::read_to_string(config_path)
             .context(format!("Failed to read sp00ky config: {:?}", config_path))?;
 
-        let config: Sp00kyConfig =
-            serde_yaml::from_str(&config_str).context("Failed to parse sp00ky config")?;
-
         let base_dir = config_path.parent().unwrap_or(Path::new("."));
+
+        let config: Sp00kyConfig = parse_config_with_includes(&config_str, base_dir)
+            .context("Failed to parse sp00ky config")?;
 
         for (name, app) in &config.apps {
             if app.app_type != AppType::Backend {
@@ -2222,6 +2402,144 @@ apps:
         assert!(
             !p.schema_appends.contains("relaylike"),
             "skipped direct-HTTP backend must not contribute schema"
+        );
+    }
+}
+
+#[cfg(test)]
+mod include_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Serialize an app back to YAML value so two AppConfigs can be compared
+    /// structurally (AppConfig doesn't derive PartialEq).
+    fn app_value(config: &Sp00kyConfig, name: &str) -> serde_yaml::Value {
+        serde_yaml::to_value(config.apps.get(name).expect("app present")).unwrap()
+    }
+
+    /// A `{ path }` reference must resolve to the exact same AppConfig as the
+    /// equivalent inline block, with every relative path rebased to the root.
+    #[test]
+    fn path_include_matches_inline_and_rebases() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("api")).unwrap();
+        std::fs::write(
+            dir.path().join("api/sp00ky.app.yml"),
+            "\
+type: backend
+spec: ./openapi.yml
+method:
+  type: outbox
+  table: job
+  schema: ./src/outbox/api.surql
+deploy:
+  dockerfile: ./Dockerfile
+  context: ../
+  port: 3660
+env:
+  dev: ./.env.local
+",
+        )
+        .unwrap();
+
+        let split = "\
+slug: t
+apps:
+  api:
+    path: ./api
+";
+        let inline = "\
+slug: t
+apps:
+  api:
+    type: backend
+    spec: api/openapi.yml
+    method:
+      type: outbox
+      table: job
+      schema: api/src/outbox/api.surql
+    deploy:
+      dockerfile: api/Dockerfile
+      context: api/../
+      port: 3660
+    env:
+      dev: api/.env.local
+";
+        let split_cfg = parse_config_with_includes(split, dir.path()).unwrap();
+        let inline_cfg = parse_config_with_includes(inline, dir.path()).unwrap();
+
+        assert_eq!(
+            app_value(&split_cfg, "api"),
+            app_value(&inline_cfg, "api"),
+            "split config must resolve identically to the inline form"
+        );
+
+        // Spot-check that every relative path was rebased onto the service dir.
+        let api = split_cfg.apps.get("api").unwrap();
+        assert_eq!(api.spec.as_deref(), Some("api/openapi.yml"));
+        assert_eq!(
+            api.method.as_ref().unwrap().schema,
+            "api/src/outbox/api.surql"
+        );
+        let deploy = api.deploy.as_ref().unwrap();
+        assert_eq!(deploy.dockerfile.as_deref(), Some("api/Dockerfile"));
+    }
+
+    /// A field set alongside `path` in the root file overrides the sub-file.
+    #[test]
+    fn root_entry_overrides_sub_file() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("svc")).unwrap();
+        std::fs::write(
+            dir.path().join("svc/sp00ky.app.yml"),
+            "type: backend\nscope: all\nspec: ./openapi.yml\nmethod:\n  type: outbox\n  table: job\n  schema: ./s.surql\n",
+        )
+        .unwrap();
+
+        let yaml = "\
+apps:
+  svc:
+    path: ./svc
+    scope: cloudOnly
+";
+        let cfg = parse_config_with_includes(yaml, dir.path()).unwrap();
+        assert_eq!(cfg.apps.get("svc").unwrap().scope, AppScope::CloudOnly);
+    }
+
+    /// A missing sub-file surfaces a clear error rather than a silent default.
+    #[test]
+    fn missing_include_errors() {
+        let dir = TempDir::new().unwrap();
+        let yaml = "apps:\n  api:\n    path: ./nope\n";
+        let err = parse_config_with_includes(yaml, dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("api") && err.to_string().contains("nope"),
+            "error should name the app and path: {err}"
+        );
+    }
+
+    /// A config with no `path:` entries parses exactly as before (regression).
+    #[test]
+    fn no_path_entries_is_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let yaml = "\
+slug: t
+apps:
+  web:
+    type: frontend
+  api:
+    type: backend
+    spec: ./api/openapi.yml
+    method:
+      type: outbox
+      table: job
+      schema: ./schema.surql
+";
+        let via_includes = parse_config_with_includes(yaml, dir.path()).unwrap();
+        let direct: Sp00kyConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            serde_yaml::to_value(&via_includes).unwrap(),
+            serde_yaml::to_value(&direct).unwrap()
         );
     }
 }

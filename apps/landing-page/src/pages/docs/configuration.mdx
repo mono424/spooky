@@ -186,7 +186,7 @@ Each entry under `apps` is a service `spky` knows how to run locally and deploy 
 
 <CodeBlock code={ymlApps} lang="yaml" />
 
-`dev` accepts either a raw command string or a typed form: `{type: npm, script, workdir?}`, `{type: docker, file, workdir?, port?}` (builds a Dockerfile for this app's dev server), or `{type: uv, script, workdir?}`. `deploy` accepts `dockerfile`, `context`, `port`, `healthcheck`, `resources` (`vcpus`, `memory`, `disk`), and a `timeout`.
+`dev` accepts either a raw command string or a typed form: `{type: npm, script, workdir?}`, `{type: docker, file, workdir?, port?}` (builds a Dockerfile for this app's dev server), or `{type: uv, script, workdir?}`. `deploy` accepts `dockerfile`, `context`, `port`, `healthcheck`, `resources` (`vcpus`, `memory`, `disk`), a `timeout`, a `cmd` (override the image's ENTRYPOINT/CMD), `build_args` (build-time-only args, same shape as `env`), and `static` (`{build, dir}`, for Cloudflare static-asset frontends).
 
 #### `scope` — where an app runs
 
@@ -213,6 +213,37 @@ A `docker` app runs a prebuilt image directly (no Dockerfile build) — useful f
 Under `spky dev` it runs as the container `sp00ky-dev-<name>` on the dev network (reachable from sibling apps by its **name**) with `--rm` teardown. `${PROJECT_DIR}` is also expanded in `env` values, and user `env` overrides the auto-injected `SPKY_*` vars. With `scope` left as `all`/`cloudOnly`, deploys pull the image and ship it through the same image pipeline as a backend; pair it with `scope: devOnly` for a purely local service (`dependsOn`/`healthcheck` are `spky dev`-only). `env` (below) is passed through as container environment variables.
 
 For per-app environment variables (`env: { dev, cloud, vault }`), see [Environment Variables](/docs/environment-variables).
+
+#### Split a service's config into its own file
+
+An app entry can also be a `{ path }` reference instead of an inline block. `path` points at a directory containing a `sp00ky.app.yml` file, so a backend service can keep its own config next to its code:
+
+```yaml
+# sp00ky.yml (project root)
+apps:
+  web:
+    type: frontend
+    # ...
+  api:
+    path: ./api            # pulls ./api/sp00ky.app.yml in as this app
+    scope: cloudOnly       # fields set here override the referenced file
+```
+
+```yaml
+# ./api/sp00ky.app.yml
+# yaml-language-server: $schema=https://sp00ky.cloud/schema/app.schema.json
+type: backend
+spec: ./openapi.yml        # paths are relative to THIS file's directory
+method:
+  type: outbox
+  table: job
+  schema: ./src/outbox/api.surql
+deploy:
+  dockerfile: ./Dockerfile
+  port: 3660
+```
+
+The referenced file holds a single app config (the same fields you'd inline under `apps.<name>`) and validates against its own [`app.schema.json`](https://sp00ky.cloud/schema/app.schema.json). Its relative paths are resolved from the service directory, and at load time the whole thing is merged into one effective config. Any field you also set alongside `path` in the root file wins (main overrides sub). The split is entirely optional — leave your apps inline and nothing changes.
 
 ### Client types
 
