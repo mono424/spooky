@@ -1746,9 +1746,14 @@ fn rebase_app_paths(app: &mut serde_yaml::Value, service_rel: &str) {
         rebase_string_at(app, key, service_rel);
     }
     // Nested one-level path fields, keyed by parent object.
+    // NOTE: `dev.file` is deliberately absent — for the docker dev method it is
+    // resolved relative to `dev.workdir` (the CLI runs `docker build -f <file>
+    // .` from workdir), not relative to the manifest dir, so prefixing the
+    // service dir onto it would double-prefix. Only manifest-dir-relative paths
+    // belong here.
     let nested: &[(&str, &[&str])] = &[
         ("method", &["schema"]),
-        ("dev", &["file", "workdir"]),
+        ("dev", &["workdir"]),
         ("deploy", &["dockerfile", "context"]),
     ];
     for (parent, keys) in nested {
@@ -2483,6 +2488,49 @@ apps:
         );
         let deploy = api.deploy.as_ref().unwrap();
         assert_eq!(deploy.dockerfile.as_deref(), Some("api/Dockerfile"));
+    }
+
+    /// The docker dev method's `file` is workdir-relative and must NOT be
+    /// rebased, while `workdir` (manifest-relative) must be. Deploy dockerfile
+    /// is manifest-relative and IS rebased. Regression for a double-prefix bug.
+    #[test]
+    fn docker_dev_file_not_rebased_but_workdir_is() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("svc")).unwrap();
+        std::fs::write(
+            dir.path().join("svc/sp00ky.app.yml"),
+            "\
+type: backend
+scope: devOnly
+dev:
+  type: docker
+  file: svc/Dockerfile
+  workdir: ../..
+deploy:
+  dockerfile: ./Dockerfile
+  context: ../..
+  port: 3663
+",
+        )
+        .unwrap();
+
+        let cfg = parse_config_with_includes("apps:\n  svc:\n    path: ./svc\n", dir.path())
+            .unwrap();
+        let app = cfg.apps.get("svc").unwrap();
+        match app.dev.as_ref().unwrap() {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Docker { file, workdir, .. }) => {
+                // `file` untouched (still relative to workdir).
+                assert_eq!(file, "svc/Dockerfile");
+                // `workdir` ../.. from service dir `svc` → repo root marker.
+                assert_eq!(workdir.as_deref(), Some("svc/../.."));
+            }
+            other => panic!("expected docker dev, got {other:?}"),
+        }
+        // Deploy dockerfile rebased onto the service dir.
+        assert_eq!(
+            app.deploy.as_ref().unwrap().dockerfile.as_deref(),
+            Some("svc/Dockerfile")
+        );
     }
 
     /// A field set alongside `path` in the root file overrides the sub-file.
