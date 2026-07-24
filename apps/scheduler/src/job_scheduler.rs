@@ -432,11 +432,24 @@ async fn recover_table_once(
     //    `created_at + <delay>` (one-shot jobs — keeps a delayed job inside its
     //    delay window from being recovered early). `??` falls back when
     //    next_run_at/delay are unset (NONE); `delay=0` ⇒ ready.
+    //    `long_overdue`: the row has been DUE for longer than the stale
+    //    window. A pending row claimed by a live SSP is normally in flight
+    //    there (enqueued / sleeping through a delay or retry backoff), so
+    //    is_orphaned skips it — but a claim can outlive the in-memory work
+    //    (enqueue marker leaked on an error path, SSP dropped the queue
+    //    without dying). Any healthy in-flight job acts within moments of
+    //    its due time; ten minutes past due and still pending means the
+    //    claim is stale, so re-dispatch regardless of assignee liveness.
+    //    `/job/recover` only acts on pending rows and dedupes via
+    //    mark_enqueued, so a false positive is a no-op.
     let pending_q = format!(
-        "SELECT type::string(id) AS id, assignee FROM {table} \
+        "SELECT type::string(id) AS id, assignee, \
+         ((next_run_at ?? (created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms')))) <= time::now() - {stale}s) AS long_overdue \
+         FROM {table} \
          WHERE status = 'pending' AND updated_at < time::now() - {grace}s \
          AND (next_run_at ?? (created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms')))) <= time::now()",
         grace = JOB_RECOVERY_PENDING_GRACE_SECS,
+        stale = JOB_RECOVERY_STALE_PROCESSING_SECS,
     );
     let mut resp = db.query(&pending_q).await?;
     let pending: Vec<Value> = resp.take(0)?;
@@ -444,7 +457,11 @@ async fn recover_table_once(
         let Some(id) = row.get("id").and_then(|v| v.as_str()) else {
             continue;
         };
-        if is_orphaned(row, &live) {
+        let long_overdue = row.get("long_overdue").and_then(|v| v.as_bool()).unwrap_or(false);
+        if is_orphaned(row, &live) || long_overdue {
+            if long_overdue && !is_orphaned(row, &live) {
+                warn!(job_id = %id, "Cluster job recovery: pending job long overdue despite live assignee — re-dispatching");
+            }
             dispatch_recover(ssp_pool, transport, id).await;
         }
     }

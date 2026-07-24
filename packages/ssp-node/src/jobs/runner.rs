@@ -96,13 +96,21 @@ impl JobRunner {
             info!(job_id = %job.id, "Job killed while pending — failing without execution");
             let error_entry = json!({ "code": "killed", "reason": "killed by operator" });
             self.append_error(&job.id, error_entry).await.ok();
-            self.update_status(&job.id, "failed").await?;
+            // Release the in-flight mark even if the status write fails —
+            // leaking it wedges the id against every future re-enqueue.
+            let status = self.update_status(&job.id, "failed").await;
             self.job_control.clear_enqueued(&job.id);
+            status?;
             return Ok(());
         }
 
-        // Update status to "processing"
-        self.update_status(&job.id, "processing").await?;
+        // Update status to "processing". On failure, release the in-flight
+        // mark before bailing (same leak hazard as above): the row is still
+        // pending in the DB, so the sweep can re-dispatch it cleanly.
+        if let Err(e) = self.update_status(&job.id, "processing").await {
+            self.job_control.clear_enqueued(&job.id);
+            return Err(e);
+        }
 
         // Build URL
         let url = format!("{}{}", job.base_url, job.path);
@@ -196,17 +204,30 @@ impl JobRunner {
     }
 
     /// Handle job failure - retry or mark as failed
+    ///
+    /// The DB bookkeeping in here (error append, retry counter) is
+    /// best-effort: a `?` on those writes used to abort the whole handler,
+    /// which skipped BOTH the retry scheduling and `clear_enqueued` — the job
+    /// then sat marked in-flight on this SSP forever, and every later
+    /// `/job/recover` bounced off `mark_enqueued` as "already queued" (a
+    /// permanently wedged job the sweep could never rescue). The retry budget
+    /// is enforced from the in-memory `job.retries` either way.
     async fn handle_failure(&self, mut job: JobEntry, error_entry: Option<serde_json::Value>) -> Result<()> {
         job.retries += 1;
 
-        // Append error to database if provided
+        // Append error to database if provided (best-effort, see above)
         if let Some(error) = error_entry {
-            self.append_error(&job.id, error).await?;
+            if let Err(e) = self.append_error(&job.id, error).await {
+                warn!(job_id = %job.id, error = %e, "Failed to append job error (continuing)");
+            }
         }
 
         // Persist the incremented attempt count regardless of outcome, so a job
-        // that exhausts its budget ends at retries == max_retries.
-        self.increment_retries(&job.id).await?;
+        // that exhausts its budget ends at retries == max_retries. Best-effort:
+        // the enforced budget is the in-memory job.retries.
+        if let Err(e) = self.increment_retries(&job.id).await {
+            warn!(job_id = %job.id, error = %e, "Failed to persist retry count (continuing)");
+        }
 
         if job.retries < job.max_retries {
             // Calculate delay based on retry strategy
@@ -251,19 +272,24 @@ impl JobRunner {
                 retries = job.retries,
                 "Recurring job exhausted retries this cycle - re-arming for next interval"
             );
-            self.rearm_recurring(&job.id, job.interval_ms).await?;
+            // Release the in-flight mark even if the terminal DB write fails —
+            // leaking it wedges the job against every future recover.
+            let rearm = self.rearm_recurring(&job.id, job.interval_ms).await;
             self.job_control.clear_enqueued(&job.id);
+            rearm?;
         } else {
             warn!(
                 job_id = %job.id,
                 retries = job.retries,
                 "Job exceeded max retries - marking as failed"
             );
-            self.update_status(&job.id, "failed").await?;
             // Terminal: the retry branch above deliberately keeps the enqueued
             // mark (the job stays in flight across the backoff), but here the
-            // job is done, so release it for any future re-enqueue.
+            // job is done, so release it for any future re-enqueue — even when
+            // the status write fails (see doc comment).
+            let status = self.update_status(&job.id, "failed").await;
             self.job_control.clear_enqueued(&job.id);
+            status?;
         }
 
         Ok(())
@@ -345,8 +371,13 @@ pub async fn append_error_helper(db: &dyn Db, job_id: &str, error: Value) -> Res
 /// killed. Written server-side (root) only.
 pub async fn rearm_recurring_helper(db: &dyn Db, job_id: &str, interval_ms: u64) -> Result<()> {
     validate_job_id(job_id)?;
+    // `assignee = NONE`: the claim marker means "this SSP holds the job
+    // in-memory right now". A re-armed row is waiting for the recovery sweep
+    // to dispatch its next run — nobody holds it. Leaving the previous run's
+    // assignee in place makes the sweep's is_orphaned check skip the row
+    // whenever that SSP is still alive, so the next run never fires.
     db.query(
-        "UPDATE type::record($id) SET status = 'pending', retries = 0, \
+        "UPDATE type::record($id) SET status = 'pending', retries = 0, assignee = NONE, \
          next_run_at = time::now() + <duration>(string::concat(<string>$interval, 'ms')), \
          updated_at = time::now() WHERE status = 'processing' RETURN NONE",
         &[("id", json!(job_id)), ("interval", json!(interval_ms))],

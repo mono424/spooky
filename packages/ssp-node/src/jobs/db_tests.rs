@@ -192,6 +192,25 @@ async fn rearm_advances_next_run_and_resets_to_pending() {
 }
 
 #[tokio::test]
+async fn rearm_releases_the_assignee_claim() {
+    // The claim marker means "this SSP holds the job in-memory right now".
+    // A re-armed row waits for the recovery sweep — keeping the previous
+    // run's assignee makes the sweep's is_orphaned check skip the row while
+    // that SSP lives, so the next recurring run would never dispatch.
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "r3", "processing", true, 300_000).await;
+    raw.query("UPDATE job:r3 SET assignee = 'ssp-0'").await.expect("stamp assignee");
+
+    rearm_recurring_helper(port.as_ref(), "job:r3", 300_000).await.unwrap();
+
+    assert_eq!(
+        select_bool(&raw, "SELECT VALUE assignee = NONE FROM ONLY job:r3").await,
+        Some(true),
+        "re-arm must clear the claim so the sweep dispatches the next run"
+    );
+}
+
+#[tokio::test]
 async fn rearm_is_a_noop_when_not_processing() {
     // Guard: never clobber a row that isn't the one this runner just ran
     // (e.g. an operator killed it). Only a `processing` row is re-armed.
