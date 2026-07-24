@@ -322,18 +322,32 @@ const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
 /// reset to pending. Kept well above any realistic job timeout.
 const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
 
-/// Outbox job-table names from `SPKY_JOB_CONFIG` (a JSON object keyed by table
-/// name). Empty when unset/invalid — the sweep then has nothing to do.
+/// Outbox job-table names from `SPKY_JOB_CONFIG`. Accepts BOTH shapes the
+/// platform emits — an object keyed by table name (scheduler-native), or the
+/// SSP routing array `[{name, base_url, table, ...}]` — so a deploy that
+/// copies the SSP value verbatim can never silently disable job recovery.
+/// Empty when unset/invalid — the sweep then has nothing to do.
 fn job_tables_from_env() -> Vec<String> {
-    match std::env::var("SPKY_JOB_CONFIG") {
-        Ok(raw) => match serde_json::from_str::<HashMap<String, Value>>(&raw) {
-            Ok(map) => map.into_keys().collect(),
-            Err(e) => {
-                warn!(error = %e, "SPKY_JOB_CONFIG is not a JSON object; cluster job recovery disabled");
-                Vec::new()
-            }
-        },
-        Err(_) => Vec::new(),
+    let raw = match std::env::var("SPKY_JOB_CONFIG") {
+        Ok(raw) => raw,
+        Err(_) => return Vec::new(),
+    };
+    job_tables_from_json(&raw)
+}
+
+fn job_tables_from_json(raw: &str) -> Vec<String> {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Object(map)) => map.into_iter().map(|(k, _)| k).collect(),
+        Ok(Value::Array(entries)) => entries
+            .iter()
+            .filter_map(|e| e.get("table").and_then(|t| t.as_str()))
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Ok(_) | Err(_) => {
+            warn!("SPKY_JOB_CONFIG is not a JSON object or array; cluster job recovery disabled");
+            Vec::new()
+        }
     }
 }
 
@@ -495,5 +509,37 @@ async fn dispatch_recover(
         Err(e) => {
             warn!(job_id = %id, ssp_id = %ssp_id, error = %e, "Cluster job recovery: /job/recover failed")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::job_tables_from_json;
+
+    #[test]
+    fn object_shape_yields_keys() {
+        let mut tables = job_tables_from_json(r#"{"job":{},"statistics_job":{}}"#);
+        tables.sort();
+        assert_eq!(tables, vec!["job", "statistics_job"]);
+    }
+
+    #[test]
+    fn ssp_array_shape_yields_table_fields() {
+        let mut tables = job_tables_from_json(
+            r#"[{"name":"analytics","base_url":"http://analytics:3662","table":"statistics_job"},
+                {"name":"gamesync","base_url":"http://gamesync:3661","table":"job"},
+                {"name":"broken","base_url":"http://x","table":""}]"#,
+        );
+        tables.sort();
+        assert_eq!(tables, vec!["job", "statistics_job"]);
+    }
+
+    #[test]
+    fn empty_and_invalid_shapes_disable_sweep() {
+        assert!(job_tables_from_json("{}").is_empty());
+        assert!(job_tables_from_json("[]").is_empty());
+        assert!(job_tables_from_json("null").is_empty());
+        assert!(job_tables_from_json("not json").is_empty());
+        assert!(job_tables_from_json("\"job\"").is_empty());
     }
 }
