@@ -154,7 +154,8 @@ fn check_config(config_path: &Path) -> std::result::Result<(Sp00kyConfig, Check)
             ));
         }
     };
-    match serde_yaml::from_str::<Sp00kyConfig>(&content) {
+    let base_dir = config_path.parent().unwrap_or(Path::new("."));
+    match crate::backend::parse_config_with_includes(&content, base_dir) {
         Ok(cfg) => Ok((
             cfg,
             Check::pass("config", Some(format!("{}", config_path.display()))),

@@ -2301,7 +2301,7 @@ fn handle_lint(config_path: &Path) -> Result<()> {
     // 2. Parse YAML
     let content = fs::read_to_string(config_path)
         .context(format!("Failed to read {}", config_path.display()))?;
-    let config: Sp00kyConfig = serde_yaml::from_str(&content)
+    let config: Sp00kyConfig = backend::parse_config_with_includes(&content, base_dir)
         .context(format!("Failed to parse {}", config_path.display()))?;
     println!("  Parsed {} successfully.", config_path.display());
 
@@ -2494,8 +2494,9 @@ fn handle_lint(config_path: &Path) -> Result<()> {
 fn handle_generate(config_path: &Path) -> Result<()> {
     let config_str = fs::read_to_string(config_path)
         .context(format!("Failed to read config file: {:?}", config_path))?;
-    let config: Sp00kyConfig =
-        serde_yaml::from_str(&config_str).context("Failed to parse sp00ky config")?;
+    let base_dir = config_path.parent().unwrap_or(Path::new("."));
+    let config: Sp00kyConfig = backend::parse_config_with_includes(&config_str, base_dir)
+        .context("Failed to parse sp00ky config")?;
 
     if config.client_types.is_empty() {
         anyhow::bail!(
