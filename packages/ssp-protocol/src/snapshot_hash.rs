@@ -52,6 +52,56 @@ where
     format!("{}{}", HASH_PREFIX, hasher.finalize().to_hex())
 }
 
+/// Incremental, page-fed builder producing output bit-identical to
+/// [`hash_table`]. Callers can stream a large table out of the database in
+/// pages (any order) instead of materializing every row as a parsed JSON
+/// `Value` at once: each record is normalized and reduced to its canonical
+/// byte serialization on `add`, which is typically several times smaller
+/// than the `Value` tree it came from. `finish` sorts by normalized id and
+/// hashes with the exact framing `hash_table` uses, so the two are
+/// interchangeable. See `Replica::hash_one_table` (apps/scheduler).
+#[derive(Default)]
+pub struct TableHasher {
+    pairs: Vec<(String, Vec<u8>)>,
+}
+
+impl TableHasher {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add one record — same normalization pipeline as [`hash_table`]
+    /// (id normalization + reserved-key stripping + canonical JSON).
+    pub fn add(&mut self, raw_id: &str, value: Value) {
+        self.pairs.push((
+            normalize_record_id(raw_id),
+            canonical_json(&strip_reserved_keys(value)),
+        ));
+    }
+
+    /// Number of records added so far.
+    pub fn len(&self) -> usize {
+        self.pairs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pairs.is_empty()
+    }
+
+    /// Finalize into the `b3:`-prefixed table hash.
+    pub fn finish(mut self) -> String {
+        self.pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut hasher = blake3::Hasher::new();
+        for (id, canonical) in &self.pairs {
+            hasher.update(id.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(canonical);
+            hasher.update(b"\0");
+        }
+        format!("{}{}", HASH_PREFIX, hasher.finalize().to_hex())
+    }
+}
+
 /// Strip SurrealDB's identifier escaping (`⟨...⟩` and backticks) from a record
 /// id so both hash producers agree on one spelling. Table names that are not
 /// plain identifiers (e.g. the `_00_*` synced meta tables, whose leading
@@ -477,5 +527,43 @@ mod tests {
         let a = vec![("u1".to_string(), json!({"v": 1}))];
         let b = vec![("u1".to_string(), json!({"v": 2}))];
         assert_ne!(xor_table_hash(a), xor_table_hash(b));
+    }
+}
+
+#[cfg(test)]
+mod table_hasher_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample_records() -> Vec<(String, Value)> {
+        vec![
+            (
+                "u2".to_string(),
+                json!({"id": "user:u2", "name": "b", "opt": null, "_00_rv": 7}),
+            ),
+            ("u1".to_string(), json!({"id": "user:u1", "name": "a"})),
+            (
+                "\u{27e8}_00_meta\u{27e9}:x".to_string(),
+                json!({"id": "\u{27e8}_00_meta\u{27e9}:x", "v": [1, {"z": 2, "a": 3}]}),
+            ),
+        ]
+    }
+
+    #[test]
+    fn table_hasher_matches_hash_table_bit_identically() {
+        let full = hash_table(sample_records());
+        // Feed in a different order to prove finish() sorting matches.
+        let mut incremental = TableHasher::new();
+        let mut recs = sample_records();
+        recs.reverse();
+        for (id, v) in recs {
+            incremental.add(&id, v);
+        }
+        assert_eq!(incremental.finish(), full);
+    }
+
+    #[test]
+    fn table_hasher_empty_matches_empty_table_hash() {
+        assert_eq!(TableHasher::new().finish(), empty_table_hash());
     }
 }

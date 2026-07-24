@@ -281,8 +281,79 @@ impl Replica {
         Ok(pairs)
     }
 
+    /// Hash one table by paging it out of the replica instead of a single
+    /// `SELECT * FROM table`. The single-shot form materialized the WHOLE
+    /// table three times over (SDK `Value` → JSON `Value` → pairs vec) on
+    /// every hash recompute; on active tenants that transient became the
+    /// scheduler's dominant anon-heap high-water mark (allocators don't
+    /// return freed pages), pinning the container at its cgroup cap. Paging
+    /// via keyset + `TableHasher` keeps only one page of parsed rows plus
+    /// compact canonical bytes per record in memory, with a bit-identical
+    /// digest (see `TableHasher` in ssp-protocol).
+    ///
+    /// A table that was empty at clone time never gets created in the
+    /// schemaless replica, and SurrealDB v3 errors on SELECT from an
+    /// undefined table — treat that as an empty table instead of failing so
+    /// its hash still lands in the snapshot map (the old path warned
+    /// "Failed to hash table" forever and never hashed such tables).
     async fn hash_one_table(&self, table: &str) -> Result<String> {
-        Ok(snapshot_hash::hash_table(self.snapshot_rows(table).await?))
+        const HASH_PAGE_SIZE: usize = 500;
+        let mut hasher = snapshot_hash::TableHasher::new();
+        let mut after_id: Option<String> = None;
+        loop {
+            let query = keyset_page_query(table, HASH_PAGE_SIZE, after_id.as_deref());
+            let mut response = match self.db.query(&query).await {
+                Ok(r) => r,
+                Err(e) if is_missing_error(&e) => break,
+                Err(e) => {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("hash_one_table: page query failed for '{}'", table)))
+                }
+            };
+            let sdk_val: surrealdb::types::Value = match response.take(0) {
+                Ok(v) => v,
+                Err(e) if is_missing_error(&e) => break,
+                Err(e) => {
+                    return Err(anyhow::Error::from(e).context(format!(
+                        "hash_one_table: take(0) failed for '{}' (after_id={:?})",
+                        table, after_id,
+                    )))
+                }
+            };
+            let rows: Vec<Value> = match sdk_val.into_json_value() {
+                Value::Array(arr) => arr,
+                _ => Vec::new(),
+            };
+            let n = rows.len();
+            // Advance the cursor to this page's last id (page is ORDER BY id)
+            // BEFORE consuming `rows` — mirrors the bootstrap pager above.
+            let next_after = rows
+                .last()
+                .and_then(|row| row.get("id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            for row in rows {
+                let Some(id) = row
+                    .as_object()
+                    .and_then(|obj| obj.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+                else {
+                    continue;
+                };
+                let raw_id = id.strip_prefix(&format!("{}:", table)).unwrap_or(&id).to_string();
+                hasher.add(&raw_id, row);
+            }
+            if n < HASH_PAGE_SIZE {
+                break;
+            }
+            // No usable id to resume from → stop rather than loop forever.
+            match next_after {
+                Some(id) => after_id = Some(id),
+                None => break,
+            }
+        }
+        Ok(hasher.finish())
     }
 
     /// Read combined snapshot state (seq + hashes + tables) from metadata.
