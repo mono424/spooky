@@ -55,6 +55,47 @@ pub fn build_remote_functions_schema(mode: &DeployMode, endpoint: &str, secret: 
     content
 }
 
+/// Platform-written job fields injected onto every outbox table.
+///
+/// The SSP stamps `assignee` (`UPDATE <job> SET assignee = "ssp-0"`) when it
+/// picks up or recovers a job. Users define their outbox tables themselves
+/// (usually SCHEMAFULL) and the documented template never mentioned this
+/// platform-internal field, so the stamp was silently rejected — harmless on
+/// the CREATE-pickup path (which tolerates it), fatal on the recovery path:
+/// `/job/recover` aborts before enqueueing when it can't claim, so a stuck
+/// job is re-dispatched by the sweep every 30s forever without ever running.
+///
+/// `IF NOT EXISTS` (not OVERWRITE) so an explicit user definition is never
+/// clobbered. Emitted by both schema paths: `migrate::apply_internal_schema`
+/// (VM) and `build_server_schema` (free/Cloudflare push).
+pub fn build_outbox_platform_fields<'a, I>(outbox_tables: I) -> String
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut out = String::new();
+    for table in outbox_tables {
+        if table.is_empty() {
+            continue;
+        }
+        out.push_str(&format!(
+            "DEFINE FIELD IF NOT EXISTS assignee ON {} TYPE option<string> \
+             PERMISSIONS FOR select WHERE true FOR create, update WHERE false;\n",
+            table
+        ));
+    }
+    out
+}
+
+/// Collect the outbox table names a processed `BackendProcessor` discovered.
+pub fn outbox_tables(processor: &BackendProcessor) -> Vec<String> {
+    processor
+        .backend_definitions
+        .values()
+        .filter_map(|def| def.outbox_table.clone())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 /// Assembles the complete server schema from all sources.
 ///
 /// This builds the full schema that should be present in SurrealDB:
@@ -82,6 +123,13 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
             backend_processor.process(config_path)?;
             content.push('\n');
             content.push_str(&backend_processor.schema_appends);
+            // Platform job fields on outbox tables (see
+            // build_outbox_platform_fields for why).
+            let tables = outbox_tables(&backend_processor);
+            content.push('\n');
+            content.push_str(&build_outbox_platform_fields(
+                tables.iter().map(String::as_str),
+            ));
         }
     }
 
@@ -599,5 +647,28 @@ mod tests {
                 && sql.contains("http::post($sp00ky_endpoint + '/ingest'"),
             "pushed free-plan schema is missing the /ingest events → realtime would be broken"
         );
+    }
+}
+
+#[cfg(test)]
+mod outbox_platform_field_tests {
+    use super::build_outbox_platform_fields;
+
+    #[test]
+    fn emits_if_not_exists_assignee_per_table() {
+        let sql = build_outbox_platform_fields(["job", "statistics_job"]);
+        assert_eq!(sql.matches("DEFINE FIELD IF NOT EXISTS assignee ON ").count(), 2);
+        assert!(sql.contains("ON job TYPE option<string>"));
+        assert!(sql.contains("ON statistics_job TYPE option<string>"));
+        // Clients must never write the claim marker.
+        assert!(sql.contains("FOR create, update WHERE false"));
+        // OVERWRITE would clobber a user's own definition — must not appear.
+        assert!(!sql.contains("OVERWRITE"));
+    }
+
+    #[test]
+    fn empty_input_emits_nothing() {
+        assert!(build_outbox_platform_fields([]).is_empty());
+        assert!(build_outbox_platform_fields([""]).is_empty());
     }
 }

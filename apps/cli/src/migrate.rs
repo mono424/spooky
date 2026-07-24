@@ -774,6 +774,25 @@ pub fn apply_internal_schema(
     );
     internal_sql.push_str(&sp00ky_events);
 
+    // 3c. Platform job fields on outbox tables. The SSP stamps `assignee`
+    // when it claims a job on pickup/recover; a SCHEMAFULL user outbox table
+    // without the field rejects the stamp and the recovery sweep can then
+    // never actually recover a stuck job (it re-dispatches every 30s
+    // forever). IF NOT EXISTS so a user's own definition always wins — and
+    // it must stay AFTER the make_defines_overwrite call above, which would
+    // corrupt an IF NOT EXISTS clause with OVERWRITE.
+    let outbox = crate::schema_builder::outbox_tables(&backend_processor);
+    if !outbox.is_empty() {
+        println!(
+            "  + Injecting platform job fields on outbox table(s): {}",
+            outbox.join(", ")
+        );
+        internal_sql.push('\n');
+        internal_sql.push_str(&crate::schema_builder::build_outbox_platform_fields(
+            outbox.iter().map(String::as_str),
+        ));
+    }
+
     // 4. Skip when the assembled schema is byte-identical to the last applied one.
     // Every statement is `DEFINE ... OVERWRITE`, so re-running is safe but forces
     // SurrealDB to re-do all that DDL (meta tables + 2 events per user table) —
