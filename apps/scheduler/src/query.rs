@@ -100,35 +100,63 @@ async fn register_query(
     Json(request): Json<ViewRegisterRequest>,
 ) -> Result<Json<QueryAssignment>, (StatusCode, String)> {
     let query_id = request.id.clone();
-    info!("Registering query: {}", query_id);
 
-    // Select SSP based on load balancing strategy
-    let (ssp_id, ssp_url) = {
+    // Clients re-issue `fn::query::register` for live views on reconnect and
+    // keepalive, so re-registration of an already-assigned query is the
+    // COMMON case. Keep it sticky: forward to the SSP that already owns the
+    // view (refreshing its metadata/TTL there) instead of re-running
+    // selection. Re-selecting round-robined the same view onto a different
+    // SSP on every call (ssp-0 ↔ ssp-1 ping-pong) and incremented the new
+    // SSP's query_count without decrementing the old one, skewing
+    // least-queries balancing forever.
+    let previous = state.query_tracker.get_assignment(&query_id).await;
+
+    // `sticky` is true when we reuse the existing assignment — query_count
+    // already accounts for this query there, so no increment.
+    let (sticky, ssp_id, ssp_url) = {
         let mut pool = state.ssp_pool.write().await;
-        match pool.select_for_query() {
-            Some(id) => {
-                // Get SSP URL before incrementing count
-                let url = pool.get(&id)
-                    .ok_or_else(|| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Selected SSP not found in pool".to_string(),
-                        )
-                    })?
-                    .url
-                    .clone();
-                pool.increment_query_count(&id);
-                (id, url)
+        let sticky_target = previous.as_ref().and_then(|prev| {
+            if pool.is_ready(prev) {
+                pool.get(prev).map(|s| (prev.clone(), s.url.clone()))
+            } else {
+                None
             }
-            None => {
-                error!("No ready SSP available for query {}", query_id);
-                return Err((
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "No SSP available".to_string(),
-                ));
-            }
+        });
+        match sticky_target {
+            Some((id, url)) => (true, id, url),
+            None => match pool.select_for_query() {
+                Some(id) => {
+                    // Get SSP URL before incrementing count
+                    let url = pool.get(&id)
+                        .ok_or_else(|| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Selected SSP not found in pool".to_string(),
+                            )
+                        })?
+                        .url
+                        .clone();
+                    // Genuine (re)assignment: move the count with the query.
+                    if let Some(prev) = &previous {
+                        pool.decrement_query_count(prev);
+                    }
+                    pool.increment_query_count(&id);
+                    (false, id, url)
+                }
+                None => {
+                    error!("No ready SSP available for query {}", query_id);
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "No SSP available".to_string(),
+                    ));
+                }
+            },
         }
     };
+    if sticky {
+        // debug: clients re-register every keepalive — info would spam.
+        tracing::debug!("Query {} already assigned to ready SSP {} — sticky re-register", query_id, ssp_id);
+    }
 
     // Assign query to SSP in tracker
     state.query_tracker.assign(query_id.clone(), ssp_id.clone()).await;
@@ -162,7 +190,9 @@ async fn register_query(
             .as_secs(),
     };
 
-    info!("Assigned query {} to SSP {}", assignment.query_id, assignment.ssp_id);
+    if !sticky {
+        info!("Assigned query {} to SSP {}", assignment.query_id, assignment.ssp_id);
+    }
     Ok(Json(assignment))
 }
 

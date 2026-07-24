@@ -928,6 +928,42 @@ mod query_tests {
     }
 
     #[tokio::test]
+    async fn query_reregister_is_sticky_and_count_stable() {
+        let mock_a = MockSsp::start().await;
+        let mock_b = MockSsp::start().await;
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-0", &mock_a.addr).await;
+        h.add_ready_ssp("ssp-1", &mock_b.addr).await;
+
+        let payload = json!({
+            "id": "q1",
+            "surql": "SELECT * FROM user",
+            "clientId": "c1"
+        });
+        let (status, body) = post_json(h.query_router(), "/view/register", &payload).await;
+        assert_eq!(status, StatusCode::OK);
+        let first_ssp = body["ssp_id"].as_str().unwrap().to_string();
+
+        // Clients re-issue register on reconnect/keepalive. The assignment
+        // must stay sticky on the owning SSP instead of round-robining onto
+        // the other one (the old behavior ping-ponged ssp-0 ↔ ssp-1 every
+        // few seconds under a client keepalive loop)...
+        for _ in 0..3 {
+            let (status, body) = post_json(h.query_router(), "/view/register", &payload).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["ssp_id"].as_str().unwrap(), first_ssp);
+        }
+
+        // ...and query_count must not drift upward (the old path incremented
+        // the newly selected SSP on every call without decrementing the
+        // previous owner, permanently skewing least-queries balancing).
+        let pool = h.ssp_pool.read().await;
+        assert_eq!(pool.get(&first_ssp).unwrap().query_count, 1);
+        let other = if first_ssp == "ssp-0" { "ssp-1" } else { "ssp-0" };
+        assert_eq!(pool.get(other).unwrap().query_count, 0);
+    }
+
+    #[tokio::test]
     async fn query_unregister_not_found() {
         let h = TestHarness::new().await;
         let app = h.query_router();
