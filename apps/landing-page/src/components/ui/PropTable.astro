@@ -3,24 +3,26 @@ const { props } = Astro.props;
 // Expects props = [{ name: 'variant', type: 'string', default: '"default"', desc: '...' }]
 ---
 
-<div class="overflow-x-auto my-8 border border-border rounded-lg">
-  <table class="w-full text-left text-sm">
-    <thead class="bg-surface text-text-main border-b border-border">
+<div class="glass-panel overflow-x-auto my-8">
+  <table class="w-full text-left text-sm my-0 border-separate border-spacing-0">
+    <thead class="bg-white/[0.05] text-text-tertiary">
       <tr>
-        <th class="p-3 font-medium">Prop</th>
-        <th class="p-3 font-medium">Type</th>
-        <th class="p-3 font-medium">Default</th>
-        <th class="p-3 font-medium">Description</th>
+        <th class="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.07em]">Prop</th>
+        <th class="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.07em]">Type</th>
+        <th class="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.07em]">Default</th>
+        <th class="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-[0.07em]">
+          Description
+        </th>
       </tr>
     </thead>
-    <tbody class="divide-y divide-border">
+    <tbody class="[&>tr:nth-child(even)]:bg-white/[0.02]">
       {
         props.map((prop) => (
-          <tr class="text-text-muted">
-            <td class="p-3 font-mono text-primary">{prop.name}</td>
-            <td class="p-3 font-mono text-xs">{prop.type}</td>
-            <td class="p-3 font-mono text-xs opacity-70">{prop.default}</td>
-            <td class="p-3">{prop.desc}</td>
+          <tr class="text-text-tertiary transition-colors hover:bg-white/[0.04]">
+            <td class="px-4 py-3 align-top font-mono text-brand-400">{prop.name}</td>
+            <td class="px-4 py-3 align-top font-mono text-xs text-text-secondary">{prop.type}</td>
+            <td class="px-4 py-3 align-top font-mono text-xs text-text-muted">{prop.default}</td>
+            <td class="px-4 py-3 align-top leading-relaxed">{prop.desc}</td>
           </tr>
         ))
       }

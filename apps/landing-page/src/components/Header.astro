@@ -3,12 +3,14 @@ import GitHubStars from './GitHubStars';
 import { Search } from './Search';
 ---
 
-<header class="h-16 border-b border-border bg-background/80 backdrop-blur sticky top-0 z-50">
+<header
+  class="h-16 bg-background/75 shadow-[0_10px_30px_-18px_rgba(0,0,0,0.9)] backdrop-blur-xl backdrop-saturate-150 sticky top-0 z-50"
+>
   <div class="max-w-[1600px] mx-auto h-full flex items-center justify-between px-6">
     <div class="flex items-center gap-4">
       <button
         id="mobile-menu-trigger"
-        class="lg:hidden p-2 -ml-2 text-text-muted hover:text-text-main hover:bg-surface rounded-md transition-colors"
+        class="lg:hidden p-2 -ml-2 text-text-muted hover:text-text-primary hover:bg-white/[0.06] rounded-lg transition-colors"
         aria-label="Toggle menu"
       >
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -82,11 +82,11 @@ export const Search = () => {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 rounded-md transition-colors w-full md:w-64"
+        className="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-400 bg-white/[0.04] border border-white/[0.08] shadow-glass-inset hover:bg-white/[0.07] hover:text-zinc-200 rounded-lg transition-colors w-full md:w-64"
       >
         <SearchIcon className="w-4 h-4" />
         <span className="hidden md:inline">Search...</span>
-        <kbd className="hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-mono text-zinc-500 bg-zinc-800 rounded border border-zinc-700 ml-auto">
+        <kbd className="hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-mono text-zinc-400 bg-white/[0.06] rounded-md border border-white/10 ml-auto">
           <span className="text-xs">⌘</span>K
         </kbd>
       </button>
@@ -95,15 +95,15 @@ export const Search = () => {
         createPortal(
           <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[10vh] px-4 font-sans">
             <div
-              className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+              className="fixed inset-0 bg-black/50 backdrop-blur-md transition-opacity"
               onClick={() => setOpen(false)}
             />
 
             <Command
-              className="relative w-full max-w-3xl overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-2xl animate-in fade-in zoom-in-95 duration-200"
+              className="glass-float relative w-full max-w-3xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
               shouldFilter={false} // We rely on Pagefind filtering
             >
-              <div className="flex items-center border-b border-zinc-800 px-4">
+              <div className="flex items-center px-4">
                 <SearchIcon className="mr-2 h-5 w-5 text-zinc-500 shrink-0" />
                 <Command.Input
                   value={query}
@@ -115,7 +115,7 @@ export const Search = () => {
                 {loading && <Loader2 className="ml-2 h-4 w-4 animate-spin text-zinc-500" />}
                 <button
                   onClick={() => setOpen(false)}
-                  className="ml-2 p-1 text-zinc-500 hover:text-zinc-300 bg-zinc-900 border border-zinc-800 rounded text-xs px-2"
+                  className="ml-2 p-1 text-zinc-400 hover:text-zinc-200 bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 rounded-md text-xs px-2 transition-colors"
                 >
                   ESC
                 </button>
@@ -164,7 +164,7 @@ export const Search = () => {
                       window.location.href = finalUrl;
                       setOpen(false);
                     }}
-                    className="relative flex select-none items-center rounded-sm px-3 py-3 text-sm outline-none aria-selected:bg-zinc-900 aria-selected:text-white data-[disabled]:pointer-events-none data-[disabled]:opacity-50 text-zinc-400 group transition-colors cursor-pointer"
+                    className="relative flex select-none items-center rounded-lg px-3 py-3 text-sm outline-none aria-selected:bg-white/[0.07] aria-selected:text-white data-[disabled]:pointer-events-none data-[disabled]:opacity-50 text-zinc-400 group transition-colors cursor-pointer"
                   >
                     <FileText className="mr-3 h-4 w-4 text-zinc-500 group-aria-selected:text-zinc-300" />
                     <div className="flex flex-col gap-0.5 overflow-hidden">

@@ -8,6 +8,90 @@
 
 body {
   @apply bg-background text-text-primary;
+  /* Docs-only reading stack: SF Pro on Apple platforms, Inter elsewhere. Set here
+     rather than in tailwind.config so marketing keeps its Inter-first stack. */
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Inter', 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* Ambient brand glow, fixed so it doesn't scroll with content */
+  background-image:
+    radial-gradient(600px 400px at 15% -5%, rgba(124, 106, 239, 0.1), transparent 70%),
+    radial-gradient(900px 500px at 95% 4%, rgba(124, 106, 239, 0.05), transparent 70%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
+@layer components {
+  /* Static glass: surfaces sitting on the opaque page background. No blur —
+     there is nothing behind them to sample, so it would cost GPU for nothing. */
+  .glass-panel {
+    @apply rounded-glass border border-white/[0.08] bg-white/[0.03] shadow-glass-inset;
+  }
+
+  /* Floating glass: surfaces that page content actually passes behind. */
+  .glass-float {
+    @apply rounded-glass border border-white/[0.12] bg-[#141416]/85 shadow-glass-lg backdrop-blur-2xl backdrop-saturate-150;
+  }
+}
+
+@layer base {
+  :focus-visible {
+    outline: 2px solid rgba(124, 106, 239, 0.6);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Safari below 18 only supports the prefixed property and autoprefixer does not
+   run on this bundle, so mirror the composed value Tailwind builds. */
+[class*='backdrop-blur'],
+.glass-float {
+  -webkit-backdrop-filter: var(--tw-backdrop-blur) var(--tw-backdrop-brightness)
+    var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate)
+    var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate)
+    var(--tw-backdrop-sepia);
+}
+
+/* Plain markdown fences emit Shiki dual-theme output, which follows the OS
+   colour scheme. The docs are dark-only, so pin them to the dark palette and
+   give them the same glass surface as <CodeBlock>. */
+.astro-code,
+.astro-code span {
+  color: var(--shiki-dark) !important;
+}
+.astro-code {
+  background-color: rgba(18, 18, 18, 0.7) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  padding: 1rem 1.125rem;
+}
+
+/* Mermaid diagrams get the same glass frame as code blocks. rx/ry are CSS-settable
+   SVG geometry properties, which is the only way to round mermaid's nodes. */
+.mermaid {
+  @apply glass-panel my-6 overflow-x-auto p-4 text-center;
+}
+.mermaid svg {
+  @apply mx-auto h-auto max-w-full;
+}
+.mermaid .node rect,
+.mermaid .node polygon,
+.mermaid .cluster rect,
+.mermaid .actor {
+  rx: 10px;
+  ry: 10px;
 }
 
 /* Custom Scrollbar to match dark theme */
@@ -19,5 +103,5 @@ body {
   @apply bg-transparent;
 }
 ::-webkit-scrollbar-thumb {
-  @apply bg-border rounded-full hover:bg-text-muted;
+  @apply rounded-full bg-white/10 hover:bg-white/20;
 }

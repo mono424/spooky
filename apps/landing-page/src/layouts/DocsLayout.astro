@@ -41,7 +41,40 @@ const activeGroup = nav.find((g: any) =>
     <link rel="help" type="text/markdown" href="/llm.txt" title="LLM Info" />
     <script>
       import mermaid from 'mermaid';
-      mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'base',
+        fontFamily: 'Inter, sans-serif',
+        themeVariables: {
+          background: 'transparent',
+          primaryColor: '#17171a',
+          primaryTextColor: '#f4f4f5',
+          primaryBorderColor: 'rgba(255,255,255,0.14)',
+          secondaryColor: '#1d1d21',
+          secondaryTextColor: '#f4f4f5',
+          secondaryBorderColor: 'rgba(255,255,255,0.1)',
+          tertiaryColor: 'rgba(255,255,255,0.03)',
+          tertiaryTextColor: '#a1a1aa',
+          tertiaryBorderColor: 'rgba(255,255,255,0.08)',
+          clusterBkg: 'rgba(255,255,255,0.03)',
+          clusterBorder: 'rgba(255,255,255,0.08)',
+          lineColor: '#9b8aff',
+          textColor: '#f4f4f5',
+          mainBkg: '#17171a',
+          nodeBorder: 'rgba(255,255,255,0.14)',
+          edgeLabelBackground: '#101012',
+          actorBkg: '#17171a',
+          actorBorder: 'rgba(255,255,255,0.14)',
+          actorTextColor: '#f4f4f5',
+          signalColor: '#9b8aff',
+          signalTextColor: '#f4f4f5',
+          labelBoxBkgColor: '#17171a',
+          labelBoxBorderColor: 'rgba(255,255,255,0.14)',
+          noteBkgColor: 'rgba(124,106,239,0.12)',
+          noteBorderColor: 'rgba(155,138,255,0.3)',
+          noteTextColor: '#f4f4f5',
+        },
+      });
 
       async function renderMermaid() {
         // Query ALL code blocks to be safe
@@ -96,24 +129,24 @@ const activeGroup = nav.find((g: any) =>
   <body
     transition:name="root"
     transition:animate="none"
-    class="bg-background text-text-secondary font-sans antialiased selection:bg-primary/20"
+    class="bg-background text-text-secondary antialiased selection:bg-brand-500/30"
   >
     <Header transition:persist />
 
     <div class="max-w-[1600px] mx-auto flex w-full min-h-screen">
       <aside
-        class="hidden lg:block w-[280px] shrink-0 border-r border-border h-[calc(100vh-64px)] sticky top-16 overflow-y-auto py-8 pl-6 pr-4"
+        class="hidden lg:block w-[280px] shrink-0 h-[calc(100vh-64px)] sticky top-16 overflow-y-auto py-8 pl-6 pr-4"
       >
         <Sidebar transition:persist />
       </aside>
 
       <main class="flex-1 min-w-0 py-8 px-6 lg:px-12">
-        <div class="prose prose-invert max-w-3xl w-full">
+        <div class="prose prose-invert prose-docs max-w-3xl w-full">
           {/* Breadcrumbs */}
           <nav
             class="flex items-center text-sm text-text-muted mb-6 overflow-x-auto whitespace-nowrap"
           >
-            <a href={`${basePath}/docs`} class="hover:text-primary transition-colors">Docs</a>
+            <a href={`${basePath}/docs`} class="hover:text-text-primary transition-colors">Docs</a>
             {
               activeGroup && (
                 <>
@@ -124,7 +157,7 @@ const activeGroup = nav.find((g: any) =>
             }
           </nav>
 
-          <h1 class="text-4xl tracking-tight mb-4">{title}</h1>
+          <h1 class="text-4xl font-semibold tracking-tight mb-4">{title}</h1>
           <p class="text-lg text-text-muted leading-relaxed mb-8">
             <slot name="description" />
           </p>
@@ -142,13 +175,15 @@ const activeGroup = nav.find((g: any) =>
       <!-- Mobile Menu Overlay -->
       <div
         id="mobile-menu"
-        class="fixed inset-0 z-40 bg-background/95 backdrop-blur-sm lg:hidden hidden transition-opacity"
+        class="fixed inset-x-0 bottom-0 top-16 z-40 bg-black/50 backdrop-blur-md lg:hidden hidden transition-opacity"
       >
-        <div class="p-6 h-full overflow-y-auto">
+        <div
+          class="h-full w-[85%] max-w-[320px] overflow-y-auto bg-[#0c0c0e]/95 p-6 shadow-glass-lg backdrop-blur-2xl backdrop-saturate-150"
+        >
           <div class="flex justify-end mb-4">
             <button
               id="mobile-menu-close"
-              class="p-2 text-text-muted hover:text-text-primary rounded-md"
+              class="p-2 text-text-muted hover:text-text-primary hover:bg-white/[0.06] rounded-lg transition-colors"
             >
               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -179,6 +214,13 @@ const activeGroup = nav.find((g: any) =>
 
             if (btn) btn.addEventListener('click', toggleMenu);
             if (closeBtn) closeBtn.addEventListener('click', toggleMenu);
+
+            // Tapping the dimmed area outside the sheet closes the drawer
+            if (menu) {
+              menu.addEventListener('click', (e) => {
+                if (e.target === menu) toggleMenu();
+              });
+            }
 
             // Close on navigation
             if (menu) {

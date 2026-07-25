@@ -9,52 +9,24 @@ interface Props {
 
 const { code, lang = 'bash', fileName } = Astro.props;
 
-const languageMap: Record<string, string> = {
-  typescript: 'TypeScript',
-  ts: 'TypeScript',
-  javascript: 'JavaScript',
-  js: 'JavaScript',
-  sql: 'sql',
-  bash: 'Bash',
-  sh: 'Shell',
-  json: 'JSON',
-  html: 'HTML',
-  css: 'CSS',
-};
-
-const displayName = languageMap[lang.toLowerCase()] || lang;
 ---
 
 <div
-  class="code-block-wrapper my-6 rounded-lg border border-border bg-[#0c0c0e] overflow-hidden group max-w-full"
+  class="code-block-wrapper glass-panel my-6 bg-[#0c0c0e]/80 shadow-glass overflow-hidden group max-w-full"
 >
-  {/* Header: Only shows if fileName is provided */}
-  {
-    fileName && (
-      <div class="flex items-center justify-between px-4 py-3 border-b border-border bg-[#121212]">
-        <span class="text-xs font-mono text-text-muted">{fileName}</span>
-
-        {/* Mac-style window dots */}
-        <div class="flex gap-1.5 opacity-50">
-          <div class="w-2.5 h-2.5 rounded-full bg-[#27272a]" />
-          <div class="w-2.5 h-2.5 rounded-full bg-[#27272a]" />
-          <div class="w-2.5 h-2.5 rounded-full bg-[#27272a]" />
-        </div>
-      </div>
-    )
-  }
-
   <div class="relative">
-    {/* Language Label */}
-    <span
-      class="absolute top-3 right-12 px-2 py-1 text-[10px] font-mono font-medium text-text-muted uppercase tracking-wider opacity-0 group-hover:opacity-100 transition-opacity duration-200 select-none"
-    >
-      {displayName}
-    </span>
+    {/* Filename as a plain label — no window frame, no divider */}
+    {
+      fileName && (
+        <span class="absolute top-3.5 left-4 font-mono text-xs text-text-muted select-none">
+          {fileName}
+        </span>
+      )
+    }
 
     {/* Copy Button */}
     <button
-      class="copy-btn absolute top-3 right-3 p-2 rounded-md bg-surface/50 border border-border/50 text-text-muted opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-surface hover:text-text-main focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-primary/50 backdrop-blur-sm z-10"
+      class="copy-btn absolute top-3 right-3 p-2 rounded-lg bg-white/[0.06] border border-white/10 text-text-muted opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-white/[0.12] hover:text-text-primary focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-brand-500/50 backdrop-blur-md z-10"
       aria-label="Copy to clipboard"
       data-code={code}
     >
@@ -79,13 +51,14 @@ const displayName = languageMap[lang.toLowerCase()] || lang;
 
     {/* The Actual Code */}
     <div
-      class="code-content p-4 text-sm font-mono leading-relaxed overflow-x-auto custom-scrollbar"
+      class:list={[
+        'code-content px-4 pb-4 text-sm font-mono leading-relaxed overflow-x-auto custom-scrollbar',
+        fileName ? 'pt-11' : 'pt-4',
+      ]}
     >
       {
-        /* Use 'github-dark' or 'poimandres' for a good dark theme. 
-         We wrap it in a div that handles the background color, 
-         so we make Shiki transparent below.
-      */
+        /* The wrapper owns the background, so Shiki is made transparent in the
+           global styles below. */
       }
       <Code
         code={code}
@@ -127,12 +100,19 @@ const displayName = languageMap[lang.toLowerCase()] || lang;
   /* Important: We only override the background-color here.
      We removed the 'color' override so the syntax highlighting shows through.
   */
-  .code-content {
-    white-space: pre !important; /* Preserve all whitespace and indentation */
-  }
+  /* No white-space: pre here — the wrapper's own newlines around <Code> would
+     render as blank lines. The inner <pre> already preserves indentation. */
 
-  .astro-code {
+  /* Scoped to .code-content so it beats the plain-fence glass surface that
+     docs.css puts on a bare .astro-code — here the wrapper supplies the frame. */
+  .code-content .astro-code {
     background-color: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    /* .code-content supplies the padding; drop the prose <pre> box entirely */
+    margin: 0 !important;
+    padding: 0 !important;
     overflow-x: auto !important; /* Scroll horizontally on narrow screens */
     white-space: pre !important; /* Preserve indentation and whitespace */
   }
@@ -151,11 +131,6 @@ const displayName = languageMap[lang.toLowerCase()] || lang;
     white-space: pre !important; /* Preserve whitespace in syntax highlighted spans */
   }
 
-  /* Apply Shiki's dark theme colors from span-level variables */
-  .astro-code span {
-    color: var(--shiki-dark) !important;
-  }
-
   /* Custom Scrollbar */
   .custom-scrollbar::-webkit-scrollbar {
     height: 8px;
@@ -164,10 +139,10 @@ const displayName = languageMap[lang.toLowerCase()] || lang;
     background: transparent;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background-color: #27272a;
-    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background-color: #3f3f46;
+    background-color: rgba(255, 255, 255, 0.2);
   }
 </style>

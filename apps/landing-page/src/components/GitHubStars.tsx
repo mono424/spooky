@@ -37,7 +37,7 @@ export default function GitHubStarsBrutalist() {
       href="https://github.com/mono424/sp00ky"
       target="_blank"
       rel="noreferrer"
-      className="group inline-flex items-center gap-2 border border-white/20 bg-black px-3 py-1.5 font-mono text-xs font-bold uppercase tracking-wider text-white transition-all hover:bg-white hover:text-black hover:shadow-[4px_4px_0px_0px_rgba(255,255,255,0.5)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none"
+      className="group inline-flex items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 font-mono text-xs font-medium uppercase tracking-wider text-zinc-300 shadow-glass-inset transition-colors hover:bg-white/[0.08] hover:text-white"
     >
       {/* Content Container */}
       <span className="flex items-center gap-2">
@@ -45,12 +45,12 @@ export default function GitHubStarsBrutalist() {
 
         <span>Github</span>
 
-        <span className="text-neutral-600 transition-colors group-hover:text-black/40">|</span>
+        <span className="text-white/20">|</span>
 
         {formattedStars ? (
           <span className="flex items-center gap-1">
             {/* Using a distinct color for the star prevents it from blending in */}
-            <span className="text-yellow-500 group-hover:text-black">★</span>
+            <span className="text-amber-400">★</span>
             <span className="tabular-nums">{formattedStars}</span>
           </span>
         ) : (

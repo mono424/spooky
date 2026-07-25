@@ -31,7 +31,7 @@ const currentPath = Astro.url.pathname;
             />
           </svg>
         </summary>
-        <ul class="space-y-0.5 relative border-l border-white/10 ml-2 pl-2">
+        <ul class="space-y-0.5 relative ml-2 pl-2">
           {group.links.map((link) => {
             const isActive =
               currentPath === link.href ||
@@ -41,13 +41,13 @@ const currentPath = Astro.url.pathname;
                 <a
                   href={link.href}
                   class:list={[
-                    'flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm transition-colors border border-transparent',
+                    'flex items-center gap-2 px-2.5 py-1.5 text-sm rounded-lg transition-colors border border-transparent',
                     isActive
-                      ? 'text-white bg-white/5 font-medium border-white/10'
-                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5',
+                      ? 'text-white bg-white/[0.06] font-medium border-white/[0.08] shadow-glass-inset'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.04]',
                   ]}
                 >
-                  {isActive && <span class="w-1.5 h-1.5 bg-white rounded-full" />}
+                  {isActive && <span class="w-1.5 h-1.5 bg-brand-400 rounded-full" />}
                   <span>{link.text}</span>
                   {link.experimental && (
                     <svg

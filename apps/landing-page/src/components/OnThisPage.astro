@@ -14,14 +14,14 @@ const { headings = [] } = Astro.props;
 
 <div class="text-sm">
   <h4 class="font-medium text-text-primary mb-4 pl-4">On this page</h4>
-  <ul class="space-y-2 border-l border-border">
+  <ul class="space-y-2">
     {
       headings.map((h) => (
         <li>
           <a
             href={`#${h.slug}`}
             class:list={[
-              'block text-text-tertiary hover:text-primary transition-colors truncate border-l-2 border-transparent -ml-[1px]',
+              'block text-text-tertiary hover:text-text-primary transition-colors truncate',
               {
                 'pl-4': h.depth === 2,
                 'pl-6': h.depth === 3,
@@ -50,11 +50,11 @@ const { headings = [] } = Astro.props;
             const id = entry.target.id;
             links.forEach((link) => {
               if (link.getAttribute('data-heading-link') === id) {
-                link.classList.add('text-primary', 'border-primary', 'font-medium');
-                link.classList.remove('text-text-tertiary', 'border-transparent');
+                link.classList.add('text-brand-400', 'font-medium');
+                link.classList.remove('text-text-tertiary');
               } else {
-                link.classList.remove('text-primary', 'border-primary', 'font-medium');
-                link.classList.add('text-text-tertiary', 'border-transparent');
+                link.classList.remove('text-brand-400', 'font-medium');
+                link.classList.add('text-text-tertiary');
               }
             });
           }

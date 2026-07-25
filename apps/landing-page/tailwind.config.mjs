@@ -109,6 +109,14 @@ export default {
       transitionDuration: {
         '400': '400ms',
       },
+      borderRadius: {
+        glass: '14px',
+      },
+      boxShadow: {
+        'glass-inset': 'inset 0 1px 0 0 rgba(255,255,255,0.06)',
+        'glass': 'inset 0 1px 0 0 rgba(255,255,255,0.06), 0 8px 32px -8px rgba(0,0,0,0.5)',
+        'glass-lg': 'inset 0 1px 0 0 rgba(255,255,255,0.08), 0 24px 64px -12px rgba(0,0,0,0.6)',
+      },
       typography: (theme) => ({
         DEFAULT: {
           css: {
@@ -139,6 +147,79 @@ export default {
               backgroundColor: '#121212',
               border: `1px solid ${theme('colors.border')}`,
               borderRadius: '0.5rem',
+            },
+          },
+        },
+        // Docs-only glass/typography polish. Marketing pages use plain `prose`,
+        // so keep these off DEFAULT and opt in with `prose-docs`.
+        docs: {
+          css: {
+            // Slightly larger type and looser leading than marketing prose — docs
+            // are read for minutes at a time, not skimmed.
+            fontSize: '1.0625rem',
+            lineHeight: '1.75',
+            h1: { letterSpacing: '-0.025em' },
+            h2: { fontWeight: '600', letterSpacing: '-0.02em' },
+            h3: { fontWeight: '600', letterSpacing: '-0.015em' },
+            h4: { fontWeight: '600' },
+            code: {
+              backgroundColor: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.06)',
+              padding: '0.15em 0.4em',
+              borderRadius: '0.375rem',
+              fontSize: '0.875em',
+            },
+            // Re-assert the reset: this block is emitted after DEFAULT's
+            // `pre code` rule, so without it every code line gets a chip.
+            'pre code': {
+              backgroundColor: 'transparent',
+              border: '0',
+              borderRadius: '0',
+              padding: '0',
+              fontSize: 'inherit',
+            },
+            pre: {
+              backgroundColor: 'rgba(18,18,18,0.7)',
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: '14px',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.05)',
+            },
+            // No hard rules: <hr> becomes a hairline that fades out at both ends.
+            hr: {
+              border: '0',
+              height: '1px',
+              background:
+                'linear-gradient(to right, transparent, rgba(255,255,255,0.1), transparent)',
+              marginTop: '4em',
+              marginBottom: '4em',
+            },
+            // Markdown tables: rows read by a zebra tint and spacing, never by lines.
+            table: {
+              borderCollapse: 'separate',
+              borderSpacing: '0',
+              fontSize: '0.9em',
+              lineHeight: '1.6',
+            },
+            thead: { borderBottomWidth: '0', backgroundColor: 'rgba(255,255,255,0.05)' },
+            'thead th': {
+              padding: '0.7em 1em',
+              fontSize: '0.78em',
+              fontWeight: '600',
+              textTransform: 'uppercase',
+              letterSpacing: '0.07em',
+              color: theme('colors.text.tertiary'),
+              verticalAlign: 'middle',
+            },
+            'thead th:first-child': { borderTopLeftRadius: '10px', borderBottomLeftRadius: '10px' },
+            'thead th:last-child': { borderTopRightRadius: '10px', borderBottomRightRadius: '10px' },
+            'tbody tr': { borderBottomWidth: '0' },
+            'tbody tr:nth-child(even)': { backgroundColor: 'rgba(255,255,255,0.02)' },
+            'tbody td': { padding: '0.75em 1em', verticalAlign: 'top' },
+            'tbody td:first-child': { color: theme('colors.text.primary') },
+            'tbody tr td:first-child': { borderTopLeftRadius: '10px', borderBottomLeftRadius: '10px' },
+            'tbody tr td:last-child': {
+              borderTopRightRadius: '10px',
+              borderBottomRightRadius: '10px',
             },
           },
         },
