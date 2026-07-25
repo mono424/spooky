@@ -1,10 +1,13 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
-title: Flutter Guide
+title: Flutter guide
+description: Generate Dart models from your schema and build an offline-first mobile app.
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Note from '../../../components/ui/Note.astro';
+import CardGrid from '../../../components/ui/CardGrid.astro';
+import LinkCard from '../../../components/ui/LinkCard.astro';
 
 export const code4 = `# Recommended: drive from sp00ky.yml's clientTypes entries
 spky generate
@@ -288,8 +291,33 @@ Here's how to use the database in a Flutter widget:
   code={code1}
 />
 
-## Next Steps
+## Next steps
 
-- Check out the [SurrealDB Dart client documentation](https://surrealdb.com/docs/sdk/dart) for more details
-- Explore state management solutions like Riverpod for reactive data binding
-- Consider implementing real-time updates using SurrealDB's LIVE queries
+<CardGrid>
+  <LinkCard
+    href="/docs/schema/generated-types"
+    title="Generated types"
+    icon="types"
+    description="Configure the Dart output and keep models in sync with the schema."
+  />
+  <LinkCard
+    href="/docs/client/offline-sync"
+    title="Offline & sync health"
+    icon="offline"
+    description="Surface connection state and pending writes in your UI."
+  />
+  <LinkCard
+    href="https://surrealdb.com/docs/sdk/dart"
+    title="SurrealDB Dart SDK"
+    icon="book"
+    description="Upstream client documentation for everything below Sp00ky."
+  />
+  <LinkCard
+    href="/docs/how-it-works"
+    title="How it works"
+    icon="brain"
+    description="Why these queries stay current without polling."
+  />
+</CardGrid>
+
+Pair this with a state-management solution such as Riverpod for reactive data binding.

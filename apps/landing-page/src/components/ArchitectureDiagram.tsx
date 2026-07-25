@@ -333,7 +333,7 @@ const FrontAppMockup = ({ animFrame, cycle }: { animFrame: number; cycle: number
         </button>
       </div>
 
-      {/* Task list — fixed height clip */}
+      {/* Task list, fixed height clip */}
       <div className="overflow-hidden" style={{ height: `${VISIBLE_COUNT * ROW_HEIGHT}px` }}>
         <div
           style={{

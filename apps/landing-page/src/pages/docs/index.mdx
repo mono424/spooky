@@ -1,10 +1,133 @@
 ---
 layout: ../../layouts/DocsLayout.astro
 title: Introduction
+description: Sp00ky is a reactive, local-first framework for SurrealDB. Write a query once and it stays correct, live, offline, and typed end to end.
 ---
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
-import Note from '../../components/ui/Note.astro';
+import CardGrid from '../../components/ui/CardGrid.astro';
+import LinkCard from '../../components/ui/LinkCard.astro';
+
+<CodeBlock fileName="Threads.tsx" code={heroCode} lang="tsx" />
+
+That component is live, typed, and works offline. There is no fetch call, no cache invalidation, no
+WebSocket setup, no loading-state machine, and no hand-written types. You didn't opt into any of it.
+
+<CardGrid>
+  <LinkCard
+    href="/docs/quickstart"
+    title="Quickstart"
+    icon="rocket"
+    eyebrow="Start here"
+    description="Empty directory to two tabs syncing live, in about five minutes."
+  />
+  <LinkCard
+    href="/docs/how-it-works"
+    title="How it works"
+    icon="brain"
+    eyebrow="Start here"
+    description="The whole mental model in one page, with a diagram."
+  />
+</CardGrid>
+
+## Three things to know
+
+### Your schema is the source of truth
+
+Write plain SurrealQL. `spky generate` turns it into typed clients, and the same file drives sync
+rules and row-level permissions.
+
+<CodeBlock fileName="schema.surql" code={schemaCode} lang="sql" />
+
+<CodeBlock fileName="schema.gen.ts" code={schemaGenCode} lang="typescript" />
+
+No drift, no duplicated model definitions, no guessing what shape a row is.
+
+### Queries are maintained, not refetched
+
+A sidecar keeps each registered query's result up to date incrementally and tells clients only what
+changed. When data moves, whether from another user, another device, another tab, or a background
+job, your UI re-renders.
+
+<CodeBlock code={mutationCode} lang="typescript" />
+
+### Backend calls go through the database
+
+`db.run()` writes a row instead of making an HTTP request. The server picks it up and calls your
+service. That one change makes server work offline-safe, retryable, and visible in the UI as an
+ordinary live query.
+
+<CodeBlock code={backendCode} lang="typescript" />
+
+## Pick your path
+
+<CardGrid>
+  <LinkCard
+    href="/docs/guide/solid"
+    title="SolidJS"
+    icon="code"
+    description="Full walkthrough: provider, queries, auth, mutations."
+  />
+  <LinkCard
+    href="/docs/guide/flutter"
+    title="Flutter"
+    icon="mobile"
+    description="Generated Dart models and offline-first mobile apps."
+  />
+  <LinkCard
+    href="/docs/guide/vanilla"
+    title="Vanilla JS / TS"
+    icon="terminal"
+    description="No framework required. Use the core client directly."
+  />
+  <LinkCard
+    href="/docs/install"
+    title="Installation"
+    icon="box"
+    description="CLI, SDKs and infrastructure, the manual route."
+  />
+</CardGrid>
+
+## Explore
+
+<CardGrid cols={3}>
+  <LinkCard
+    href="/docs/schema"
+    title="Schema"
+    icon="database"
+    description="Tables, relationships, migrations."
+  />
+  <LinkCard
+    href="/docs/client/queries"
+    title="Client SDK"
+    icon="live"
+    description="Queries, mutations, auth, offline."
+  />
+  <LinkCard
+    href="/docs/backend"
+    title="Backends"
+    icon="server"
+    description="Your own service, called through the DB."
+  />
+  <LinkCard
+    href="/docs/jobs"
+    title="Background jobs"
+    icon="jobs"
+    description="Jobs, schedules, workflow DAGs."
+  />
+  <LinkCard
+    href="/docs/cloud/getting-started"
+    title="Deploy"
+    icon="cloud"
+    description="One command to production."
+  />
+  <LinkCard
+    href="/docs/reference/cli"
+    title="CLI reference"
+    icon="terminal"
+    description="Every spky command."
+  />
+</CardGrid>
 
 export const heroCode = `import { useQuery } from '@spooky-sync/client-solid';
 import { For } from 'solid-js';
@@ -32,8 +155,8 @@ function Threads() {
 }`;
 
 export const schemaCode = `DEFINE TABLE thread SCHEMAFULL;
-DEFINE FIELD title ON TABLE thread TYPE string;
-DEFINE FIELD author ON TABLE thread TYPE record<user>;
+DEFINE FIELD title      ON TABLE thread TYPE string;
+DEFINE FIELD author     ON TABLE thread TYPE record<user>;
 DEFINE FIELD created_at ON TABLE thread TYPE datetime VALUE time::now();`;
 
 export const schemaGenCode = `type Thread = {
@@ -43,57 +166,8 @@ export const schemaGenCode = `type Thread = {
   created_at: Date;
 };`;
 
-export const mutationCode = `await db.create('thread', {
-  title: 'Hello world',
-  author: currentUser,
-});
+export const mutationCode = `await db.create(threadId, { title: 'Hello world' });
 // Every useQuery('thread') updates. Everywhere. Instantly.`;
 
-export const installCode = `pnpm add @spooky-sync/core @spooky-sync/client-solid`;
-
-**You write your app. Sp00ky handles the rest.**
-
-Real-time sync. Offline support. End-to-end type safety. You don't configure any of it. It just works.
-
-<CodeBlock fileName="Threads.tsx" code={heroCode} lang="typescript" />
-
-## What you didn't write
-
-No fetch calls. No cache invalidation. No WebSocket setup. No offline logic. No manual type definitions.
-
-That component is live. Type-safe. Works offline. Syncs across devices. You didn't think about any of it.
-
-## Schema is your source of truth
-
-Define your schema once. Types flow everywhere.
-
-<CodeBlock fileName="schema.surql" code={schemaCode} lang="sql" />
-
-<CodeBlock fileName="schema.gen.ts" code={schemaGenCode} lang="typescript" />
-
-Run `spky generate` and your types are always in sync with your database. No drift. No guessing.
-
-## Queries are live
-
-When data changes — from another user, another device, or another tab — your UI re-renders. Automatically.
-
-<CodeBlock code={mutationCode} lang="typescript" />
-
-No polling. No refetch logic. No stale data.
-
-## Offline by default
-
-Your app works without a connection. Changes are stored locally and sync when the network comes back. You don't configure this. It just works.
-
-## Get started
-
-<CodeBlock code={installCode} lang="bash" />
-
-<Note>
-  Sp00ky supports **SolidJS**, **Flutter**, and **Vanilla JS/TS**. Pick the guide for your stack.
-</Note>
-
-- [Installation](/docs/install) — set up the CLI and infrastructure
-- [SolidJS guide](/docs/guide/solid) — get reactive in minutes
-- [Flutter guide](/docs/guide/flutter) — build offline-first mobile apps
-- [Vanilla JS / TS](/docs/guide/vanilla) — use Sp00ky with any framework
+export const backendCode = `await db.run('api', '/spookify', { id: thread.id });
+// Queued offline, retried on failure, visible as a row you can subscribe to.`;

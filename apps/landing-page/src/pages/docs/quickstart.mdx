@@ -1,0 +1,165 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Quickstart
+description: From an empty directory to a live, offline-capable app syncing across two browser tabs. About five minutes.
+---
+
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Steps from '../../components/ui/Steps.astro';
+import Step from '../../components/ui/Step.astro';
+import Note from '../../components/ui/Note.astro';
+import CardGrid from '../../components/ui/CardGrid.astro';
+import LinkCard from '../../components/ui/LinkCard.astro';
+
+You'll need **Node.js 22.12+** and a running **Docker** daemon. Nothing else: the CLI brings up
+SurrealDB and the sync engine itself.
+
+<Steps>
+  <Step title="Scaffold a project">
+    <CodeBlock code={initCode} lang="bash" />
+
+    `spky init` asks four questions. For this walkthrough answer:
+
+    | Prompt | Answer |
+    | --- | --- |
+    | Project name | `spooky-demo` |
+    | Project kind | **Full project (Schema + App)** |
+    | Schema template | **Example (User + Threads + Comments)** |
+    | Package manager | whatever you use |
+
+    It writes the project, installs dependencies, generates types and creates the first migration.
+  </Step>
+
+  <Step title="Start the stack">
+    <CodeBlock code={devCode} lang="bash" />
+
+    SurrealDB comes up on `:8666`, the SSP on `:8667`, and your app's dev server starts alongside
+    them. Leave this running. It's your whole backend.
+
+    <Note>
+      Ports 8666 and 8667 need to be free. If one is taken, `spky dev` tells you which process has
+      it.
+    </Note>
+  </Step>
+
+  <Step title="Look at the schema">
+    Open `schema/src/schema.surql`. This file is the source of truth for everything: your types,
+    your sync rules, your permissions.
+
+    <CodeBlock fileName="schema/src/schema.surql" code={schemaCode} lang="sql" />
+
+    Nothing here is Sp00ky-specific. It's plain SurrealQL.
+  </Step>
+
+  <Step title="Render a live list">
+    Drop this into a component. `useQuery` takes the query and keeps it current.
+
+    <CodeBlock fileName="src/Threads.tsx" code={queryCode} lang="tsx" />
+
+    `thread.author.username` is typed, and it came back in the same query as the thread. That's
+    what `.related()` does.
+  </Step>
+
+  <Step title="Write something">
+    <CodeBlock fileName="src/NewThread.tsx" code={mutationCode} lang="tsx" />
+
+    The new row appears in the list before the server has confirmed it. No refetch, no cache
+    invalidation, no loading state to manage.
+  </Step>
+
+  <Step title="Watch it sync">
+    Open the app in **two browser tabs** side by side. Create a thread in one.
+
+    It appears in the other immediately. Now open DevTools in the second tab, switch the network to
+    **Offline**, and create a thread there: it still shows up locally. Go back online and it syncs
+    up on its own.
+
+    That's the whole model. You didn't write a WebSocket handler, a queue, or a retry.
+  </Step>
+</Steps>
+
+## What just happened
+
+`spky dev` started SurrealDB plus a sidecar called the SSP. When you write a row, SurrealDB pushes
+the change to the SSP, which recomputes only the queries affected by it and writes the result into a
+small per-user index table. Your client holds one live subscription on that table, so it learns
+exactly which of its queries changed. [How it works](/docs/how-it-works) has the full picture.
+
+## Next
+
+<CardGrid>
+  <LinkCard
+    href="/docs/how-it-works"
+    title="How it works"
+    icon="brain"
+    description="The pipeline behind the magic, in one page."
+  />
+  <LinkCard
+    href="/docs/guide/solid"
+    title="SolidJS guide"
+    icon="code"
+    description="Wire Sp00ky into a real Solid app, step by step."
+  />
+  <LinkCard
+    href="/docs/schema"
+    title="Define your schema"
+    icon="database"
+    description="Tables, permissions and the annotations Sp00ky reads."
+  />
+  <LinkCard
+    href="/docs/client/auth"
+    title="Authentication"
+    icon="key"
+    description="Sign users in and scope their data with row-level permissions."
+  />
+</CardGrid>
+
+export const initCode = `npx @spooky-sync/cli init`;
+
+export const devCode = `cd spooky-demo
+spky dev`;
+
+export const schemaCode = `DEFINE TABLE thread SCHEMAFULL
+PERMISSIONS
+  FOR select, create WHERE true
+  FOR update, delete WHERE author = $auth.id;
+
+DEFINE FIELD title      ON TABLE thread TYPE string;
+DEFINE FIELD author     ON TABLE thread TYPE record<user>; -- @parent
+DEFINE FIELD created_at ON TABLE thread TYPE datetime VALUE time::now();`;
+
+export const queryCode = `import { useQuery } from '@spooky-sync/client-solid';
+import { For } from 'solid-js';
+import { db } from './db';
+
+export function Threads() {
+  const threads = useQuery(db, () =>
+    db.query('thread')
+      .related('author')
+      .orderBy('created_at', 'desc')
+      .limit(20)
+      .build()
+  );
+
+  return (
+    <For each={threads.data() || []}>
+      {(thread) => (
+        <article>
+          <h2>{thread.title}</h2>
+          <span>{thread.author.username}</span>
+        </article>
+      )}
+    </For>
+  );
+}`;
+
+export const mutationCode = `import { Uuid } from 'surrealdb';
+import { db } from './db';
+
+async function createThread(title: string) {
+  // db.create takes a fully-qualified record id, not a table name
+  const id = \`thread:\${Uuid.v4().toString().replace(/-/g, '')}\`;
+
+  await db.create(id, { title });
+  // 'author' is filled in from the auth context. The field is marked @parent
+}`;

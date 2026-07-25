@@ -1,6 +1,7 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
-title: Logs & Monitoring
+title: Logs & monitoring
+description: Tail and search logs across every service, set log levels, and publish a public status page.
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
@@ -86,17 +87,17 @@ At `trace`, the Scheduler emits one line per replica query (proxy passthroughs, 
 
 Use it to diagnose:
 
-- "I deployed but my data isn't showing up" — confirm the Scheduler is bootstrapping from the namespace/database you expect.
-- "This live query never updates" — every query the Scheduler runs is in the trace log, so you can see what fired and what didn't.
-- Bootstrap performance regressions — per-table `fetch_ms` / `insert_ms` are logged at `info`; per-record sequence is at `trace`.
+- "I deployed but my data isn't showing up." Confirm the Scheduler is bootstrapping from the namespace/database you expect.
+- "This live query never updates". Every query the Scheduler runs is in the trace log, so you can see what fired and what didn't.
+- Bootstrap performance regressions: per-table `fetch_ms` / `insert_ms` are logged at `info`; per-record sequence is at `trace`.
 
 <Note>
-  Trace mode is chatty — a multi-million-row bootstrap produces a line per record. Switch back to <code>info</code> with another <code>spky deploy</code> once you have what you need.
+  Trace mode is chatty: a multi-million-row bootstrap produces a line per record. Switch back to <code>info</code> with another <code>spky deploy</code> once you have what you need.
 </Note>
 
 ## Status Badge
 
-Add a live deployment status badge to your GitHub README or any webpage. The badge is a public SVG endpoint — no authentication required.
+Add a live deployment status badge to your GitHub README or any webpage. The badge is a public SVG endpoint. No authentication required.
 
 <CodeBlock
   code={code2}
@@ -119,7 +120,7 @@ The badge displays the current deployment status:
 | **error** | Red | Deployment failed |
 | **unknown** | Gray | No deployment found |
 
-The badge is never cached — it always reflects the current state. You can also append `.svg` to the URL: `/v1/badge/your-project-slug.svg`.
+The badge is never cached. It always reflects the current state. You can also append `.svg` to the URL: `/v1/badge/your-project-slug.svg`.
 
 <Note title="Staging">
 For staging deployments, use the staging API URL: <code>https://api-stg.sp00ky.cloud/v1/badge/your-project-slug</code>
@@ -127,14 +128,14 @@ For staging deployments, use the staging API URL: <code>https://api-stg.sp00ky.c
 
 ## Uptime Status Page
 
-Every running deployment is health-checked automatically — there is nothing to enable. The results are published as a public, unauthenticated status page, reached by your project slug:
+Every running deployment is health-checked automatically. There is nothing to enable. The results are published as a public, unauthenticated status page, reached by your project slug:
 
 <CodeBlock
   code={codeUptimeUrl}
   lang="text"
 />
 
-The page shows a 30-day uptime heatmap — one bar per UTC day — for each monitored endpoint, plus the overall percentage across them. An unknown slug, or a project with no checks yet, renders a graceful "No uptime data yet" rather than an error.
+The page shows a 30-day uptime heatmap (one bar per UTC day) for each monitored endpoint, plus the overall percentage across them. An unknown slug, or a project with no checks yet, renders a graceful "No uptime data yet" rather than an error.
 
 ### How checks work
 
@@ -149,7 +150,7 @@ A day's percentage is `up / total` checks for that UTC day; days with no checks 
 
 ### JSON
 
-Append `.json` to get the same data as a machine-readable payload — useful for a custom dashboard or an external monitor:
+Append `.json` to get the same data as a machine-readable payload, useful for a custom dashboard or an external monitor:
 
 <CodeBlock
   code={codeUptimeJsonUrl}

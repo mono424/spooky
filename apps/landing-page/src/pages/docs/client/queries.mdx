@@ -1,0 +1,216 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Reactive queries
+description: Declare a query once. It stays correct forever, across components, tabs, devices and backend jobs.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+import CardGrid from '../../../components/ui/CardGrid.astro';
+import LinkCard from '../../../components/ui/LinkCard.astro';
+
+<CodeBlock fileName="UserList.tsx" code={heroCode} lang="tsx" />
+
+That list is live. When anyone creates, edits, or deletes a `user`, in this component, in another
+tab, on another device, or from a [backend job](/docs/jobs), the component re-renders with the new
+data. You never write a refetch, an invalidation rule, or a subscription teardown.
+
+## Building a query
+
+`db.query(table)` returns a fluent builder. Nothing runs until you `.build()`, and `.build()`
+returns a plan, not results.
+
+<CodeBlock code={builderCode} lang="typescript" />
+
+| Method | Purpose |
+| --- | --- |
+| `.where(conditions)` | Filter rows. See below. |
+| `.select(...fields)` | Restrict the projection. Defaults to every column. |
+| `.related(field)` | Replace a record id with the full related record. |
+| `.orderBy(field, dir)` | Sort. Chain calls for multi-key ordering. |
+| `.limit(n)` / `.offset(n)` | Window the result. See [Pagination](/docs/client/pagination). |
+| `.one()` | Return a single record instead of an array. |
+| `.build()` | Freeze the plan so `useQuery` can register it. |
+
+### Filtering
+
+A plain value means equality. For anything else, pass a comparison descriptor: `_op` is the
+operator, `_val` the value. A top-level `_or` compiles to a parenthesised `OR` group.
+
+<CodeBlock code={whereCode} lang="typescript" />
+
+## Pulling in related records
+
+`.related()` follows a `record<...>` field and returns the whole record instead of an id. One call
+covers 1:1, 1:N and graph edges. Sp00ky reads your `schema.surql` to work out the traversal.
+
+<CodeBlock code={relatedCode} lang="typescript" />
+
+<Note>
+  You never write graph paths like `->liked->post` or join conditions. The relation table you
+  declared in the schema is enough for Sp00ky to generate the right query.
+</Note>
+
+The return type changes with the call: without `.related()` the field is a `RecordId`, with it the
+field is the related object. Accessing a relation you didn't fetch is a compile error.
+
+<CodeBlock code={typeSafetyCode} lang="typescript" />
+
+## Subscribing with `useQuery`
+
+`useQuery(db, factory)` registers the plan and keeps the result current for the lifetime of the
+component.
+
+<CodeBlock code={useQueryCode} lang="tsx" />
+
+| Accessor | Returns |
+| --- | --- |
+| `data()` | Current rows, or `undefined` before the first result. |
+| `error()` | The last error, if the query failed. |
+| `isLoading()` | `true` until there is anything to show. |
+| `isFetching()` | `true` while a fetch is in flight, including refreshes. |
+| `isSettled()` | `true` once the query has a server-confirmed result. Use this, not `isLoading`, to decide "the list really is empty". |
+
+Two options are worth knowing:
+
+| Option | Effect |
+| --- | --- |
+| `enabled: () => boolean` | Skip registration until the accessor returns `true`. |
+| `deregisterOnCleanup: true` | Tear the synced view down on unmount instead of keeping it warm. See [Pagination](/docs/client/pagination). |
+
+If your app is wrapped in `<Sp00kyProvider>`, you can drop the first argument and call
+`useQuery(() => …)`. The client comes from context.
+
+Because the factory is a function, anything reactive you read inside it re-registers the query when
+it changes. That's how filters, sort order and pagination all work. You change a signal, and the
+live window follows.
+
+<CodeBlock code={reactiveFactoryCode} lang="tsx" />
+
+Under the hood `useQuery` calls `subscribe(queryHash, callback, { immediate: true })`. The
+`immediate` flag fires the callback synchronously with whatever is already in the local store, so
+the first paint has data even offline. UPDATE events are debounced by `streamDebounceTime`
+(default 50 ms, see [Client config](/docs/reference/client-config)); CREATE and DELETE fire
+immediately. Subscriptions tear down on unmount.
+
+## One-off reads
+
+Sometimes you want a value rather than a subscription, inside an event handler say. Call `.run()` on the
+built query and await it.
+
+<CodeBlock code={oneShotCode} lang="typescript" />
+
+For SurrealQL the builder can't express, `db.queryRaw(sql, params, ttl)` is the escape hatch. Raw
+queries are **not** reactive.
+
+## Next
+
+<CardGrid>
+  <LinkCard
+    href="/docs/client/pagination"
+    title="Pagination"
+    icon="layers"
+    description="Load-more and windowed infinite scroll, both fully live."
+  />
+  <LinkCard
+    href="/docs/client/mutations"
+    title="Mutations"
+    icon="pen"
+    description="Create, update and delete with optimistic local writes."
+  />
+  <LinkCard
+    href="/docs/client/offline-sync"
+    title="Offline & sync health"
+    icon="offline"
+    description="What happens to a live query when the network drops."
+  />
+  <LinkCard
+    href="/docs/how-it-works"
+    title="How it works"
+    icon="brain"
+    description="The pipeline that keeps these queries current."
+  />
+</CardGrid>
+
+export const heroCode = `import { useQuery } from '@spooky-sync/client-solid';
+import { For } from 'solid-js';
+import { db } from './db';
+
+function UserList() {
+  const users = useQuery(db, () =>
+    db.query('user')
+      .orderBy('created_at', 'desc')
+      .limit(20)
+      .build()
+  );
+
+  return (
+    <ul>
+      <For each={users.data() || []}>
+        {(user) => <li>{user.username}</li>}
+      </For>
+    </ul>
+  );
+}`;
+
+export const builderCode = `const query = db.query('user')
+  .where({ age: { _op: '>', _val: 18 } })
+  .orderBy('created_at', 'desc')
+  .limit(10)
+  .build();          // a plan, not a result`;
+
+export const whereCode = `// equality
+.where({ status: 'open' })
+
+// comparison: _op is the operator, _val the value
+.where({ age: { _op: '>=', _val: 18 } })
+
+// several fields are ANDed together
+.where({ status: 'open', age: { _op: '<', _val: 65 } })
+
+// _or produces (white = $or0 OR black = $or1)
+.where({ _or: [{ white: userId }, { black: userId }] })`;
+
+export const relatedCode = `const threads = useQuery(db, () =>
+  db.query('thread')
+    .related('author')
+    .orderBy('created_at', 'desc')
+    .limit(10)
+    .build()
+);
+
+threads.data()?.forEach((thread) => {
+  console.log(thread.title);
+  console.log(thread.author?.username); // typed
+});`;
+
+export const typeSafetyCode = `const post = posts[0];
+
+// ✅ fetched via .related('author')
+console.log(post.author.username);
+
+// ❌ Property 'email' does not exist on type 'User'
+console.log(post.author.email);`;
+
+export const useQueryCode = `const threads = useQuery(db, () => db.query('thread').build());
+
+threads.data();       // Thread[] | undefined
+threads.isSettled();  // false until the first server-confirmed result`;
+
+export const reactiveFactoryCode = `const [status, setStatus] = createSignal('open');
+
+// re-registers whenever status() changes
+const results = useQuery(db, () =>
+  db.query('thread')
+    .where({ status: status() })
+    .build()
+);`;
+
+export const oneShotCode = `const user = await db.query('user')
+  .where({ id: userId })
+  .one()
+  .build()
+  .run();
+
+// arbitrary SurrealQL, not reactive
+const rows = await db.queryRaw('SELECT count() FROM thread GROUP ALL', {}, 60);`;

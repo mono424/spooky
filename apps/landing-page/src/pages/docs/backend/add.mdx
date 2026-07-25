@@ -1,0 +1,188 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Add a backend
+description: Scaffold the outbox table, describe your routes in OpenAPI, and call them with a typed db.run().
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Steps from '../../../components/ui/Steps.astro';
+import Step from '../../../components/ui/Step.astro';
+import Note from '../../../components/ui/Note.astro';
+import Warning from '../../../components/ui/Warning.astro';
+
+<Steps>
+  <Step title="Describe your routes in OpenAPI">
+    Sp00ky derives the callable routes and their payload types from an OpenAPI spec. Each `path`
+    becomes a route you can pass to `db.run()`, and the request body schema becomes its argument
+    type.
+
+    <CodeBlock fileName="api/openapi.yml" code={openapiCode} lang="yaml" />
+  </Step>
+
+  <Step title="Register the backend">
+    `spky api add` writes the `sp00ky.yml` entry and generates the outbox table schema for you.
+
+    <CodeBlock code={addCode} lang="bash" />
+
+    Run it without flags for an interactive prompt. The resulting config looks like this:
+
+    <CodeBlock fileName="sp00ky.yml" code={configCode} lang="yaml" />
+
+    | Field | Meaning |
+    | --- | --- |
+    | `type` | `backend` for an outbox-invoked HTTP service. |
+    | `spec` | Path to the OpenAPI file. Required. It's where routes and types come from. |
+    | `baseUrl` | Where the job runner sends requests. Use `host.docker.internal` to reach a service on your host from the containerised stack. |
+    | `method.type` | `outbox`. The only supported trigger today. |
+    | `method.table` | Name of the outbox table in SurrealDB. |
+    | `method.schema` | Path where the generated table definition is written. |
+
+    <Note>Validate the file at any point with `spky lint`.</Note>
+  </Step>
+
+  <Step title="Review the generated outbox table">
+    `spky api add` writes a `DEFINE TABLE` with every field the job runner needs. You don't have to
+    import it anywhere: the CLI appends `method.schema` to your schema automatically whenever it
+    builds, so migrations and codegen pick it up.
+
+    <CodeBlock fileName="schema/src/outbox/api.surql" code={outboxCode} lang="sql" />
+
+    | Field | Written by | Purpose |
+    | --- | --- | --- |
+    | `path`, `payload` | client | Which route to call, and with what. |
+    | `status` | runner | `pending → processing → success \| failed`. |
+    | `result` | runner | Your backend's response body. |
+    | `errors` | runner | One `{ code, reason }` entry per failed attempt. |
+    | `retries`, `max_retries`, `retry_strategy` | mixed | Attempt budget; `linear` or `exponential`. |
+    | `delay` | client | One-shot delay in ms before the job becomes due. |
+    | `assignee` | platform | Which SSP instance claimed the row. |
+
+    <Warning title="Don't loosen the write permissions">
+      Client code may create rows and read them back, but `status`, `result`, `errors` and
+      `assignee` are `FOR update WHERE false`. The job runner is the single writer of job status.
+      Making these client-writable lets a browser lie about whether work succeeded.
+    </Warning>
+  </Step>
+
+  <Step title="Regenerate types">
+    <CodeBlock code={generateCode} lang="bash" />
+
+    Backend names and route paths are now part of your generated schema, so `db.run()` autocompletes
+    them and typechecks the payload.
+  </Step>
+
+  <Step title="Call it">
+    <CodeBlock code={callCode} lang="typescript" />
+
+    `db.run()` resolves once the job row is written, not when your backend replies. Watch the row to
+    follow the actual work. See [Jobs](/docs/jobs).
+  </Step>
+</Steps>
+
+## Implementing the route
+
+Your service is an ordinary HTTP server. The job runner POSTs the `payload` to `baseUrl + path` and
+stores whatever JSON you return in the row's `result` field.
+
+<CodeBlock fileName="api/src/index.ts" code={handlerCode} lang="typescript" />
+
+A non-2xx response marks the attempt failed and schedules a retry according to the row's
+`max_retries` and `retry_strategy`. Return quickly, or raise the
+[timeout](/docs/backend/options#timeouts).
+
+## Running it locally
+
+Add a `dev` block and `spky dev` starts your backend alongside SurrealDB and the SSP. See
+[Dev servers & sidecars](/docs/dev/servers).
+
+<CodeBlock fileName="sp00ky.yml" code={devCode} lang="yaml" />
+
+export const openapiCode = `openapi: 3.1.0
+info:
+  version: 1.0.0
+  title: example
+paths:
+  /spookify:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  example: thread:kv9b3b...
+              required:
+                - id
+      responses:
+        '200':
+          description: ok
+        '404':
+          description: Thread not found
+        '500':
+          description: Internal server error`;
+
+export const addCode = `spky api add \\
+  --name api \\
+  --spec ../api/openapi.yml \\
+  --base-url http://host.docker.internal:3660 \\
+  --table job \\
+  --schema-path ./src/outbox/api.surql`;
+
+export const configCode = `apps:
+  api:
+    type: backend
+    baseUrl: http://host.docker.internal:3660
+    spec: ../api/openapi.yml
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql`;
+
+export const outboxCode = `DEFINE TABLE job SCHEMAFULL
+PERMISSIONS
+  FOR select, create, update, delete WHERE true;
+
+DEFINE FIELD path    ON TABLE job TYPE string
+PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+
+DEFINE FIELD payload ON TABLE job TYPE any
+PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+
+DEFINE FIELD status  ON TABLE job TYPE string DEFAULT ALWAYS "pending"
+ASSERT $value IN ["pending", "processing", "success", "failed"]
+PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+
+-- the backend's response body, written by the job runner
+DEFINE FIELD result  ON TABLE job TYPE any
+PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
+
+-- … plus retries, max_retries, retry_strategy, errors, delay,
+--    assigned_to, assignee, created_at, updated_at`;
+
+export const generateCode = `spky generate`;
+
+export const callCode = `// 'api' is the key under apps:, '/spookify' comes from the OpenAPI spec
+await db.run('api', '/spookify', { id: thread.id });`;
+
+export const handlerCode = `import { Hono } from 'hono';
+
+const app = new Hono();
+
+app.post('/spookify', async (c) => {
+  const { id } = await c.req.json();
+  const summary = await doTheWork(id);
+  return c.json({ summary });   // lands in the job row's \`result\`
+});
+
+export default { port: 3660, fetch: app.fetch };`;
+
+export const devCode = `apps:
+  api:
+    type: backend
+    # …
+    dev:
+      type: npm
+      script: dev
+      workdir: ../api`;

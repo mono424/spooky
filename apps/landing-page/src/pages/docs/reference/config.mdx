@@ -1,0 +1,254 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: sp00ky.yml
+description: "Every key in the project config the CLI reads: apps, schedules, schema paths, versions and per-environment overrides."
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+
+`sp00ky.yml` at your project root is the single source of truth for the `spky` CLI. It tells `spky dev`, `spky deploy` and `spky doctor` how to run your stack, which SurrealDB version to spin up, where your schema and buckets live, which client types to generate, and how your apps boot.
+
+For the client-side object you pass to `new SyncedDb(...)`, see [Client config](/docs/reference/client-config).
+
+Validate it at any time with `spky lint`, or run [`spky doctor`](/docs/dev/doctor) for a fuller
+project health check.
+
+Add the schema comment as the first line of `sp00ky.yml` to get autocomplete and validation in editors that support `yaml-language-server`:
+
+<CodeBlock code={ymlSchemaHeader} lang="yaml" />
+
+## Minimal example
+
+The smallest viable file to get `spky dev` running:
+
+<CodeBlock code={ymlMinimal} lang="yaml" />
+
+For a fully annotated reference covering every option, see [`example/sp00ky.yml`](https://github.com/sp00ky-org/sp00ky/blob/main/example/sp00ky.yml) in the repo.
+
+## Top-level settings
+
+| Field | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `mode` | `singlenode` \| `cluster` \| `surrealism` | `singlenode` | Deployment topology. `singlenode` runs one SSP, `cluster` runs multiple, `surrealism` is for embedded setups. |
+| `slug` | string | (none) | Project slug used by `spky deploy` and the other cloud commands. |
+| `surrealdb` | object | (none) | DB connection. Sub-fields: `namespace`, `database`, `username`, `password`, `hosting` (`cloud` or `external`), `endpoint` (required when `hosting: external`). |
+| `schema` | path | (none) | Directory containing your `.surql` schema sources. See [Schema](/docs/schema). |
+| `buckets` | path[] | `[]` | Bucket definition files referenced from your schema. See [Buckets](/docs/client/buckets). |
+| `clientTypes` | array | `[]` | Codegen targets. Each entry has `format` (`typescript` or `dart`), an `output` path, and (dart only) an optional `workdir`. See [Client types](#client-types). |
+| `version` | string \| object | latest stable | Pin SSP and scheduler image tags. Accepts a single tag, a `{dev, cloud}` split, or a `path:` override pointing at a local binary. |
+| `logLevel` | string \| object | `info` | Log verbosity. Accepts `trace`, `debug`, `info`, `warn`, `error`, `off`, target=level directives, or a `{dev, cloud}` split. |
+| `refMode` | `dedicated` \| `single` | `dedicated` | Storage layout for the SSP's `_00_list_ref` table. `dedicated` gives each user their own table and works around a SurrealDB v3 LIVE-permission gap. |
+| `apps` | map | `{}` | Your frontend and backend services. See [Apps](#apps) below. |
+| `schedules` | map \| path | `{}` | Server-side cron/interval jobs. See [Schedules](/docs/jobs/schedules). |
+| `workflows` | map \| path | `{}` | Server-side workflow DAGs. See [Workflows](/docs/jobs/workflows). |
+| `deployment` | object | (none) | Cloud deployment knobs: `sspCount`, `backup`. See [Cloud Deployment](/docs/cloud/deploying). |
+
+## Apps
+
+Each entry under `apps` is a service `spky` knows how to run locally and deploy to the cloud. Set `type: frontend`, `type: backend`, or `type: docker`, then describe how it boots (`dev`) and how it deploys (`deploy`). Backends additionally need an OpenAPI `spec`, a `baseUrl`, an optional `auth` block, and a `method` (typically `outbox`) so the SSP can deliver jobs.
+
+<CodeBlock code={ymlApps} lang="yaml" />
+
+`dev` accepts either a raw command string or a typed form: `{type: npm, script, workdir?}`, `{type: docker, file, workdir?, port?}` (builds a Dockerfile for this app's dev server), or `{type: uv, script, workdir?}`. `deploy` accepts `dockerfile`, `context`, `port`, `healthcheck`, `resources` (`vcpus`, `memory`, `disk`), a `timeout`, a `cmd` (override the image's ENTRYPOINT/CMD), `build_args` (build-time-only args, same shape as `env`), and `static` (`{build, dir}`, for Cloudflare static-asset frontends).
+
+#### `scope`: where an app runs
+
+Every app accepts an optional `scope` controlling where it runs:
+
+| `scope` | Behavior |
+| --- | --- |
+| `all` (default) | Started by `spky dev` **and** deployed to the cloud. |
+| `devOnly` | Local-only, started by `spky dev`, never deployed. Validation is relaxed (no `spec`/`method`/`deploy` required), so it's handy for a local sidecar. |
+| `cloudOnly` | Deployed to the cloud but skipped by `spky dev`. |
+
+#### `type: docker`: run a prebuilt image
+
+A `docker` app runs a prebuilt image directly (no Dockerfile build), useful for local infra like a LiveKit SFU, a mock service, or a cache. Fields:
+
+- `image` (required): the image to run, e.g. `livekit/livekit-server:latest`.
+- `ports`: published ports. A bare port (`7880`) maps host→container 1:1 (`7880:7880`); use `"host:container"` to remap and a `/proto` suffix for UDP (`"7882/udp"`).
+- `args`: appended after the image as the container command (e.g. `["--dev"]`, or `["go", "run", "."]` to run a service from source).
+- `volumes`: bind/volume mounts (`docker run -v`), e.g. `["/var/run/docker.sock:/var/run/docker.sock", "${PROJECT_DIR}/../..:/src", "gomod:/go"]`. `${PROJECT_DIR}` (the absolute directory of `sp00ky.yml`) is expanded in the host portion.
+- `workdir`: working directory inside the container (`docker run -w`).
+- `dependsOn`: names of other `docker` apps that must be **ready** before this one starts. `spky dev` launches apps in dependency order; an unknown name, a self-dependency, or a cycle is rejected at config load (caught by `spky lint`/`spky doctor`).
+- `healthcheck`: an HTTP path (e.g. `/health`) polled on the app's first published host port until it returns 200. A `dependsOn` waits for this, i.e. for the service to be genuinely up, not just for the container to have started. Without it, a dependency is "ready" as soon as its container is running.
+
+Under `spky dev` it runs as the container `sp00ky-dev-<name>` on the dev network (reachable from sibling apps by its **name**) with `--rm` teardown. `${PROJECT_DIR}` is also expanded in `env` values, and user `env` overrides the auto-injected `SPKY_*` vars. With `scope` left as `all`/`cloudOnly`, deploys pull the image and ship it through the same image pipeline as a backend; pair it with `scope: devOnly` for a purely local service (`dependsOn`/`healthcheck` are `spky dev`-only). `env` (below) is passed through as container environment variables.
+
+For per-app environment variables (`env: { dev, cloud, vault }`), see [Environment Variables](/docs/dev/env).
+
+#### Split a service's config into its own file
+
+An app entry can also be a `{ path }` reference instead of an inline block. `path` points at a directory containing a `sp00ky.app.yml` file, so a backend service can keep its own config next to its code:
+
+```yaml
+# sp00ky.yml (project root)
+apps:
+  web:
+    type: frontend
+    # ...
+  api:
+    path: ./api            # pulls ./api/sp00ky.app.yml in as this app
+    scope: cloudOnly       # fields set here override the referenced file
+```
+
+```yaml
+# ./api/sp00ky.app.yml
+# yaml-language-server: $schema=https://sp00ky.cloud/schema/app.schema.json
+type: backend
+spec: ./openapi.yml        # paths are relative to THIS file's directory
+method:
+  type: outbox
+  table: job
+  schema: ./src/outbox/api.surql
+deploy:
+  dockerfile: ./Dockerfile
+  port: 3660
+```
+
+The referenced file holds a single app config (the same fields you'd inline under `apps.<name>`) and validates against its own [`app.schema.json`](https://sp00ky.cloud/schema/app.schema.json). Its relative paths are resolved from the service directory, and at load time the whole thing is merged into one effective config. Any field you also set alongside `path` in the root file wins (main overrides sub). The split is entirely optional, leave your apps inline and nothing changes.
+
+## Schedules and workflows
+
+`schedules` and `workflows` declare work that runs server-side on a clock, whether or not a client is connected. Each cycle the scheduler creates a new job row in the target backend's outbox table, so a scheduled run is an ordinary job with the usual retry, kill, and recovery behaviour.
+
+<CodeBlock code={ymlSchedules} lang="yaml" />
+
+A schedule sets exactly one of `cron` (a 5-field expression, evaluated in `timezone`, default UTC) or `every` (a fixed interval, minimum 10s). `forEach` fans one schedule out into one job per row, and `concurrency` decides what a fire does when that row's previous run is still going: `skip` (default) records the suppressed tick, `allow` permits overlap, `replace` kills the in-flight run first.
+
+A workflow is a DAG: steps with no `dependsOn` are roots and run in parallel, a step with several dependencies is a fan-in join, and each step receives its dependencies' response bodies under `payload.steps`. See [Schedules](/docs/jobs/schedules) and [Workflows](/docs/jobs/workflows) for the full behaviour and the `spky schedules` / `spky workflows` commands.
+
+Either section can also live in its own file, per entry or wholesale, useful once you have more than a handful:
+
+<CodeBlock code={ymlScheduleFiles} lang="yaml" />
+
+<Note>
+  `spky lint` parses every cron expression, checks each interval, resolves each `backend` and `route` against that app's OpenAPI spec, and rejects a workflow whose `dependsOn` edges form a cycle, so a definition that lints is one the scheduler can actually run.
+</Note>
+
+## Client types
+
+`clientTypes` is a list of codegen targets; `spky generate` (run with no args) regenerates every entry from your schema. Each entry has a `format` and an `output` path (relative to `sp00ky.yml`):
+
+- **`typescript`**: the CLI's built-in generator emits a typed schema module (e.g. `schema.gen.ts`).
+- **`dart`**: runs spooky_core's richer generator (`dart run spooky_core:spooky_gen`), which emits the typed client, `Patch` classes, and `spookySchema`/`surqlSchema`. Because that tool resolves `spooky_core` from the enclosing Dart package, it runs from the package directory, **auto-derived from `output`'s nearest ancestor `pubspec.yaml`**. Set the optional `workdir` only to override that. (This replaces a manual `dart run spooky_core:spooky_gen` / Makefile step.)
+
+A project can list several outputs, e.g. a TypeScript web client plus one or more Dart clients (a Flutter app, a renderer), and keep them all in sync from one command.
+
+## Per-environment overrides
+
+`version`, `logLevel`, and `apps.<name>.env` each accept a `{dev, cloud}` split so your local stack can differ from what runs in Sp00ky Cloud. A common pattern is to run host-built binaries during `spky dev` and a pinned image tag in the cloud:
+
+<CodeBlock code={ymlPerEnv} lang="yaml" />
+
+export const ymlSchemaHeader = `# yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json`;
+
+export const ymlMinimal = `mode: singlenode
+surrealdb:
+  namespace: main
+  database: main
+schema: ./schema
+buckets:
+  - ./schema/src/buckets/profile.surql
+clientTypes:
+  - format: typescript
+    output: ./src/schema.gen.ts
+  - format: dart
+    output: ../app/lib/sync/app_db.g.dart`;
+
+export const ymlApps = `apps:
+  web:
+    type: frontend
+    dev:
+      type: npm
+      script: dev:app
+    deploy:
+      dockerfile: ./app/Dockerfile
+      context: ../
+      port: 80
+  api:
+    type: backend
+    spec: ./api/openapi.yml
+    baseUrl: http://host.docker.internal:3660
+    dev:
+      type: npm
+      script: dev
+      workdir: ./api
+    deploy:
+      dockerfile: ./api/Dockerfile
+      context: ../
+      port: 3660
+      healthcheck: /health
+    auth:
+      type: token
+      token: THIS_IS_TOP_SECRET
+    method:
+      type: outbox
+      table: job
+      schema: ./schema/src/outbox/api.surql
+  livekit:
+    type: docker
+    scope: devOnly
+    image: livekit/livekit-server:latest
+    ports: [7880, 7881, "7882/udp"]
+    args: ["--dev", "--bind", "0.0.0.0"]`;
+
+export const ymlSchedules = `schedules:
+  nightly-cleanup:
+    cron: "0 3 * * *"
+    timezone: Europe/Berlin
+    backend: api
+    route: /cleanupExpired
+    payload:
+      olderThanDays: 30
+
+  game-sync:
+    every: 5m
+    backend: api
+    route: /syncGames
+    forEach:
+      query: SELECT id FROM connection WHERE active = true
+      key: id
+    concurrency: skip
+    retry: { max: 3, strategy: linear }
+    timeout: 120s
+
+workflows:
+  monthly-report:
+    schedule: { cron: "0 6 1 * *" }
+    steps:
+      extract-orders: { backend: api, route: /exportOrders }
+      extract-users:  { backend: api, route: /exportUsers }
+      transform:
+        backend: analytics
+        route: /buildReport
+        dependsOn: [extract-orders, extract-users]
+      notify: { backend: notify, route: /postSlack, dependsOn: [transform] }
+    onFailure: halt`;
+
+export const ymlScheduleFiles = `schedules: ./schedules.yml            # the whole map lives in that file
+
+workflows:
+  monthly-report: ./workflows/monthly-report.yml   # one definition per file
+  quick-one: { steps: { ping: { backend: api, route: /ping } } }   # mixing is fine`;
+
+export const ymlPerEnv = `version:
+  dev:
+    ssp:
+      path: ../target/debug/ssp-server
+    scheduler:
+      path: ../target/debug/scheduler
+  cloud: canary
+
+logLevel:
+  dev: trace
+  cloud: info
+
+apps:
+  api:
+    env:
+      dev: '.env.local'
+      cloud:
+        vault:
+          - 'API_AUTH_TOKEN'`;

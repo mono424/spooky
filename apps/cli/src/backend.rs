@@ -1435,7 +1435,7 @@ pub struct AppDeployConfig {
     pub cmd: Option<String>,
     /// Build-time secrets/args passed to `docker build --build-arg` (any app
     /// type). Same shape as `env` (inline map, `vault:` whitelist, dotenv path).
-    /// Build-time only — never injected into the container's runtime env. Keep in
+    /// Build-time only: never injected into the container's runtime env. Keep in
     /// sync with spooky-cloud's linking builder (`deploy.build_args`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_args: Option<EnvConfig>,
@@ -1449,7 +1449,7 @@ pub struct AppDeployConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct StaticDeployConfig {
     /// Build command run in the app dir before upload (e.g. "npm run build").
-    /// Optional — omit if the output dir already holds a built SPA.
+    /// Optional: omit if the output dir already holds a built SPA.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
     /// Directory (relative to the app dir) holding the built static site.

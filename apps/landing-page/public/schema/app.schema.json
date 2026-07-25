@@ -364,7 +364,7 @@
         },
         "build_args": {
           "$ref": "#/$defs/envConfig",
-          "description": "Build-time secrets/args passed to `docker build --build-arg` (any app type). Same shape as `env`. Build-time only — never injected into the container's runtime env."
+          "description": "Build-time secrets/args passed to `docker build --build-arg` (any app type). Same shape as `env`. Build-time only: never injected into the container's runtime env."
         },
         "static": {
           "$ref": "#/$defs/staticDeployConfig"
@@ -378,7 +378,7 @@
       "properties": {
         "build": {
           "type": "string",
-          "description": "Build command run in the app dir before upload (e.g. \"npm run build\"). Optional — omit if the output dir already holds a built SPA."
+          "description": "Build command run in the app dir before upload (e.g. \"npm run build\"). Optional: omit if the output dir already holds a built SPA."
         },
         "dir": {
           "type": "string",
@@ -389,7 +389,7 @@
       "additionalProperties": false
     },
     "envConfig": {
-      "description": "Environment variable configuration. Supports multiple forms:\n- \"vault\" — fetch all vars from encrypted vault\n- { vault: [KEY1, KEY2] } — fetch only whitelisted vars from vault\n- \"path/to/file\" — load from dotenv file\n- { KEY: \"val\" } — inline key-value map\n- { dev: <source>, cloud: <source> } — per-environment split\n- [<source>, ...] — array of sources, merged in order (later overrides earlier)",
+      "description": "Environment variable configuration. Supports multiple forms:\n- \"vault\": fetch all vars from encrypted vault\n- { vault: [KEY1, KEY2] }: fetch only whitelisted vars from vault\n- \"path/to/file\": load from dotenv file\n- { KEY: \"val\" }: inline key-value map\n- { dev: <source>, cloud: <source> }: per-environment split\n- [<source>, ...]: array of sources, merged in order (later overrides earlier)",
       "oneOf": [
         {
           "type": "string",

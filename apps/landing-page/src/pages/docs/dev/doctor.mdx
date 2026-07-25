@@ -1,0 +1,94 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Doctor & troubleshooting
+description: Start with spky doctor. It names the broken thing and prints the command that fixes it.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+
+When something is off, run this before anything else:
+
+<CodeBlock code={doctorCode} lang="bash" />
+
+<CodeBlock code={doctorOutputCode} lang="bash" />
+
+Every failing check comes with a `fix`: the exact command to run. It's the fastest feedback loop
+after a schema edit, and it's cheap enough to run constantly.
+
+## What it checks
+
+| Check | Catches |
+| --- | --- |
+| Config validity | `sp00ky.yml` doesn't parse, or references a path that doesn't exist. |
+| Schema source | The `.surql` file named in `schema:` is missing. |
+| Codegen freshness | `schema.gen.ts` / `.dart` is older than the schema. The single most common cause of "this type is wrong". |
+| Migrations directory | Missing or unreadable migrations folder. |
+| Legacy recurring fields | Outbox tables still carrying the old per-row recurrence fields, superseded by `schedules:`. |
+| Docker | The daemon isn't running or isn't reachable. |
+
+## For agents and CI
+
+`--json` emits a stable, parseable contract: a list of checks, each with `name`, `severity`, `fix`
+and `detail`.
+
+<CodeBlock code={doctorJsonCode} lang="bash" />
+
+This is the intended feedback loop for AI coding agents: edit the schema, run
+`spky doctor --json`, act on the `fix` fields, repeat. See
+[AI coding agents](/docs/reference/ai-agents).
+
+## The rest of the toolkit
+
+| Command | Use it when |
+| --- | --- |
+| `spky lint` | You only want to know whether `sp00ky.yml` is valid. Faster than `doctor`. |
+| `spky verify` | Query results look stale or incomplete. Compares the SSP/scheduler snapshot against the upstream database. `--fix` forces every SSP to re-bootstrap. |
+| `spky query` | You want to see what's actually in the database. Pass SurrealQL to run once, or omit it for a REPL. `--cloud` targets the deployment. |
+| `spky jobs` | A backend call didn't do anything. Opens the interactive job dashboard. |
+| `spky logs` | You need service output. Filter with `--since`, `--until`, `--grep`. |
+| `spky stats` | Something is slow. Live CPU, memory, disk and network graphs. |
+
+<CodeBlock code={queryCode} lang="bash" />
+
+## Common situations
+
+**Types don't match the schema.** `spky doctor` will say codegen is stale. Run `spky generate`.
+
+**A live query returns nothing, but the row exists.** Usually permissions: the `FOR select` clause
+on the table has to admit the row for the current `$auth`. Multi-hop expressions like
+`assigned_to.owner.id = $auth.id` are not evaluated by the sync engine and yield an empty view. See
+[Authentication](/docs/client/auth). If permissions look right, the SSP may be holding stale state:
+`spky verify --fix`, or restart with `spky dev --clean`.
+
+**Results are stale after a lot of local churn.** `spky dev --clean` wipes derived SSP/scheduler
+state and re-bootstraps from the database. Your data survives.
+
+**A `db.run()` call did nothing.** The job row exists, so look at it: `spky jobs` shows status,
+attempts and the error from each one. A `pending` row that never advances usually means the runner
+can't reach your `baseUrl`.
+
+<Note>
+  From inside the containerised stack, your host machine is `host.docker.internal`, not
+  `localhost`. A backend running on your laptop needs `baseUrl: http://host.docker.internal:3660`.
+</Note>
+
+export const doctorCode = `spky doctor`;
+
+export const doctorOutputCode = `✓ config          sp00ky.yml parsed
+✓ schema source   schema/src/schema.surql
+✗ codegen         schema.gen.ts is older than schema.surql
+                  fix: spky generate
+✓ migrations      12 applied, 0 pending
+✓ docker          daemon reachable`;
+
+export const doctorJsonCode = `spky doctor --json`;
+
+export const queryCode = `# one-shot
+spky query 'SELECT count() FROM thread GROUP ALL'
+
+# against the deployment
+spky query --cloud 'SELECT * FROM _00_query LIMIT 5'
+
+# interactive REPL
+spky query`;

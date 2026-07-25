@@ -1,0 +1,113 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: spky dev
+description: One command brings up SurrealDB, the SSP, the scheduler and your own apps, with migrations already applied.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import CardGrid from '../../../components/ui/CardGrid.astro';
+import LinkCard from '../../../components/ui/LinkCard.astro';
+
+<CodeBlock code={devCode} lang="bash" />
+
+That's your whole local stack. It reads `sp00ky.yml`, starts everything in dependency order, applies
+pending migrations, and streams the logs of every service into one terminal. `Ctrl+C` tears it all
+down.
+
+<CodeBlock code={outputCode} lang="bash" />
+
+| Service | Local URL | Role |
+| --- | --- | --- |
+| SurrealDB | `http://localhost:8666` | The database. Your client connects here. |
+| SSP | `http://localhost:8667` | Incremental view maintenance and the job runner. |
+| Scheduler | `http://localhost:9667` | Cluster coordinator. Only in `mode: cluster`. |
+
+Any app in `sp00ky.yml` with a `dev` block starts too. See
+[Dev servers & sidecars](/docs/dev/servers).
+
+## What it does on startup
+
+1. Checks your schema against the database and warns about drift.
+2. Creates the Docker network and starts SurrealDB, waiting for it to report healthy.
+3. Ensures the namespace and database exist.
+4. Applies pending [migrations](/docs/schema/migrations), then the internal Sp00ky schema and remote
+   functions.
+5. Starts the scheduler (cluster mode) and the SSP.
+6. Starts your apps.
+
+## Flags
+
+| Flag | Effect |
+| --- | --- |
+| `--apply-migrations` | Apply pending migrations without prompting. What you want in a script. |
+| `--skip-migrations` | Skip the migration check entirely. |
+| `--fix-checksums` | Update stored checksums for migration files that were edited after being applied. |
+| `--clean` | Wipe SSP and scheduler state so they re-bootstrap from SurrealDB. **Your data is preserved.** |
+| `--clean-db` | Also wipe the SurrealDB volume. Implies `--clean`. |
+
+<Warning title="--clean-db deletes your local data">
+  `--clean` is the recovery tool: it clears derived state (views, snapshots) and rebuilds it from the
+  database. `--clean-db` throws away the database too. Reach for `--clean` first. It fixes most
+  "my query returns nothing" situations without costing you your seed data.
+</Warning>
+
+## The edit loop
+
+With `spky dev` running:
+
+- **Edit `.surql`** → the schema is regenerated, so your types update. Create a migration with
+  `spky migrate create` when you're ready to make the change durable.
+- **Edit app code** → your own dev server handles it (Vite, `next dev`, whatever you configured).
+- **Something looks wrong** → `spky doctor` in a second terminal, then
+  [`spky jobs`](/docs/jobs) or [`spky logs`](/docs/cloud/logs) depending on what's stuck.
+
+<Note>
+  Ports 8666, 8667 and 9667 must be free. `spky dev` checks them up front and tells you which
+  process is holding one.
+</Note>
+
+## Next
+
+<CardGrid>
+  <LinkCard
+    href="/docs/dev/servers"
+    title="Dev servers & sidecars"
+    icon="terminal"
+    description="Start your frontend, backend and third-party containers with the stack."
+  />
+  <LinkCard
+    href="/docs/dev/env"
+    title="Environment variables"
+    icon="key"
+    description="What gets injected, and how to add your own."
+  />
+  <LinkCard
+    href="/docs/dev/doctor"
+    title="Doctor & troubleshooting"
+    icon="doctor"
+    description="The fastest way to find out what's actually broken."
+  />
+  <LinkCard
+    href="/docs/schema/migrations"
+    title="Migrations"
+    icon="migrations"
+    description="Create, apply and repair schema changes."
+  />
+</CardGrid>
+
+export const devCode = `spky dev`;
+
+export const outputCode = `👻 Starting development environment...
+👻 Mode: singlenode
+👻 Phase 1: Creating Docker network...
+👻 Phase 2: Starting SurrealDB...
+👻 Phase 3: Waiting for SurrealDB health...
+👻 Phase 4: Applying migrations...
+👻 Phase 6: Starting SSP...
+
+👻 Development environment ready!
+👻 SurrealDB:  http://localhost:8666
+👻 SSP:        http://localhost:8667
+👻 Press Ctrl+C to stop.`;

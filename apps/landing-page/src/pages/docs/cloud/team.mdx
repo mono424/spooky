@@ -1,6 +1,7 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
 title: Teams
+description: Invite members, manage roles, and handle vault passphrase resets.
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
@@ -44,7 +45,7 @@ Commands:
   remove <EMAIL>     Remove a team member
   rename [NAME]      Rename the tenant`;
 
-Sp00ky Cloud projects live inside a **tenant**. Every tenant has at least one admin and can have additional team members who share access to projects, deployments, and the [Shared Vault](/docs/cloud/vault).
+Sp00ky Cloud projects live inside a **tenant**. Every tenant has at least one admin and can have additional team members who share access to projects, deployments, and the [Shared Vault](/docs/reference/vault).
 
 ## Plan Limits
 
@@ -64,7 +65,7 @@ Invite a new member by their GitHub email address:
   lang="bash"
 />
 
-If the [Shared Vault](/docs/cloud/vault) is initialized, the CLI will prompt for your vault passphrase to securely transfer vault access to the new member. The invited user receives an email with a link to accept — they'll authenticate via GitHub OAuth and set their own vault passphrase.
+If the [Shared Vault](/docs/reference/vault) is initialized, the CLI will prompt for your vault passphrase to securely transfer vault access to the new member. The invited user receives an email with a link to accept. They'll authenticate via GitHub OAuth and set their own vault passphrase.
 
 <Note title="GitHub Account Required">
 Team members must have a GitHub account with the invited email address. Sp00ky Cloud uses GitHub OAuth for authentication.
@@ -110,7 +111,7 @@ Example output:
 />
 
 <Warning>
-Removing a team member immediately revokes all access. Their copy of the vault encryption key is deleted and any API keys they created are revoked. This cannot be undone — you'll need to re-invite them to restore access.
+Removing a team member immediately revokes all access. Their copy of the vault encryption key is deleted and any API keys they created are revoked. This cannot be undone. You'll need to re-invite them to restore access.
 </Warning>
 
 If a removed member previously loaded sensitive values, consider rotating those variables with `spky env set`.
@@ -133,7 +134,7 @@ If a team member loses their vault passphrase, an admin can approve a reset so t
   lang="bash"
 />
 
-See [Passphrase Reset](/docs/cloud/vault#passphrase-reset) for the full details.
+See [Passphrase Reset](/docs/reference/vault#passphrase-reset) for the full details.
 
 ## Renaming a Tenant
 

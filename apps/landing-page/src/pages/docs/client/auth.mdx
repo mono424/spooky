@@ -1,0 +1,204 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Authentication
+description: Sign users in with SurrealDB access methods, and scope every live query with row-level permissions.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import Note from '../../../components/ui/Note.astro';
+
+export const code5 = `-- Define access scope for accounts
+DEFINE ACCESS account ON DATABASE TYPE RECORD
+  SIGNUP ( 
+    CREATE user 
+    SET username = $username,
+      password = crypto::argon2::generate($password)
+  )
+  SIGNIN (
+    SELECT * FROM user 
+    WHERE username = $username 
+      AND crypto::argon2::compare(password, $password)
+  )
+  DURATION FOR TOKEN 15m, FOR SESSION 30d;
+
+-- Permissions use the $auth variable to check the current user
+DEFINE TABLE user SCHEMAFULL
+PERMISSIONS
+FOR update, delete WHERE id = $auth.id
+FOR select, create WHERE true;`;
+
+export const code4 = `import { db } from './db';
+
+// The second argument is typesafe based on your SIGNIN definition
+await db.auth.signIn('account', {
+username: 'sp00ky_user',
+password: 'secure_password'
+});`;
+
+export const code3 = `import { db } from './db';
+
+await db.auth.signUp('account', {
+username: 'new_user',
+password: 'secure_password'
+});`;
+
+export const codePerm = `-- A live stream's presence row is readable by its owner, by anyone when the
+-- broadcast is public, and by collaborators the owner shared it with as admin.
+DEFINE TABLE stream_presence SCHEMAFULL
+  PERMISSIONS
+    FOR select WHERE
+      -- 1. the owner reads their own rows (flat comparison)
+      ( $access = "account" AND owner = $auth.id )
+      -- 2. anyone reads a publicly shared broadcast's rows (relational subquery)
+      OR owner IN (SELECT VALUE owner FROM broadcast WHERE share_visibility = 'public')
+      -- 3. an admin collaborator reads them (subquery over a record link)
+      OR ( $access = "account" AND owner IN (
+             SELECT VALUE broadcast.owner FROM broadcast_share
+             WHERE user = $auth.id AND role = 'admin') )
+    FOR create, update, delete WHERE false;`;
+
+export const code2 = `await db.auth.signOut();`;
+
+export const code1 = `import { createSignal, onCleanup } from 'solid-js';
+
+function MyComponent() {
+  const [userId, setUserId] = createSignal<string | null>(null);
+  
+  // Subscribe to auth state changes
+  const unsubscribe = db.auth.subscribe((uid) => {
+    setUserId(uid);
+    if (uid) {
+      console.log('User logged in:', uid);
+    } else {
+      console.log('User logged out');
+    }
+  });
+  
+  // Clean up subscription
+  onCleanup(() => unsubscribe());
+  
+  return <div>User ID: {userId() || 'Not logged in'}</div>;
+}`;
+
+Authentication in Sp00ky is built directly into the sql schema, making it robust, typesafe, and dynamic. Because access control is defined at the database layer, your rules are consistently enforced regardless of how the data is accessed.
+
+## Schema Configuration
+
+You define authentication using `DEFINE ACCESS`. This allows you to specify exactly how users sign up and sign in, and what permissions they have.
+
+<CodeBlock
+  code={code5}
+lang="sql"
+/>
+
+## Client-Side Authentication
+
+Sp00ky provides a strongly-typed authentication service on the client. It integrates seamlessly with the schema definitions.
+
+### Sign In
+
+<CodeBlock
+  code={code4}
+lang="typescript"
+/>
+
+### Sign Up
+
+<CodeBlock
+  code={code3}
+lang="typescript"
+/>
+
+### Sign Out
+
+<CodeBlock
+  code={code2}
+  lang="typescript"
+/>
+
+### Reacting to Auth State
+
+You can subscribe to authentication state changes to update your UI dynamically. The callback receives the user ID when authenticated, or `null` when signed out.
+
+<CodeBlock
+  code={code1}
+  lang="typescript"
+/>
+
+### Local Data Isolation
+
+Every auth change also switches the client's **local storage bucket**. Each
+user has their own IndexedDB store on the device (signed-out sessions use a
+shared anonymous bucket), so:
+
+- After sign-out or an account switch, the previous user's cached rows are
+  no longer readable, live queries emit an empty result immediately and
+  refill from the server for the new session.
+- Signing out does **not** delete the user's bucket: their cache stays warm
+  and any un-pushed offline mutations remain queued in their bucket, resuming
+  automatically the next time they sign in on that device.
+- Mutations made while signed out stay in the anonymous bucket; they are not
+  replayed under a signed-in user's identity.
+
+Nothing to configure. This is the default behavior with
+`database.store: 'indexeddb'`. Details in
+[Architecture → Per-User Local Buckets](/docs/reference/architecture#per-user-local-buckets).
+
+## Row-Level Permissions in Live Queries
+
+A table's `PERMISSIONS FOR select` clause is more than a server-side gate: Sp00ky
+compiles it into a row filter that is injected into **every live query** on that
+table, enforced identically by the server SSP and the in-browser WASM processor.
+A client never registers a query that could return rows its permission forbids,
+and the filter is re-evaluated incrementally as data changes.
+
+### Supported expressions
+
+- Field comparisons: `=`, `!=`, `<`, `<=`, `>`, `>=`, and string prefix matches.
+- Boolean composition with `AND` and `OR`.
+- The `$auth` and `$access` parameters (e.g. `owner = $auth.id`,
+  `$access = "account"`).
+- **Relational membership** via `IN (SELECT VALUE <field> FROM <table> WHERE …)`.
+  The inner `WHERE` may itself reference `$auth`. This lowers to an incremental
+  semi-join, so when the referenced table changes (a broadcast is made public, a
+  share is revoked) the affected live queries update on their own. No refetch.
+- A subquery that projects a **record-link field** (`SELECT VALUE link.field`)
+  resolves the link with a nested join, so two-hop rules like "rows whose owner
+  is the owner of a broadcast shared with me" work.
+
+<CodeBlock
+  code={codePerm}
+  lang="sql"
+/>
+
+<Note>
+  All three branches above are enforced on the client too. A viewer only ever
+  syncs the presence rows they are actually allowed to see; making a broadcast
+  private retracts its rows from every unrelated viewer's live query.
+</Note>
+
+### Not supported
+
+<Warning title="Unsupported permission constructs">
+  `EXISTS (SELECT …)` and `$parent` correlation inside a permission clause are
+  not representable in the live-query engine and are rejected at registration
+  time with the offending table named. Rewrite `EXISTS` as an `IN (SELECT VALUE …)`
+  membership check. A table whose permission fails to compile is never synced
+  (fail-closed), so a client can never receive rows an unrepresentable rule was
+  meant to guard.
+</Warning>
+
+## Third-Party Providers
+
+### Clerk
+
+<Note>Integration coming soon.</Note>
+
+### Firebase
+
+<Note>Integration coming soon.</Note>
+
+### Auth0
+
+<Note>Integration coming soon.</Note>

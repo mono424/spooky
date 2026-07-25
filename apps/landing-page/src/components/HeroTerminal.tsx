@@ -15,7 +15,7 @@ export const HeroTerminal: React.FC = () => {
         </div>
       </div>
 
-      {/* Terminal Content — Full (desktop) */}
+      {/* Terminal Content, Full (desktop) */}
       <div className="terminal-content relative z-10 bg-surface p-6 transition-all duration-300 hidden lg:block">
         <pre className="font-mono text-sm text-white/60 leading-relaxed whitespace-pre-wrap break-words">
           <code>
@@ -43,7 +43,7 @@ export const HeroTerminal: React.FC = () => {
           </code>
         </pre>
       </div>
-      {/* Terminal Content — Condensed (mobile) */}
+      {/* Terminal Content, Condensed (mobile) */}
       <div className="terminal-content relative z-10 bg-surface p-4 transition-all duration-300 lg:hidden">
         <pre className="font-mono text-xs text-white/60 leading-relaxed whitespace-pre-wrap break-words">
           <code>

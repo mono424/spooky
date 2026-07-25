@@ -1,0 +1,324 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Workflows
+description: A DAG of steps, each one a job. Steps read their dependencies’ output, retry individually, and can fan out.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import PropTable from '../../../components/ui/PropTable.astro';
+import CardGrid from '../../../components/ui/CardGrid.astro';
+import LinkCard from '../../../components/ui/LinkCard.astro';
+
+export const quickstartCode = `# sp00ky.yml
+workflows:
+  monthly-report:
+    schedule: { cron: "0 6 1 * *" }   # 06:00 on the 1st; omit to run only on demand
+    steps:
+      # No dependsOn ⇒ a root. Roots run in parallel.
+      extract-orders: { backend: api, route: /exportOrders }
+      extract-users:  { backend: api, route: /exportUsers }
+
+      # Several dependencies ⇒ a fan-in join: waits for all of them.
+      transform:
+        backend: analytics
+        route: /buildReport
+        dependsOn: [extract-orders, extract-users]
+
+      # Two steps on the same dependency ⇒ they run in parallel.
+      notify:  { backend: notify, route: /postSlack,     dependsOn: [transform] }
+      archive: { backend: api,    route: /archiveReport, dependsOn: [transform] }
+    onFailure: halt`;
+
+export const shapeCode = `extract-orders ─┐
+                ├─▶ transform ─┬─▶ notify
+extract-users  ─┘              └─▶ archive`;
+
+export const stepIoCode = `// A step's dependencies' outputs arrive under \`payload.steps\`, keyed by step
+// name. Each value is whatever that step's backend responded with.
+app.post('/buildReport', async (req, res) => {
+  const { steps } = req.body;
+  const orders = steps['extract-orders'];   // { fileId: 'f_8123' }
+  const users  = steps['extract-users'];
+
+  const reportId = await buildReport(orders.fileId, users.fileId);
+  res.json({ reportId });                   // in turn becomes notify's input
+});`;
+
+export const rootStepCode = `// A root step has no dependencies, so \`steps\` is absent. If the workflow was
+// fanned out with forEach, the row is in \`payload.input\`.
+app.post('/exportOrders', async (req, res) => {
+  const { input } = req.body;               // { id: 'tenant:acme' } or undefined
+  res.json({ fileId: await exportOrders(input?.id) });
+});`;
+
+export const perStepCode = `workflows:
+  ingest-nightly:
+    schedule: { every: 1h }
+    steps:
+      fetch:
+        backend: api
+        route: /fetchUpstream
+        retry: { max: 5, strategy: exponential }   # flaky upstream
+        timeout: 300s                              # slow upstream
+      load:
+        backend: warehouse                         # a different backend…
+        route: /load                               # …so its own outbox table
+        dependsOn: [fetch]
+        payload: { mode: append }                  # static, merged with steps`;
+
+export const failureCode = `workflows:
+  nightly:
+    schedule: { cron: "0 2 * * *" }
+    onFailure: continue-independent
+    steps:
+      fetch-orders:  { backend: api, route: /fetchOrders }
+      load-orders:   { backend: api, route: /loadOrders,  dependsOn: [fetch-orders] }
+      fetch-reviews: { backend: api, route: /fetchReviews }
+      load-reviews:  { backend: api, route: /loadReviews, dependsOn: [fetch-reviews] }
+      # If fetch-orders fails: load-orders is skipped, but the reviews branch
+      # runs to completion. The run still ends \`failed\`.`;
+
+export const fanOutCode = `workflows:
+  tenant-report:
+    schedule: { cron: "0 6 * * 1" }     # Monday mornings
+    forEach:
+      query: SELECT id FROM tenant WHERE plan != 'free'
+      key: id
+    concurrency: skip                   # per tenant, not globally
+    steps:
+      collect: { backend: api, route: /collectUsage }
+      send:    { backend: notify, route: /emailReport, dependsOn: [collect] }`;
+
+export const fileLinkCode = `# One file per workflow keeps a large DAG out of the main manifest:
+workflows:
+  monthly-report: ./workflows/monthly-report.yml
+  tenant-report: ./workflows/tenant-report.yml
+
+  # Inline ones can sit alongside:
+  quick-ping:
+    steps:
+      ping: { backend: api, route: /ping }`;
+
+export const cliCode = `spky workflows list                       # deployed workflows
+spky workflows runs monthly-report        # run history, newest first
+spky workflows show monthly-report        # newest run, as a diagram
+spky workflows show _00_workflow_run:⟨…⟩    # a specific run
+spky workflows show monthly-report --json # the same state, as data
+spky workflows watch monthly-report       # live, updating as steps advance
+spky workflows kill monthly-report        # stop a run`;
+
+export const showOutputCode = `$ spky workflows show monthly-report
+monthly-report  ◐ running  _00_workflow_run:⟨monthly-report_1769…⟩
+elapsed 2:41
+
+┌────────────────────┐      ┌────────────────────┐      ┌────────────────────┐
+│ ✔ extract-orders   │──┐  ▸│ ◐ transform        │──┐  ▸│ ○ notify           │
+│   done             │  │   │   running…         │  │   │                    │
+└────────────────────┘  │   └────────────────────┘  │   └────────────────────┘
+┌────────────────────┐  │                           │   ┌────────────────────┐
+│ ✔ extract-users    │──┘                           └──▸│ ○ archive          │
+│   done             │                                  │                    │
+└────────────────────┘                                  └────────────────────┘
+
+✔ success   ✖ failed   ◐ running   ○ blocked   ⊘ skipped`;
+
+export const failedShowCode = `$ spky workflows show monthly-report
+monthly-report  ✖ failed  _00_workflow_run:⟨monthly-report_1769…⟩
+elapsed 0:18
+
+┌────────────────────┐      ┌────────────────────┐      ┌────────────────────┐
+│ ✖ extract-orders   │──┐  ▸│ ⊘ transform        │──┐  ▸│ ⊘ notify           │
+│   upstream 503     │  │   │                    │  │   │                    │
+└────────────────────┘  │   └────────────────────┘  │   └────────────────────┘
+┌────────────────────┐  │                           │   ┌────────────────────┐
+│ ✔ extract-users    │──┘                           └──▸│ ⊘ archive          │
+│   done             │                                  │                    │
+└────────────────────┘                                  └────────────────────┘
+
+error: {"code":"step_failed","step":"extract-orders"}
+  extract-orders: {"code":503,"reason":"upstream 503"}`;
+
+export const jsonCode = `$ spky workflows show monthly-report --json | jq '.steps[] | {step, status}'
+{ "step": "extract-orders", "status": "success" }
+{ "step": "extract-users",  "status": "success" }
+{ "step": "transform",      "status": "dispatched" }
+{ "step": "notify",         "status": "blocked" }
+{ "step": "archive",        "status": "blocked" }`;
+
+## Overview
+
+A workflow is a DAG of steps, where each step calls a backend route and can read the output of the steps it depends on. Use it when periodic work is more than one call: extract-then-load, fan-in aggregation, or anything where a later step needs an earlier step's result.
+
+Every step is an ordinary atomic job, so the whole [jobs](/docs/jobs) lifecycle applies per step: retries, timeouts, `spky jobs` visibility, kill, and crash recovery. A workflow adds the ordering, the data passing, and the run-level view.
+
+<CodeBlock code={quickstartCode} lang="yaml" />
+
+That declaration describes this shape:
+
+<CodeBlock code={shapeCode} lang="text" />
+
+Parallelism is implicit in the graph. There is no `parallel:` keyword. Anything whose dependencies are satisfied runs as soon as they are, so both roots start together and `notify`/`archive` start together.
+
+<Note>
+  A workflow with a `schedule:` runs on a clock exactly like a [schedule](/docs/jobs/schedules) does, same cron/interval syntax, same `spky schedules pause` / `trigger`. Omit `schedule:` for a workflow you only ever trigger by hand.
+</Note>
+
+## Passing data between steps
+
+<CodeBlock code={stepIoCode} lang="typescript" />
+
+A step receives the JSON body each of its **direct** dependencies responded with, under `payload.steps`. Only direct dependencies are injected, so a long chain never accumulates an ever-growing payload, if `notify` needs something `extract-orders` produced, pass it through `transform`'s response.
+
+<CodeBlock code={rootStepCode} lang="typescript" />
+
+<Warning>
+  A step's output is its HTTP response body, captured on the job row. Keep it small (identifiers, counts, paths) rather than the data itself. Bodies over 64 KB are replaced with a marker and the step still succeeds, so a large response fails quietly as *missing input* to the next step rather than as an error.
+</Warning>
+
+## Per-step retries, timeouts, and backends
+
+<CodeBlock code={perStepCode} lang="yaml" />
+
+`retry` and `timeout` work per step exactly as they do for a one-shot job, because a step *is* one: a step counts as failed only once its job row has exhausted its retries. While it is retrying, the workflow simply waits, dependents stay blocked, and nothing is marked failed.
+
+Steps may target different backends, in which case each step's job lands in its own backend's outbox table.
+
+## When a step fails
+
+`onFailure` decides the rest of the run:
+
+<PropTable props={[
+  { name: 'halt', type: 'string', default: 'halt', desc: 'Fail the run and skip every step that has not started yet.' },
+  { name: 'continue-independent', type: 'string', default: '-', desc: 'Skip only the branch below the failure; branches that do not depend on it keep running. The run still ends failed.' },
+]} />
+
+<CodeBlock code={failureCode} lang="yaml" />
+
+Either way, steps already in flight are left to finish rather than abandoned. The run terminalizes once nothing can move any more. That means a failed run may still be doing useful work for a moment, and its final status arrives when the last in-flight step lands.
+
+## Fanning out a whole workflow
+
+`forEach` works at the workflow level too: one complete run per row, with the row available to every step as `payload.input`.
+
+<CodeBlock code={fanOutCode} lang="yaml" />
+
+`concurrency` is then per row as well, so a tenant whose report is still generating doesn't block anyone else's. The [Schedules](/docs/jobs/schedules#concurrency) page covers the three policies.
+
+## Definitions in their own files
+
+A DAG is the kind of thing that outgrows a shared manifest quickly, so `workflows:` entries can live in their own files. Paths are relative to the manifest that names them.
+
+<CodeBlock code={fileLinkCode} lang="yaml" />
+
+## Watching a run
+
+<CodeBlock code={cliCode} lang="bash" />
+
+`show` renders a run as a diagram and `watch` renders the same diagram live, refreshing as steps advance:
+
+<CodeBlock code={showOutputCode} lang="text" />
+
+In `watch`, the selected step's payload, output, and errors appear underneath the graph. Use `↑↓`/`jk` to move, `K` to kill the run, `r` to refresh now, `q` to quit.
+
+When something breaks, the same view tells you where and why:
+
+<CodeBlock code={failedShowCode} lang="text" />
+
+Piped output switches to plain ASCII automatically, so it pastes cleanly into a ticket or a CI log; `--ascii` forces it. For scripting, `--json` gives the same state as data:
+
+<CodeBlock code={jsonCode} lang="bash" />
+
+<Note>
+  On a narrow terminal the renderer falls back to an indented dependency list instead of truncating the graph, so it stays readable at any width.
+</Note>
+
+## How it advances
+
+A workflow run has no long-lived coordinator process. Every advancement reads the step rows, decides what changed, and writes the transitions back under guards, which is what makes it safe to run restarts and duplicate events through:
+
+- **Roots are not special.** Every step starts `blocked` and is promoted the same way, so spawning and advancing share one code path.
+- **A step is dispatched exactly once.** The `blocked → ready` promotion is a compare-and-swap; whichever pass wins it is the one that creates the job. Two concurrent advancements can't double-dispatch.
+- **A join waits for all of its dependencies to succeed.** Not "most", and not "all finished": a dependency that failed means the join can never become ready, so it is skipped instead.
+- **Completion is observed, then verified.** The engine reacts to job-completion events, and every 5-second sweep also reconciles against the job rows directly, so a dropped event costs one sweep of latency rather than stalling the run.
+
+## Reference
+
+### Workflow fields
+
+<PropTable props={[
+  { name: 'schedule', type: 'object', default: '-', desc: 'When to run it: { cron } or { every }, plus optional timezone. Omit for a trigger-only workflow.' },
+  { name: 'steps', type: 'map', default: '(required)', desc: 'Steps by name. Declaration order is irrelevant, dependsOn decides execution order.' },
+  { name: 'onFailure', type: 'halt | continue-independent', default: 'halt', desc: 'Whether a failed step stops the whole run or only its branch.' },
+  { name: 'concurrency', type: 'skip | allow | replace', default: 'skip', desc: 'What a fire does when the previous run (for that forEach key) is still going.' },
+  { name: 'forEach.query', type: 'string', default: '-', desc: 'SurrealQL SELECT run each fire; one whole run per row, passed to every step as payload.input.' },
+  { name: 'forEach.key', type: 'string', default: 'id', desc: 'Row field whose value keys the per-row concurrency check.' },
+]} />
+
+### Step fields
+
+<PropTable props={[
+  { name: 'backend', type: 'string', default: '(required)', desc: 'Name of an apps: entry with an outbox method.' },
+  { name: 'route', type: 'string', default: '(required)', desc: 'POST route on that backend.' },
+  { name: 'dependsOn', type: 'string[]', default: '[]', desc: 'Steps that must succeed first. Empty means a root; several means a fan-in join.' },
+  { name: 'payload', type: 'object', default: '{}', desc: 'Static payload for this step, merged with input and steps.' },
+  { name: 'retry.max', type: 'integer', default: '3', desc: 'Retries before this step counts as failed.' },
+  { name: 'retry.strategy', type: 'linear | exponential', default: 'linear', desc: 'Backoff shape between retries.' },
+  { name: 'timeout', type: 'duration', default: '(backend default)', desc: 'Per-step HTTP timeout, e.g. 30s.' },
+]} />
+
+### Statuses
+
+Run statuses are `running`, `success`, `failed`, and `killed`. Step statuses add the lifecycle:
+
+<PropTable props={[
+  { name: 'blocked', type: 'step', default: '-', desc: 'Waiting on a dependency.' },
+  { name: 'ready', type: 'step', default: '-', desc: 'Dependencies satisfied and claimed for dispatch.' },
+  { name: 'dispatched', type: 'step', default: '-', desc: 'Its job is pending, retrying, or running.' },
+  { name: 'success', type: 'step', default: '-', desc: 'Its job succeeded; its response body is the step output.' },
+  { name: 'failed', type: 'step', default: '-', desc: 'Its job exhausted its retries.' },
+  { name: 'skipped', type: 'step', default: '-', desc: 'An ancestor failed, or the run was killed, so it can never run.' },
+]} />
+
+## Validation
+
+`spky lint` rejects a broken DAG before it can be deployed:
+
+- `dependsOn` names a step that exists, and no step depends on itself
+- the graph is acyclic
+- each step's `backend` is an app with an outbox method, and its `route` exists in that backend's OpenAPI spec
+- the cadence parses, if the workflow has one
+
+<Warning>
+  Workflows run on VM and cluster deployments. The Cloudflare (free) plan has no job runner, so the steps would never execute.
+</Warning>
+
+## See also
+
+<CardGrid>
+  <LinkCard
+    href="/docs/jobs/schedules"
+    title="Schedules"
+    icon="clock"
+    description="Single-route cron and interval jobs, fan-out, and the spky schedules commands."
+  />
+  <LinkCard
+    href="/docs/jobs"
+    title="Jobs"
+    icon="jobs"
+    description="The job lifecycle every step inherits."
+  />
+  <LinkCard
+    href="/docs/reference/config#schedules-and-workflows"
+    title="sp00ky.yml"
+    icon="config"
+    description="Where the workflows: block sits in your project config."
+  />
+  <LinkCard
+    href="/docs/backend"
+    title="What is a backend"
+    icon="server"
+    description="The service each step actually calls."
+  />
+</CardGrid>

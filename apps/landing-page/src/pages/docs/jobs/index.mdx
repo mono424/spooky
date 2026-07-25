@@ -1,0 +1,251 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Jobs
+description: A job is one backend call, stored as a row. Watch it, retry it, kill it, from your app or the CLI.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import Note from '../../../components/ui/Note.astro';
+import PropTable from '../../../components/ui/PropTable.astro';
+import CardGrid from '../../../components/ui/CardGrid.astro';
+import LinkCard from '../../../components/ui/LinkCard.astro';
+
+export const callCode = `// Call a backend route. Returns as soon as the row is written, the SSP
+// delivers it to your backend, retrying on failure.
+await db.run('api', '/spookify', { id: thread.id }, { assignedTo: thread.id });`;
+
+export const optionsCode = `// Idempotent work: retry generously.
+await db.run('api', '/generate-content', data, {
+  max_retries: 5,
+  retry_strategy: 'exponential',
+});
+
+// Not idempotent: never retry.
+await db.run('api', '/charge-payment', data, { max_retries: 0 });
+
+// Slow work (needs timeoutOverridable: true on the backend).
+await db.run('agent', '/chat', data, { timeout: 120 });
+
+// Run no sooner than 5 minutes from now.
+await db.run('api', '/send-reminder', { id: reminder.id }, { delay: 5 * 60 * 1000 });`;
+
+export const queryJobCode = `// Jobs are ordinary records, so the query builder reads them, and because the
+// query is reactive, the UI follows the job's status without any polling.
+const threadQuery = db.query('thread')
+  .where({ id: 'thread:abc123' })
+  .related('jobs', (q) => q
+    .where({ path: '/spookify' })
+    .orderBy('created_at', 'desc')
+    .limit(1))
+  .one()
+  .build();
+
+const thread = useQuery(db, () => threadQuery);
+
+const job = () => thread()?.jobs?.[0];
+const isRunning = () => ['pending', 'processing'].includes(job()?.status);
+const failed = () => job()?.status === 'failed';`;
+
+export const jobSchemaCode = `DEFINE TABLE job SCHEMAFULL
+  PERMISSIONS
+    FOR select, create, update, delete
+    WHERE $access = "account" AND assigned_to.author.id = $auth.id;
+
+-- What to call, and for whom
+DEFINE FIELD assigned_to ON TABLE job TYPE record<thread>
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD path ON TABLE job TYPE string
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD payload ON TABLE job TYPE any
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+
+-- Retry policy
+DEFINE FIELD retries ON TABLE job TYPE int DEFAULT ALWAYS 0
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD max_retries ON TABLE job TYPE int DEFAULT ALWAYS 3;
+DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
+  ASSERT $value IN ["linear", "exponential"]
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+
+-- Optional per-job overrides
+DEFINE FIELD delay ON TABLE job TYPE int DEFAULT ALWAYS 0
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD timeout ON TABLE job TYPE option<int>
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+
+-- Lifecycle, written by the platform
+DEFINE FIELD status ON TABLE job TYPE string DEFAULT ALWAYS "pending"
+  ASSERT $value IN ["pending", "processing", "success", "failed"]
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS []
+  PERMISSIONS FOR create WHERE true FOR select, update WHERE false;
+-- The element must be FLEXIBLE, or a SCHEMAFULL table rejects the runner's
+-- { code, reason } entries as unknown fields.
+DEFINE FIELD errors[*] ON TABLE job TYPE object FLEXIBLE;
+DEFINE FIELD result ON TABLE job TYPE any
+  PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
+DEFINE FIELD assignee ON TABLE job TYPE option<string>
+  PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
+
+DEFINE FIELD updated_at ON TABLE job TYPE datetime DEFAULT ALWAYS time::now()
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD created_at ON TABLE job TYPE datetime VALUE time::now()
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;`;
+
+export const undoSendCode = `// Queue the send 30 seconds out, linked to the email record.
+await db.run('api', '/send-email',
+  { to: email.to, subject: email.subject, body: email.body },
+  { assignedTo: email.id, delay: 30_000 }
+);
+
+// "Undo": the user owns the email record, so a normal update works, and the
+// /send-email handler bails out when the job finally runs.
+await db.update('email', 'email:abc123', { retracted: true });
+
+// Backend handler:
+if (email.retracted) return { skipped: true };
+await mailer.send(email);`;
+
+export const cliCode = `spky jobs                      # live dashboard (status counts, recent jobs)
+spky jobs list                 # static, scriptable table (alias: ls)
+spky jobs list --status failed
+spky jobs list --limit 1000 --json
+spky jobs get job:abc123       # full payload, result, and error history
+spky jobs kill job:abc123      # cancel in-flight, or drop if still queued
+spky jobs retry job:abc123     # re-run a terminal job
+spky jobs clear                # delete terminal (success/failed) jobs
+
+# Every command targets the local dev stack by default; --cloud targets the
+# deployed database, resolved from "spky login" plus the slug in sp00ky.yml.
+spky jobs --cloud`;
+
+export const scheduleCronCode = `# sp00ky.yml, runs server-side, with no client involved.
+schedules:
+  nightly-cleanup:
+    cron: "0 3 * * *"
+    backend: api
+    route: /cleanupExpired`;
+
+## Overview
+
+A job is a row in an outbox table that says "call this backend route with this payload". Your app writes the row and moves on; the SSP delivers it, retries it on failure, and records the outcome back on the row.
+
+Because the row is ordinary synced data, the whole thing is reactive: your UI can watch a job's `status` the same way it watches anything else, offline writes queue like any other mutation, and nothing depends on the client staying connected while the work runs.
+
+<CodeBlock code={callCode} lang="typescript" />
+
+`spky add api` scaffolds the outbox table and wires the backend into `sp00ky.yml`. See [Backend Setup](/docs/backend) for that walkthrough.
+
+## Calling a backend route
+
+`db.run(backend, path, payload, options?)` takes the backend name from `sp00ky.yml`, a route path from that backend's OpenAPI spec, and the payload for it. The payload is validated against the spec, so a missing required argument throws immediately rather than failing later in the runner.
+
+<PropTable props={[
+  { name: 'assignedTo', type: 'string', default: '-', desc: 'Record id to link the job to. Makes it reachable with .related() from that record, which is the usual way a UI finds "the job for this thread".' },
+  { name: 'max_retries', type: 'number', default: '3', desc: 'Attempts before the job is marked failed. Use 0 for anything not safe to repeat.' },
+  { name: 'retry_strategy', type: "'linear' | 'exponential'", default: "'linear'", desc: 'Backoff shape between attempts.' },
+  { name: 'timeout', type: 'number', default: '(backend default)', desc: 'HTTP timeout in seconds. Only applies when the backend sets deploy.timeoutOverridable.' },
+  { name: 'delay', type: 'number', default: '0', desc: 'Minimum milliseconds the job stays pending before it becomes eligible to run.' },
+]} />
+
+<CodeBlock code={optionsCode} lang="typescript" />
+
+## Reading job status
+
+<CodeBlock code={queryJobCode} lang="typescript" />
+
+`status` moves `pending → processing → success | failed`. On success the backend's response body is stored on the job's `result` field, so `spky jobs get` shows what a job actually returned. On failure each attempt appends `{ code, reason }` to `errors`, and `retries` counts what has been tried.
+
+## Delayed jobs
+
+A `delay` keeps a job `pending` for at least that long. It is a minimum, not a precise schedule: the job becomes eligible when the delay elapses, then runs as soon as the runner picks it up.
+
+A delayed job is just a pending job, so it stays visible and cancellable while it waits. That makes it the natural way to build an undo window:
+
+<CodeBlock code={undoSendCode} lang="typescript" />
+
+<Warning>
+  `spky jobs kill` and `fn::job::kill` are operator actions: record-access users can't call them, so one user can never kill another's job. For a user-facing "Undo", use the flag pattern above (the user owns the record, so a normal update works) rather than trying to kill the job from the client.
+</Warning>
+
+<Note>
+  Delayed jobs survive a restart: the recovery sweep re-dispatches a job whose delay elapsed while its SSP was down, so the window can't be lost.
+</Note>
+
+## Scheduled and multi-step work
+
+Everything above is about jobs your app creates. Work that should happen on a clock is declared in `sp00ky.yml` instead, and runs whether or not anyone is connected:
+
+<CodeBlock code={scheduleCronCode} lang="yaml" />
+
+Each cycle creates a new job row in this same table, so everything on this page still applies to it.
+
+- **[Schedules](/docs/jobs/schedules)**: cron and interval cadences, fan-out (one job per row of a query), concurrency policies, `spky schedules`
+- **[Workflows](/docs/jobs/workflows)**: several jobs as a DAG, passing each step's output to its dependents, and the live `spky workflows watch` view
+
+<Note>
+  These replaced the client-side `db.runRecurring()` API, which has been removed.
+</Note>
+
+## Inspecting jobs from the CLI
+
+`spky jobs` reads the outbox tables straight from SurrealDB, so you can watch and manage the queue without building any UI:
+
+<CodeBlock code={cliCode} lang="bash" />
+
+<Note>
+  `kill` and `retry` go through the `fn::job::kill` / `fn::job::retry` SurrealQL functions rather than a plain `UPDATE`, because job pickup is gated inside the SSP. Those functions are installed by the schema deploy, so both need a deployed backend. `clear` only touches terminal rows, so it is a plain `DELETE`.
+</Note>
+
+## How execution works
+
+The job runner is built into the SSP. There is nothing to install or implement:
+
+1. **Pickup is create-only.** Writing a `pending` row fires an event that hands the job to the runner, which is why `db.run()` creates a row rather than updating one.
+2. **The runner is the only writer of `status`.** Everything else (kill, retry, recovery) goes through guarded statements, so two writers can never disagree about a job's state.
+3. **Retries happen in-process,** with linear or exponential backoff. A job that exhausts them is marked `failed` with its error history intact.
+4. **A recovery sweep catches what events miss:** rows created while the SSP was down, jobs whose delay elapsed during a restart, and `processing` rows orphaned by a crash. In cluster mode the scheduler owns that sweep and uses `assignee` to tell whether the owning SSP is still alive.
+
+<Warning>
+  A SCHEMAFULL job table must define the platform's own fields, or those writes are rejected at the statement level and quietly lost. `spky deploy` injects `assignee`, `result`, and `errors[*]` with `IF NOT EXISTS`, so re-deploying an older project fixes it.
+</Warning>
+
+## Job table schema
+
+`spky add api` generates this. The permission rule is the important part: scope jobs to their owner so one user can neither read nor queue work on another's records.
+
+<CodeBlock code={jobSchemaCode} lang="sql" />
+
+<Note>
+  `status`, `errors`, `result`, and `assignee` are platform-written: clients may read them but never set them. `assignee` is the owning SSP node id, used for cluster recovery.
+</Note>
+
+## See also
+
+<CardGrid>
+  <LinkCard
+    href="/docs/jobs/schedules"
+    title="Schedules"
+    icon="clock"
+    description="Recurring work. Each cycle creates one of these job rows."
+  />
+  <LinkCard
+    href="/docs/jobs/workflows"
+    title="Workflows"
+    icon="workflow"
+    description="A DAG of steps, where every step is a job."
+  />
+  <LinkCard
+    href="/docs/backend"
+    title="What is a backend"
+    icon="server"
+    description="Where job rows come from, and the outbox model behind them."
+  />
+  <LinkCard
+    href="/docs/client/queries"
+    title="Reactive queries"
+    icon="live"
+    description="The query builder used above to read job status."
+  />
+</CardGrid>

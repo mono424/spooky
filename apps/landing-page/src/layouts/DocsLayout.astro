@@ -3,20 +3,20 @@ import { ClientRouter } from 'astro:transitions';
 import Sidebar from '../components/Sidebar.astro';
 import OnThisPage from '../components/OnThisPage.astro';
 import Header from '../components/Header.astro';
-import { basePath, docsNav as nav } from '../config/nav';
+import NextSteps from '../components/ui/NextSteps.astro';
+import { basePath, resolveActive } from '../config/nav';
 // oxlint-disable-next-line no-unassigned-import
 import '../styles/docs.css';
 
 const { frontmatter, headings } = Astro.props;
 const title = frontmatter?.title || Astro.props.title;
+// One-line page summary. Rendered as the lead paragraph and reused for social
+// cards, so a page that sets it gets a useful preview instead of the generic one.
+const description = frontmatter?.description || Astro.props.description;
+const socialDescription =
+  description || 'sp00ky documentation, The Reactive, Local-First Framework for SurrealDB';
 
-const currentPath = Astro.url.pathname.replace(/\/$/, '');
-const activeGroup = nav.find((g: any) =>
-  g.links.some((l: any) => {
-    const cleanLink = l.href.replace(/\/$/, '');
-    return currentPath === cleanLink || currentPath.startsWith(cleanLink + '/');
-  })
-);
+const { group: activeGroup } = resolveActive(Astro.url.pathname);
 ---
 
 <html lang="en" class="dark">
@@ -24,14 +24,15 @@ const activeGroup = nav.find((g: any) =>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width" />
     <meta property="og:type" content="article" />
-    <meta property="og:title" content={`${title} — sp00ky Docs`} />
-    <meta property="og:description" content="sp00ky documentation — The Reactive, Local-First Framework for SurrealDB" />
+    <meta property="og:title" content={`${title} | sp00ky Docs`} />
+    <meta name="description" content={socialDescription} />
+    <meta property="og:description" content={socialDescription} />
     <meta property="og:image" content={new URL('/social-card.png', Astro.site)} />
     <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:title" content={`${title} — sp00ky Docs`} />
-    <meta property="twitter:description" content="sp00ky documentation — The Reactive, Local-First Framework for SurrealDB" />
+    <meta property="twitter:title" content={`${title} | sp00ky Docs`} />
+    <meta property="twitter:description" content={socialDescription} />
     <meta property="twitter:image" content={new URL('/social-card.png', Astro.site)} />
-    <title>{title} — sp00ky Docs</title>
+    <title>{title} | sp00ky Docs</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -157,12 +158,23 @@ const activeGroup = nav.find((g: any) =>
             }
           </nav>
 
-          <h1 class="text-4xl font-semibold tracking-tight mb-4">{title}</h1>
-          <p class="text-lg text-text-muted leading-relaxed mb-8">
-            <slot name="description" />
-          </p>
+          <h1
+            class:list={[
+              'text-4xl font-semibold tracking-tight',
+              description ? 'mb-4' : 'mb-8',
+            ]}
+          >
+            {title}
+          </h1>
+          {
+            description && (
+              <p class="text-lg text-text-muted leading-relaxed mb-8">{description}</p>
+            )
+          }
 
           <slot />
+
+          <NextSteps />
         </div>
       </main>
 

@@ -1,0 +1,112 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Relationships
+description: Model 1:1, 1:N and many-to-many links in SurrealQL, and pull them into a query with .related().
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+
+A relationship is a field of type `record<table>`. Declare it in the schema and the client can
+traverse it in a single query with `.related()`. No joins, no second round trip.
+
+<CodeBlock fileName="schema.surql" code={quickCode} lang="sql" />
+
+<CodeBlock code={quickQueryCode} lang="typescript" />
+
+`thread.author` comes back as a fully typed `User`, not an id, and the query stays live: editing the
+author's username updates every thread row that renders it.
+
+## One-to-one
+
+A user has exactly one profile. Put a `record<profile>` field on `user`. Add the reverse field only
+if you also need to traverse the other direction.
+
+<CodeBlock code={oneToOneCode} lang="sql" />
+
+## One-to-many
+
+A thread has many comments. The rule is the same as in a relational database: **the child holds the
+reference.** Put `record<thread>` on `comment`.
+
+<CodeBlock code={oneToManyCode} lang="sql" />
+
+Query it from either end: from the child with `.related('thread')`, or from the parent by filtering
+the child table on the parent id.
+
+<CodeBlock code={oneToManyQueryCode} lang="typescript" />
+
+<Note>
+  Keeping a mirror `array<record<comment>>` on the parent is optional and costs you a write on every
+  insert. Filter the child table instead unless you specifically need the ordered array.
+</Note>
+
+## Many-to-many
+
+For users liking posts, or posts having tags, use a **relation table**, a table that stores graph
+edges and can carry its own fields.
+
+<CodeBlock code={manyToManyCode} lang="sql" />
+
+Because the edge is a table, anything you'd put on a row works on it: timestamps, a rating, a
+permission clause. Create edges with `RELATE`.
+
+## The `@parent` descriptor
+
+When a `record<...>` field always points at the acting user, mark it `-- @parent`. Sp00ky fills it
+from the auth context on write, so client code can never spoof it.
+
+<CodeBlock code={parentCode} lang="sql" />
+
+See [Define your schema](/docs/schema#annotations) for the full descriptor list, and
+[Reactive queries](/docs/client/queries) for the querying side.
+
+export const quickCode = `DEFINE TABLE thread SCHEMAFULL;
+DEFINE FIELD author ON TABLE thread TYPE record<user>;`;
+
+export const quickQueryCode = `const threads = db.query('thread')
+  .related('author')       // pulls the full user record
+  .orderBy('created_at', 'desc')
+  .build();
+
+threads.data()?.[0].author.username; // typed`;
+
+export const oneToOneCode = `DEFINE TABLE user SCHEMAFULL;
+DEFINE TABLE profile SCHEMAFULL;
+
+-- user -> profile
+DEFINE FIELD profile ON TABLE user TYPE record<profile>;
+
+-- optional: profile -> user, only if you traverse both ways
+DEFINE FIELD user ON TABLE profile TYPE record<user>;`;
+
+export const oneToManyCode = `DEFINE TABLE thread SCHEMAFULL;
+DEFINE TABLE comment SCHEMAFULL;
+
+-- the child stores the reference
+DEFINE FIELD thread ON TABLE comment TYPE record<thread>;`;
+
+export const oneToManyQueryCode = `// comments for one thread
+const comments = db.query('comment')
+  .where({ thread: threadId })
+  .orderBy('created_at', 'asc')
+  .build();
+
+// each comment with its thread attached
+const withThread = db.query('comment')
+  .related('thread')
+  .build();`;
+
+export const manyToManyCode = `DEFINE TABLE user SCHEMAFULL;
+DEFINE TABLE post SCHEMAFULL;
+
+-- the edge table connects user -> post
+DEFINE TABLE liked SCHEMAFULL TYPE RELATION FROM user TO post;
+
+-- edges can carry their own fields
+DEFINE FIELD created_at ON TABLE liked TYPE datetime VALUE time::now();
+
+-- create an edge
+-- RELATE user:john->liked->post:surrealdb_is_cool;`;
+
+export const parentCode = `DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent`;

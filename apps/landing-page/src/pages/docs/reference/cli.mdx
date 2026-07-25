@@ -1,0 +1,89 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: CLI reference
+description: Every spky command, grouped by what you're trying to do. Run spky <command> --help for full flags.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+
+<CodeBlock code={helpCode} lang="bash" />
+
+Commands read `sp00ky.yml` from the current directory. Pass `--path <dir>` to point at a project
+somewhere else, and `spky <command> --help` for the flags of any single command.
+
+## Project & dev loop
+
+| Command | What it does |
+| --- | --- |
+| `spky init` | Scaffold a new project: schema, app, config, first migration. |
+| `spky dev` | Start the local stack: SurrealDB, SSP, scheduler, your apps. [Docs](/docs/dev) |
+| `spky generate` (`gen`) | Generate client types from `sp00ky.yml`, or a single file via `--input`/`--output`. [Docs](/docs/schema/generated-types) |
+| `spky migrate` | Database migrations: `create`, `apply`, `prod`, `status`, `fix`. [Docs](/docs/schema/migrations) |
+| `spky lint` | Validate `sp00ky.yml`. |
+| `spky doctor [--json]` | Project health: config, codegen freshness, migrations, Docker. [Docs](/docs/dev/doctor) |
+| `spky verify [--fix]` | Check the SSP/scheduler snapshot against upstream SurrealDB; `--fix` forces a re-bootstrap. |
+| `spky query [sql]` | Run SurrealQL once, or open a REPL. `--cloud` targets the deployment. |
+| `spky version` | Print version information. |
+
+## Adding things to a project
+
+| Command | What it does |
+| --- | --- |
+| `spky api add` | Register a backend and generate its outbox table. [Docs](/docs/backend/add) |
+| `spky bucket` | `add` a file bucket, or configure its storage `backend`. [Docs](/docs/client/buckets) |
+| `spky flag` | Feature flags: `list`, `create`, `get`, `delete`, `enable`, `disable`, `set`, `unset`, `eval`. `set` adds a targeting rule, `eval` dry-runs one user. [Docs](/docs/client/feature-flags) |
+| `spky recipe <name>` | Render a cookbook snippet (`live-list`, `optimistic-mutation`, `crdt-text-field`). `spky recipe list` for the index. |
+| `spky agents init` | Generate `AGENTS.md`, parameterized by your schema. [Docs](/docs/reference/ai-agents) |
+| `spky mcp` | MCP server for editors and agents: `serve`, `token`, `tokens`, `revoke`, `install`. [Docs](/docs/reference/mcp) |
+
+## Operating a running system
+
+| Command | What it does |
+| --- | --- |
+| `spky jobs` | Background jobs: `list`, `get`, `kill`, `retry`, `clear`. No subcommand opens the interactive dashboard. [Docs](/docs/jobs) |
+| `spky schedules` | Server-side schedules: `list`, `get`, `pause`, `resume`, `trigger`, `runs`, `sync`. [Docs](/docs/jobs/schedules) |
+| `spky workflows` | Workflow DAGs: `list`, `show`, `watch`, `runs`, `kill`. `show` renders the graph, `watch` follows a run live. [Docs](/docs/jobs/workflows) |
+| `spky logs` | Tail or browse logs. `--since`, `--until`, `--grep`, `--filter`, `--tui`. [Docs](/docs/cloud/logs) |
+| `spky stats` | Live CPU, memory, disk and network graphs. |
+| `spky status` | Deployment version, status and running VMs. |
+| `spky restart [--surreal] [--clean]` | Restart scheduler and SSP containers. Backends and frontends are untouched. |
+| `spky scale ssp <n>` | Scale SSP instances. |
+
+## Cloud
+
+| Command | What it does |
+| --- | --- |
+| `spky login`, `spky logout` | Authenticate with Sp00ky Cloud. |
+| `spky project` | Manage cloud projects: `create`, `list`, `credentials`, `destroy`. [Docs](/docs/cloud/getting-started) |
+| `spky deploy` | Build, upload, provision, migrate, deploy. [Docs](/docs/cloud/deploying) |
+| `spky push` | Push schema to a free (Cloudflare) project's SSP node. Paid plans apply schema during `deploy`. |
+| `spky release <app>` | Announce a new version to running clients without deploying. `--mandatory`, `--cache-bust`. |
+| `spky env` | Encrypted variables and the vault: `set`, `list`, `rm`, `pull`, `import`, `unlock`, `passphrase`, `share-ci`, `reset`. [Docs](/docs/cloud/env-variables) |
+| `spky domain` | Custom domains: `add`, `list`, `remove`. |
+| `spky backup` | Database backups: `list`, `create`, `restore`, `delete`, `configure`, `reset`. [Docs](/docs/cloud/backups) |
+| `spky link` | GitHub push-to-deploy: `setup`, `status`, `settings`, `unlink`, `trigger`, `runs`. [Docs](/docs/cloud/ci-cd) |
+| `spky token` | API tokens for CI: `create`, `list`, `revoke`. |
+| `spky team` | Members and invitations: `list`, `invite`, `invitations`, `revoke`, `remove`, `rename`. [Docs](/docs/cloud/team) |
+| `spky billing` | Billing: `usage`, `change-plan`. No subcommand opens the portal. |
+| `spky notice [message]` | Post a notice to the public uptime page. `list` and `remove` manage existing ones. |
+
+## Flags worth memorising
+
+<CodeBlock code={flagsCode} lang="bash" />
+
+<Note>
+  `spky doctor --json` is the designed integration point for scripts and AI agents: a stable list of
+  checks, each with a `severity` and a `fix` command. See
+  [AI coding agents](/docs/reference/ai-agents).
+</Note>
+
+export const helpCode = `spky --help`;
+
+export const flagsCode = `spky dev --clean            # rebuild SSP/scheduler state, keep your data
+spky dev --clean-db         # also wipe the database
+spky deploy --only api,web  # deploy a subset of apps
+spky deploy --upgrade       # also pull new SSP/scheduler images
+spky doctor --json          # machine-readable health check
+spky query --cloud '…'      # run SurrealQL against production
+spky logs --since 1h --grep 'error'`;

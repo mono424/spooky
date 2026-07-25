@@ -19,9 +19,38 @@ import {
   TriangleAlert, // warning
   Save, // save
   Bot, // bot
+  Rocket, // rocket
+  Database, // database
+  Terminal, // terminal
+  Cloud, // cloud
+  Server, // server
+  Clock, // clock
+  Workflow, // workflow
+  ListChecks, // jobs
+  Layers, // layers
+  Link2, // relationship
+  FileCode2, // types
+  GitBranch, // migrations
+  Radio, // live
+  WifiOff, // offline
+  Flag, // flag
+  FolderUp, // bucket
+  Users, // users
+  Gauge, // gauge
+  Stethoscope, // doctor
+  Settings2, // config
+  ScrollText, // logs
+  Smartphone, // mobile
+  Code2, // code
+  Play, // play
+  ShieldCheck, // shield
+  Puzzle, // puzzle
+  HardDriveDownload, // backup
 } from 'lucide-react';
 
-const { name, class: className } = Astro.props;
+// `strokeWidth` defaults to 1 to keep the large marketing icons hairline-thin;
+// small inline icons (docs link cards) pass a heavier weight so they stay legible.
+const { name, class: className, strokeWidth = 1 } = Astro.props;
 
 // Map our custom names to Lucide components
 const iconMap = {
@@ -40,9 +69,36 @@ const iconMap = {
   warning: TriangleAlert,
   save: Save,
   bot: Bot,
+  rocket: Rocket,
+  database: Database,
+  terminal: Terminal,
+  cloud: Cloud,
+  server: Server,
+  clock: Clock,
+  workflow: Workflow,
+  jobs: ListChecks,
+  layers: Layers,
+  relationship: Link2,
+  types: FileCode2,
+  migrations: GitBranch,
+  live: Radio,
+  offline: WifiOff,
+  flag: Flag,
+  bucket: FolderUp,
+  users: Users,
+  gauge: Gauge,
+  doctor: Stethoscope,
+  config: Settings2,
+  logs: ScrollText,
+  mobile: Smartphone,
+  code: Code2,
+  play: Play,
+  shield: ShieldCheck,
+  puzzle: Puzzle,
+  backup: HardDriveDownload,
 };
 
 const LucideIcon = iconMap[name] || Wrench;
 ---
 
-<LucideIcon className={className} strokeWidth={1} />
+<LucideIcon className={className} strokeWidth={strokeWidth} />

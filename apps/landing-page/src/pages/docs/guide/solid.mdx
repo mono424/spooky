@@ -1,6 +1,7 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
-title: SolidJS Guide
+title: SolidJS guide
+description: "Wire Sp00ky into a Solid app end to end: client setup, live queries, auth and mutations."
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
@@ -111,7 +112,7 @@ export function AuthProvider(props: { children: JSX.Element }) {
   const [userId, setUserId] = createSignal<string | null>(null);
   const [isInitializing, setIsInitializing] = createSignal(true);
 
-  // Subscribe to auth state changes — fires synchronously with the
+  // Subscribe to auth state changes, fires synchronously with the
   // current value on subscribe, then on every signin/signout.
   const unsubscribe = db.auth.subscribe((uid) => {
     setUserId(uid);
@@ -163,7 +164,7 @@ function useMutations() {
   const db = useDb<typeof schema>();
 
   // Create a new thread. \`db.create\` takes a fully-qualified record
-  // id ("thread:abc…") plus a typed payload — there's no separate
+  // id ("thread:abc…") plus a typed payload. There's no separate
   // table argument.
   const createThread = async (title: string, content: string, authorId: string) => {
     const id = \\\`thread:\\\${Uuid.v4().toString().replace(/-/g, '')}\\\`;
@@ -175,7 +176,7 @@ function useMutations() {
     });
   };
 
-  // Update a thread. The third arg is a partial — only listed fields
+  // Update a thread. The third arg is a partial, only listed fields
   // are merged.
   const updateThread = async (
     threadId: string,

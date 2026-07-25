@@ -15,7 +15,7 @@ const { code, lang = 'bash', fileName } = Astro.props;
   class="code-block-wrapper glass-panel my-6 bg-[#0c0c0e]/80 shadow-glass overflow-hidden group max-w-full"
 >
   <div class="relative">
-    {/* Filename as a plain label — no window frame, no divider */}
+    {/* Filename as a plain label. No window frame, no divider */}
     {
       fileName && (
         <span class="absolute top-3.5 left-4 font-mono text-xs text-text-muted select-none">
@@ -100,11 +100,11 @@ const { code, lang = 'bash', fileName } = Astro.props;
   /* Important: We only override the background-color here.
      We removed the 'color' override so the syntax highlighting shows through.
   */
-  /* No white-space: pre here — the wrapper's own newlines around <Code> would
+  /* No white-space: pre here, the wrapper's own newlines around <Code> would
      render as blank lines. The inner <pre> already preserves indentation. */
 
   /* Scoped to .code-content so it beats the plain-fence glass surface that
-     docs.css puts on a bare .astro-code — here the wrapper supplies the frame. */
+     docs.css puts on a bare .astro-code, here the wrapper supplies the frame. */
   .code-content .astro-code {
     background-color: transparent !important;
     border: 0 !important;

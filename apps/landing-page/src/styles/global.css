@@ -377,7 +377,7 @@ details[open] .expanded-content {
   right: 0;
   z-index: 50;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  /* Heavier opacity + smaller blur radius — Safari's backdrop-filter is one
+  /* Heavier opacity + smaller blur radius. Safari's backdrop-filter is one
      of the slowest paints, especially on a fixed nav that re-rasters on scroll. */
   background: rgba(9, 9, 11, 0.88);
   backdrop-filter: saturate(140%) blur(8px);
@@ -983,7 +983,7 @@ body {
   animation-timing-function: ease-in-out;
   animation-iteration-count: infinite;
   animation-direction: alternate;
-  /* will-change intentionally omitted — promoting 14 layers up-front
+  /* will-change intentionally omitted: promoting 14 layers up-front
      hurts more than it helps in Safari (memory + composite cost). */
   user-select: none;
 }

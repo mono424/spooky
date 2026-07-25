@@ -1,6 +1,7 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
 title: Deploying
+description: One command builds your images, provisions infrastructure, runs migrations and cuts over DNS.
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
@@ -53,14 +54,24 @@ You'll see real-time progress as each step completes.
   Run <code>spky lint</code> before deploying to catch config issues early.
 </Note>
 
-### Upgrading Infrastructure
+### Flags
 
-To also upgrade SSP and Scheduler to the latest version:
+| Flag | Effect |
+| --- | --- |
+| `--upgrade` | Also pull the latest SSP and Scheduler images. |
+| `--only api,web` | Build and deploy just these apps. Everything else keeps running untouched. |
+| `--clean` | Wipe the scheduler's persistent volume first. For state corruption; your SurrealDB data is not touched. |
+| `--force-schema` | Re-apply the internal schema and remote functions even when the hash says nothing changed. Drift recovery. |
+| `--cache-bust` | Clients reloading onto this version clear service-worker caches first. |
+| `--mandatory` | Clients reload immediately instead of being offered a notification. Broken-build kill switch. |
 
 <CodeBlock
   code={code4}
   lang="bash"
 />
+
+`--only` is the one to reach for during normal iteration: a frontend-only change doesn't need the
+backend rebuilt.
 
 ## Checking Status
 
@@ -104,5 +115,5 @@ The value is forwarded to `tracing-subscriber`, so target-specific directives wo
 Each `spky deploy` sends the resolved `cloud` value to Sp00ky Cloud, which restarts the Scheduler and SSP containers with the new `RUST_LOG`. Use `--upgrade` if you also want fresh base images at the same time.
 
 <Note>
-  At <code>trace</code>, the Scheduler logs every replica query and every record it ingests during bootstrap. Useful for diagnosing "why isn't this row showing up?" — see <a href="/docs/cloud/logs">Logs & Monitoring</a>.
+  At <code>trace</code>, the Scheduler logs every replica query and every record it ingests during bootstrap. Useful for diagnosing "why isn't this row showing up?" See <a href="/docs/cloud/logs">Logs & Monitoring</a>.
 </Note>

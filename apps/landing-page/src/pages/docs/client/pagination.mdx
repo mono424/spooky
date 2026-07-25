@@ -1,0 +1,143 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Pagination
+description: Pagination is .limit() and .offset(), and every page stays live, so inserts and deletes reconcile themselves.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+import Warning from '../../../components/ui/Warning.astro';
+
+Pagination is just `.limit()` and `.offset()` on a query. The part that differs from a REST app:
+each page is a **live** query. Once a page is on screen it keeps itself current: an insert, edit or
+delete on the server reconciles the affected page with no refetch and no invalidation.
+
+<Warning title="Always add a unique tiebreaker">
+  Give every paginated `ORDER BY` a trailing `.orderBy('id', 'asc')`. Without a *total* order, rows
+  sharing a sort value can swap places between renders or show up in two pages at once as the window
+  shifts.
+</Warning>
+
+## Load more
+
+The simplest approach: drive `.limit()` from a signal and grow it. The query factory reads the
+signal, so `useQuery` re-registers the larger window when the user asks for more.
+
+<CodeBlock fileName="Feed.tsx" code={loadMoreCode} lang="tsx" />
+
+Good for small-to-medium lists where keeping every loaded row live is acceptable. Every row stays
+subscribed, so memory grows with the list.
+
+## Windowed infinite scroll
+
+For large lists, render one live query **per page window** (`LIMIT PAGE START page*PAGE`) and mount
+more windows as the user scrolls. Pass `{ deregisterOnCleanup: true }` so a window that scrolls
+off-screen tears down its synced view. This bounds the number of live queries no matter how far
+the user scrolls.
+
+<CodeBlock fileName="InfiniteList.tsx" code={windowedCode} lang="tsx" />
+
+Each window stays individually live. Offset windows are materialized server-side from the SSP's
+window id-set rather than by re-applying `START n` against your local store, so a delete in an
+earlier page correctly shifts later rows **up across window boundaries**. No stale gaps, no
+duplicated rows. See
+[Architecture](/docs/reference/architecture#bootstrap-pagination) for the mechanism.
+
+<Note>
+  For long lists pair this with a virtualizer (e.g. `@tanstack/solid-virtual`) keyed by record `id`,
+  so only visible rows render even though several windows are subscribed.
+</Note>
+
+## Detecting the end
+
+A short page means the end of the list. Check `isSettled()` before you trust a short result:
+an unsettled window may simply not have its rows yet.
+
+<CodeBlock code={endDetectionCode} lang="typescript" />
+
+export const loadMoreCode = `import { useQuery } from '@spooky-sync/client-solid';
+import { createSignal, For } from 'solid-js';
+import { db } from './db';
+
+function Feed() {
+  const [limit, setLimit] = createSignal(20);
+
+  // Reading limit() inside the factory grows the live window:
+  // useQuery re-registers whenever the resulting query changes.
+  const posts = useQuery(db, () =>
+    db.query('post')
+      .orderBy('created_at', 'desc')
+      .orderBy('id', 'asc')        // unique tiebreaker -> stable total order
+      .limit(limit())
+      .build()
+  );
+
+  return (
+    <>
+      <For each={posts.data() || []}>{(p) => <PostRow post={p} />}</For>
+      <button onClick={() => setLimit((n) => n + 20)}>Load more</button>
+    </>
+  );
+}`;
+
+export const windowedCode = `import { useQuery } from '@spooky-sync/client-solid';
+import { createSignal, createMemo, createEffect, For, onCleanup } from 'solid-js';
+import { createStore } from 'solid-js/store';
+import { db } from './db';
+
+const PAGE = 50;
+
+// One live window: LIMIT PAGE START page*PAGE. It reports its rows to the parent
+// and drops them on unmount. deregisterOnCleanup cancels the synced view when
+// this window scrolls off-screen (scrolling back re-registers it).
+function Window(props) {
+  const result = useQuery(
+    db,
+    () =>
+      db.query('post')
+        .orderBy('created_at', 'desc')
+        .orderBy('id', 'asc')        // unique tiebreaker -> total order
+        .limit(PAGE)
+        .offset(props.page * PAGE)
+        .build(),
+    { deregisterOnCleanup: true }
+  );
+  // Pass a FRESH array so a same-length change (a delete shifts the next row in)
+  // still updates the parent store.
+  createEffect(() => props.onRows(props.page, (result.data() || []).map((r) => r)));
+  onCleanup(() => props.onRows(props.page, undefined));
+  return null;
+}
+
+function InfiniteList() {
+  const [pages, setPages] = createSignal(1);          // grow as the user scrolls
+  const [windows, setWindows] = createStore({});      // page -> rows | undefined
+
+  // Contiguous rows from page 0; stop at the first gap or short (final) page.
+  const rows = createMemo(() => {
+    const out = [];
+    for (let p = 0; p < pages(); p++) {
+      const r = windows[p];
+      if (r === undefined) break;     // window still loading
+      out.push(...r);
+      if (r.length < PAGE) break;     // short page = end of the list
+    }
+    return out;
+  });
+
+  const loadMore = () => setPages((p) => p + 1);
+
+  return (
+    <>
+      <For each={Array.from({ length: pages() }, (_, p) => p)}>
+        {(p) => <Window page={p} onRows={(page, r) => setWindows(page, r)} />}
+      </For>
+      <For each={rows()}>{(post) => <PostRow post={post} />}</For>
+      {/* Call loadMore() from an IntersectionObserver sentinel or scroll handler */}
+      <button onClick={loadMore}>Load more</button>
+    </>
+  );
+}`;
+
+export const endDetectionCode = `const atEnd = () =>
+  posts.isSettled() && (posts.data()?.length ?? 0) < PAGE;`;

@@ -1,0 +1,73 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Generated types
+description: spky generate turns your .surql schema into typed TypeScript or Dart clients. Run it after every schema edit.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+
+<CodeBlock code={generateCode} lang="bash" />
+
+That reads your schema and writes a typed client for every entry under `clientTypes` in
+`sp00ky.yml`. Tables become types, `record<...>` fields become typed relations, and the query
+builder starts autocompleting your table and column names.
+
+<CodeBlock fileName="schema.gen.ts" code={outputCode} lang="typescript" />
+
+## Configure the outputs
+
+Each `clientTypes` entry is a `format` plus an `output` path, resolved relative to `sp00ky.yml`.
+List as many as you need: a Flutter app and a web app can generate from one schema.
+
+<CodeBlock fileName="sp00ky.yml" code={configCode} lang="yaml" />
+
+| Field | Notes |
+| --- | --- |
+| `format` | `typescript` or `dart`. |
+| `output` | Destination file. Overwritten on every run; never hand-edit it. |
+| `workdir` | `dart` only. Directory to run the Dart generator from; must be a package depending on `spooky_core`. Defaults to the nearest ancestor `pubspec.yaml` of `output`. |
+
+`typescript` uses the built-in generator. `dart` shells out to `spooky_core`'s generator
+(`dart run spooky_core:spooky_gen`). See the [Flutter guide](/docs/guide/flutter).
+
+## Generating without a config
+
+For one-off runs, or a schema that isn't part of a project yet, point the CLI at a file directly.
+
+<CodeBlock code={oneShotCode} lang="bash" />
+
+## Keep it fresh
+
+Generated types drift the moment you edit `.surql` and forget to regenerate. Two guards:
+
+- [`spky dev`](/docs/dev) regenerates on schema changes while it's running.
+- [`spky doctor`](/docs/dev/doctor) fails when `schema.gen.ts` is older than the schema, and tells
+  you to run `spky generate`. This is the check to wire into CI and into agent loops.
+
+<Note>
+  Commit the generated file. It keeps type errors visible in review, and CI doesn't need a database
+  to typecheck.
+</Note>
+
+export const generateCode = `spky generate   # alias: spky gen`;
+
+export const outputCode = `export type User = {
+  id: RecordId<"user">;
+  username: string;
+  created_at: Date;
+  // relationships are typed as RecordIds
+  profile?: RecordId<"profile">;
+};`;
+
+export const configCode = `clientTypes:
+  - format: typescript
+    output: ./apps/web/src/schema.gen.ts
+  - format: dart
+    output: ./apps/mobile/lib/schema.gen.dart`;
+
+export const oneShotCode = `# a single file, one format
+spky generate --input ./schema/src/schema.surql --output ./schema.gen.ts --format typescript
+
+# every format at once (TypeScript, Dart, JSON Schema)
+spky generate --input ./schema/src/schema.surql --output ./schema --all`;

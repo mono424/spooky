@@ -560,7 +560,7 @@ const features = [
   },
 ];
 
-/** 4-column feature grid + "Local first" text — placed after the hero */
+/** 4-column feature grid + "Local first" text, placed after the hero */
 export function FeatureGrid() {
   return (
     <>
@@ -674,7 +674,7 @@ function DrawerContent() {
           </div>
 
           <div className="flex flex-col gap-4">
-            {/* Top row: SurrealDB — RPC — Scheduler */}
+            {/* Top row: SurrealDB (RPC) Scheduler */}
             <div className="flex gap-2 justify-center items-stretch">
               {/* SurrealDB */}
               <div className="border border-white/[0.15] bg-white/[0.02] p-2 rounded flex flex-col gap-2 flex-1 min-w-0">
@@ -763,7 +763,7 @@ function DrawerContent() {
   );
 }
 
-/** "Horizontally Scalable" text + drawer — placed at end of "How it works" */
+/** "Horizontally Scalable" text + drawer, placed at end of "How it works" */
 export function ScalableText() {
   const [drawerOpen, setDrawerOpen] = useState(false);
 

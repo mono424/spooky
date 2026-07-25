@@ -1,0 +1,157 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Backend options
+description: Auth tokens, request timeouts, environment variables, and running a backend you host yourself.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+
+Everything on this page is optional. A backend works with just `spec`, `baseUrl` and `method`. See
+[Add a backend](/docs/backend/add).
+
+## Authentication
+
+Add an `auth` block and the job runner sends `Authorization: Bearer <token>` on every request to
+that backend.
+
+<CodeBlock fileName="sp00ky.yml" code={authConfigCode} lang="yaml" />
+
+The token is a literal, an `${ENV_VAR}` reference, or a `{ vault: KEY }` lookup resolved at deploy
+time. See [Environment variables](/docs/dev/env). Validate it on your side:
+
+<CodeBlock code={authMiddlewareCode} lang="typescript" />
+
+`type: token` is the only auth type today.
+
+## Timeouts
+
+The job runner allows **10 seconds** per HTTP request by default. Long-running work (LLM calls,
+video encoding, large imports) needs a higher ceiling.
+
+<CodeBlock fileName="sp00ky.yml" code={timeoutCode} lang="yaml" />
+
+With `timeoutOverridable: true`, the client can shorten or extend an individual call:
+
+<CodeBlock code={timeoutClientCode} lang="typescript" />
+
+When it's `false` (the default) the `timeout` option is ignored and the deploy-time value always
+wins.
+
+<Note>
+  A timeout counts as a failed attempt: the row's `errors` array grows and the job retries according
+  to `max_retries` and `retry_strategy`.
+</Note>
+
+## Environment variables
+
+`env` feeds variables into the backend's container. It takes a file path, an inline map, `vault`, or
+a per-environment map of any of those.
+
+<CodeBlock fileName="sp00ky.yml" code={envCode} lang="yaml" />
+
+Full syntax, layering rules and the auto-injected variables are on
+[Environment variables](/docs/dev/env).
+
+## Deploy settings
+
+`deploy` controls how Sp00ky Cloud builds and runs the backend.
+
+<CodeBlock fileName="sp00ky.yml" code={deployCode} lang="yaml" />
+
+| Field | Purpose |
+| --- | --- |
+| `dockerfile` | Build context for the image. |
+| `port` | Port your service listens on inside the container. |
+| `timeout` | Per-request timeout in seconds (default `10`). |
+| `timeoutOverridable` | Let the client override `timeout` per call. |
+
+## Hosting it yourself
+
+Set `hosting: external` and Sp00ky won't build or deploy the service. It only calls the `baseUrl`
+you give it. Useful for a backend that already lives somewhere, or one that has to run inside your
+own network.
+
+<CodeBlock fileName="sp00ky.yml" code={externalCode} lang="yaml" />
+
+## Limiting where an app runs
+
+`scope` keeps an app out of an environment where it doesn't belong.
+
+| Value | Effect |
+| --- | --- |
+| `all` | Default. Runs locally and in the cloud. |
+| `devOnly` | Only under `spky dev`. Mail catchers, fake payment providers, seed jobs. |
+| `cloudOnly` | Only in deployed environments. |
+
+<CodeBlock fileName="sp00ky.yml" code={scopeCode} lang="yaml" />
+
+export const authConfigCode = `apps:
+  api:
+    type: backend
+    baseUrl: https://api.example.com
+    spec: ../api/openapi.yml
+    auth:
+      type: token
+      token: { vault: API_TOKEN }
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql`;
+
+export const authMiddlewareCode = `import { bearerAuth } from 'hono/bearer-auth';
+
+app.use('/*', bearerAuth({ token: process.env.API_AUTH_TOKEN }));`;
+
+export const timeoutCode = `apps:
+  agent:
+    type: backend
+    spec: ./openapi.yaml
+    baseUrl: http://host.docker.internal:8767
+    method:
+      type: outbox
+      table: jobs_agent
+      schema: ./src/outbox/agent.surql
+    deploy:
+      dockerfile: ./Dockerfile
+      port: 8767
+      timeout: 120               # allow up to 2 minutes per request
+      timeoutOverridable: true   # let the client set per-job timeouts`;
+
+export const timeoutClientCode = `await db.run('agent', '/chat', { message: 'Hello' }, { timeout: 60 });`;
+
+export const envCode = `apps:
+  api:
+    type: backend
+    # …
+    env:
+      dev: ".env.local"
+      cloud: "vault"`;
+
+export const deployCode = `apps:
+  api:
+    type: backend
+    # …
+    deploy:
+      dockerfile: ../api/Dockerfile
+      port: 3660
+      timeout: 30`;
+
+export const externalCode = `apps:
+  api:
+    type: backend
+    hosting: external
+    baseUrl: https://api.example.com
+    spec: ../api/openapi.yml
+    method:
+      type: outbox
+      table: job
+      schema: ./src/outbox/api.surql`;
+
+export const scopeCode = `apps:
+  mailpit:
+    type: docker
+    scope: devOnly
+    image: axllent/mailpit
+    ports:
+      - "8025:8025"`;

@@ -1,0 +1,176 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Offline & sync health
+description: Your app already works offline. This page is about showing the user what's going on, and tuning what gets cached.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+import CardGrid from '../../../components/ui/CardGrid.astro';
+import LinkCard from '../../../components/ui/LinkCard.astro';
+
+There's no offline mode to switch on. Reads are served from the local store, writes queue locally
+and drain when the network returns. What you do have to build is the UI that tells the user which
+state they're in.
+
+<CodeBlock fileName="ConnectionBanner.tsx" code={bannerCode} lang="tsx" />
+
+## Sync health
+
+A single dropped request never trips the banner. `useSyncStatus` reports `degraded` only after a
+**run** of consecutive failed sync rounds (three by default) and flips back on the first
+successful round.
+
+| Accessor | Meaning |
+| --- | --- |
+| `status()` | `'healthy'` or `'degraded'`. |
+| `isDegraded()` | Sustained failures. Something is wrong. |
+| `everConnected()` | At least one sync round has succeeded this session. |
+| `isOffline()` | **Degraded after having connected.** This is the one to drive a banner off. It stays `false` during initial connect, so a cold start doesn't flash "offline". |
+| `health()` | The full snapshot: `consecutiveFailures`, `kind` (`network` or `application`), `error`. |
+
+Tune the threshold in your client config:
+
+<CodeBlock code={healthConfigCode} lang="typescript" />
+
+Pass `syncHealth: false` to never report degraded at all.
+
+<Note>
+  Individual failures are always swallowed and retried. They never throw into your app. Sync health
+  is purely a reporting channel.
+</Note>
+
+## Pending writes
+
+Mutations made while offline sit in a queue. `pendingMutationCount` is how many are waiting, and
+`subscribeToPendingMutations` fires whenever it changes.
+
+<CodeBlock code={pendingCode} lang="tsx" />
+
+Useful for a "3 changes not yet saved" indicator, and for warning before the user closes the tab
+with unsynced work.
+
+## Where data lives locally
+
+Set `database.store` in your [client config](/docs/reference/client-config):
+
+| Store | Behaviour |
+| --- | --- |
+| `indexeddb` | Survives reloads. What you want in production. |
+| `memory` | Cleared on refresh. Good for tests and ephemeral views. |
+
+Reads hit this store first, so a returning user sees their data on the first frame, before any
+network round trip completes.
+
+## Preloading
+
+`db.preload()` warms a query's cache without rendering it. Run it on a route you're about to
+navigate to and the next screen paints instantly.
+
+<CodeBlock code={preloadCode} lang="typescript" />
+
+| `refresh` | Behaviour when a cached copy already exists |
+| --- | --- |
+| `onUse` (default) | Don't refetch now; refresh when something actually subscribes. |
+| `background` | Refetch immediately in the background. |
+| `stale` | Refetch in the background only if the cached copy is older than `staleTime` (default 1h). |
+
+## Telling clients a new version shipped
+
+Deployed frontends write an announcement row that running clients can see. `useAppRelease` surfaces
+it so you can offer a reload, or force one when you've shipped a fix for a broken build.
+
+<CodeBlock fileName="UpdatePrompt.tsx" code={releaseCode} lang="tsx" />
+
+| Accessor | Meaning |
+| --- | --- |
+| `latestVersion()` | Announced version, or `undefined` if nothing has been announced. |
+| `updateAvailable()` | The announcement is semver-newer than `currentVersion`. |
+| `mandatory()` | Deployed with `--mandatory`: reload without asking. |
+| `cacheBust()` | Deployed with `--cache-bust`: clear CacheStorage during the reload. |
+| `reload()` | Performs the reload, handling cache-busting and the service worker correctly. |
+
+Announce a release without a full deploy with [`spky release`](/docs/reference/cli).
+
+## Next
+
+<CardGrid>
+  <LinkCard
+    href="/docs/reference/client-config"
+    title="Client config"
+    icon="config"
+    description="Every SyncedDbConfig option, including the sync timings."
+  />
+  <LinkCard
+    href="/docs/client/mutations"
+    title="Mutations"
+    icon="pen"
+    description="How optimistic writes are applied and reconciled."
+  />
+  <LinkCard
+    href="/docs/how-it-works"
+    title="How it works"
+    icon="brain"
+    description="Why the local store can be authoritative for reads."
+  />
+  <LinkCard
+    href="/docs/dev/doctor"
+    title="Troubleshooting"
+    icon="doctor"
+    description="When sync is degraded and you need to know why."
+  />
+</CardGrid>
+
+export const bannerCode = `import { useSyncStatus } from '@spooky-sync/client-solid';
+import { Show } from 'solid-js';
+
+function ConnectionBanner() {
+  const sync = useSyncStatus();
+
+  return (
+    <Show when={sync.isOffline()}>
+      <div class="banner">Can't reach the server, changes are saved locally.</div>
+    </Show>
+  );
+}`;
+
+export const healthConfigCode = `const dbConfig: SyncedDbConfig<typeof schema> = {
+  // …
+  syncHealth: { degradeAfterConsecutiveFailures: 5 },
+};`;
+
+export const pendingCode = `const [pending, setPending] = createSignal(db.pendingMutationCount);
+onCleanup(db.subscribeToPendingMutations(setPending));
+
+<Show when={pending() > 0}>
+  {pending()} change{pending() === 1 ? '' : 's'} not yet synced
+</Show>`;
+
+export const preloadCode = `// warm the thread list before the user navigates to it
+await db.preload(
+  db.query('thread').orderBy('created_at', 'desc').limit(20).build(),
+  { refresh: 'stale', staleTime: '5m' }
+);`;
+
+export const releaseCode = `import { useAppRelease } from '@spooky-sync/client-solid';
+import { Show, createEffect } from 'solid-js';
+
+function UpdatePrompt() {
+  const release = useAppRelease({
+    app: 'web',
+    currentVersion: __APP_VERSION__,   // baked in at build time
+  });
+
+  // a mandatory release reloads without asking
+  createEffect(() => {
+    if (release.updateAvailable() && release.mandatory()) release.reload();
+  });
+
+  return (
+    <Show when={release.updateAvailable()}>
+      <button onClick={() => release.reload()}>
+        Update to {release.latestVersion()}
+      </button>
+    </Show>
+  );
+}`;

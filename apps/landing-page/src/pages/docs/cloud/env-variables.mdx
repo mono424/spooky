@@ -1,6 +1,7 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
-title: Environment Variables
+title: Environment & vault
+description: "Encrypted environment variables: set them once, share them with your team, inject them at deploy time."
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
@@ -10,7 +11,7 @@ import Note from '../../../components/ui/Note.astro';
 export const code30 = `# 1. Initialize your encryption vault
 spky env unlock
 
-# 2. Set a variable (interactive — prompts for value and environment)
+# 2. Set a variable (interactive, prompts for value and environment)
 spky env set DATABASE_URL
 
 # 3. Load variables and start your app
@@ -18,10 +19,10 @@ spky env pull && pnpm dev`;
 
 export const code29 = `spky env unlock`;
 
-export const code28 = `# With a name — goes straight to the value prompt
+export const code28 = `# With a name, goes straight to the value prompt
 spky env set DATABASE_URL
 
-# Without a name — prompts for the name first
+# Without a name, prompts for the name first
 spky env set`;
 
 export const code27 = `# Load development variables (default) and start your app
@@ -170,7 +171,7 @@ export const code1 = `DELETE /v1/projects/{projectID}/envs/{NAME}`;
 
 Sp00ky Cloud provides encrypted environment variable storage that syncs across your team. Each variable supports separate **development** and **production** values, so your local dev setup and production deployment stay in sync without `.env` files.
 
-All values are encrypted at rest using the tenant's [Shared Vault](/docs/cloud/vault). For details on the encryption model, key hierarchy, and security properties, see the vault documentation.
+All values are encrypted at rest using the tenant's [Shared Vault](/docs/reference/vault). For details on the encryption model, key hierarchy, and security properties, see the vault documentation.
 
 ## Quick Start
 
@@ -189,14 +190,14 @@ Before using environment variables, initialize your encryption vault:
 />
 
 You'll be prompted to:
-1. **Choose a vault passphrase** — this protects your encryption keys, pick something strong
+1. **Choose a vault passphrase**: this protects your encryption keys, so pick something strong
 2. **Confirm the passphrase**
 3. **Optionally cache the derived key** locally in `~/.sp00ky/vault-derived-key` (the raw passphrase is never written to disk; only its Argon2id-derived key)
 
 If you skip `env unlock`, the vault will be created automatically the first time you run `env set`.
 
 <Note title="Teams">
-The first team member to run <code>env unlock</code> creates the tenant vault. Other members receive vault access through the invitation flow — they set their own passphrase when accepting the invitation. See <a href="/docs/cloud/vault">Shared Vault</a> for details.
+The first team member to run <code>env unlock</code> creates the tenant vault. Other members receive vault access through the invitation flow. They set their own passphrase when accepting the invitation. See <a href="/docs/reference/vault">Shared Vault</a> for details.
 </Note>
 
 ## Setting Variables
@@ -209,14 +210,14 @@ The first team member to run <code>env unlock</code> creates the tenant vault. O
 The CLI will interactively ask you:
 
 1. **Variable name** (if not provided as argument)
-2. **Which environment(s)** — choose from:
-   - *Both (same value)* — use one value for dev and prod
+2. **Which environment(s)**: choose from:
+   - *Both (same value)*: use one value for dev and prod
    - *Development only*
    - *Production only*
-   - *Both (different values)* — prompts for each separately
-3. **The value** — entered with masked input (like a password prompt)
+   - *Both (different values)*: prompts for each separately
+3. **The value**: entered with masked input (like a password prompt)
 
-Variable names are automatically uppercased. Running `env set` on an existing variable updates only the environments you specify — it won't overwrite the other environment's value.
+Variable names are automatically uppercased. Running `env set` on an existing variable updates only the environments you specify. It won't overwrite the other environment's value.
 
 ## Loading Variables
 
@@ -227,7 +228,7 @@ Load environment variables and pipe them into your dev workflow:
   lang="bash"
 />
 
-The output format is `KEY=value`, one per line — designed for shell evaluation:
+The output format is `KEY=value`, one per line, designed for shell evaluation:
 
 <CodeBlock
   code={code26}
@@ -254,7 +255,7 @@ Example output:
   lang="bash"
 />
 
-Values are never shown — only names and whether each environment has a value set.
+Values are never shown, only names and whether each environment has a value set.
 
 ## Deleting Variables
 
@@ -272,7 +273,7 @@ Import variables from an `.env` file:
   lang="bash"
 />
 
-Supports standard `.env` format — one `KEY=value` per line, comments with `#`, and quoted values.
+Supports standard `.env` format. One `KEY=value` per line, comments with `#`, and quoted values.
 
 ## Passphrase Management
 
@@ -292,7 +293,7 @@ Only your copy of the encryption key is re-wrapped. Other members and existing v
   lang="bash"
 />
 
-See [Passphrase Reset](/docs/cloud/vault#passphrase-reset) for the full flow.
+See [Passphrase Reset](/docs/reference/vault#passphrase-reset) for the full flow.
 
 **Caching:** The CLI can cache the Argon2id-derived key at `~/.sp00ky/vault-derived-key` (your raw passphrase is never persisted). To clear the cache:
 
@@ -414,7 +415,7 @@ All endpoints are scoped to a project: `/v1/projects/{projectID}/envs`.
   lang="bash"
 />
 
-- `dev_value` and `prod_value` are optional — provide one or both
+- `dev_value` and `prod_value` are optional; provide one or both
 - Set `both: true` with `dev_value` to use the same value for both environments
 - Variable names are stored uppercase
 - Returns `400` with code `vault_not_initialized` if the vault hasn't been set up

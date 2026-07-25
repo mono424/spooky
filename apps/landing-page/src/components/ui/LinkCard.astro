@@ -1,0 +1,58 @@
+---
+import Icon from './Icon.astro';
+
+interface Props {
+  href: string;
+  title: string;
+  /** Semantic icon name from Icon.astro's map. */
+  icon?: string;
+  description?: string;
+  /** Small uppercase label above the title, e.g. "Step 2" or "Reference". */
+  eyebrow?: string;
+}
+
+const { href, title, icon, description, eyebrow } = Astro.props;
+---
+
+<a
+  href={href}
+  class="group not-prose flex items-start gap-3 rounded-glass border border-white/[0.08] bg-white/[0.03] p-4 no-underline shadow-glass-inset transition-colors duration-200 hover:border-brand-400/30 hover:bg-white/[0.06]"
+>
+  {
+    icon && (
+      <span class="mt-0.5 shrink-0 text-brand-400 transition-colors group-hover:text-brand-300">
+        <Icon name={icon} class="h-5 w-5" strokeWidth={1.75} />
+      </span>
+    )
+  }
+  <span class="min-w-0 flex-1">
+    {
+      eyebrow && (
+        <span class="mb-1 block text-[11px] font-medium uppercase tracking-wider text-text-muted">
+          {eyebrow}
+        </span>
+      )
+    }
+    <span class="flex items-center gap-1.5 text-sm font-medium text-text-primary">
+      <span class="min-w-0">{title}</span>
+      <svg
+        class="h-3.5 w-3.5 shrink-0 text-text-muted transition-all duration-200 group-hover:translate-x-0.5 group-hover:text-brand-400"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+      >
+        <path d="M5 12h14M13 6l6 6-6 6"></path>
+      </svg>
+    </span>
+    {
+      description && (
+        <span class="mt-1 block text-sm leading-relaxed text-text-tertiary">{description}</span>
+      )
+    }
+    <slot />
+  </span>
+</a>

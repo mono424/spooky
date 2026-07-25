@@ -1,25 +1,99 @@
 ---
 layout: ../../layouts/DocsLayout.astro
 title: Installation
+description: Install the CLI and client SDKs, then bring up the stack. For a new project, spky init does all of this for you.
 ---
 
-Getting started with Sp00ky involves setting up the CLI tool and configuring your project.
-
-## Prerequisites
-
-- **Node.js** (v22.12 or higher — the workspace pins `>=22.21.1`)
-- **SurrealDB** (v3.1 — the CLI defaults to `surrealdb/surrealdb:v3.1.0-beta.3`)
-- **Rust** (only if you're building the SSP / scheduler from source — pre-built Docker images are used by default)
-
 import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Steps from '../../components/ui/Steps.astro';
+import Step from '../../components/ui/Step.astro';
+import Note from '../../components/ui/Note.astro';
+import CardGrid from '../../components/ui/CardGrid.astro';
+import LinkCard from '../../components/ui/LinkCard.astro';
 
-export const code5 = `pnpm add -D @spooky-sync/cli`;
+<Note>
+  Starting fresh? [`spky init`](/docs/quickstart) scaffolds the project, installs everything and
+  generates types in one go. This page is for adding Sp00ky to an existing codebase.
+</Note>
 
-export const code4 = `pnpm add @spooky-sync/core @spooky-sync/client-solid`;
+**Requirements:** Node.js 22.12 or newer (the workspace pins `>=22.21.1`), and Docker for the local
+stack. Rust only if you intend to build the SSP or scheduler from source, prebuilt images are the
+default.
 
-export const code3 = `spky dev`;
+<Steps>
+  <Step title="Install the CLI">
+    <CodeBlock code={cliCode} lang="bash" />
 
-export const code2 = `services:
+    `spky` is how you generate types, run migrations, start the local stack and deploy.
+  </Step>
+
+  <Step title="Install the client SDKs">
+    The core client plus the bindings for your framework.
+
+    <CodeBlock code={sdkCode} lang="bash" />
+
+    Flutter projects depend on `spooky_core` from pub instead. See the
+    [Flutter guide](/docs/guide/flutter).
+  </Step>
+
+  <Step title="Start the stack">
+    <CodeBlock code={devCode} lang="bash" />
+
+    This brings up SurrealDB and the SSP sidecar, applies migrations, and starts any app with a
+    `dev` block in `sp00ky.yml`. See [spky dev](/docs/dev).
+
+    If you'd rather wire the infrastructure yourself:
+
+    <CodeBlock fileName="docker-compose.yml" code={composeCode} lang="yaml" />
+
+    <CodeBlock code={composeUpCode} lang="bash" />
+  </Step>
+
+  <Step title="Verify">
+    <CodeBlock code={doctorCode} lang="bash" />
+
+    `spky doctor` checks that `sp00ky.yml` parses, the schema source exists, generated types are
+    current, and the migrations directory is in place. Each failed check prints the command that
+    fixes it. Re-run it after every schema edit. It's the fastest feedback loop there is.
+  </Step>
+</Steps>
+
+## Next
+
+<CardGrid>
+  <LinkCard
+    href="/docs/quickstart"
+    title="Quickstart"
+    icon="rocket"
+    description="Build something and watch it sync across two tabs."
+  />
+  <LinkCard
+    href="/docs/schema"
+    title="Define your schema"
+    icon="database"
+    description="The file everything else is generated from."
+  />
+  <LinkCard
+    href="/docs/dev/doctor"
+    title="Doctor & troubleshooting"
+    icon="doctor"
+    description="What to run when something doesn't work."
+  />
+  <LinkCard
+    href="/docs/reference/config"
+    title="sp00ky.yml"
+    icon="config"
+    description="Every key in the project config."
+  />
+</CardGrid>
+
+export const cliCode = `pnpm add -D @spooky-sync/cli`;
+
+export const sdkCode = `pnpm add @spooky-sync/core @spooky-sync/client-solid`;
+
+export const devCode = `spky dev`;
+
+export const composeCode = `services:
   surrealdb:
     image: surrealdb/surrealdb:v3.1.0-beta.3
     command: start --user root --pass root rocksdb:/data/db
@@ -39,53 +113,6 @@ export const code2 = `services:
     depends_on:
       - surrealdb`;
 
-export const code1 = `docker compose up -d`;
+export const composeUpCode = `docker compose up -d`;
 
-export const codeDoctor = `spky doctor`;
-
-export const codeDoctorJson = `spky doctor --json`;
-
-## Step 1: Install the CLI
-
-The Sp00ky CLI is your primary tool for generating code and managing schemas.
-
-<CodeBlock code={code5} lang="bash" />
-
-## Step 2: Install Client SDKs
-
-Install the core client and the bindings for your framework.
-
-<CodeBlock code={code4} lang="bash" />
-
-## Step 3: Run Infrastructure
-
-The easiest way to start everything is with the Sp00ky CLI:
-
-<CodeBlock code={code3} lang="bash" />
-
-This starts SurrealDB, the SSP sidecar, applies migrations, and runs your app dev server — all in one command. If your apps have a `dev` field configured in `sp00ky.yml`, those are started too. See the [Dev Server](/docs/backend/dev-server) page for details.
-
-Alternatively, you can set up infrastructure manually with Docker Compose:
-
-<CodeBlock
-  code={code2}
-  lang="yaml"
-/>
-
-Run it with:
-
-<CodeBlock code={code1} lang="bash" />
-
-## Step 4: Verify Your Setup
-
-Run `spky doctor` from the project root to confirm everything is wired up:
-
-<CodeBlock code={codeDoctor} lang="bash" />
-
-It checks `sp00ky.yml` parses, the schema source exists, generated `schema.gen.ts` is up to date, and the migrations directory is in place. Each failed check comes with an actionable `fix` hint (e.g. `spky generate`).
-
-For agent-driven workflows, pass `--json` for a stable, parseable contract:
-
-<CodeBlock code={codeDoctorJson} lang="bash" />
-
-Re-run `spky doctor` after every schema edit — it's the fastest feedback loop for catching codegen drift.
+export const doctorCode = `spky doctor`;

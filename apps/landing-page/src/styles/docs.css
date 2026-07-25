@@ -24,7 +24,7 @@ body {
 }
 
 @layer components {
-  /* Static glass: surfaces sitting on the opaque page background. No blur —
+  /* Static glass: surfaces sitting on the opaque page background. No blur:
      there is nothing behind them to sample, so it would cost GPU for nothing. */
   .glass-panel {
     @apply rounded-glass border border-white/[0.08] bg-white/[0.03] shadow-glass-inset;
@@ -76,6 +76,100 @@ body {
   border-radius: 14px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   padding: 1rem 1.125rem;
+}
+
+/* Tables: a command or a flag must never break mid-token. Without this the
+   auto layout squeezes the first column and hyphenates `--force-schema` or
+   `spky verify` across two lines, which reads as two different things. Inline
+   code stays on one line and the table scrolls sideways instead. */
+.prose-docs table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+}
+.prose-docs :is(td, th) code {
+  white-space: nowrap;
+}
+/* Give the label column the width its content needs and no more, so the
+   description column absorbs the remaining space. */
+.prose-docs tbody td:first-child {
+  width: 1%;
+}
+
+/* <Steps> / <Step>: a numbered procedure with a connecting rail. Numbering is a
+   CSS counter so MDX authors never pass an index; reordering steps renumbers
+   them for free. Content inside a step keeps prose styling; only the list
+   chrome is reset. */
+.docs-steps {
+  counter-reset: docs-step;
+  list-style: none;
+  margin: 1.75rem 0;
+  padding: 0;
+}
+.docs-steps > li {
+  counter-increment: docs-step;
+  position: relative;
+  margin: 0;
+  padding: 0 0 2rem 3.25rem;
+}
+.docs-steps > li::marker {
+  content: none;
+}
+/* The number badge. */
+.docs-steps > li::before {
+  content: counter(docs-step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(155, 138, 255, 0.25);
+  background: rgba(124, 106, 239, 0.14);
+  color: #c4b5ff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+/* The rail joining one step to the next. */
+.docs-steps > li::after {
+  content: '';
+  position: absolute;
+  left: calc(1rem - 0.5px);
+  top: 2.375rem;
+  bottom: 0.375rem;
+  width: 1px;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.02));
+}
+.docs-steps > li:last-child {
+  padding-bottom: 0;
+}
+.docs-steps > li:last-child::after {
+  content: none;
+}
+.docs-steps > li > :first-child {
+  margin-top: 0;
+}
+.docs-steps > li > :last-child {
+  margin-bottom: 0;
+}
+.docs-step-title {
+  margin: 0.3125rem 0 0.625rem;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+
+@media (max-width: 640px) {
+  .docs-steps > li {
+    padding-left: 2.75rem;
+  }
 }
 
 /* Mermaid diagrams get the same glass frame as code blocks. rx/ry are CSS-settable

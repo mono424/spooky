@@ -1,18 +1,13 @@
 ---
-import { basePath, docsNav as nav } from '../config/nav';
+import { docsNav as nav, resolveActive } from '../config/nav';
 
-const currentPath = Astro.url.pathname;
+const { group: activeGroup, link: activeLink } = resolveActive(Astro.url.pathname);
 ---
 
 <nav class="space-y-6">
   {
-    nav.map((group, index) => {
-      const hasActivePage = group.links.some(
-        (link) =>
-          currentPath === link.href ||
-          (link.href !== `${basePath}/docs` && currentPath.startsWith(link.href))
-      );
-      const isOpen = hasActivePage;
+    nav.map((group) => {
+      const isOpen = group === activeGroup;
       return (
       <details open={isOpen} name="docs-sidebar" class="group">
         <summary class="flex items-center justify-between cursor-pointer list-none text-sm font-medium text-text-primary mb-2 px-2 hover:opacity-80 select-none">
@@ -33,9 +28,7 @@ const currentPath = Astro.url.pathname;
         </summary>
         <ul class="space-y-0.5 relative ml-2 pl-2">
           {group.links.map((link) => {
-            const isActive =
-              currentPath === link.href ||
-              (link.href !== `${basePath}/docs` && currentPath.startsWith(link.href));
+            const isActive = link === activeLink;
             return (
               <li>
                 <a

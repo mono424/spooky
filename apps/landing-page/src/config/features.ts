@@ -18,7 +18,7 @@ export const coreFeatures: Feature[] = [
     title: 'Optimistic Updates',
     desc: 'UI updates instantly, sync happens in the background.',
     longDesc:
-      'Writes land on-device in milliseconds. sp00ky reconciles with the server in the background, so your UI never waits on a round-trip and never feels sluggish — even over a flaky connection.',
+      'Writes land on-device in milliseconds. sp00ky reconciles with the server in the background, so your UI never waits on a round-trip and never feels sluggish, even over a flaky connection.',
     group: 'core',
     href: '/features/optimistic-updates',
   },
@@ -28,7 +28,7 @@ export const coreFeatures: Feature[] = [
     title: 'Reactive Queries',
     desc: 'SurrealQL queries that update when data changes.',
     longDesc:
-      'Subscribe to a SurrealQL query once — sp00ky pushes fresh results whenever the underlying data changes, anywhere in the system. No polling, no manual invalidation, no stale state.',
+      'Subscribe to a SurrealQL query once. Sp00ky pushes fresh results whenever the underlying data changes, anywhere in the system. No polling, no manual invalidation, no stale state.',
     group: 'core',
     href: '/features/reactive-queries',
   },
@@ -38,7 +38,7 @@ export const coreFeatures: Feature[] = [
     title: 'Job Scheduler',
     desc: 'Retries, queues, durable cross-session tasks.',
     longDesc:
-      'A durable, local-first job scheduler built into the engine. Retries, backoff, queues, and cross-session persistence — without standing up a separate worker or queue service.',
+      'A durable, local-first job scheduler built into the engine. Retries, backoff, queues, and cross-session persistence, without standing up a separate worker or queue service.',
     group: 'core',
     href: '/features/job-scheduler',
   },
@@ -91,7 +91,7 @@ export const cloudFeatures: Feature[] = [
     title: 'Automatic Backups',
     desc: 'Continuous point-in-time snapshots, 1-click restore.',
     longDesc:
-      'Continuous snapshots run in the background. Roll back to any point in time with a single click — no tickets, no pipelines, no downtime.',
+      'Continuous snapshots run in the background. Roll back to any point in time with a single click. No tickets, no pipelines, no downtime.',
     group: 'cloud',
     href: '/cloud/automatic-backups',
   },
@@ -101,7 +101,7 @@ export const cloudFeatures: Feature[] = [
     title: 'Managed Hosting',
     desc: 'Spin up production-ready instances in one command.',
     longDesc:
-      'Production-ready sp00ky instances, spun up with a single command. Autoscaling, TLS, logs, and metrics are managed for you — focus on the app, not the infra.',
+      'Production-ready sp00ky instances, spun up with a single command. Autoscaling, TLS, logs, and metrics are managed for you. Focus on the app, not the infra.',
     group: 'cloud',
     href: '/cloud/managed-hosting',
   },

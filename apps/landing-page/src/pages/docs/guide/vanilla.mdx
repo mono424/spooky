@@ -1,6 +1,7 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
 title: Vanilla JS / TS
+description: Use the core client directly, with no framework bindings.
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
@@ -31,7 +32,7 @@ const config: Sp00kyConfig<typeof schema> = {
 
 export const client = new Sp00kyClient<typeof schema>(config);
 
-// Initialize the client (idempotent — safe to await multiple times).
+// Initialize the client (idempotent, safe to await multiple times).
 export async function initDatabase() {
   await client.init();
   console.log('Sp00ky client initialized');
@@ -39,7 +40,7 @@ export async function initDatabase() {
 
 export const code4 = `import { client } from './db';
 
-// Build a query. The second argument is \`QueryOptions\` — pass \`{}\`
+// Build a query. The second argument is \`QueryOptions\`. Pass \`{}\`
 // for defaults. SolidJS users get the same builder from \`db.query()\`
 // without the options argument.
 const builder = client.query('thread', {})

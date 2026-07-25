@@ -1,0 +1,127 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Define your schema
+description: Your .surql files are the single source of truth. Everything else (client types, sync, permissions) is derived from them.
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import CardGrid from '../../../components/ui/CardGrid.astro';
+import LinkCard from '../../../components/ui/LinkCard.astro';
+
+You write plain SurrealQL in `.surql` files. Sp00ky reads them and derives your client types, your sync
+rules, and your row-level permissions from the same definitions.
+
+<CodeBlock fileName="schema/src/schema.surql" code={tableCode} lang="sql" />
+
+That's the whole contract. Run [`spky generate`](/docs/schema/generated-types) and the matching
+`User` type appears in your app, with `username` as a `string` and `created_at` as a `Date`.
+
+## Fields carry the rules
+
+Put constraints in the schema, not in your app code. `ASSERT` rejects bad writes at the database, and
+`PERMISSIONS` are enforced for every client, including the ones you didn't write.
+
+<CodeBlock fileName="schema/src/schema.surql" code={strictCode} lang="sql" />
+
+`PERMISSIONS` also shape what live queries return: a client subscribed to `user` only ever receives
+rows the `FOR select` clause admits. See [Authentication](/docs/client/auth) for how `$auth` is
+populated and which permission expressions the sync engine can evaluate.
+
+## Annotations
+
+Sp00ky reads special comment **descriptors** in your `.surql` files. They look like ordinary
+SurrealQL comments (`-- @name`), so SurrealDB ignores them, but the CLI uses them to change how a
+table or field is generated and synced.
+
+| Descriptor | Placement | Effect |
+| --- | --- | --- |
+| `-- @nosync` | above a `DEFINE TABLE` | Server-only table. Excluded from sync entirely (see below). |
+| `-- @crdt text` | above a `DEFINE FIELD` | Marks a collaborative text field backed by a Loro CRDT. See [CRDT fields](/docs/client/crdt). |
+| `-- @cursor` | above a `DEFINE FIELD` (with `@crdt`) | Stores per-session cursors alongside the CRDT snapshot. |
+| `-- @parent` | suffix on a `DEFINE FIELD ... TYPE record<...>` | Marks the parent side of a relationship; written automatically from the auth context, never by client code. |
+
+<CodeBlock code={annotationsCode} lang="sql" />
+
+### Keeping a table off the client (`@nosync`)
+
+Put `-- @nosync` on the line above a `DEFINE TABLE` to make it **server-only**, useful for audit
+logs, bookkeeping, or anything that should live in your database but never reach a browser.
+
+<CodeBlock code={nosyncCode} lang="sql" />
+
+A `@nosync` table is:
+
+- **Omitted from generated types** (TypeScript / Dart / JSON Schema).
+- **Omitted from relations**: any `record<...>` field on another table pointing at it is dropped
+  from the generated relationships.
+- **Never synced**: no sync events are emitted, so nothing flows to the scheduler or SSP.
+- **Excluded from the scheduler snapshot** and from SSP bootstrap.
+- **Still stored in the main database, and still included in backups.**
+
+<Warning title="Not the same as locking permissions">
+  `@nosync` is distinct from `PERMISSIONS FOR select WHERE false`. A permission-locked table is
+  still synced (it shows up in generated types and the snapshot, it just can't be read); `@nosync`
+  removes the table from sync altogether. Reach for `@nosync` when a table should never leave the
+  server.
+</Warning>
+
+## Next
+
+<CardGrid>
+  <LinkCard
+    href="/docs/schema/relationships"
+    title="Relationships"
+    icon="relationship"
+    description="1:1, 1:N and graph edges, and how each one queries."
+  />
+  <LinkCard
+    href="/docs/schema/generated-types"
+    title="Generated types"
+    icon="types"
+    description="Turn the schema into TypeScript and Dart with spky generate."
+  />
+  <LinkCard
+    href="/docs/schema/migrations"
+    title="Migrations"
+    icon="migrations"
+    description="Evolve the schema safely once you have real data."
+  />
+  <LinkCard
+    href="/docs/client/auth"
+    title="Authentication"
+    icon="key"
+    description="Define access methods and row-level permissions."
+  />
+</CardGrid>
+
+export const tableCode = `DEFINE TABLE user SCHEMAFULL;
+
+DEFINE FIELD username   ON TABLE user TYPE string;
+DEFINE FIELD created_at ON TABLE user TYPE datetime VALUE time::now();`;
+
+export const strictCode = `DEFINE TABLE user SCHEMAFULL
+  PERMISSIONS
+    FOR select, create WHERE true
+    FOR update, delete WHERE id = $auth.id; -- only the user can modify their own record
+
+DEFINE FIELD username ON TABLE user TYPE string
+  ASSERT $value != NONE AND string::len($value) > 3;
+
+DEFINE FIELD created_at ON TABLE user TYPE datetime
+  VALUE time::now();
+
+DEFINE INDEX unique_username ON TABLE user FIELDS username UNIQUE;`;
+
+export const annotationsCode = `-- @crdt text                       -- collaborative text field (Loro CRDT)
+DEFINE FIELD content ON TABLE thread TYPE string;
+
+DEFINE FIELD author ON TABLE thread TYPE record<user>; -- @parent
+
+-- @nosync
+DEFINE TABLE audit_log SCHEMALESS;`;
+
+export const nosyncCode = `-- @nosync
+DEFINE TABLE audit_log SCHEMALESS;
+DEFINE FIELD action ON TABLE audit_log TYPE string;
+DEFINE FIELD at     ON TABLE audit_log TYPE datetime VALUE time::now();`;

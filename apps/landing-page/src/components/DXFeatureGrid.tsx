@@ -11,7 +11,7 @@ export const DXFeatureGrid: React.FC = () => {
         <DXFeatureBox
           figure="FIG. 3.1"
           title="Schema-First Intelligence"
-          description="Define your schema once — get type-safe clients, context-aware autocomplete, and real-time validation across your entire stack."
+          description="Define your schema once, get type-safe clients, context-aware autocomplete, and real-time validation across your entire stack."
           className="md:rounded-l-2xl"
         >
           <div className="w-full h-full flex items-center justify-center pt-8 pb-4 relative md:pr-[60px]">
