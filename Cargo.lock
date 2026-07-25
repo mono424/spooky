@@ -1085,6 +1085,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono-tz"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+dependencies = [
+ "chrono",
+ "phf 0.12.1",
+]
+
+[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1347,6 +1357,15 @@ name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
+
+[[package]]
+name = "croner"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c344b0690c1ad1c7176fe18eb173e0c927008fdaaa256e40dfd43ddd149c0843"
+dependencies = [
+ "chrono",
+]
 
 [[package]]
 name = "crossbeam-deque"
@@ -3866,7 +3885,7 @@ checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
 
 [[package]]
 name = "maintenance"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4823,6 +4842,15 @@ dependencies = [
 
 [[package]]
 name = "phf"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+dependencies = [
+ "phf_shared 0.12.1",
+]
+
+[[package]]
+name = "phf"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
@@ -4898,6 +4926,15 @@ checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
 dependencies = [
  "siphasher",
  "unicase",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
+dependencies = [
+ "siphasher",
 ]
 
 [[package]]
@@ -6209,8 +6246,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "schedule-core"
+version = "0.0.1-canary.148"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "croner",
+ "serde",
+ "serde_json",
+ "sha2",
+ "surrealdb",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "scheduler"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6223,6 +6278,7 @@ dependencies = [
  "maintenance",
  "reqwest 0.12.28",
  "rust-s3",
+ "schedule-core",
  "serde",
  "serde_json",
  "sha2",
@@ -6728,7 +6784,7 @@ dependencies = [
 
 [[package]]
 name = "sp00ky-cli"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6746,6 +6802,7 @@ dependencies = [
  "rand 0.8.6",
  "ratatui",
  "regex",
+ "schedule-core",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6791,7 +6848,7 @@ dependencies = [
 
 [[package]]
 name = "ssp"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "anyhow",
  "blake3",
@@ -6817,7 +6874,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-ffi"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "anyhow",
  "libc",
@@ -6828,7 +6885,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-node"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6838,6 +6895,7 @@ dependencies = [
  "loro",
  "lru",
  "reqwest 0.12.28",
+ "schedule-core",
  "serde",
  "serde_json",
  "ssp",
@@ -6852,7 +6910,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-portable"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6875,7 +6933,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-protocol"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "blake3",
  "serde",
@@ -6884,7 +6942,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-server"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6920,7 +6978,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-wasm"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",

@@ -68,6 +68,9 @@ pub struct SspNode {
     /// `true` when no scheduler fronts this SSP (standalone mode): this node
     /// handles all jobs and owns the recovery sweep.
     pub standalone: bool,
+    /// Declarative-schedule engine — standalone mode only (`None` in cluster
+    /// mode, where the scheduler service is the single ticker).
+    pub schedule_engine: Option<Arc<schedule_core::ScheduleEngine>>,
     /// View TTL cleanup cadence (seconds) — the `TtlCleanup` timer re-arm.
     pub ttl_cleanup_interval_secs: u64,
     /// Rows per bootstrap page (keyset pagination) for cold-start rebuild.
@@ -84,10 +87,9 @@ const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
 const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
 
 /// Projection for recovery row reads: `type::string(id) AS id` keeps the
-/// RecordId out of the flattened JSON; `recurring`+`interval` preserve a
-/// recovered recurring job's schedule flag.
+/// RecordId out of the flattened JSON.
 const RECOVERY_FIELDS: &str = "type::string(id) AS id, status, path, payload, retries, \
-                               max_retries, retry_strategy, timeout, recurring, interval";
+                               max_retries, retry_strategy, timeout";
 
 #[derive(Deserialize, Debug)]
 struct LogRequest {
@@ -895,8 +897,13 @@ impl SspNode {
                 if payload.record.get("status").and_then(|v| v.as_str()) == Some("pending") {
                     self.route_pending_job(&payload, &backend_info).await;
                 }
-            } else if is_assigned && op == Operation::Update {
-                self.maybe_enqueue_recurring_poke(&backend_info, &payload.id, &payload.record).await;
+            } else if op == Operation::Update {
+                // The runner's terminal status write fires this table's mutation
+                // event, which is how the schedule engine learns a scheduled job
+                // or workflow step finished. Not gated on `is_assigned`: the
+                // engine only ever reads the job row, and in cluster mode the
+                // node that RAN the job is not the node that ticks.
+                self.observe_job_terminal(&payload.id, &payload.record).await;
             }
         }
 
@@ -1038,65 +1045,26 @@ impl SspNode {
         }
     }
 
-    /// A recurring schedule's clock was bumped (manual "poke" = run now).
-    async fn maybe_enqueue_recurring_poke(
-        &self,
-        backend_info: &crate::jobs::BackendInfo,
-        id: &str,
-        record: &Value,
-    ) {
-        let recurring = record.get("recurring").and_then(|v| v.as_bool()).unwrap_or(false);
+    /// A job row was updated — tell the schedule engine if it just terminalized.
+    ///
+    /// This is the fast path for advancing scheduled runs and workflow DAGs. It
+    /// is deliberately best-effort: the event is an `http::post` from a DB event,
+    /// so a restart can drop it, and the engine's heal pass reaches the same
+    /// conclusion within one sweep. Runs on the `Spawner` so a slow DAG
+    /// advancement never holds up the ingest response.
+    async fn observe_job_terminal(&self, id: &str, record: &Value) {
+        let Some(engine) = self.schedule_engine.clone() else { return };
         let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        if !recurring || status != "pending" {
+        if !matches!(status, "success" | "failed") {
             return;
         }
-        // Distinguish a poke (next_run_at = now) from the runner's re-arm
-        // (future) using the value CARRIED in this event, not a row read (the
-        // event fires inside the writer's tx — a row read can see the stale
-        // pre-update value). Empty ⇒ run now.
-        let next_run_at = record.get("next_run_at").and_then(|v| v.as_str()).unwrap_or("");
-        let due = if next_run_at.is_empty() {
-            true
-        } else {
-            match self
-                .platform
-                .db
-                .query(crate::jobs::POKE_DUE_SQL, &[("nra", json!(next_run_at))])
-                .await
-            {
-                Ok(rows) => rows.first().and_then(|v| v.as_bool()).unwrap_or(false),
-                Err(e) => {
-                    warn!(job_id = %id, error = %e, "Recurring poke due-check failed");
-                    return;
-                }
+        let job_id = id.to_string();
+        let status = status.to_string();
+        self.platform.spawner.spawn(Box::pin(async move {
+            if let Err(e) = engine.observe_job_terminal(&job_id, &status).await {
+                warn!(job_id = %job_id, error = %e, "schedule engine could not observe job completion");
             }
-        };
-        if !due {
-            return;
-        }
-        if !self.job_control.mark_enqueued(id) {
-            return; // already queued/in-flight; that run re-arms on completion
-        }
-        if !self.standalone {
-            if let Err(e) =
-                crate::jobs::set_assignee_helper(self.platform.db.as_ref(), id, &self.ssp_id).await
-            {
-                warn!(job_id = %id, error = %e, "Failed to persist assignee for poked job");
-            }
-        }
-        let timeout_override = record.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
-        let job_entry = crate::jobs::JobEntry::from_record(
-            id.to_string(),
-            backend_info.base_url.clone(),
-            backend_info.auth_token.clone(),
-            record,
-            backend_info.effective_timeout(timeout_override),
-        );
-        info!(job_id = %id, "Recurring poke: enqueuing immediate run");
-        if let Err(e) = self.job_queue_tx.send(job_entry).await {
-            self.job_control.clear_enqueued(id);
-            error!(job_id = %id, error = %e, "Failed to enqueue poked job");
-        }
+        }));
     }
 
     // --- Timer-driven sweeps (invoked from Runtime::on_timer) ----------------

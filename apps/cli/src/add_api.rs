@@ -59,6 +59,10 @@ PERMISSIONS
   FOR create WHERE true
   FOR select, update WHERE false;
 
+-- The element must be FLEXIBLE or a SCHEMAFULL table rejects the runner's
+-- `{{ code, reason }}` entries as unknown fields (`errors[0].code`).
+DEFINE FIELD errors[*] ON TABLE {table} TYPE object FLEXIBLE;
+
 DEFINE FIELD updated_at ON TABLE {table} TYPE datetime
 DEFAULT ALWAYS time::now()
 PERMISSIONS
@@ -81,30 +85,22 @@ PERMISSIONS
   FOR select WHERE true
   FOR create, update WHERE false;
 
--- Optional scheduling fields, read by the job runner:
---   delay        one-shot delay in ms (db.run(..., {{ delay }}))
---   recurring    single durable row re-run every `interval` ms (runRecurring)
---   next_run_at  when the next recurring run is due; the recovery sweep
---                dispatches once it elapses. Owner-updatable so a client
---                "poke" (set to time::now()) can trigger an immediate run.
+-- The backend's response body on success, stored by the job runner. Readable so
+-- you can inspect job output (`spky jobs get`), and it is what a scheduled
+-- workflow hands to the steps that depend on this one. Platform-written.
+DEFINE FIELD result ON TABLE {table} TYPE any
+PERMISSIONS
+  FOR select WHERE true
+  FOR create, update WHERE false;
+
+-- One-shot delay in ms: the job becomes due at `created_at + delay`
+-- (`db.run(..., {{ delay }})`). Recurring work is no longer a field on this
+-- table — declare it in sp00ky.yml under `schedules:` and the server-side
+-- scheduler creates a fresh row here each cycle.
 DEFINE FIELD delay ON TABLE {table} TYPE option<int>
 PERMISSIONS
   FOR create, select WHERE true
   FOR update WHERE false;
-
-DEFINE FIELD recurring ON TABLE {table} TYPE option<bool>
-PERMISSIONS
-  FOR create, select WHERE true
-  FOR update WHERE false;
-
-DEFINE FIELD interval ON TABLE {table} TYPE option<int>
-PERMISSIONS
-  FOR create, select WHERE true
-  FOR update WHERE false;
-
-DEFINE FIELD next_run_at ON TABLE {table} TYPE option<datetime>
-PERMISSIONS
-  FOR create, select, update WHERE true;
 "#,
         table = table_name
     )

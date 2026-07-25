@@ -262,6 +262,9 @@ fn build_node(
         edge_update_tx,
         anonymous_live_queries: false,
         standalone: true,
+        // No schedule engine: this shell has no job runner wired (`_job_rx` is
+        // dropped), so a fired schedule would spawn rows nothing executes.
+        schedule_engine: None,
         ttl_cleanup_interval_secs: 60,
         bootstrap_page_size: 200,
         checkpoint_interval_secs,

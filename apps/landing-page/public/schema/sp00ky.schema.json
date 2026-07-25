@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sp00ky.cloud/schema/sp00ky.schema.json",
   "title": "sp00ky.yml",
-  "description": "Configuration file for Sp00ky — an offline-first, real-time sync framework built on SurrealDB.",
+  "description": "Configuration file for Sp00ky \u2014 an offline-first, real-time sync framework built on SurrealDB.",
   "type": "object",
   "properties": {
     "slug": {
@@ -69,7 +69,7 @@
       ]
     },
     "logLevel": {
-      "description": "`RUST_LOG` directive applied to the Scheduler and SSP containers (both `spky dev` and `spky cloud deploy`). A plain string applies everywhere (e.g. `trace`, `info,ssp=debug`). A `{dev, cloud}` map sets per-environment levels. Unset → defaults to `info`.",
+      "description": "`RUST_LOG` directive applied to the Scheduler and SSP containers (both `spky dev` and `spky cloud deploy`). A plain string applies everywhere (e.g. `trace`, `info,ssp=debug`). A `{dev, cloud}` map sets per-environment levels. Unset \u2192 defaults to `info`.",
       "oneOf": [
         {
           "type": "string",
@@ -130,6 +130,36 @@
       "additionalProperties": {
         "$ref": "#/$defs/appEntry"
       }
+    },
+    "schedules": {
+      "description": "Server-side cron/interval schedules, keyed by name. Each cycle the scheduler creates a new job row in the backend's outbox table. The whole section may instead be a path to a YAML file holding the map.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Path to a YAML file holding the whole schedules map, relative to the manifest."
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/scheduleEntry"
+          }
+        }
+      ]
+    },
+    "workflows": {
+      "description": "Server-side workflow DAGs, keyed by name. Same file-linking rule as `schedules`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Path to a YAML file holding the whole workflows map, relative to the manifest."
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/workflowEntry"
+          }
+        }
+      ]
     },
     "buckets": {
       "type": "array",
@@ -447,7 +477,7 @@
         },
         "workdir": {
           "type": "string",
-          "description": "For format: dart — optional override for the directory (relative to sp00ky.yml) to run the Dart generator from. Must be a Dart package that depends on spooky_core. By default it's auto-derived from `output`'s nearest ancestor pubspec.yaml. Ignored for TypeScript."
+          "description": "For format: dart \u2014 optional override for the directory (relative to sp00ky.yml) to run the Dart generator from. Must be a Dart package that depends on spooky_core. By default it's auto-derived from `output`'s nearest ancestor pubspec.yaml. Ignored for TypeScript."
         }
       },
       "additionalProperties": false
@@ -514,6 +544,206 @@
         }
       },
       "additionalProperties": false
+    },
+    "forEachConfig": {
+      "type": "object",
+      "description": "Fan out: run this SurrealQL SELECT each fire and spawn one job per row. The row is passed to the handler as `payload.row`.",
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "A single SurrealQL SELECT statement. Runs with root privileges."
+        },
+        "key": {
+          "type": "string",
+          "description": "Row field whose value keys the per-row concurrency check. Defaults to `id`."
+        }
+      }
+    },
+    "retryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum retries per run."
+        },
+        "strategy": {
+          "enum": [
+            "linear",
+            "exponential"
+          ],
+          "description": "Backoff shape, matching the job runner."
+        }
+      }
+    },
+    "scheduleEntry": {
+      "description": "A server-side schedule: either an inline definition, or a path to a YAML file containing one. Set exactly one of `cron` or `every`. `cron` is a standard 5-field expression evaluated in `timezone` (default UTC); `every` is a fixed interval measured from each fire.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Path to a YAML file holding this schedule's definition, relative to the manifest."
+        },
+        {
+          "type": "object",
+          "required": [
+            "backend",
+            "route"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "cron": {
+              "type": "string",
+              "description": "Standard 5-field cron expression (an optional leading seconds field is accepted), e.g. `0 3 * * *`."
+            },
+            "every": {
+              "type": "string",
+              "description": "Fixed interval, e.g. `30s`, `5m`, `1h30m`. Minimum 10s."
+            },
+            "timezone": {
+              "type": "string",
+              "description": "IANA timezone the cron expression is evaluated in, e.g. `Europe/Berlin`. Defaults to UTC."
+            },
+            "backend": {
+              "type": "string",
+              "description": "Name of an `apps:` entry with an outbox method."
+            },
+            "route": {
+              "type": "string",
+              "description": "Route path on that backend, e.g. `/syncGames`."
+            },
+            "payload": {
+              "type": "object",
+              "description": "Static payload merged into every spawned job's payload."
+            },
+            "forEach": {
+              "$ref": "#/$defs/forEachConfig"
+            },
+            "concurrency": {
+              "enum": [
+                "skip",
+                "allow",
+                "replace"
+              ],
+              "default": "skip",
+              "description": "What happens when a fire lands while the previous run for the same key is still going. `skip` records the suppressed tick and leaves the in-flight run alone; `allow` permits overlap; `replace` kills the in-flight run first."
+            },
+            "retry": {
+              "$ref": "#/$defs/retryConfig"
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Per-job HTTP timeout, e.g. `120s`. Honoured only when the backend sets `deploy.timeoutOverridable`."
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "`false` deploys the schedule but leaves it inert. Distinct from `spky schedules pause`, which config never overwrites."
+            }
+          }
+        }
+      ]
+    },
+    "workflowStep": {
+      "type": "object",
+      "required": [
+        "backend",
+        "route"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "type": "string",
+          "description": "Name of an `apps:` entry with an outbox method."
+        },
+        "route": {
+          "type": "string",
+          "description": "Route path on that backend."
+        },
+        "payload": {
+          "type": "object",
+          "description": "Static payload for this step."
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Steps that must succeed first. A step with none is a root and runs in parallel with the other roots; a step with several is a fan-in join."
+        },
+        "retry": {
+          "$ref": "#/$defs/retryConfig"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "Per-step HTTP timeout, e.g. `30s`."
+        }
+      }
+    },
+    "workflowEntry": {
+      "description": "A workflow DAG: either an inline definition, or a path to a YAML file containing one.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Path to a YAML file holding this workflow's definition, relative to the manifest."
+        },
+        {
+          "type": "object",
+          "required": [
+            "steps"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "schedule": {
+              "type": "object",
+              "description": "When to run it. Omit for a trigger-only workflow. Set exactly one of `cron` or `every`. `cron` is a standard 5-field expression evaluated in `timezone` (default UTC); `every` is a fixed interval measured from each fire.",
+              "additionalProperties": false,
+              "properties": {
+                "cron": {
+                  "type": "string"
+                },
+                "every": {
+                  "type": "string"
+                },
+                "timezone": {
+                  "type": "string"
+                }
+              }
+            },
+            "steps": {
+              "type": "object",
+              "description": "Steps by name. Order is irrelevant \u2014 `dependsOn` decides execution.",
+              "additionalProperties": {
+                "$ref": "#/$defs/workflowStep"
+              }
+            },
+            "onFailure": {
+              "enum": [
+                "halt",
+                "continue-independent"
+              ],
+              "default": "halt",
+              "description": "`halt` fails the run and skips every step that hasn't started; `continue-independent` skips only the branch below the failure. Either way the run ends failed."
+            },
+            "concurrency": {
+              "enum": [
+                "skip",
+                "allow",
+                "replace"
+              ],
+              "default": "skip",
+              "description": "What happens when a fire lands while the previous run for the same key is still going. `skip` records the suppressed tick and leaves the in-flight run alone; `allow` permits overlap; `replace` kills the in-flight run first."
+            },
+            "forEach": {
+              "$ref": "#/$defs/forEachConfig"
+            }
+          }
+        }
+      ]
     }
   }
 }

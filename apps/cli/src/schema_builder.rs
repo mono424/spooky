@@ -65,6 +65,12 @@ pub fn build_remote_functions_schema(mode: &DeployMode, endpoint: &str, secret: 
 /// `/job/recover` aborts before enqueueing when it can't claim, so a stuck
 /// job is re-dispatched by the sweep every 30s forever without ever running.
 ///
+/// `result` holds the backend's response body on success, so job output is
+/// visible in `spky jobs` and, crucially, can be handed to the next step of a
+/// workflow. The runner degrades to a status-only write when the field is
+/// missing, so a project that hasn't re-applied its schema yet still completes
+/// jobs — it just can't chain their output.
+///
 /// `IF NOT EXISTS` (not OVERWRITE) so an explicit user definition is never
 /// clobbered. Emitted by both schema paths: `migrate::apply_internal_schema`
 /// (VM) and `build_server_schema` (free/Cloudflare push).
@@ -80,6 +86,21 @@ where
         out.push_str(&format!(
             "DEFINE FIELD IF NOT EXISTS assignee ON {} TYPE option<string> \
              PERMISSIONS FOR select WHERE true FOR create, update WHERE false;\n",
+            table
+        ));
+        out.push_str(&format!(
+            "DEFINE FIELD IF NOT EXISTS result ON {} TYPE any \
+             PERMISSIONS FOR select WHERE true FOR create, update WHERE false;\n",
+            table
+        ));
+        // The documented outbox template declares `errors` as `array<object>`
+        // but never defined its ELEMENT, so on a SCHEMAFULL table SurrealDB
+        // rejected the runner's `{ code, reason }` append with "Found field
+        // 'errors[0].code', but no such field exists" — statement-level, so the
+        // write was silently lost and failed jobs recorded no reason. Same fix as
+        // `_00_feature_flag.rules[*]`: declare the element FLEXIBLE.
+        out.push_str(&format!(
+            "DEFINE FIELD IF NOT EXISTS errors[*] ON {} TYPE object FLEXIBLE;\n",
             table
         ));
     }
@@ -140,6 +161,10 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
     // Remote meta tables (server-side)
     content.push('\n');
     content.push_str(include_str!("meta_tables_remote.surql"));
+
+    // Scheduling tables (`_00_schedule*`)
+    content.push('\n');
+    content.push_str(include_str!("schedule_tables.surql"));
 
     // Migration tracking table
     content.push('\n');

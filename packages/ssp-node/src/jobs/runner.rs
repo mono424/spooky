@@ -10,21 +10,17 @@ use crate::api::Method;
 use crate::ports::{Db, HttpClient, HttpError, OutboundRequest, Scheduler, Spawner};
 
 /// SQL boolean expression (for recovery-sweep `WHERE` clauses): is a pending job
-/// DUE now? A recurring schedule is due at `next_run_at`; a one-shot job (no
-/// `next_run_at`) is due at `created_at + <delay>`. `??` falls back when
-/// next_run_at/delay are unset (NONE); `delay = 0` ⇒ ready immediately. Shared by
-/// the SSP singlenode sweep and the cluster scheduler sweep so the two never
-/// drift, and exercised directly by tests.
+/// DUE now? A job is due at `created_at + <delay>`; `??` falls back when `delay`
+/// is unset (NONE), and `delay = 0` ⇒ ready immediately. Shared by the SSP
+/// singlenode sweep and the cluster scheduler sweep so the two never drift, and
+/// exercised directly by tests.
+///
+/// Recurring schedules used to add a `next_run_at ??` arm here. They are now
+/// declarative and server-side (`schedules:` in sp00ky.yml): the schedule engine
+/// keeps its own clock in `_00_schedule.next_fire_at` and spawns a NEW job row
+/// per cycle, so an outbox row is once again always a single execution.
 pub const PENDING_DUE_CLAUSE: &str =
-    "(next_run_at ?? (created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms')))) <= time::now()";
-
-/// SQL the SSP poke path uses to decide whether a recurring row is DUE now, from
-/// the `next_run_at` value CARRIED in the ingest event (bound as `$nra`) rather
-/// than a row read: the `_00_*_mutation` event's `http::post` fires inside the
-/// writer's transaction, so reading the row back can see the pre-update value.
-/// Comparing the carried value distinguishes a poke (now) from the runner's
-/// re-arm (a future time). Returns a bool. Shared so tests hit the exact string.
-pub const POKE_DUE_SQL: &str = "RETURN <datetime>$nra <= time::now()";
+    "(created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms'))) <= time::now()";
 
 /// Guard the `type::record($id)` conversion: SurrealDB record ids are
 /// `table:key`. The former implementation used `RecordId::parse_simple`;
@@ -161,14 +157,7 @@ impl JobRunner {
             }
             Ok(response) if (200..300).contains(&response.status) => {
                 info!(job_id = %job.id, status = response.status, "Job completed successfully");
-                if job.recurring {
-                    // Recurring schedule: never terminalize. Re-arm the clock from
-                    // THIS completion (drift-free) and return to `pending` so the
-                    // recovery sweep dispatches the next run when the interval elapses.
-                    self.rearm_recurring(&job.id, job.interval_ms).await?;
-                } else {
-                    self.update_status(&job.id, "success").await?;
-                }
+                self.complete_success(&job.id, &response.body).await?;
                 self.job_control.clear_enqueued(&job.id);
             }
             Ok(response) => {
@@ -262,21 +251,6 @@ impl JobRunner {
                     error!(job_id = %job_id, error = %e, "Failed to re-queue job");
                 }
             }));
-        } else if job.recurring {
-            // A recurring schedule must survive a transient backend outage: it
-            // exhausts its per-cycle retry budget, then re-arms for the next
-            // interval instead of dying `failed`. Errors stay on the row for
-            // visibility; retries reset for the next cycle.
-            warn!(
-                job_id = %job.id,
-                retries = job.retries,
-                "Recurring job exhausted retries this cycle - re-arming for next interval"
-            );
-            // Release the in-flight mark even if the terminal DB write fails —
-            // leaking it wedges the job against every future recover.
-            let rearm = self.rearm_recurring(&job.id, job.interval_ms).await;
-            self.job_control.clear_enqueued(&job.id);
-            rearm?;
         } else {
             warn!(
                 job_id = %job.id,
@@ -303,8 +277,8 @@ impl JobRunner {
         update_status_helper(self.db.as_ref(), job_id, status).await
     }
 
-    async fn rearm_recurring(&self, job_id: &str, interval_ms: u64) -> Result<()> {
-        rearm_recurring_helper(self.db.as_ref(), job_id, interval_ms).await
+    async fn complete_success(&self, job_id: &str, body: &str) -> Result<()> {
+        complete_success_helper(self.db.as_ref(), job_id, body).await
     }
 
     async fn increment_retries(&self, job_id: &str) -> Result<()> {
@@ -318,6 +292,69 @@ impl JobRunner {
             .context("Failed to increment retries")?;
         Ok(())
     }
+}
+
+/// Cap on the stored size of a job's captured `result`. A backend that streams
+/// back a megabyte of rows should not bloat every SELECT of the outbox table (or
+/// the payload of a workflow step that depends on it). Bodies past the cap are
+/// stored as a marker object instead — the job still succeeds, and the operator
+/// sees why the output is missing. A const rather than an env var because the
+/// portable core reads the process environment zero times (see `NodeConfig`).
+pub const JOB_RESULT_MAX_BYTES: usize = 64 * 1024;
+
+/// Terminalize a successful job AND capture the backend's response body in
+/// `result`.
+///
+/// The body is stored as parsed JSON when it parses (so `result.fileId` works in
+/// a dependent workflow step) and as a plain string otherwise.
+///
+/// Outbox tables are user-owned and usually SCHEMAFULL, and `result` only
+/// arrived with the platform-field injection in `build_outbox_platform_fields`.
+/// A project that upgraded the stack without re-applying its schema therefore
+/// has no such field, and SurrealDB rejects the WHOLE update — which would wedge
+/// job completion, the one thing that must never happen. So a failed write falls
+/// back to a status-only update: such a job completes normally, it just has no
+/// captured output.
+pub async fn complete_success_helper(db: &dyn Db, job_id: &str, body: &str) -> Result<()> {
+    validate_job_id(job_id)?;
+    let result = encode_job_result(body);
+    let attempt = db
+        .query(
+            "UPDATE type::record($id) SET status = 'success', result = $result, \
+             updated_at = time::now()",
+            &[("id", json!(job_id)), ("result", result)],
+        )
+        .await;
+
+    match attempt {
+        Ok(_) => Ok(()),
+        Err(crate::ports::DbError::Query(e)) => {
+            warn!(
+                job_id = %job_id,
+                error = %e,
+                "Could not store job result (is the outbox schema up to date?) — \
+                 completing the job without it"
+            );
+            update_status_helper(db, job_id, "success").await
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Response body → the value stored in `result`: parsed JSON when it parses, a
+/// plain string otherwise, or a marker when it exceeds [`JOB_RESULT_MAX_BYTES`].
+fn encode_job_result(body: &str) -> Value {
+    if body.len() > JOB_RESULT_MAX_BYTES {
+        return json!({
+            "truncated": true,
+            "bytes": body.len(),
+            "limit": JOB_RESULT_MAX_BYTES,
+        });
+    }
+    if body.trim().is_empty() {
+        return Value::Null;
+    }
+    serde_json::from_str(body).unwrap_or_else(|_| json!(body))
 }
 
 /// Helper function to update status (used by both JobRunner and spawned tasks)
@@ -359,31 +396,6 @@ pub async fn append_error_helper(db: &dyn Db, job_id: &str, error: Value) -> Res
     )
     .await
     .context("Failed to append error")?;
-    Ok(())
-}
-
-/// Re-arm a recurring job after a run completes: set `next_run_at = now + interval`,
-/// reset `retries`, and return the row to `pending` so the recovery sweep dispatches
-/// the next run once the interval elapses. A recurring row therefore never reaches a
-/// terminal `success`/`failed` state; it cycles pending -> processing -> pending.
-/// Guarded on `status = 'processing'` (the state the runner set before the run) to
-/// preserve the single-writer invariant — it never clobbers a row an operator has
-/// killed. Written server-side (root) only.
-pub async fn rearm_recurring_helper(db: &dyn Db, job_id: &str, interval_ms: u64) -> Result<()> {
-    validate_job_id(job_id)?;
-    // `assignee = NONE`: the claim marker means "this SSP holds the job
-    // in-memory right now". A re-armed row is waiting for the recovery sweep
-    // to dispatch its next run — nobody holds it. Leaving the previous run's
-    // assignee in place makes the sweep's is_orphaned check skip the row
-    // whenever that SSP is still alive, so the next run never fires.
-    db.query(
-        "UPDATE type::record($id) SET status = 'pending', retries = 0, assignee = NONE, \
-         next_run_at = time::now() + <duration>(string::concat(<string>$interval, 'ms')), \
-         updated_at = time::now() WHERE status = 'processing' RETURN NONE",
-        &[("id", json!(job_id)), ("interval", json!(interval_ms))],
-    )
-    .await
-    .context("Failed to re-arm recurring job")?;
     Ok(())
 }
 
@@ -440,7 +452,7 @@ pub async fn load_job_record(db: &dyn Db, job_id: &str) -> Result<Option<Value>>
     }
     let results = db
         .query(
-            "SELECT status, path, payload, retries, max_retries, retry_strategy, timeout, recurring, interval \
+            "SELECT status, path, payload, retries, max_retries, retry_strategy, timeout \
              FROM ONLY type::record($id)",
             &[("id", json!(job_id))],
         )
@@ -457,7 +469,7 @@ pub async fn load_job_record(db: &dyn Db, job_id: &str) -> Result<Option<Value>>
 
 /// Mark + enqueue a recovered/re-dispatched job. Returns `false` when the job
 /// is already queued or in-flight (the `mark_enqueued` guard) or the queue is
-/// closed. Shared by the singlenode recovery sweep, the recurring-poke path,
+/// closed. Shared by the singlenode recovery sweep, the
 /// and `/job/recover`.
 pub async fn enqueue_recovered(
     job_control: &super::types::JobControl,
@@ -523,35 +535,45 @@ mod tests {
     }
 
     #[test]
-    fn from_record_parses_recurring_fields() {
-        let rec = serde_json::json!({
-            "path": "/run",
-            "payload": {},
-            "recurring": true,
-            "interval": 300_000,
-        });
+    fn from_record_reads_the_dispatch_fields_and_defaults_the_rest() {
         let e = JobEntry::from_record(
-            "job:x".into(),
+            "job:a".into(),
             "http://b".into(),
             None,
-            &rec,
-            Duration::from_secs(1),
+            &json!({
+                "path": "/run",
+                "payload": { "x": 1 },
+                "retries": 2,
+                "max_retries": 5,
+                "retry_strategy": "exponential",
+            }),
+            Duration::from_secs(7),
         );
-        assert!(e.recurring);
-        assert_eq!(e.interval_ms, 300_000);
+        assert_eq!(e.path, "/run");
+        assert_eq!(e.retries, 2);
+        assert_eq!(e.max_retries, 5);
+        assert_eq!(e.retry_strategy, "exponential");
+        assert_eq!(e.timeout, Duration::from_secs(7));
+
+        // A sparse row falls back to the documented defaults.
+        let e = JobEntry::from_record(
+            "job:b".into(),
+            "http://b".into(),
+            None,
+            &json!({ "path": "/run" }),
+            Duration::from_secs(5),
+        );
+        assert_eq!(e.retries, 0);
+        assert_eq!(e.max_retries, 3);
+        assert_eq!(e.retry_strategy, "linear");
     }
 
     #[test]
-    fn from_record_defaults_to_one_shot() {
-        let rec = serde_json::json!({ "path": "/run", "payload": {} });
-        let e = JobEntry::from_record(
-            "job:x".into(),
-            "http://b".into(),
-            None,
-            &rec,
-            Duration::from_secs(1),
-        );
-        assert!(!e.recurring, "missing recurring => one-shot");
-        assert_eq!(e.interval_ms, 0, "missing interval => 0");
+    fn encodes_results_by_shape_and_size() {
+        assert_eq!(encode_job_result("{\"a\":1}"), json!({"a": 1}), "JSON stays addressable");
+        assert_eq!(encode_job_result("done"), json!("done"), "non-JSON becomes a string");
+        assert_eq!(encode_job_result("   "), Value::Null, "an empty body stores nothing");
+        let huge = "x".repeat(JOB_RESULT_MAX_BYTES + 1);
+        assert_eq!(encode_job_result(&huge)["truncated"], json!(true));
     }
 }

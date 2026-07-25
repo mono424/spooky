@@ -1,559 +1,225 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
-title: Jobs & Usage
+title: Jobs
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import Warning from '../../../components/ui/Warning.astro';
 import Note from '../../../components/ui/Note.astro';
+import PropTable from '../../../components/ui/PropTable.astro';
 
-export const jobSchemaCode = `DEFINE TABLE job SCHEMAFULL
-  PERMISSIONS
-    FOR select, create, update, delete 
-    WHERE $access = "account" AND assigned_to.author.id = $auth.id;
+export const callCode = `// Call a backend route. Returns as soon as the row is written — the SSP
+// delivers it to your backend, retrying on failure.
+await db.run('api', '/spookify', { id: thread.id }, { assignedTo: thread.id });`;
 
--- Link to parent record (e.g., thread, user)
-DEFINE FIELD assigned_to ON TABLE job TYPE record<thread>
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
+export const optionsCode = `// Idempotent work: retry generously.
+await db.run('api', '/generate-content', data, {
+  max_retries: 5,
+  retry_strategy: 'exponential',
+});
 
--- API route path
-DEFINE FIELD path ON TABLE job TYPE string
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
+// Not idempotent: never retry.
+await db.run('api', '/charge-payment', data, { max_retries: 0 });
 
--- JSON payload for the request
-DEFINE FIELD payload ON TABLE job TYPE any
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
+// Slow work (needs timeoutOverridable: true on the backend).
+await db.run('agent', '/chat', data, { timeout: 120 });
 
--- Retry configuration
-DEFINE FIELD retries ON TABLE job TYPE int DEFAULT ALWAYS 0
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
+// Run no sooner than 5 minutes from now.
+await db.run('api', '/send-reminder', { id: reminder.id }, { delay: 5 * 60 * 1000 });`;
 
-DEFINE FIELD max_retries ON TABLE job TYPE int DEFAULT ALWAYS 3;
-
-DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
-  ASSERT $value IN ["linear", "exponential"]
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
-
--- Optional: minimum delay (milliseconds) the job stays pending before it runs
-DEFINE FIELD delay ON TABLE job TYPE int DEFAULT ALWAYS 0
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
-
--- Optional: per-job timeout override (seconds)
-DEFINE FIELD timeout ON TABLE job TYPE option<int>
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
-
--- Optional: owning SSP node id, set by the system for cluster recovery
-DEFINE FIELD assignee ON TABLE job TYPE option<string>
-  PERMISSIONS
-    FOR select WHERE true
-    FOR create, update WHERE false;
-
--- Job status lifecycle
-DEFINE FIELD status ON TABLE job TYPE string DEFAULT ALWAYS "pending"
-  ASSERT $value IN ["pending", "processing", "success", "failed"]
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
-
--- Error tracking
-DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS []
-  PERMISSIONS
-    FOR create WHERE true
-    FOR select, update WHERE false;
-
--- Timestamps
-DEFINE FIELD updated_at ON TABLE job TYPE datetime
-  DEFAULT ALWAYS time::now()
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;
-
-DEFINE FIELD created_at ON TABLE job TYPE datetime
-  VALUE time::now()
-  PERMISSIONS
-    FOR create, select WHERE true
-    FOR update WHERE false;`;
-
-export const callCode = `// Call a backend function
-await db.run('api', '/spookify', { id: threadData.id }, { 
-  assignedTo: threadData.id 
-});`;
-
-export const signatureCode = `db.run(
-  backend: string,      // Backend name from sp00ky.yml
-  path: string,          // Route path from OpenAPI spec
-  payload: object,       // Request parameters
-  options?: {
-    assignedTo?: string,           // Link to parent record
-    max_retries?: number,          // Override default max retries
-    retry_strategy?: 'linear' | 'exponential',  // Override retry strategy
-    timeout?: number,              // Override backend timeout (seconds)
-    delay?: number                 // Stay pending at least N milliseconds before running
-  }
-)`;
-
-export const queryJobCode = `const threadQuery = db.query('thread')
+export const queryJobCode = `// Jobs are ordinary records, so the query builder reads them — and because the
+// query is reactive, the UI follows the job's status without any polling.
+const threadQuery = db.query('thread')
   .where({ id: 'thread:abc123' })
-  .related('jobs', (q) => {
-    return q
-      .where({ path: '/spookify' })
-      .orderBy('created_at', 'desc')
-      .limit(1);
-  })
+  .related('jobs', (q) => q
+    .where({ path: '/spookify' })
+    .orderBy('created_at', 'desc')
+    .limit(1))
   .one()
   .build();
 
 const thread = useQuery(db, () => threadQuery);
 
-// Access the job status
-const job = thread()?.jobs?.[0];
-const isProcessing = ['pending', 'processing'].includes(job?.status);`;
+const job = () => thread()?.jobs?.[0];
+const isRunning = () => ['pending', 'processing'].includes(job()?.status);
+const failed = () => job()?.status === 'failed';`;
 
-export const fullExampleCode = `import { useQuery } from '@spooky-sync/client-solid';
-import { db } from './db';
-import { createSignal } from 'solid-js';
+export const jobSchemaCode = `DEFINE TABLE job SCHEMAFULL
+  PERMISSIONS
+    FOR select, create, update, delete
+    WHERE $access = "account" AND assigned_to.author.id = $auth.id;
 
-function ThreadDetail() {
-  const [isSubmitting, setIsSubmitting] = createSignal(false);
+-- What to call, and for whom
+DEFINE FIELD assigned_to ON TABLE job TYPE record<thread>
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD path ON TABLE job TYPE string
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD payload ON TABLE job TYPE any
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
 
-  // Query thread with related jobs
-  const threadQuery = db.query('thread')
-    .where({ id: 'thread:abc123' })
-    .related('jobs', (q) => {
-      return q
-        .where({ path: '/spookify' })
-        .orderBy('created_at', 'desc')
-        .limit(1);
-    })
-    .one()
-    .build();
+-- Retry policy
+DEFINE FIELD retries ON TABLE job TYPE int DEFAULT ALWAYS 0
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD max_retries ON TABLE job TYPE int DEFAULT ALWAYS 3;
+DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
+  ASSERT $value IN ["linear", "exponential"]
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
 
-  const thread = useQuery(db, () => threadQuery);
+-- Optional per-job overrides
+DEFINE FIELD delay ON TABLE job TYPE int DEFAULT ALWAYS 0
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD timeout ON TABLE job TYPE option<int>
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
 
-  // Check if job is in progress
-  const isJobRunning = () => {
-    const job = thread()?.jobs?.[0];
-    return ['pending', 'processing'].includes(job?.status);
-  };
+-- Lifecycle, written by the platform
+DEFINE FIELD status ON TABLE job TYPE string DEFAULT ALWAYS "pending"
+  ASSERT $value IN ["pending", "processing", "success", "failed"]
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS []
+  PERMISSIONS FOR create WHERE true FOR select, update WHERE false;
+-- The element must be FLEXIBLE, or a SCHEMAFULL table rejects the runner's
+-- { code, reason } entries as unknown fields.
+DEFINE FIELD errors[*] ON TABLE job TYPE object FLEXIBLE;
+DEFINE FIELD result ON TABLE job TYPE any
+  PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
+DEFINE FIELD assignee ON TABLE job TYPE option<string>
+  PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
 
-  // Trigger backend function
-  const handleSpookify = async () => {
-    setIsSubmitting(true);
-    try {
-      await db.run('api', '/spookify', 
-        { id: thread()?.id },
-        { assignedTo: thread()?.id }
-      );
-    } catch (err) {
-      console.error('Failed to spookify:', err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+DEFINE FIELD updated_at ON TABLE job TYPE datetime DEFAULT ALWAYS time::now()
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+DEFINE FIELD created_at ON TABLE job TYPE datetime VALUE time::now()
+  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;`;
 
-  return (
-    <div>
-      <h1>{thread()?.title}</h1>
-      <p>{thread()?.content}</p>
-
-      <button 
-        onClick={handleSpookify}
-        disabled={isSubmitting() || isJobRunning()}
-      >
-        {isJobRunning() ? 'Spookifying...' : 'Spookify Thread'}
-      </button>
-
-      {thread()?.jobs?.[0]?.status === 'failed' && (
-        <div class="error">
-          Job failed after {thread()?.jobs?.[0]?.retries} attempts
-        </div>
-      )}
-    </div>
-  );
-}`;
-
-export const assignedToCode = `await db.run('api', '/process-order', 
-  { orderId: order.id },
-  { assignedTo: order.id }  // Link job to order
-);`;
-
-export const delayCode = `// Run no sooner than 5 minutes from now
-await db.run('api', '/send-reminder',
-  { id: reminder.id },
-  { delay: 5 * 60 * 1000 }  // 5 minutes, in milliseconds
+export const undoSendCode = `// Queue the send 30 seconds out, linked to the email record.
+await db.run('api', '/send-email',
+  { to: email.to, subject: email.subject, body: email.body },
+  { assignedTo: email.id, delay: 30_000 }
 );
 
-// Delay composes with the other options
-await db.run('api', '/generate-digest', data, {
-  delay: 30_000,            // wait 30s before the first attempt
-  max_retries: 3,
-  retry_strategy: 'exponential'
-});`;
-
-export const delayCancelCode = `// Enqueue a delayed job...
-await db.run('api', '/send-reminder', { id: reminder.id }, { delay: 60_000 });
-
-// ...then cancel it before the delay elapses (CLI, or fn::job::kill).
-// The job is marked "failed" and never calls the backend.
-// spky jobs kill job:abc123`;
-
-export const emailSendCode = `import { db } from './db';
-
-// User clicked "Send". Queue the email to go out in 30 seconds, linked to the
-// email record so we can find the job again during the undo window.
-async function sendEmail(email) {
-  await db.run('api', '/send-email',
-    { to: email.to, subject: email.subject, body: email.body },
-    { assignedTo: email.id, delay: 30_000 }  // 30s "undo send" window
-  );
-}`;
-
-export const emailRetractCode = `// During the 30s window the job is still \`pending\`, so it can be killed. Find
-// it via the email it is linked to (db.run returns void, so we query for it):
-const pendingSend = db.query('job')
-  .where({ assigned_to: 'email:abc123', path: '/send-email', status: 'pending' })
-  .orderBy('created_at', 'desc')
-  .limit(1)
-  .one()
-  .build();
-
-const job = useQuery(db, () => pendingSend);
-const jobId = () => job()?.id;  // e.g. "job:xyz789"
-
-// Retract it — a killed pending job is marked \`failed\` and the email is never
-// sent. Kill is an operator action, so run it via the CLI:
-//   spky jobs kill job:xyz789`;
-
-export const emailSoftCancelCode = `// In-app "Undo" without operator access: let the user flag the email retracted
-// during the window (they own the record, so a normal update works), and have
-// the /send-email route skip sending when the job finally runs.
-
-// Client — flip the flag while the job is still delayed:
+// "Undo": the user owns the email record, so a normal update works — and the
+// /send-email handler bails out when the job finally runs.
 await db.update('email', 'email:abc123', { retracted: true });
 
-// Backend /send-email handler (pseudocode) — bail out if retracted:
+// Backend handler:
 if (email.retracted) return { skipped: true };
 await mailer.send(email);`;
 
-export const failedJobCode = `const job = thread()?.jobs?.[0];
+export const cliCode = `spky jobs                      # live dashboard (status counts, recent jobs)
+spky jobs list                 # static, scriptable table (alias: ls)
+spky jobs list --status failed
+spky jobs list --limit 1000 --json
+spky jobs get job:abc123       # full payload, result, and error history
+spky jobs kill job:abc123      # cancel in-flight, or drop if still queued
+spky jobs retry job:abc123     # re-run a terminal job
+spky jobs clear                # delete terminal (success/failed) jobs
 
-if (job?.status === 'failed') {
-  return <ErrorMessage>
-    Operation failed after {job.retries} attempts. 
-    Please try again later.
-  </ErrorMessage>;
-}`;
-
-export const retryCode = `// Safe to retry multiple times
-await db.run('api', '/generate-content', data, {
-  max_retries: 5,
-  retry_strategy: 'exponential'
-});
-
-// Should not retry
-await db.run('api', '/charge-payment', data, {
-  max_retries: 0
-});
-
-// Long-running AI operation (requires timeoutOverridable: true on backend)
-await db.run('agent', '/chat', data, {
-  timeout: 120,
-  max_retries: 2,
-  retry_strategy: 'exponential'
-});`;
-
-export const permissionsCode = `DEFINE TABLE job SCHEMAFULL
-  PERMISSIONS
-    FOR select, create, update, delete 
-    WHERE $access = "account" AND assigned_to.author.id = $auth.id;`;
-
-export const jobsTuiCode = `# Live dashboard against your local dev database
-spky jobs
-
-# ...against the deployed (cloud) database
+# Every command targets the local dev stack by default; --cloud targets the
+# deployed database, resolved from "spky login" plus the slug in sp00ky.yml.
 spky jobs --cloud`;
 
-export const jobsListCode = `# List recent jobs as a static, scriptable table (alias: ls)
-spky jobs list
+export const scheduleCronCode = `# sp00ky.yml — runs server-side, with no client involved.
+schedules:
+  nightly-cleanup:
+    cron: "0 3 * * *"
+    backend: api
+    route: /cleanupExpired`;
 
-# Filter by status and/or a single job table
-spky jobs list --status failed
-spky jobs list --status pending --table job
+## Overview
 
-# Raise the per-table row cap (default 200) and emit JSON for scripts
-spky jobs list --limit 1000 --json`;
+A job is a row in an outbox table that says "call this backend route with this payload". Your app writes the row and moves on; the SSP delivers it, retries it on failure, and records the outcome back on the row.
 
-export const jobsManageCode = `# Full payload + error history for one job
-spky jobs get job:abc123
-
-# Stop a job: cancel it if in-flight, or drop it if still queued
-spky jobs kill job:abc123
-
-# Re-run a terminal (failed or success) job
-spky jobs retry job:abc123
-
-# Delete every terminal job (status success or failed) from all job tables
-spky jobs clear`;
-
-export const jobsEnvCode = `# Default: the local dev database (the "spky dev" stack at
-# http://localhost:8000, namespace/database "main"). Override explicitly
-# with flags or env vars:
-spky jobs list --url http://localhost:8000 --namespace main --database main
-SURREAL_URL=https://db.example.com SURREAL_NS=main spky jobs list
-
-# --cloud: your deployed production database, resolved from "spky login"
-# plus the slug in sp00ky.yml (same lookup as "spky project credentials").
-spky jobs list --cloud
-spky jobs --cloud            # dashboard against production`;
-
-export const recurringFieldsCode = `-- Recurring / scheduled jobs: add these optional fields to your job table.
--- All are option<...> with NO default (an option field carrying BOTH a DEFAULT
--- and field-level PERMISSIONS breaks client codegen). The runtime treats a
--- missing value as "not recurring" / delay 0.
-DEFINE FIELD recurring ON TABLE job TYPE option<bool>
-  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
-
-DEFINE FIELD interval ON TABLE job TYPE option<int>
-  PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
-
--- Owner-updatable so a client "poke" (manual refresh) can bump it to now.
-DEFINE FIELD next_run_at ON TABLE job TYPE option<datetime>
-  PERMISSIONS FOR create, select, update WHERE true;`;
-
-export const runRecurringCode = `// Register a recurring job: ONE durable schedule per (assignedTo, path).
-// Runs immediately, then every \`interval\` ms measured from each run's COMPLETION.
-// Idempotent - calling it again for the same (assignedTo, path) does nothing.
-await db.runRecurring(
-  'api',
-  '/syncGames',
-  { connection: connectionId },
-  { assignedTo: connectionId, interval: 5 * 60 * 1000 } // every 5 minutes
-);`;
-
-export const pokeRecurringCode = `// Manual "refresh now": run immediately AND reset the interval clock, so the
-// next automatic run lands one interval after this manual run completes.
-await db.pokeRecurring('api', '/syncGames', { assignedTo: connectionId });`;
-
-export const cancelRecurringCode = `// Stop the schedule (e.g. on disconnect): deletes the schedule row so it is
-// no longer dispatched.
-await db.cancelRecurring('api', '/syncGames', { assignedTo: connectionId });`;
-
-## Job Table Schema
-
-The job table stores outbox records and tracks their execution status. Here's the required schema:
-
-<CodeBlock code={jobSchemaCode} lang="sql" />
-
-### Key Fields
-
-- **`assigned_to`**: Links the job to a parent record (optional, but useful for querying jobs by entity)
-- **`path`**: The API route path from your OpenAPI spec
-- **`payload`**: JSON payload containing the request parameters
-- **`status`**: Current job state: `pending`, `processing`, `success`, or `failed`
-- **`retries`**: Number of retry attempts so far
-- **`max_retries`**: Maximum number of retry attempts before marking as failed
-- **`retry_strategy`**: Retry timing strategy (`linear` or `exponential`)
-- **`delay`**: Optional minimum delay in milliseconds before the job is eligible to run (default `0`). While delayed the job stays `pending` and can still be killed.
-- **`timeout`**: Optional per-job timeout override in seconds (only used if backend has `timeoutOverridable: true`)
-- **`errors`**: Array of error objects from failed execution attempts
-- **`assignee`**: System-managed. The owning SSP node id, set automatically in cluster mode so a job is recovered if its SSP goes down. You never set this.
-
-## Calling Backend Functions
-
-Use the `db.run()` method to create a job and call your backend function:
+Because the row is ordinary synced data, the whole thing is reactive: your UI can watch a job's `status` the same way it watches anything else, offline writes queue like any other mutation, and nothing depends on the client staying connected while the work runs.
 
 <CodeBlock code={callCode} lang="typescript" />
 
-### Method Signature
+`spky add api` scaffolds the outbox table and wires the backend into `sp00ky.yml` — see [Backend Setup](/docs/backend/setup) for that walkthrough.
 
-<CodeBlock code={signatureCode} lang="typescript" />
+## Calling a backend route
 
-### Parameters
+`db.run(backend, path, payload, options?)` takes the backend name from `sp00ky.yml`, a route path from that backend's OpenAPI spec, and the payload for it. The payload is validated against the spec, so a missing required argument throws immediately rather than failing later in the runner.
 
-- **`backend`**: The name of the backend app from your `sp00ky.yml` (e.g., `'api'`)
-- **`path`**: The API route path (e.g., `'/spookify'`)
-- **`payload`**: An object containing the request parameters defined in your OpenAPI schema
-- **`options`** (optional):
-  - **`assignedTo`**: Record ID to link this job to (useful for querying related jobs)
-  - **`max_retries`**: Override the default maximum retry attempts (default: 3)
-  - **`retry_strategy`**: Override the retry strategy (default: `'linear'`)
-  - **`timeout`**: Override the backend HTTP request timeout in seconds. Only takes effect if the backend has `timeoutOverridable: true` in `sp00ky.yml`.
-  - **`delay`**: Minimum milliseconds the job stays `pending` before it is eligible to run (default `0`).
+<PropTable props={[
+  { name: 'assignedTo', type: 'string', default: '-', desc: 'Record id to link the job to. Makes it reachable with .related() from that record — the usual way a UI finds "the job for this thread".' },
+  { name: 'max_retries', type: 'number', default: '3', desc: 'Attempts before the job is marked failed. Use 0 for anything not safe to repeat.' },
+  { name: 'retry_strategy', type: "'linear' | 'exponential'", default: "'linear'", desc: 'Backoff shape between attempts.' },
+  { name: 'timeout', type: 'number', default: '(backend default)', desc: 'HTTP timeout in seconds. Only applies when the backend sets deploy.timeoutOverridable.' },
+  { name: 'delay', type: 'number', default: '0', desc: 'Minimum milliseconds the job stays pending before it becomes eligible to run.' },
+]} />
 
-<Warning>
-  The `db.run()` method validates the payload against your OpenAPI schema. Missing required parameters will throw an error.
-</Warning>
+<CodeBlock code={optionsCode} lang="typescript" />
 
-## Delaying Jobs
-
-Set `delay` (milliseconds) to keep a job `pending` for at least that long before it runs. Use it for reminders, debounced follow-ups, or spacing out work:
-
-<CodeBlock code={delayCode} lang="typescript" />
-
-The delay is a **minimum**, not an exact schedule: the job becomes eligible once the delay elapses and then runs as soon as the runner picks it up. `delay` requires the `delay` field on your job table (see the schema above).
-
-A delayed job is just a `pending` job, so it stays fully visible and cancellable during its wait. Killing it before the delay elapses marks it `failed` and the backend is never called:
-
-<CodeBlock code={delayCancelCode} lang="typescript" />
-
-<Note>
-  In cluster mode, delayed jobs survive an SSP restart: the scheduler re-dispatches a delayed job (using the `assignee` field) if its owning SSP goes down before the delay elapses.
-</Note>
-
-### Example: Undo Send
-
-A delay window is the classic "undo send". Queue the email to leave in 30 seconds, linked to the email record so you can find the job again:
-
-<CodeBlock code={emailSendCode} lang="typescript" />
-
-While the delay has not elapsed the job is still `pending`, so it can be killed. Killing it marks the job `failed` and the backend (the actual send) is never called:
-
-<CodeBlock code={emailRetractCode} lang="typescript" />
-
-<Warning>
-  `fn::job::kill` / `spky jobs kill` are operator actions (system access) — record-access end users can't call them, so they can't stop each other's jobs. For a user-facing "Undo" button, either route the kill through a trusted backend/admin action, or use the soft-cancel pattern below.
-</Warning>
-
-For a purely client-side undo, gate the send on a flag the user can flip during the window — no operator access required:
-
-<CodeBlock code={emailSoftCancelCode} lang="typescript" />
-
-## Recurring & Scheduled Jobs
-
-A recurring job runs on a fixed interval, server-side, even when no client is connected - use it for periodic syncs, polling an upstream API, cache warming, or scheduled cleanup. Unlike `db.run()` (a one-shot job), `db.runRecurring()` creates a single durable **schedule row** that never terminalizes: it cycles `pending -> processing -> pending`, and after each run completes the runner re-arms it to run again one interval later.
-
-### Schema
-
-Add three optional fields to your job table:
-
-<CodeBlock code={recurringFieldsCode} lang="sql" />
-
-### Starting a schedule
-
-<CodeBlock code={runRecurringCode} lang="typescript" />
-
-The interval is measured from **completion**, not wall-clock: the next run is scheduled `interval` ms after the previous run finishes, so runs never overlap and a slow run never stacks up a backlog. `runRecurring` is idempotent and keyed on `(assignedTo, path)` - there is at most one schedule per pair, so calling it on every login/reconnect never creates a second one.
-
-### Refresh now (poke)
-
-<CodeBlock code={pokeRecurringCode} lang="typescript" />
-
-A poke runs the job immediately and resets the clock, so the next automatic run lands one interval after the manual run completes - automatic and manual runs share one clock. It is a no-op if no schedule exists yet.
-
-### Stopping a schedule
-
-<CodeBlock code={cancelRecurringCode} lang="typescript" />
-
-<Note>
-  Recurring jobs are resilient. A run that exhausts its retries does NOT kill the schedule - it re-arms for the next interval, so a transient backend outage can't permanently stop it. And because the row is always `pending` or `processing`, the recovery sweep resumes it after an SSP or scheduler restart.
-</Note>
-
-<Warning>
-  A recurring job never reaches `success`/`failed` - it stays `pending` between runs and flips to `processing` while running. Observe `status = 'processing'` for a live "syncing now" indicator; don't wait for a terminal state.
-</Warning>
-
-## Querying Job Status
-
-Jobs are stored as regular SurrealDB records, so you can query them using the query builder. The most common pattern is to use `.related()` to fetch jobs for a specific entity:
+## Reading job status
 
 <CodeBlock code={queryJobCode} lang="typescript" />
 
-This pattern is reactive - when the job runner updates the job status in the database, your UI will automatically reflect the changes.
+`status` moves `pending → processing → success | failed`. On success the backend's response body is stored on the job's `result` field, so `spky jobs get` shows what a job actually returned. On failure each attempt appends `{ code, reason }` to `errors`, and `retries` counts what has been tried.
 
-## Complete Example
+## Delayed jobs
 
-Here's a complete example of implementing a "spookify" feature that generates AI content:
+A `delay` keeps a job `pending` for at least that long. It is a minimum, not a precise schedule — the job becomes eligible when the delay elapses, then runs as soon as the runner picks it up.
 
-<CodeBlock code={fullExampleCode} lang="typescript" />
+A delayed job is just a pending job, so it stays visible and cancellable while it waits. That makes it the natural way to build an undo window:
 
-## Inspecting Jobs from the CLI
+<CodeBlock code={undoSendCode} lang="typescript" />
 
-The `spky jobs` command reads the same outbox job tables straight from SurrealDB — the tables declared in `sp00ky.yml` (any `backend` app with an `outbox` method), falling back to `job`. It works against your **local dev** database by default, or your deployed **production** database with `--cloud`, so you can watch and manage the queue from a terminal without building any UI.
-
-Run it without a subcommand to open a live, interactive dashboard (status counts, recent jobs, filter cycling):
-
-<CodeBlock code={jobsTuiCode} lang="bash" />
-
-### Listing Jobs
-
-`spky jobs list` (alias `ls`) prints a static, scriptable table — handy in CI or piped through `jq` with `--json`:
-
-<CodeBlock code={jobsListCode} lang="bash" />
-
-### Inspecting, Killing, Retrying & Clearing
-
-<CodeBlock code={jobsManageCode} lang="bash" />
+<Warning>
+  `spky jobs kill` and `fn::job::kill` are operator actions — record-access users can't call them, so one user can never kill another's job. For a user-facing "Undo", use the flag pattern above (the user owns the record, so a normal update works) rather than trying to kill the job from the client.
+</Warning>
 
 <Note>
-  `kill` and `retry` mutate jobs through the `fn::job::kill` / `fn::job::retry` SurrealQL functions rather than a plain `UPDATE` (job pickup is gated inside the SSP). Those functions are installed by the schema deploy, so kill/retry require a deployed backend.
+  Delayed jobs survive a restart: the recovery sweep re-dispatches a job whose delay elapsed while its SSP was down, so the window can't be lost.
 </Note>
 
-`spky jobs clear` deletes every terminal job (status `success` or `failed`) from all job tables — handy for trimming finished history. Terminal jobs aren't in-flight, so this is a plain `DELETE` (no SSP coordination); pending/processing jobs are left untouched.
+## Scheduled and multi-step work
 
-### Dev vs. Production
+Everything above is about jobs your app creates. Work that should happen on a clock is declared in `sp00ky.yml` instead, and runs whether or not anyone is connected:
 
-By default every `spky jobs` command targets the local dev database from the `spky dev` stack (`http://localhost:8000`, namespace/database `main`). Pass `--cloud` to target the project's deployed database instead: it resolves the endpoint and root credentials from your `spky login` session and the `slug:` in `sp00ky.yml` (the same lookup as `spky project credentials`), so you don't pass `--url`/`--password`. You can also point at any database explicitly with `--url`/`--namespace`/`--database`/`--username`/`--password` or the matching `SURREAL_URL`/`SURREAL_NS`/`SURREAL_DB`/`SURREAL_USER`/`SURREAL_PASS` environment variables.
+<CodeBlock code={scheduleCronCode} lang="yaml" />
 
-<CodeBlock code={jobsEnvCode} lang="bash" />
+Each cycle creates a new job row in this same table, so everything on this page still applies to it.
+
+- **[Schedules](/docs/backend/schedules)** — cron and interval cadences, fan-out (one job per row of a query), concurrency policies, `spky schedules`
+- **[Workflows](/docs/backend/workflows)** — several jobs as a DAG, passing each step's output to its dependents, and the live `spky workflows watch` view
 
 <Note>
-  `--cloud` is the same flag the other database-connecting commands accept (`spky flag`, `spky migrate`, `spky query`) — run them locally during development and add `--cloud` to point at production.
+  These replaced the client-side `db.runRecurring()` API, which has been removed.
 </Note>
 
-## Job Runner
+## Inspecting jobs from the CLI
 
-The job runner is a separate service that processes outbox jobs. You can use the example job runner from the Sp00ky repository or implement your own.
+`spky jobs` reads the outbox tables straight from SurrealDB, so you can watch and manage the queue without building any UI:
 
-The job runner:
-1. Picks up job records with `status = 'pending'`
-2. Honors the `delay` field, keeping a job `pending` until its delay has elapsed
-3. Updates status to `'processing'`
-4. Makes the HTTP request to your backend
-5. Updates status to `'success'` or `'failed'`
-6. Implements retry logic based on `retry_strategy`
+<CodeBlock code={cliCode} lang="bash" />
 
 <Note>
-  See the `packages/job-runner` directory in the Sp00ky repository for a reference implementation in Rust.
+  `kill` and `retry` go through the `fn::job::kill` / `fn::job::retry` SurrealQL functions rather than a plain `UPDATE`, because job pickup is gated inside the SSP. Those functions are installed by the schema deploy, so both need a deployed backend. `clear` only touches terminal rows, so it is a plain `DELETE`.
 </Note>
 
-## Best Practices
+## How execution works
 
-### Use assignedTo for Related Jobs
+The job runner is built into the SSP — there is nothing to install or implement:
 
-Always link jobs to their parent entity using `assignedTo`. This makes it easy to query related jobs:
+1. **Pickup is create-only.** Writing a `pending` row fires an event that hands the job to the runner, which is why `db.run()` creates a row rather than updating one.
+2. **The runner is the only writer of `status`.** Everything else — kill, retry, recovery — goes through guarded statements, so two writers can never disagree about a job's state.
+3. **Retries happen in-process,** with linear or exponential backoff. A job that exhausts them is marked `failed` with its error history intact.
+4. **A recovery sweep catches what events miss:** rows created while the SSP was down, jobs whose delay elapsed during a restart, and `processing` rows orphaned by a crash. In cluster mode the scheduler owns that sweep and uses `assignee` to tell whether the owning SSP is still alive.
 
-<CodeBlock code={assignedToCode} lang="typescript" />
+<Warning>
+  A SCHEMAFULL job table must define the platform's own fields, or those writes are rejected at the statement level and quietly lost. `spky deploy` injects `assignee`, `result`, and `errors[*]` with `IF NOT EXISTS`, so re-deploying an older project fixes it.
+</Warning>
 
-### Handle Failed Jobs in Your UI
+## Job table schema
 
-Check the job status and provide feedback to users:
+`spky add api` generates this. The permission rule is the important part: scope jobs to their owner so one user can neither read nor queue work on another's records.
 
-<CodeBlock code={failedJobCode} lang="typescript" />
+<CodeBlock code={jobSchemaCode} lang="sql" />
 
-### Set Appropriate Retry and Timeout Policies
+<Note>
+  `status`, `errors`, `result`, and `assignee` are platform-written — clients may read them but never set them. `assignee` is the owning SSP node id, used for cluster recovery.
+</Note>
 
-For idempotent operations, use higher retry counts. For non-idempotent operations, use lower retry counts or disable retries. For long-running operations like AI inference, increase the timeout:
+## See also
 
-<CodeBlock code={retryCode} lang="typescript" />
-
-### Use Permissions to Secure Jobs
-
-The job table should have permissions that prevent users from seeing or modifying other users' jobs:
-
-<CodeBlock code={permissionsCode} lang="sql" />
-
-This ensures users can only access jobs assigned to records they own.
+- [Backend Setup](/docs/backend/setup) — adding a backend and its outbox table
+- [Schedules](/docs/backend/schedules) and [Workflows](/docs/backend/workflows) — periodic and multi-step jobs
+- [Querying Data](/docs/query-data) — the query builder used above to read job status

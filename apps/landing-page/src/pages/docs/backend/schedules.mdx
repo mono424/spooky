@@ -1,0 +1,231 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Schedules
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import PropTable from '../../../components/ui/PropTable.astro';
+
+export const quickstartCode = `# sp00ky.yml
+schedules:
+  nightly-cleanup:
+    cron: "0 3 * * *"          # 03:00, every day
+    backend: api               # an app with an outbox method
+    route: /cleanupExpired     # a POST route on that backend
+    payload:
+      olderThanDays: 30`;
+
+export const quickstartHandlerCode = `// Your backend, unchanged — a scheduled run is an ordinary job POST.
+app.post('/cleanupExpired', async (req, res) => {
+  const { olderThanDays } = req.body;
+  const deleted = await purgeExpired(olderThanDays);
+  res.json({ deleted });          // the response body is stored on the job row
+});`;
+
+export const cadenceCode = `schedules:
+  # Cron: 5 fields (minute hour day month weekday), evaluated in \`timezone\`.
+  nightly:
+    cron: "0 3 * * *"
+    timezone: Europe/Berlin      # optional; defaults to UTC
+    backend: api
+    route: /nightly
+
+  # Interval: measured from each fire, not from completion.
+  poll-upstream:
+    every: 5m                    # 30s | 5m | 1h30m — minimum 10s
+    backend: api
+    route: /pollUpstream`;
+
+export const fanOutCode = `schedules:
+  game-sync:
+    every: 5m
+    backend: api
+    route: /syncGames
+    forEach:
+      query: SELECT id FROM connection WHERE active = true
+      key: id                    # per-row concurrency key (default: id)
+    concurrency: skip            # skip | allow | replace
+    retry: { max: 3, strategy: linear }
+    timeout: 120s`;
+
+export const fanOutHandlerCode = `// Each row arrives under \`payload.row\`.
+app.post('/syncGames', async (req, res) => {
+  const { row } = req.body;      // { id: 'connection:abc' }
+  const games = await syncGamesFor(row.id);
+  res.json({ synced: games.length });
+});`;
+
+export const fileLinkCode = `# The whole section from one file:
+schedules: ./schedules.yml
+
+# Or one file per definition, mixed with inline ones:
+schedules:
+  game-sync: ./schedules/game-sync.yml
+  quick-ping:
+    every: 1h
+    backend: api
+    route: /ping`;
+
+export const cliListCode = `$ spky schedules list
+NAME                     KIND      CADENCE        STATE     NEXT FIRE            LAST RUN
+game-sync                job       every 5m       active    2026-07-25 09:35:00  ✔ success
+monthly-report           workflow  0 6 1 * *      active    2026-08-01 06:00:00  ◐ running
+nightly-cleanup          job       0 3 * * *      paused    2026-07-26 01:00:00  ✔ success
+stale-poller             job       every 1h       error     -                    ·  -
+  last error: forEach query failed: query: Parse error at 'FROM'`;
+
+export const cliOpsCode = `spky schedules get game-sync        # definition, clock, recent runs
+spky schedules pause game-sync     # stop future fires
+spky schedules resume game-sync    # plan the next fire from now
+spky schedules trigger game-sync   # fire once now, cadence untouched
+spky schedules runs game-sync      # run history, newest first
+spky schedules runs --status failed
+spky schedules sync                # re-push sp00ky.yml without a deploy
+
+# Every read supports --json for scripting:
+spky schedules list --json | jq '.[] | select(.paused) | .name'`;
+
+export const cliRunsCode = `$ spky schedules runs game-sync
+SCHEDULE               STATUS     FIRED                TRIGGER   KEY
+game-sync              ✔ success  2026-07-25 09:30:00  cron      connection:alice
+game-sync              ⊘ skipped  2026-07-25 09:30:00  cron      connection:bob
+game-sync              ✔ success  2026-07-25 09:25:00  cron      connection:alice
+game-sync              ✔ success  2026-07-25 09:25:00  cron      connection:bob`;
+
+## Overview
+
+A schedule runs a backend route on a clock, server-side, whether or not a client is connected. Use it for periodic syncs, polling an upstream API, cache warming, or scheduled cleanup.
+
+Schedules are declared in `sp00ky.yml` and deployed like everything else in the manifest. Each cycle, the scheduler creates a **new job row** in the target backend's outbox table — so a scheduled run is an ordinary atomic job, with the same retry policy, the same `spky jobs` visibility, and the same kill and crash-recovery behaviour as a job your app created with `db.run()`.
+
+<CodeBlock code={quickstartCode} lang="yaml" />
+
+<CodeBlock code={quickstartHandlerCode} lang="typescript" />
+
+That's the whole integration: your backend doesn't know it was called by a schedule.
+
+<Note>
+  Schedules replaced the old client-side recurring API (`db.runRecurring()` / `pokeRecurring` / `cancelRecurring`), which has been removed — periodic work is declared here instead of registered by a browser.
+</Note>
+
+For multi-step work — several routes in sequence, in parallel, or passing data to each other — see [Workflows](/docs/backend/workflows).
+
+## Cadence
+
+A schedule sets exactly one of `cron` or `every`.
+
+<CodeBlock code={cadenceCode} lang="yaml" />
+
+`cron` is a standard 5-field expression (a leading seconds field is also accepted) evaluated in `timezone`, so "daily at 03:00" stays 03:00 local across daylight-saving changes rather than drifting by an hour twice a year.
+
+`every` is measured from each **fire**, not from each completion. A `5m` schedule fires at a steady 5-minute rhythm regardless of how long a run takes; use `concurrency` (below) to decide what happens when a run is still going at the next fire.
+
+<Note>
+  Missed fires coalesce. If the stack is down for a week, an hourly schedule fires **once** on the way back up and then resumes its normal rhythm — it does not replay 168 backlogged runs.
+</Note>
+
+## Fan-out: one job per row
+
+`forEach` turns one schedule into one job per row its query returns — a per-user sync, a per-connection poll, a per-tenant cleanup.
+
+<CodeBlock code={fanOutCode} lang="yaml" />
+
+<CodeBlock code={fanOutHandlerCode} lang="typescript" />
+
+The query runs with root privileges on every fire, so it always sees current data: a row added since the last fire is picked up automatically, and a row that disappears simply stops being scheduled.
+
+### Concurrency
+
+`concurrency` decides what a fire does when the previous run **for that same key** is still in flight. It is tracked per key, so one slow user never holds up anyone else.
+
+<PropTable props={[
+  { name: 'skip', type: 'policy', default: 'default', desc: 'Record the suppressed tick and leave the in-flight run alone. A 5-minute sync that occasionally takes 8 minutes will not pile up behind itself.' },
+  { name: 'allow', type: 'policy', default: '-', desc: 'Spawn regardless. Runs for the same key may overlap — correct when the work is idempotent and independent.' },
+  { name: 'replace', type: 'policy', default: '-', desc: 'Kill the in-flight run, then start the new one. Use when only the newest result matters.' },
+]} />
+
+<Note>
+  A suppressed tick is recorded as a `skipped` run, not silently dropped, so `spky schedules runs` shows you a schedule falling behind instead of just looking idle.
+</Note>
+
+## Definitions in their own files
+
+Once you have more than a handful, `schedules:` can live in separate files — per entry or wholesale. Paths are relative to the manifest that names them.
+
+<CodeBlock code={fileLinkCode} lang="yaml" />
+
+## Operating them
+
+<CodeBlock code={cliListCode} lang="bash" />
+
+`STATE` is the one field worth reading closely: `active` is normal, `paused` means an operator stopped it, `disabled` means `enabled: false` in the manifest, `planning` means the scheduler has not computed its first fire yet, and `error` means the cadence or the `forEach` query is broken — with the reason printed underneath.
+
+<CodeBlock code={cliOpsCode} lang="bash" />
+
+`pause` is the big red button: it stops future fires, **survives redeploys**, and wins over a queued trigger. `trigger` fires one extra run without shifting the cadence — a manual run at 14:07 does not move tonight's 03:00.
+
+<CodeBlock code={cliRunsCode} lang="bash" />
+
+`spky schedules list` and `runs` cover workflow schedules too; to see a workflow run's DAG, use [`spky workflows show` / `watch`](/docs/backend/workflows#watching-a-run).
+
+## How it works
+
+Worth knowing, because it explains what is and isn't guaranteed:
+
+- **Definitions are rows.** `spky deploy` (and `spky dev`) upserts each definition into an internal `_00_schedule` table. Three writers own disjoint fields: your manifest owns the definition, you own `paused`, and the scheduler owns the clock. That is why a redeploy can never un-pause something you paused, and why pausing never fights the scheduler over a field.
+- **One ticker.** A sweep runs every 5 seconds — in the SSP for a singlenode deployment, in the scheduler service for a cluster. A fire is claimed with a compare-and-swap on the schedule's next-fire time, so even two tickers cannot double-fire.
+- **Runs are recorded, not inferred.** Every fire writes a `_00_schedule_run` row (including suppressed ones), which is both your history and the per-key concurrency state. Because it is state in the database rather than memory, restarts don't lose it.
+- **Completion is observed, and also healed.** The scheduler learns a job finished from the same event stream your app's writes travel on, and every sweep also reconciles directly against the job rows. So a dropped event delays things by one sweep instead of stalling them.
+
+## Validation
+
+`spky lint` checks schedules as part of the normal config pass, so mistakes surface before a deploy rather than at 03:00:
+
+- every cron expression parses, and every `every` interval is at least 10s
+- `timezone` is a real IANA zone
+- each `backend` is an app with an outbox method, and each `route` exists in that backend's OpenAPI spec
+- `forEach.query` is a single `SELECT`
+- no name is used by both a schedule and a workflow
+
+<Warning>
+  Schedules run on VM and cluster deployments. The Cloudflare (free) plan has no job runner, so a schedule there would create rows nothing executes. `spky lint` warns for the same reason when a schedule targets a `devOnly` backend — it will run locally under `spky dev`, but not in the cloud.
+</Warning>
+
+## Reference
+
+### Schedule fields
+
+<PropTable props={[
+  { name: 'cron', type: 'string', default: '-', desc: 'Cron expression, e.g. "0 3 * * *". Exactly one of cron or every.' },
+  { name: 'every', type: 'duration', default: '-', desc: 'Fixed interval from each fire, e.g. 30s, 5m, 1h30m. Minimum 10s.' },
+  { name: 'timezone', type: 'string', default: 'UTC', desc: 'IANA zone the cron expression is evaluated in, e.g. Europe/Berlin.' },
+  { name: 'backend', type: 'string', default: '(required)', desc: 'Name of an apps: entry with an outbox method.' },
+  { name: 'route', type: 'string', default: '(required)', desc: 'POST route on that backend, e.g. /syncGames.' },
+  { name: 'payload', type: 'object', default: '{}', desc: 'Static payload merged into every spawned job.' },
+  { name: 'forEach.query', type: 'string', default: '-', desc: 'SurrealQL SELECT run each fire; one job per row, passed as payload.row.' },
+  { name: 'forEach.key', type: 'string', default: 'id', desc: 'Row field whose value keys the per-row concurrency check.' },
+  { name: 'concurrency', type: 'skip | allow | replace', default: 'skip', desc: 'What a fire does when the previous run for that key is still going.' },
+  { name: 'retry.max', type: 'integer', default: '3', desc: 'Retries per run, before the run counts as failed.' },
+  { name: 'retry.strategy', type: 'linear | exponential', default: 'linear', desc: 'Backoff shape between retries.' },
+  { name: 'timeout', type: 'duration', default: '(backend default)', desc: 'Per-job HTTP timeout. Honoured only when the backend sets deploy.timeoutOverridable.' },
+  { name: 'enabled', type: 'boolean', default: 'true', desc: 'false deploys the schedule but leaves it inert. Independent of spky schedules pause.' },
+]} />
+
+### Run statuses
+
+<PropTable props={[
+  { name: 'running', type: 'status', default: '-', desc: 'In flight.' },
+  { name: 'success', type: 'status', default: '-', desc: 'The job succeeded.' },
+  { name: 'failed', type: 'status', default: '-', desc: 'The job exhausted its retries.' },
+  { name: 'skipped', type: 'status', default: '-', desc: 'concurrency: skip suppressed this tick — the previous run for that key was still going.' },
+  { name: 'replaced', type: 'status', default: '-', desc: 'concurrency: replace killed this run in favour of a newer fire.' },
+  { name: 'killed', type: 'status', default: '-', desc: 'An operator stopped it.' },
+]} />
+
+## See also
+
+- [Workflows](/docs/backend/workflows) — multi-step DAGs built out of these same jobs
+- [Jobs](/docs/backend/jobs) — the one-shot `db.run()` API, retries, and the job lifecycle scheduled runs inherit
+- [Configuration](/docs/configuration#schedules-and-workflows) — where `schedules:` sits in `sp00ky.yml`

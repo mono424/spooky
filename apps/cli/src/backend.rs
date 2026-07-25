@@ -405,6 +405,13 @@ pub struct Sp00kyConfig {
     /// Application definitions (backends and frontends). Each key is the app name.
     #[serde(default)]
     pub apps: BTreeMap<String, AppConfig>,
+    /// Server-side cron/interval schedules. Each key is the schedule name.
+    /// A value may be a path to a YAML file instead of an inline definition.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub schedules: BTreeMap<String, crate::schedule_config::ScheduleConfig>,
+    /// Server-side workflow DAGs. Same file-linking rule as `schedules`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workflows: BTreeMap<String, crate::schedule_config::WorkflowConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub buckets: Vec<String>,
     #[serde(default, rename = "clientTypes", skip_serializing_if = "Vec::is_empty")]
@@ -914,6 +921,7 @@ impl Sp00kyConfig {
             app.validate(name)?;
         }
         self.validate_docker_depends_on()?;
+        crate::schedule_config::validate_all(&self.schedules, &self.workflows)?;
         // logLevel: walk every directive string and confirm it parses.
         if let Some(cfg) = &self.log_level {
             match cfg {
@@ -1727,7 +1735,87 @@ pub fn parse_config_with_includes(content: &str, base_dir: &Path) -> Result<Sp00
     let mut root: serde_yaml::Value =
         serde_yaml::from_str(content).context("failed to parse sp00ky manifest")?;
     resolve_app_includes(&mut root, base_dir)?;
+    resolve_linked_definitions(&mut root, base_dir)?;
     serde_yaml::from_value(root).context("failed to interpret sp00ky manifest")
+}
+
+/// Sections whose entries may be linked to an external YAML file instead of
+/// being written inline. Resolved here, at the `Value` stage, for the same
+/// reason app includes are: by the time serde sees the tree it must already be
+/// the real thing.
+const LINKABLE_SECTIONS: &[&str] = &["schedules", "workflows"];
+
+/// Pull `schedules:` / `workflows:` definitions in from files.
+///
+/// Two forms, both relative to the manifest that names them:
+///
+/// ```yaml
+/// schedules: ./schedules.yml            # the whole map lives in that file
+/// workflows:
+///   monthly-report: ./workflows/monthly-report.yml   # one definition per file
+///   inline-one: { steps: { … } }                     # mixing is fine
+/// ```
+///
+/// Deliberately one level deep: a linked file holding more links would make the
+/// effective config depend on a traversal order nobody can see. If that is ever
+/// wanted, it should be an explicit feature rather than a fallout of recursion.
+fn resolve_linked_definitions(root: &mut serde_yaml::Value, base_dir: &Path) -> Result<()> {
+    for section in LINKABLE_SECTIONS {
+        let key = serde_yaml::Value::String((*section).to_string());
+        let Some(value) = root.get(&key).cloned() else { continue };
+
+        // Whole-section link: `schedules: ./schedules.yml`.
+        if let serde_yaml::Value::String(path) = &value {
+            let loaded = load_linked_yaml(base_dir, path, section)?;
+            if !matches!(loaded, serde_yaml::Value::Mapping(_)) {
+                bail!(
+                    "{} file '{}' must contain a mapping of names to definitions",
+                    section,
+                    path
+                );
+            }
+            if let serde_yaml::Value::Mapping(root_map) = root {
+                root_map.insert(key, loaded);
+            }
+            continue;
+        }
+
+        // Per-entry links: one file per definition.
+        let serde_yaml::Value::Mapping(entries) = value else { continue };
+        let mut resolved = serde_yaml::Mapping::new();
+        for (name, entry) in entries {
+            match &entry {
+                serde_yaml::Value::String(path) => {
+                    let loaded = load_linked_yaml(base_dir, path, section)?;
+                    if !matches!(loaded, serde_yaml::Value::Mapping(_)) {
+                        bail!(
+                            "{} '{}' points at '{}', which must contain a single definition mapping",
+                            section,
+                            value_key_str(&name),
+                            path
+                        );
+                    }
+                    resolved.insert(name, loaded);
+                }
+                _ => {
+                    resolved.insert(name, entry);
+                }
+            }
+        }
+        if let serde_yaml::Value::Mapping(root_map) = root {
+            root_map.insert(key, serde_yaml::Value::Mapping(resolved));
+        }
+    }
+    Ok(())
+}
+
+fn load_linked_yaml(base_dir: &Path, rel: &str, section: &str) -> Result<serde_yaml::Value> {
+    let path = base_dir.join(rel);
+    let content = fs::read_to_string(&path).with_context(|| {
+        format!("{} references '{}' but {} could not be read", section, rel, path.display())
+    })?;
+    serde_yaml::from_str(&content)
+        .with_context(|| format!("failed to parse {} file {}", section, path.display()))
 }
 
 /// Keys inside an `AppConfig` (and its nested `deploy`/`dev`/`method` objects)
@@ -1766,6 +1854,28 @@ fn rebase_app_paths(app: &mut serde_yaml::Value, service_rel: &str) {
     // deploy.static.dir
     if let Some(static_obj) = app.get_mut("deploy").and_then(|d| d.get_mut("static")) {
         rebase_string_at(static_obj, "dir", service_rel);
+    }
+    // `schedules` / `workflows` file links: a whole-section string, or a string
+    // per entry. Both are relative to the manifest that names them, so a
+    // per-service include's links need the service dir prefixed.
+    for section in LINKABLE_SECTIONS {
+        match app.get_mut(*section) {
+            Some(serde_yaml::Value::String(s)) => {
+                if is_rebasable_path(s) {
+                    *s = joined_rel(service_rel, s);
+                }
+            }
+            Some(serde_yaml::Value::Mapping(entries)) => {
+                for (_, value) in entries.iter_mut() {
+                    if let serde_yaml::Value::String(s) = value {
+                        if is_rebasable_path(s) {
+                            *s = joined_rel(service_rel, s);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
     // `env` may be a bare dotenv path string, or a `{ dev, cloud }` map whose
     // string entries are dotenv paths. Vault/inline-map forms are left alone.

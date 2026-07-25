@@ -25,7 +25,9 @@ export const docsNav = [
     title: 'Backend',
     links: [
       { text: 'Setup', href: `${basePath}/docs/backend/setup` },
-      { text: 'Jobs & Usage', href: `${basePath}/docs/backend/jobs` },
+      { text: 'Jobs', href: `${basePath}/docs/backend/jobs` },
+      { text: 'Schedules', href: `${basePath}/docs/backend/schedules` },
+      { text: 'Workflows', href: `${basePath}/docs/backend/workflows` },
       { text: 'Dev Server', href: `${basePath}/docs/backend/dev-server` },
     ],
   },

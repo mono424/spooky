@@ -18,6 +18,7 @@ use std::sync::Arc;
 use ssp::circuit::Circuit;
 
 use crate::node::JOB_RECOVERY_INTERVAL_SECS;
+use crate::schedules::SCHEDULE_SWEEP_INTERVAL_SECS;
 use crate::ports::CircuitStoreError;
 use crate::status::SspStatus;
 use crate::{now_epoch_ms, SspNode, TimerKind};
@@ -37,7 +38,7 @@ impl Runtime {
     }
 
     /// Dispatch one fired timer. Handles the PORTABLE periodic kinds
-    /// (`JobRecoverySweep`, `TtlCleanup`, `CircuitCheckpoint`) — each runs its
+    /// (`JobRecoverySweep`, `ScheduleSweep`, `TtlCleanup`, `CircuitCheckpoint`) — each runs its
     /// work (gated on `Ready`) then re-arms itself via the `Scheduler` port.
     /// Host-specific kinds (`DbResignin`, `BackendHealth` — they need the
     /// non-wasm `maintenance` crate) are NOT handled here; the shell's drain
@@ -57,6 +58,30 @@ impl Runtime {
                         .schedule(
                             TimerKind::JobRecoverySweep,
                             now_epoch_ms() + JOB_RECOVERY_INTERVAL_SECS * 1000,
+                        )
+                        .await;
+                }
+            }
+            TimerKind::ScheduleSweep => {
+                // Standalone owns the schedule engine; in cluster mode the
+                // scheduler service ticks and `schedule_engine` is None.
+                if let Some(engine) = node.schedule_engine.as_ref() {
+                    if *node.status.read().await == SspStatus::Ready {
+                        match engine.tick_pass().await {
+                            Ok(report) => {
+                                if report != Default::default() {
+                                    tracing::debug!(?report, "schedule sweep");
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "schedule sweep failed");
+                            }
+                        }
+                    }
+                    sched
+                        .schedule(
+                            TimerKind::ScheduleSweep,
+                            now_epoch_ms() + SCHEDULE_SWEEP_INTERVAL_SECS * 1000,
                         )
                         .await;
                 }

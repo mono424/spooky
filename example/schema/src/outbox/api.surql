@@ -53,6 +53,7 @@ PERMISSIONS
   FOR select WHERE true
   FOR create, update WHERE false;
 
+DEFINE FIELD errors[*] ON TABLE job TYPE object FLEXIBLE;
 DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS []
 PERMISSIONS
   FOR create WHERE true

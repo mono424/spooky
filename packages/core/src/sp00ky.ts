@@ -959,34 +959,6 @@ export class Sp00kyClient<S extends SchemaStructure> {
     return this.dataModule.run(backend, path, payload, options);
   }
 
-  runRecurring<
-    B extends BackendNames<S>,
-    R extends BackendRoutes<S, B>,
-  >(
-    backend: B,
-    path: R,
-    payload: RoutePayload<S, B, R>,
-    options: RunOptions & { interval: number; assignedTo: string }
-  ) {
-    return this.dataModule.runRecurring(backend, path, payload, options);
-  }
-
-  pokeRecurring<B extends BackendNames<S>>(
-    backend: B,
-    path: BackendRoutes<S, B>,
-    options: { assignedTo: string }
-  ) {
-    return this.dataModule.pokeRecurring(backend, path, options);
-  }
-
-  cancelRecurring<B extends BackendNames<S>>(
-    backend: B,
-    path: BackendRoutes<S, B>,
-    options: { assignedTo: string }
-  ) {
-    return this.dataModule.cancelRecurring(backend, path, options);
-  }
-
   bucket<B extends BucketNames<S>>(name: B): BucketHandle {
     return new BucketHandle(name, this.remote);
   }

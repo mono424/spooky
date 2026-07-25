@@ -10,5 +10,6 @@ members = [
     "packages/ssp-wasm",
     "packages/ssp-ffi",
     "packages/maintenance",
+    "packages/schedule-core",
     "packages/ssp-node",
 ]

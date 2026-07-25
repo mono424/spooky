@@ -428,10 +428,11 @@ async fn recover_table_once(
     };
 
     // 1. Due pending rows older than the grace period. A row is DUE at
-    //    `next_run_at` (recurring schedules) or, absent that, at
-    //    `created_at + <delay>` (one-shot jobs — keeps a delayed job inside its
-    //    delay window from being recovered early). `??` falls back when
-    //    next_run_at/delay are unset (NONE); `delay=0` ⇒ ready.
+    //    `created_at + <delay>`, which keeps a delayed job inside its delay
+    //    window from being recovered early; `??` falls back when `delay` is unset
+    //    (NONE) and `delay=0` ⇒ ready. Must stay byte-identical to
+    //    `ssp_node::jobs::PENDING_DUE_CLAUSE` — the scheduler crate can't depend
+    //    on ssp-node, so this is a deliberate copy, not a divergence.
     //    `long_overdue`: the row has been DUE for longer than the stale
     //    window. A pending row claimed by a live SSP is normally in flight
     //    there (enqueued / sleeping through a delay or retry backoff), so
@@ -444,10 +445,10 @@ async fn recover_table_once(
     //    mark_enqueued, so a false positive is a no-op.
     let pending_q = format!(
         "SELECT type::string(id) AS id, assignee, \
-         ((next_run_at ?? (created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms')))) <= time::now() - {stale}s) AS long_overdue \
+         ((created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms'))) <= time::now() - {stale}s) AS long_overdue \
          FROM {table} \
          WHERE status = 'pending' AND updated_at < time::now() - {grace}s \
-         AND (next_run_at ?? (created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms')))) <= time::now()",
+         AND (created_at + <duration>(string::concat(<string>(delay ?? 0), 'ms'))) <= time::now()",
         grace = JOB_RECOVERY_PENDING_GRACE_SECS,
         stale = JOB_RECOVERY_STALE_PROCESSING_SECS,
     );

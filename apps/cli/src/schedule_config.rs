@@ -1,0 +1,709 @@
+//! `schedules:` and `workflows:` in sp00ky.yml — the declarative surface for
+//! server-side cron jobs and workflow DAGs.
+//!
+//! This module owns the YAML shape, its validation, and the normalization into
+//! the flat form the engine reads out of `_00_schedule`. The engine never sees
+//! sugar: `every: 5m` becomes `every_ms`, `backend: api` becomes the app's outbox
+//! table, and a step map becomes an ordered step list.
+//!
+//! Validation runs in two places on purpose. `Sp00kyConfig::validate` does the
+//! structural checks that need nothing but the config (cron parses, exactly one
+//! cadence, the DAG is acyclic), and `spky lint` / `spky doctor` additionally
+//! check things that need the backend route map (does that backend exist, does
+//! that route exist on it). Whatever deploys is therefore something the engine
+//! can actually plan and run.
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
+
+/// One `schedules:` entry.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleConfig {
+    /// Cron expression, evaluated in `timezone`. Standard 5 fields, with an
+    /// optional leading seconds field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+    /// Fixed interval (`30s`, `5m`, `1h30m`), measured from each fire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every: Option<String>,
+    /// IANA timezone for `cron`. Defaults to UTC.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+
+    /// App name (an `apps:` entry with an outbox method) whose route this calls.
+    pub backend: String,
+    /// Route path on that backend, e.g. `/syncGames`.
+    pub route: String,
+    /// Static payload merged into every spawned job's payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_yaml::Value>,
+
+    /// Fan out: run this SurrealQL SELECT each fire and spawn one job per row.
+    #[serde(default, rename = "forEach", skip_serializing_if = "Option::is_none")]
+    pub for_each: Option<ForEachConfig>,
+    /// What to do when a fire lands while the previous run is still going.
+    #[serde(default)]
+    pub concurrency: Concurrency,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryConfig>,
+    /// Per-job HTTP timeout (`120s`). Honoured only when the backend sets
+    /// `deploy.timeoutOverridable`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+
+    /// `false` deploys the schedule but leaves it inert. Distinct from an
+    /// operator `spky schedules pause`, which config never overwrites.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForEachConfig {
+    /// SurrealQL SELECT. Runs as root, so it can read anything.
+    pub query: String,
+    /// Row field whose value keys the concurrency check. Defaults to `id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Concurrency {
+    /// Record a suppressed tick and move on. The default: a slow hourly sync
+    /// should not pile up behind itself.
+    #[default]
+    Skip,
+    /// Spawn regardless; overlapping runs are fine.
+    Allow,
+    /// Kill the in-flight run and start the new one.
+    Replace,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetryConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<i64>,
+    /// `linear` or `exponential`, matching the job runner's backoff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<String>,
+}
+
+/// One `workflows:` entry: a DAG of steps, optionally on a schedule.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowConfig {
+    /// Omit for a trigger-only workflow (`spky workflows trigger`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<WorkflowTrigger>,
+    /// Steps by name. Order here is irrelevant — `dependsOn` decides execution.
+    pub steps: BTreeMap<String, WorkflowStep>,
+    /// What happens to steps that haven't started when one fails.
+    #[serde(default, rename = "onFailure")]
+    pub on_failure: OnFailure,
+    #[serde(default)]
+    pub concurrency: Concurrency,
+    #[serde(default, rename = "forEach", skip_serializing_if = "Option::is_none")]
+    pub for_each: Option<ForEachConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowTrigger {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnFailure {
+    /// Fail the run and skip every step that hasn't started.
+    #[default]
+    Halt,
+    /// Skip only the branch below the failure; unrelated branches finish. The
+    /// run still ends `failed`.
+    ContinueIndependent,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowStep {
+    pub backend: String,
+    pub route: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_yaml::Value>,
+    /// Steps that must succeed first. Steps with no dependencies are roots and
+    /// run in parallel; a step with several is a fan-in join.
+    #[serde(default, rename = "dependsOn", alias = "depends_on")]
+    pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<RetryConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+// ── Validation ──────────────────────────────────────────────────────────────
+
+/// Names must be safe to embed in a record id and readable in CLI output.
+fn validate_name(kind: &str, name: &str) -> Result<()> {
+    let ok = !name.is_empty()
+        && name.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if !ok {
+        bail!(
+            "{kind} name '{name}' must be lowercase letters, digits, '-' or '_', starting with a letter"
+        );
+    }
+    Ok(())
+}
+
+/// Parse a `30s` / `5m` / `1h30m` duration to milliseconds.
+pub fn parse_duration_ms(raw: &str) -> Result<i64> {
+    let dur = humantime::parse_duration(raw.trim())
+        .map_err(|e| anyhow::anyhow!("invalid duration '{raw}': {e}"))?;
+    let ms = dur.as_millis();
+    if ms == 0 {
+        bail!("duration '{raw}' must be greater than zero");
+    }
+    i64::try_from(ms).map_err(|_| anyhow::anyhow!("duration '{raw}' is too large"))
+}
+
+/// The shortest interval a schedule may use. The sweep runs every 5s, so
+/// anything below this can't be honoured and would just mislead.
+const MIN_INTERVAL_MS: i64 = 10_000;
+
+/// Check a cadence: exactly one of cron/every, and it has to parse.
+fn validate_cadence(
+    label: &str,
+    cron: Option<&str>,
+    every: Option<&str>,
+    timezone: Option<&str>,
+    required: bool,
+) -> Result<()> {
+    match (cron, every) {
+        (Some(_), Some(_)) => bail!("{label} sets both 'cron' and 'every' — pick one"),
+        (None, None) if required => bail!("{label} must set either 'cron' or 'every'"),
+        (None, None) => return Ok(()),
+        _ => {}
+    }
+    // Parsed by the same code the engine uses, so a cron that lints will plan.
+    schedule_core::FireSpec::parse(
+        cron,
+        every.map(parse_duration_ms).transpose()?,
+        timezone,
+    )
+    .map_err(|e| anyhow::anyhow!("{label}: {e}"))?;
+    if let Some(every) = every {
+        let ms = parse_duration_ms(every)?;
+        if ms < MIN_INTERVAL_MS {
+            bail!(
+                "{label} interval '{every}' is shorter than the {}s minimum",
+                MIN_INTERVAL_MS / 1000
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_for_each(label: &str, for_each: Option<&ForEachConfig>) -> Result<()> {
+    let Some(fe) = for_each else { return Ok(()) };
+    let q = fe.query.trim();
+    if !q.to_ascii_uppercase().starts_with("SELECT") {
+        bail!("{label} forEach.query must be a SELECT statement");
+    }
+    if q.contains(';') {
+        bail!("{label} forEach.query must be a single statement (no ';')");
+    }
+    Ok(())
+}
+
+fn validate_retry(label: &str, retry: Option<&RetryConfig>) -> Result<()> {
+    let Some(retry) = retry else { return Ok(()) };
+    if let Some(max) = retry.max {
+        if max < 0 {
+            bail!("{label} retry.max cannot be negative");
+        }
+    }
+    if let Some(strategy) = &retry.strategy {
+        if !matches!(strategy.as_str(), "linear" | "exponential") {
+            bail!("{label} retry.strategy must be 'linear' or 'exponential'");
+        }
+    }
+    Ok(())
+}
+
+/// Kahn's algorithm over the step graph, mirroring the docker `dependsOn` check.
+fn validate_dag(label: &str, steps: &BTreeMap<String, WorkflowStep>) -> Result<()> {
+    if steps.is_empty() {
+        bail!("{label} has no steps");
+    }
+    let names: BTreeSet<&str> = steps.keys().map(String::as_str).collect();
+    let mut indegree: BTreeMap<&str, usize> = names.iter().map(|n| (*n, 0usize)).collect();
+    let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+
+    for (name, step) in steps {
+        for dep in &step.depends_on {
+            if dep == name {
+                bail!("{label} step '{name}' cannot depend on itself");
+            }
+            if !names.contains(dep.as_str()) {
+                bail!("{label} step '{name}' depends on unknown step '{dep}'");
+            }
+            dependents.entry(dep.as_str()).or_default().push(name.as_str());
+            *indegree.get_mut(name.as_str()).unwrap() += 1;
+        }
+    }
+
+    let mut queue: VecDeque<&str> =
+        indegree.iter().filter(|(_, d)| **d == 0).map(|(n, _)| *n).collect();
+    let mut processed = 0usize;
+    while let Some(n) = queue.pop_front() {
+        processed += 1;
+        for &m in dependents.get(n).map(Vec::as_slice).unwrap_or(&[]) {
+            let d = indegree.get_mut(m).unwrap();
+            *d -= 1;
+            if *d == 0 {
+                queue.push_back(m);
+            }
+        }
+    }
+    if processed != steps.len() {
+        let in_cycle: Vec<&str> =
+            indegree.iter().filter(|(_, d)| **d > 0).map(|(n, _)| *n).collect();
+        bail!("{label} has a dependsOn cycle among steps: {}", in_cycle.join(", "));
+    }
+    Ok(())
+}
+
+/// Structural validation — everything checkable without the backend route map.
+pub fn validate_all(
+    schedules: &BTreeMap<String, ScheduleConfig>,
+    workflows: &BTreeMap<String, WorkflowConfig>,
+) -> Result<()> {
+    for (name, s) in schedules {
+        validate_name("schedule", name)?;
+        let label = format!("schedule '{name}'");
+        validate_cadence(&label, s.cron.as_deref(), s.every.as_deref(), s.timezone.as_deref(), true)?;
+        validate_for_each(&label, s.for_each.as_ref())?;
+        validate_retry(&label, s.retry.as_ref())?;
+        if let Some(timeout) = &s.timeout {
+            parse_duration_ms(timeout)?;
+        }
+        if s.route.is_empty() {
+            bail!("{label} has an empty route");
+        }
+    }
+
+    for (name, w) in workflows {
+        validate_name("workflow", name)?;
+        let label = format!("workflow '{name}'");
+        if let Some(trigger) = &w.schedule {
+            validate_cadence(
+                &label,
+                trigger.cron.as_deref(),
+                trigger.every.as_deref(),
+                trigger.timezone.as_deref(),
+                true,
+            )?;
+        }
+        validate_for_each(&label, w.for_each.as_ref())?;
+        validate_dag(&label, &w.steps)?;
+        for (step_name, step) in &w.steps {
+            let step_label = format!("{label} step '{step_name}'");
+            validate_retry(&step_label, step.retry.as_ref())?;
+            if let Some(timeout) = &step.timeout {
+                parse_duration_ms(timeout)?;
+            }
+            if step.route.is_empty() {
+                bail!("{step_label} has an empty route");
+            }
+        }
+    }
+
+    // Both kinds share the `_00_schedule` id space, so a collision would make
+    // one silently overwrite the other on deploy.
+    for name in schedules.keys() {
+        if workflows.contains_key(name) {
+            bail!("'{name}' is defined as both a schedule and a workflow");
+        }
+    }
+    Ok(())
+}
+
+// ── Normalization (config → the row the engine reads) ───────────────────────
+
+/// Normalized spec fields for one `_00_schedule` row, as JSON. Deploy hashes
+/// this and UPSERTs it; the engine deserializes it as `ScheduleSpec`.
+pub fn normalize_schedule(
+    name: &str,
+    cfg: &ScheduleConfig,
+    outbox_table: &str,
+) -> Result<serde_json::Value> {
+    let mut row = serde_json::Map::new();
+    row.insert("name".into(), serde_json::json!(name));
+    row.insert("kind".into(), serde_json::json!("job"));
+    row.insert("target_table".into(), serde_json::json!(outbox_table));
+    row.insert("path".into(), serde_json::json!(cfg.route));
+    insert_cadence(&mut row, cfg.cron.as_deref(), cfg.every.as_deref(), cfg.timezone.as_deref())?;
+    if let Some(payload) = &cfg.payload {
+        row.insert("payload".into(), yaml_to_json(payload)?);
+    }
+    insert_for_each(&mut row, cfg.for_each.as_ref());
+    row.insert("concurrency".into(), serde_json::json!(concurrency_str(cfg.concurrency)));
+    insert_retry(&mut row, cfg.retry.as_ref());
+    if let Some(timeout) = &cfg.timeout {
+        // The runner takes whole seconds.
+        row.insert("timeout".into(), serde_json::json!(parse_duration_ms(timeout)? / 1000));
+    }
+    row.insert("config_disabled".into(), serde_json::json!(!cfg.enabled));
+    Ok(serde_json::Value::Object(row))
+}
+
+/// Same, for a workflow: the DAG is flattened to an ordered step list so the
+/// engine never has to interpret a map.
+pub fn normalize_workflow(
+    name: &str,
+    cfg: &WorkflowConfig,
+    outbox_table: &str,
+    step_tables: &BTreeMap<String, String>,
+) -> Result<serde_json::Value> {
+    let mut row = serde_json::Map::new();
+    row.insert("name".into(), serde_json::json!(name));
+    row.insert("kind".into(), serde_json::json!("workflow"));
+    row.insert("target_table".into(), serde_json::json!(outbox_table));
+    if let Some(trigger) = &cfg.schedule {
+        insert_cadence(
+            &mut row,
+            trigger.cron.as_deref(),
+            trigger.every.as_deref(),
+            trigger.timezone.as_deref(),
+        )?;
+    }
+    insert_for_each(&mut row, cfg.for_each.as_ref());
+    row.insert("concurrency".into(), serde_json::json!(concurrency_str(cfg.concurrency)));
+
+    let mut steps = Vec::with_capacity(cfg.steps.len());
+    for (step_name, step) in &cfg.steps {
+        let mut s = serde_json::Map::new();
+        s.insert("name".into(), serde_json::json!(step_name));
+        s.insert("path".into(), serde_json::json!(step.route));
+        // A step may call a different backend than the workflow's default, so
+        // its outbox table travels with it.
+        if let Some(table) = step_tables.get(step_name) {
+            if table != outbox_table {
+                s.insert("table".into(), serde_json::json!(table));
+            }
+        }
+        if let Some(payload) = &step.payload {
+            s.insert("payload".into(), yaml_to_json(payload)?);
+        }
+        s.insert("depends_on".into(), serde_json::json!(step.depends_on));
+        if let Some(retry) = &step.retry {
+            if let Some(max) = retry.max {
+                s.insert("max_retries".into(), serde_json::json!(max));
+            }
+            if let Some(strategy) = &retry.strategy {
+                s.insert("retry_strategy".into(), serde_json::json!(strategy));
+            }
+        }
+        if let Some(timeout) = &step.timeout {
+            s.insert("timeout".into(), serde_json::json!(parse_duration_ms(timeout)? / 1000));
+        }
+        steps.push(serde_json::Value::Object(s));
+    }
+
+    row.insert(
+        "workflow".into(),
+        serde_json::json!({
+            "steps": steps,
+            "on_failure": match cfg.on_failure {
+                OnFailure::Halt => "halt",
+                OnFailure::ContinueIndependent => "continue-independent",
+            },
+        }),
+    );
+    row.insert("config_disabled".into(), serde_json::json!(false));
+    Ok(serde_json::Value::Object(row))
+}
+
+fn insert_cadence(
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    cron: Option<&str>,
+    every: Option<&str>,
+    timezone: Option<&str>,
+) -> Result<()> {
+    if let Some(cron) = cron {
+        row.insert("cron".into(), serde_json::json!(cron));
+    }
+    if let Some(every) = every {
+        row.insert("every_ms".into(), serde_json::json!(parse_duration_ms(every)?));
+    }
+    if let Some(tz) = timezone {
+        row.insert("timezone".into(), serde_json::json!(tz));
+    }
+    Ok(())
+}
+
+fn insert_for_each(
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    for_each: Option<&ForEachConfig>,
+) {
+    let Some(fe) = for_each else { return };
+    row.insert("for_each".into(), serde_json::json!(fe.query));
+    if let Some(key) = &fe.key {
+        row.insert("for_each_key".into(), serde_json::json!(key));
+    }
+}
+
+fn insert_retry(
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    retry: Option<&RetryConfig>,
+) {
+    let Some(retry) = retry else { return };
+    if let Some(max) = retry.max {
+        row.insert("max_retries".into(), serde_json::json!(max));
+    }
+    if let Some(strategy) = &retry.strategy {
+        row.insert("retry_strategy".into(), serde_json::json!(strategy));
+    }
+}
+
+fn concurrency_str(c: Concurrency) -> &'static str {
+    match c {
+        Concurrency::Skip => "skip",
+        Concurrency::Allow => "allow",
+        Concurrency::Replace => "replace",
+    }
+}
+
+fn yaml_to_json(value: &serde_yaml::Value) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(value)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn schedule(yaml: &str) -> BTreeMap<String, ScheduleConfig> {
+        serde_yaml::from_str(yaml).expect("parses")
+    }
+
+    fn workflows(yaml: &str) -> BTreeMap<String, WorkflowConfig> {
+        serde_yaml::from_str(yaml).expect("parses")
+    }
+
+    #[test]
+    fn accepts_a_cron_schedule_and_a_fan_out_schedule() {
+        let s = schedule(
+            r#"
+nightly-cleanup:
+  cron: "0 3 * * *"
+  timezone: Europe/Berlin
+  backend: api
+  route: /cleanupExpired
+  payload: { olderThanDays: 30 }
+game-sync:
+  every: 5m
+  backend: gamesync
+  route: /syncGames
+  forEach:
+    query: SELECT id FROM connection WHERE active = true
+    key: id
+  concurrency: skip
+  retry: { max: 3, strategy: linear }
+  timeout: 120s
+"#,
+        );
+        validate_all(&s, &BTreeMap::new()).expect("valid");
+        assert_eq!(s["game-sync"].concurrency, Concurrency::Skip);
+        assert!(s["nightly-cleanup"].enabled, "enabled defaults to true");
+    }
+
+    #[test]
+    fn rejects_a_bad_cadence() {
+        let both = schedule("x:\n  cron: \"0 3 * * *\"\n  every: 5m\n  backend: api\n  route: /r\n");
+        assert!(validate_all(&both, &BTreeMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("pick one"));
+
+        let neither = schedule("x:\n  backend: api\n  route: /r\n");
+        assert!(validate_all(&neither, &BTreeMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("must set either"));
+
+        let bad_cron = schedule("x:\n  cron: nope\n  backend: api\n  route: /r\n");
+        assert!(validate_all(&bad_cron, &BTreeMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("cron"));
+
+        let too_fast = schedule("x:\n  every: 1s\n  backend: api\n  route: /r\n");
+        assert!(validate_all(&too_fast, &BTreeMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("minimum"));
+
+        let bad_tz =
+            schedule("x:\n  cron: \"0 3 * * *\"\n  timezone: Mars/Olympus\n  backend: api\n  route: /r\n");
+        assert!(validate_all(&bad_tz, &BTreeMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("timezone"));
+    }
+
+    #[test]
+    fn rejects_a_for_each_that_is_not_a_single_select() {
+        let not_select = schedule(
+            "x:\n  every: 5m\n  backend: api\n  route: /r\n  forEach:\n    query: DELETE user\n",
+        );
+        assert!(validate_all(&not_select, &BTreeMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("SELECT"));
+
+        let multi = schedule(
+            "x:\n  every: 5m\n  backend: api\n  route: /r\n  forEach:\n    query: \"SELECT id FROM a; DELETE b\"\n",
+        );
+        assert!(validate_all(&multi, &BTreeMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("single statement"));
+    }
+
+    #[test]
+    fn accepts_a_diamond_workflow_and_rejects_a_cycle() {
+        let w = workflows(
+            r#"
+monthly-report:
+  schedule: { cron: "0 6 1 * *" }
+  steps:
+    extract-orders: { backend: api, route: /exportOrders }
+    extract-users: { backend: api, route: /exportUsers }
+    transform:
+      backend: analytics
+      route: /buildReport
+      dependsOn: [extract-orders, extract-users]
+    notify: { backend: notify, route: /postSlack, dependsOn: [transform] }
+    archive: { backend: api, route: /archiveReport, dependsOn: [transform] }
+  onFailure: halt
+"#,
+        );
+        validate_all(&BTreeMap::new(), &w).expect("valid");
+        assert_eq!(w["monthly-report"].on_failure, OnFailure::Halt);
+
+        let cyclic = workflows(
+            "w:\n  steps:\n    a: { backend: api, route: /a, dependsOn: [b] }\n    b: { backend: api, route: /b, dependsOn: [a] }\n",
+        );
+        assert!(validate_all(&BTreeMap::new(), &cyclic)
+            .unwrap_err()
+            .to_string()
+            .contains("cycle"));
+
+        let ghost = workflows("w:\n  steps:\n    a: { backend: api, route: /a, dependsOn: [ghost] }\n");
+        assert!(validate_all(&BTreeMap::new(), &ghost)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown step"));
+
+        let selfdep = workflows("w:\n  steps:\n    a: { backend: api, route: /a, dependsOn: [a] }\n");
+        assert!(validate_all(&BTreeMap::new(), &selfdep)
+            .unwrap_err()
+            .to_string()
+            .contains("itself"));
+    }
+
+    #[test]
+    fn rejects_a_name_used_by_both_kinds() {
+        let s = schedule("dup:\n  every: 5m\n  backend: api\n  route: /r\n");
+        let w = workflows("dup:\n  steps:\n    a: { backend: api, route: /a }\n");
+        assert!(validate_all(&s, &w).unwrap_err().to_string().contains("both"));
+    }
+
+    #[test]
+    fn rejects_unparseable_names() {
+        let s = schedule("Bad_Name:\n  every: 5m\n  backend: api\n  route: /r\n");
+        assert!(validate_all(&s, &BTreeMap::new())
+            .unwrap_err()
+            .to_string()
+            .contains("lowercase"));
+    }
+
+    #[test]
+    fn normalizes_sugar_away_for_the_engine() {
+        let s = schedule(
+            "game-sync:\n  every: 5m\n  backend: gamesync\n  route: /syncGames\n  timeout: 2m\n  \
+             retry: { max: 3, strategy: exponential }\n  concurrency: replace\n  \
+             forEach:\n    query: SELECT id FROM connection\n    key: id\n  enabled: false\n",
+        );
+        let row = normalize_schedule("game-sync", &s["game-sync"], "job").unwrap();
+        assert_eq!(row["kind"], serde_json::json!("job"));
+        assert_eq!(row["every_ms"], serde_json::json!(300_000), "`5m` becomes milliseconds");
+        assert_eq!(row["target_table"], serde_json::json!("job"), "backend resolved to its table");
+        assert_eq!(row["path"], serde_json::json!("/syncGames"));
+        assert_eq!(row["timeout"], serde_json::json!(120), "the runner takes seconds");
+        assert_eq!(row["max_retries"], serde_json::json!(3));
+        assert_eq!(row["retry_strategy"], serde_json::json!("exponential"));
+        assert_eq!(row["concurrency"], serde_json::json!("replace"));
+        assert_eq!(row["for_each_key"], serde_json::json!("id"));
+        assert_eq!(row["config_disabled"], serde_json::json!(true), "`enabled: false`");
+        assert!(row.get("cron").is_none(), "no cron on an interval schedule");
+    }
+
+    #[test]
+    fn normalizes_a_workflow_into_an_ordered_step_list() {
+        let w = workflows(
+            "report:\n  schedule: { cron: \"0 6 1 * *\" }\n  onFailure: continue-independent\n  steps:\n    \
+             extract: { backend: api, route: /extract }\n    \
+             load: { backend: warehouse, route: /load, dependsOn: [extract], timeout: 30s }\n",
+        );
+        let mut tables = BTreeMap::new();
+        tables.insert("extract".to_string(), "job".to_string());
+        tables.insert("load".to_string(), "warehouse_job".to_string());
+
+        let row = normalize_workflow("report", &w["report"], "job", &tables).unwrap();
+        assert_eq!(row["kind"], serde_json::json!("workflow"));
+        assert_eq!(row["cron"], serde_json::json!("0 6 1 * *"));
+        assert_eq!(row["workflow"]["on_failure"], serde_json::json!("continue-independent"));
+
+        let steps = row["workflow"]["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 2);
+        let load = steps.iter().find(|s| s["name"] == serde_json::json!("load")).unwrap();
+        assert_eq!(load["depends_on"], serde_json::json!(["extract"]));
+        assert_eq!(load["table"], serde_json::json!("warehouse_job"), "a step can use its own table");
+        assert_eq!(load["timeout"], serde_json::json!(30));
+        let extract = steps.iter().find(|s| s["name"] == serde_json::json!("extract")).unwrap();
+        assert!(extract.get("table").is_none(), "a step on the default table omits it");
+    }
+
+    /// The engine must be able to read back exactly what deploy writes.
+    #[test]
+    fn normalized_rows_deserialize_as_engine_specs() {
+        let s = schedule("nightly:\n  cron: \"0 3 * * *\"\n  backend: api\n  route: /cleanup\n");
+        let row = normalize_schedule("nightly", &s["nightly"], "job").unwrap();
+        let spec = schedule_core::ScheduleSpec::from_row(&row).expect("engine reads it");
+        assert_eq!(spec.name, "nightly");
+        assert!(spec.fire_spec().is_ok());
+
+        let w = workflows("wf:\n  steps:\n    a: { backend: api, route: /a }\n    b: { backend: api, route: /b, dependsOn: [a] }\n");
+        let row = normalize_workflow("wf", &w["wf"], "job", &BTreeMap::new()).unwrap();
+        let spec = schedule_core::ScheduleSpec::from_row(&row).expect("engine reads it");
+        let dag = schedule_core::WorkflowDag::validate(spec.workflow.as_ref().unwrap())
+            .expect("engine validates the DAG");
+        assert_eq!(dag.len(), 2);
+    }
+}

@@ -14,6 +14,11 @@ use serde::{Deserialize, Serialize};
 pub enum TimerKind {
     /// Standalone job recovery sweep (re-arms every `JOB_RECOVERY_INTERVAL_SECS`).
     JobRecoverySweep,
+    /// Standalone schedule sweep: plan/fire declarative schedules, advance
+    /// workflow DAGs, heal lost job-completion events (re-arms every
+    /// `SCHEDULE_SWEEP_INTERVAL_SECS`). Cluster mode leaves this to the
+    /// scheduler service, which is the single ticker there.
+    ScheduleSweep,
     /// View TTL cleanup (re-arms every `ttl_cleanup_interval_secs`).
     TtlCleanup,
     /// Edge-update batch flush (re-arms every `query_update_throttle_ms`

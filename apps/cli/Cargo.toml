@@ -1,6 +1,6 @@
 [package]
 name = "sp00ky-cli"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 edition = "2021"
 
 [[bin]]
@@ -15,6 +15,9 @@ serde_json = "1.0"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 humantime = "2"
+# Shared with the runtime engine so a cron/DAG that lints is one the engine can
+# actually plan — no second parser to drift.
+schedule-core = { path = "../../packages/schedule-core" }
 regex = "1.12.2"
 tar = "0.4"
 zstd = "0.13"
@@ -36,6 +39,6 @@ open = "5"
 ssp-protocol = { path = "../../packages/ssp-protocol" }
 
 [dev-dependencies]
-# Used by tests/flag_sql_e2e.rs to talk to the throwaway SurrealDB over HTTP.
+# Used by the docker-gated e2e tests to talk to the throwaway SurrealDB over HTTP.
 ureq = { version = "2.9", features = ["json"] }
 

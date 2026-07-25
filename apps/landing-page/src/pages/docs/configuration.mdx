@@ -4,6 +4,7 @@ title: Configuration
 ---
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Note from '../../components/ui/Note.astro';
 
 export const ymlSchemaHeader = `# yaml-language-server: $schema=https://sp00ky.cloud/schema/sp00ky.schema.json`;
 
@@ -56,6 +57,45 @@ export const ymlApps = `apps:
     image: livekit/livekit-server:latest
     ports: [7880, 7881, "7882/udp"]
     args: ["--dev", "--bind", "0.0.0.0"]`;
+
+export const ymlSchedules = `schedules:
+  nightly-cleanup:
+    cron: "0 3 * * *"
+    timezone: Europe/Berlin
+    backend: api
+    route: /cleanupExpired
+    payload:
+      olderThanDays: 30
+
+  game-sync:
+    every: 5m
+    backend: api
+    route: /syncGames
+    forEach:
+      query: SELECT id FROM connection WHERE active = true
+      key: id
+    concurrency: skip
+    retry: { max: 3, strategy: linear }
+    timeout: 120s
+
+workflows:
+  monthly-report:
+    schedule: { cron: "0 6 1 * *" }
+    steps:
+      extract-orders: { backend: api, route: /exportOrders }
+      extract-users:  { backend: api, route: /exportUsers }
+      transform:
+        backend: analytics
+        route: /buildReport
+        dependsOn: [extract-orders, extract-users]
+      notify: { backend: notify, route: /postSlack, dependsOn: [transform] }
+    onFailure: halt`;
+
+export const ymlScheduleFiles = `schedules: ./schedules.yml            # the whole map lives in that file
+
+workflows:
+  monthly-report: ./workflows/monthly-report.yml   # one definition per file
+  quick-one: { steps: { ping: { backend: api, route: /ping } } }   # mixing is fine`;
 
 export const ymlPerEnv = `version:
   dev:
@@ -178,6 +218,8 @@ For a fully annotated reference covering every option, see [`example/sp00ky.yml`
 | `logLevel` | string \| object | `info` | Log verbosity. Accepts `trace`, `debug`, `info`, `warn`, `error`, `off`, target=level directives, or a `{dev, cloud}` split. |
 | `refMode` | `dedicated` \| `single` | `dedicated` | Storage layout for the SSP's `_00_list_ref` table. `dedicated` gives each user their own table and works around a SurrealDB v3 LIVE-permission gap. |
 | `apps` | map | `{}` | Your frontend and backend services. See [Apps](#apps) below. |
+| `schedules` | map \| path | `{}` | Server-side cron/interval jobs. See [Schedules](/docs/backend/schedules). |
+| `workflows` | map \| path | `{}` | Server-side workflow DAGs. See [Workflows](/docs/backend/workflows). |
 | `deployment` | object | (none) | Cloud deployment knobs: `sspCount`, `backup`. See [Cloud Deployment](/docs/cloud/deployment). |
 
 ### Apps
@@ -244,6 +286,24 @@ deploy:
 ```
 
 The referenced file holds a single app config (the same fields you'd inline under `apps.<name>`) and validates against its own [`app.schema.json`](https://sp00ky.cloud/schema/app.schema.json). Its relative paths are resolved from the service directory, and at load time the whole thing is merged into one effective config. Any field you also set alongside `path` in the root file wins (main overrides sub). The split is entirely optional — leave your apps inline and nothing changes.
+
+### Schedules and workflows
+
+`schedules` and `workflows` declare work that runs server-side on a clock, whether or not a client is connected. Each cycle the scheduler creates a new job row in the target backend's outbox table, so a scheduled run is an ordinary job with the usual retry, kill, and recovery behaviour.
+
+<CodeBlock code={ymlSchedules} lang="yaml" />
+
+A schedule sets exactly one of `cron` (a 5-field expression, evaluated in `timezone`, default UTC) or `every` (a fixed interval, minimum 10s). `forEach` fans one schedule out into one job per row, and `concurrency` decides what a fire does when that row's previous run is still going: `skip` (default) records the suppressed tick, `allow` permits overlap, `replace` kills the in-flight run first.
+
+A workflow is a DAG: steps with no `dependsOn` are roots and run in parallel, a step with several dependencies is a fan-in join, and each step receives its dependencies' response bodies under `payload.steps`. See [Schedules](/docs/backend/schedules) and [Workflows](/docs/backend/workflows) for the full behaviour and the `spky schedules` / `spky workflows` commands.
+
+Either section can also live in its own file, per entry or wholesale — useful once you have more than a handful:
+
+<CodeBlock code={ymlScheduleFiles} lang="yaml" />
+
+<Note>
+  `spky lint` parses every cron expression, checks each interval, resolves each `backend` and `route` against that app's OpenAPI spec, and rejects a workflow whose `dependsOn` edges form a cycle — so a definition that lints is one the scheduler can actually run.
+</Note>
 
 ### Client types
 

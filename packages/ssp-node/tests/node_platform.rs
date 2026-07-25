@@ -146,6 +146,8 @@ struct HarnessOpts {
     backend_counts: Option<BackendCounts>,
     ref_mode: ssp_protocol::RefMode,
     circuit_store: Option<Arc<dyn ssp_node::CircuitStore>>,
+    /// Wire the declarative-schedule engine (as a standalone VM node does).
+    schedules: bool,
 }
 
 impl Default for HarnessOpts {
@@ -156,6 +158,7 @@ impl Default for HarnessOpts {
             backend_counts: None,
             ref_mode: ssp_protocol::RefMode::Single,
             circuit_store: None,
+            schedules: false,
         }
     }
 }
@@ -235,12 +238,13 @@ async fn build(opts: HarnessOpts) -> Harness {
     // consuming the node's sender.
     let rx = Arc::new(tokio::sync::Mutex::new(rx));
 
+    let job_control = JobControl::new();
     let node = SspNode {
         platform,
         status: Arc::new(RwLock::new(opts.status)),
         processor: Arc::new(RwLock::new(Circuit::new())),
         job_config: Arc::new(job_config),
-        job_control: JobControl::new(),
+        job_control: job_control.clone(),
         job_queue_tx: tx,
         ssp_id: "test-ssp".to_string(),
         auth_secret: SECRET.to_string(),
@@ -256,6 +260,14 @@ async fn build(opts: HarnessOpts) -> Harness {
         edge_update_tx: { let (tx, _rx) = mpsc::unbounded_channel(); tx },
         anonymous_live_queries: false,
         standalone: true,
+        schedule_engine: opts.schedules.then(|| {
+            ssp_node::schedules::build_engine(
+                true,
+                Arc::new(MemDb(Arc::clone(&raw))),
+                job_control.clone(),
+            )
+            .expect("standalone builds an engine")
+        }),
         ttl_cleanup_interval_secs: 60,
         bootstrap_page_size: 200,
         checkpoint_interval_secs: None,
@@ -907,4 +919,85 @@ async fn log_accepts_and_swallows() {
         .await
         .unwrap();
     assert_eq!(r.status, 200);
+}
+
+// --- declarative schedules (standalone wiring) -------------------------------
+
+/// The DDL the CLI ships for the scheduling tables, so this test exercises the
+/// same schema a deploy applies.
+const SCHEDULE_TABLES: &str = include_str!("../../../apps/cli/src/schedule_tables.surql");
+
+/// The end-to-end singlenode path: the schedule sweep creates a `pending` outbox
+/// row, the row's mutation event reaches `/ingest`, and the existing CREATE-only
+/// pickup enqueues it for the runner. Everything past the queue is the runner's
+/// job, which `jobs::db_tests` covers.
+#[tokio::test]
+async fn a_due_schedule_spawns_a_job_that_ingest_picks_up() {
+    let h = build(HarnessOpts {
+        job_tables: vec![("job", "http://backend")],
+        schedules: true,
+        ..Default::default()
+    })
+    .await;
+    h.raw_db.query(SCHEDULE_TABLES).await.expect("scheduling schema");
+    h.raw_db
+        .query(
+            "DEFINE TABLE job SCHEMALESS; \
+             CREATE _00_schedule:nightly CONTENT { name: 'nightly', kind: 'job', \
+             every_ms: 300000, target_table: 'job', path: '/cleanup' }",
+        )
+        .await
+        .expect("define schedule");
+
+    let engine = h.node.schedule_engine.clone().expect("standalone wires an engine");
+
+    // First sweep plans; pull the clock back so the second one fires.
+    engine.tick_pass().await.unwrap();
+    h.raw_db
+        .query("UPDATE _00_schedule:nightly SET next_fire_at = time::now() - 1s")
+        .await
+        .unwrap();
+    let report = engine.tick_pass().await.unwrap();
+    assert_eq!(report.spawned, 1, "the sweep spawned an atomic job");
+
+    let spawned: Vec<String> = h
+        .raw_db
+        .query("SELECT VALUE type::string(id) FROM job")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    assert_eq!(spawned.len(), 1);
+    let job_id = spawned[0].clone();
+
+    // The mutation event a real deploy installs would POST exactly this.
+    let body = json!({
+        "table": "job",
+        "op": "CREATE",
+        "id": job_id,
+        "record": { "status": "pending", "path": "/cleanup", "payload": {} }
+    });
+    let r = h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap();
+    assert_eq!(r.status, 200);
+
+    let mut rx = h.job_rx.lock().await;
+    let job = rx.try_recv().expect("the scheduled job reached the runner queue");
+    assert_eq!(job.id, job_id);
+    assert_eq!(job.path, "/cleanup");
+}
+
+/// Cluster mode must not tick: the scheduler service is the single ticker, and a
+/// second one would only lose the claim CAS and waste the work.
+#[tokio::test]
+async fn cluster_mode_builds_no_schedule_engine() {
+    let db: Arc<dyn Db> = Arc::new(MemDb(Arc::new({
+        let db = Surreal::new::<Mem>(()).await.unwrap();
+        db.use_ns("test").use_db("test").await.unwrap();
+        db
+    })));
+    assert!(
+        ssp_node::schedules::build_engine(false, Arc::clone(&db), JobControl::new()).is_none(),
+        "cluster mode leaves ticking to the scheduler service"
+    );
+    assert!(ssp_node::schedules::build_engine(true, db, JobControl::new()).is_some());
 }

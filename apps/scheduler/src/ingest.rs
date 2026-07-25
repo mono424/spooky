@@ -30,6 +30,11 @@ pub struct IngestState {
     pub event_buffer: Arc<RwLock<VecDeque<BufferedEvent>>>,
     pub seq_counter: Arc<AtomicU64>,
     pub wal: Arc<RwLock<EventWal>>,
+    /// Upstream DB connection details, for the schedule engine's observer hook.
+    pub db_config: Arc<crate::config::DbConfig>,
+    /// Outbox tables from `SPKY_JOB_CONFIG`: only an UPDATE on one of these can
+    /// be a job finishing, so everything else skips the hook entirely.
+    pub job_tables: Arc<Vec<String>>,
 }
 
 /// Snapshot of how far behind the replica is vs. the ingest stream.
@@ -144,6 +149,24 @@ async fn handle_ingest(
     {
         let mut buffer = state.event_buffer.write().await;
         buffer.push_back(buffered_event.clone());
+    }
+
+    // A job-table UPDATE may be the runner terminalizing a scheduled job or a
+    // workflow step. The scheduler is both the ingest entrypoint and the
+    // cluster's single ticker, so this is where the engine learns about it.
+    // Best-effort: the sweep's heal pass covers a missed event within one tick.
+    if request.op.eq_ignore_ascii_case("UPDATE")
+        && state.job_tables.iter().any(|t| t == &request.table)
+    {
+        if let Some(status) = request.record.get("status").and_then(|v| v.as_str()) {
+            crate::schedule_engine::observe_job_terminal(
+                Arc::clone(&state.ssp_pool),
+                Arc::clone(&state.transport),
+                Arc::clone(&state.db_config),
+                request.id.clone(),
+                status.to_string(),
+            );
+        }
     }
 
     // Select one SSP for job execution (round-robin)

@@ -123,6 +123,14 @@ async fn main() -> Result<()> {
         std::sync::Arc::new(scheduler.config().db.clone()),
     ).await;
 
+    // Declarative schedules + workflows. The scheduler is the cluster's single
+    // ticker (SSPs leave their engine unbuilt in cluster mode).
+    scheduler::schedule_engine::start_schedule_sweep(
+        std::sync::Arc::clone(&job_state.ssp_pool),
+        std::sync::Arc::clone(&transport),
+        std::sync::Arc::new(scheduler.config().db.clone()),
+    );
+
     // Spawn the single-consumer backup worker
     {
         let host = Arc::clone(&maintenance_host);

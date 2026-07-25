@@ -1,6 +1,6 @@
 [package]
 name = "ssp-node"
-version = "0.0.1-canary.147"
+version = "0.0.1-canary.148"
 edition = "2021"
 description = "Portable SSP node core: platform ports (traits) + shared types for the VM (tokio/axum) and Cloudflare (workers-rs) shells"
 
@@ -20,6 +20,7 @@ tokio = { version = "1", default-features = false, features = ["sync", "macros"]
 tracing = "0.1"
 web-time = "1"
 
+schedule-core = { path = "../schedule-core" }
 ssp = { path = "../ssp" }
 ssp-protocol = { path = "../ssp-protocol" }
 

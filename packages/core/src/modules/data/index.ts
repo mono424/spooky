@@ -1174,8 +1174,11 @@ export class DataModule<S extends SchemaStructure> {
   }
 
   /**
-   * Build the outbox job record + resolve its table for a backend route. Shared
-   * by `run` (one-shot) and `runRecurring` (durable schedule).
+   * Build the outbox job record + resolve its table for a backend route.
+   *
+   * Every job is a single execution. Recurring work is declared server-side
+   * (`schedules:` in sp00ky.yml) and the scheduler creates a fresh row per cycle,
+   * so nothing here needs to know about schedules.
    */
   private buildJobRecord<B extends BackendNames<S>, R extends BackendRoutes<S, B>>(
     backend: B,
@@ -1227,113 +1230,6 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     return { tableName, record };
-  }
-
-  /**
-   * Deterministic id for the single recurring-schedule row of a given
-   * (assigned_to, path). One row per pair => calling `runRecurring` twice cannot
-   * fork a second schedule, and `poke`/`cancel` address the same row.
-   */
-  private recurringJobId(tableName: string, assignedTo: string, path: string): string {
-    const suffix = `${assignedTo}_${path}`.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-    return `${tableName}:${suffix}`;
-  }
-
-  /**
-   * Register a RECURRING job: one durable row per (assigned_to, path) that
-   * re-runs every `options.interval` ms (measured from each run's completion).
-   * Idempotent: if the schedule already exists it is left untouched, so calling
-   * this on every connect/re-login never forks a second schedule. The first run
-   * fires immediately (`next_run_at = now`), then every interval thereafter.
-   */
-  async runRecurring<B extends BackendNames<S>, R extends BackendRoutes<S, B>>(
-    backend: B,
-    path: R,
-    data: RoutePayload<S, B, R>,
-    options: RunOptions & { interval: number; assignedTo: string }
-  ): Promise<void> {
-    if (options?.interval == null) {
-      throw new Error('runRecurring requires options.interval (ms)');
-    }
-    if (!options?.assignedTo) {
-      throw new Error('runRecurring requires options.assignedTo');
-    }
-
-    const { tableName, record } = this.buildJobRecord(backend, path, data, options);
-    const recordId = this.recurringJobId(tableName, options.assignedTo, path);
-    const rid = parseRecordIdString(recordId);
-
-    // Single schedule per key: if the row already exists, do nothing.
-    const [existing] = await withRetry(this.logger, () =>
-      this.local.query<[unknown]>('SELECT id FROM ONLY $id', { id: rid })
-    );
-    if (existing) return;
-
-    record.recurring = true;
-    record.interval = options.interval;
-    record.next_run_at = new Date(); // run now, then re-arm to now + interval on completion
-    try {
-      await this.create(recordId, record);
-    } catch (err) {
-      // The local existence check can miss a row that exists on the server but
-      // hasn't synced into this session yet (e.g. a re-login before catch-up).
-      // The deterministic id makes that CREATE collide; treat it as "schedule
-      // already exists" and keep runRecurring idempotent rather than throwing.
-      this.logger.debug(
-        { id: recordId, err: (err as Error)?.message, Category: 'sp00ky-client::DataModule::runRecurring' },
-        'runRecurring create skipped (schedule likely already exists)'
-      );
-    }
-  }
-
-  /**
-   * Manually trigger a recurring job NOW and reset its interval clock. Sets
-   * `next_run_at = now` on the schedule row; the SSP ingest picks up the update
-   * and dispatches an immediate run, after which the runner re-arms the clock
-   * from that run's completion. No-op if no schedule exists (caller should have
-   * created one via `runRecurring`).
-   */
-  async pokeRecurring<B extends BackendNames<S>>(
-    backend: B,
-    path: BackendRoutes<S, B>,
-    options: { assignedTo: string }
-  ): Promise<void> {
-    if (!options?.assignedTo) {
-      throw new Error('pokeRecurring requires options.assignedTo');
-    }
-    const tableName = this.schema.backends?.[backend]?.outboxTable;
-    if (!tableName) {
-      throw new Error(`Outbox table for backend ${backend} not found`);
-    }
-    const recordId = this.recurringJobId(tableName, options.assignedTo, path as string);
-    const rid = parseRecordIdString(recordId);
-
-    const [existing] = await withRetry(this.logger, () =>
-      this.local.query<[unknown]>('SELECT id FROM ONLY $id', { id: rid })
-    );
-    if (!existing) return;
-
-    await this.update(tableName, recordId, { next_run_at: new Date() });
-  }
-
-  /**
-   * Cancel a recurring schedule: delete the single schedule row so it stops
-   * being dispatched server-side.
-   */
-  async cancelRecurring<B extends BackendNames<S>>(
-    backend: B,
-    path: BackendRoutes<S, B>,
-    options: { assignedTo: string }
-  ): Promise<void> {
-    if (!options?.assignedTo) {
-      throw new Error('cancelRecurring requires options.assignedTo');
-    }
-    const tableName = this.schema.backends?.[backend]?.outboxTable;
-    if (!tableName) {
-      throw new Error(`Outbox table for backend ${backend} not found`);
-    }
-    const recordId = this.recurringJobId(tableName, options.assignedTo, path as string);
-    await this.delete(tableName, recordId);
   }
 
   // ==================== MUTATION MANAGEMENT ====================

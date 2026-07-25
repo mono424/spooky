@@ -47,6 +47,55 @@ buckets:
 logLevel:
   dev: trace
   cloud: info
+# ── Server-side schedules ────────────────────────────────────────────────────
+# Declarative cron/interval jobs. The scheduler spawns a NEW row in the app's
+# outbox table each cycle, so every run is an ordinary atomic job with the usual
+# retry/kill/recovery behaviour. Operate them with `spky schedules`.
+schedules:
+  # Plain cron. `spky schedules trigger nightly-spookify` fires one extra run
+  # without shifting the schedule.
+  nightly-spookify:
+    cron: "0 3 * * *"
+    timezone: Europe/Berlin
+    backend: api
+    route: /spookify
+    payload:
+      id: thread:demo
+
+  # Fan-out: one job per row the query returns, keyed per row. `skip` means a
+  # thread whose previous run is still going is left alone this cycle rather
+  # than queueing a second one.
+  spookify-threads:
+    every: 5m
+    backend: api
+    route: /spookify
+    forEach:
+      query: SELECT id FROM thread WHERE archived = false
+      key: id
+    concurrency: skip
+    retry:
+      max: 3
+      strategy: linear
+    timeout: 120s
+
+# ── Server-side workflows ────────────────────────────────────────────────────
+# A DAG of steps, each step an atomic job. Steps with no `dependsOn` are roots
+# and run in parallel; a step listing several is a fan-in join. A step reads its
+# dependencies' outputs from `payload.steps.<name>`.
+workflows:
+  share-and-spookify:
+    schedule:
+      cron: "0 6 * * 1"
+    steps:
+      accept-shares:
+        backend: api
+        route: /share/accept
+      spookify:
+        backend: api
+        route: /spookify
+        dependsOn: [accept-shares]
+    onFailure: halt
+
 clientTypes:
   - format: typescript
     output: ./app-solid/src/schema.gen.ts

@@ -762,6 +762,12 @@ pub fn apply_internal_schema(
     internal_sql.push_str(&meta_tables_remote);
     internal_sql.push('\n');
 
+    // Scheduling tables (`_00_schedule*`). A separate file so the engine crate
+    // can include_str! exactly this DDL in its tests; already all-OVERWRITE, so
+    // it goes in AFTER make_defines_overwrite rather than through it.
+    internal_sql.push_str(include_str!("schedule_tables.surql"));
+    internal_sql.push('\n');
+
     // 3b. Per-table sp00ky events (mutation + delete for versioning & ingest)
     println!("  + Generating per-table events...");
     let sp00ky_events = generate_sp00ky_events(
@@ -803,6 +809,9 @@ pub fn apply_internal_schema(
         && read_stored_schema_hash(client, "internal").as_deref() == Some(&hash)
     {
         println!("  {DIM}Internal schema unchanged, skipping.{RESET}");
+        // Schedules still sync: their definitions live in sp00ky.yml, which
+        // changes independently of the schema this hash covers.
+        sync_schedules(client, config_path, &backend_processor);
         println!("────────────────────────────────────────────────────────\n");
         return Ok(());
     }
@@ -822,8 +831,44 @@ pub fn apply_internal_schema(
     record_schema_hash(client, "internal", &hash);
 
     println!("  {GREEN}Internal Sp00ky schema applied successfully.{RESET}");
+    sync_schedules(client, config_path, &backend_processor);
     println!("────────────────────────────────────────────────────────\n");
     Ok(())
+}
+
+/// Push declarative `schedules:` / `workflows:` into `_00_schedule`.
+///
+/// Deliberately non-fatal: a bad schedule definition must not fail a deploy that
+/// otherwise succeeded, and the failure is loud enough to act on. `spky lint`
+/// catches these before deploy, and `spky schedules sync` retries afterwards.
+fn sync_schedules(
+    client: &dyn MigrationDB,
+    config_path: Option<&Path>,
+    processor: &BackendProcessor,
+) {
+    let Some(config_path) = config_path.filter(|p| p.exists()) else { return };
+    let base_dir = config_path.parent().unwrap_or(Path::new("."));
+    let config = crate::backend::load_config(config_path);
+    if config.schedules.is_empty() && config.workflows.is_empty() {
+        // Still sweep: a schedule that was just deleted from the manifest has to
+        // stop firing.
+        match crate::schedule_sync::sync(client, &config, processor, base_dir) {
+            Ok(report) if report.removed > 0 => {
+                println!("  + Removed {} schedule(s) no longer in sp00ky.yml", report.removed);
+            }
+            Ok(_) => {}
+            Err(e) => println!("  ▸ Warning: failed to sync schedules: {e:#}"),
+        }
+        return;
+    }
+
+    match crate::schedule_sync::sync(client, &config, processor, base_dir) {
+        Ok(report) if report.is_noop() => {
+            println!("  {DIM}Schedules unchanged ({}).{RESET}", report.summary());
+        }
+        Ok(report) => println!("  + Synced schedules: {}", report.summary()),
+        Err(e) => println!("  ▸ Warning: failed to sync schedules: {e:#}"),
+    }
 }
 
 #[cfg(test)]

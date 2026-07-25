@@ -392,6 +392,10 @@ fn build_node(platform: Platform, cfg: &NodeConfigCf) -> SspNode {
         edge_update_tx,
         anonymous_live_queries: false,
         standalone: true,
+        // No schedule engine on Workers: this shell drops `_job_rx`, so there is
+        // no runner to execute anything a fired schedule would spawn. Scheduling
+        // is VM/singlenode + cluster only until that changes.
+        schedule_engine: None,
         ttl_cleanup_interval_secs: 60,
         bootstrap_page_size: 200,
         checkpoint_interval_secs: Some(300),

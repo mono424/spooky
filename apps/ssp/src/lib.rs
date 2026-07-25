@@ -512,6 +512,30 @@ pub async fn run_server() -> anyhow::Result<()> {
         }
     }
 
+    // Declarative schedules (`schedules:` / `workflows:` in sp00ky.yml). Same
+    // singlenode-only reasoning as the recovery sweep: in cluster mode the
+    // scheduler service is the single ticker, so an SSP that also ticked would
+    // just lose the claim CAS and waste the work.
+    let schedule_engine = ssp_node::schedules::build_engine(
+        config.scheduler_url.is_none(),
+        Arc::clone(&platform.db),
+        job_control.clone(),
+    );
+    if schedule_engine.is_some() {
+        // Armed immediately: the first pass plans any schedule whose spec changed
+        // in the deploy that just happened, and can fire it in the same sweep.
+        platform
+            .scheduler
+            .schedule(ssp_node::TimerKind::ScheduleSweep, ssp_node::now_epoch_ms())
+            .await;
+        info!(
+            interval_secs = ssp_node::schedules::SCHEDULE_SWEEP_INTERVAL_SECS,
+            "Schedule sweep timer armed"
+        );
+    } else {
+        info!("Schedule sweep disabled (cluster mode — the scheduler service owns ticking)");
+    }
+
     // Clone for scheduler integration
     let processor_for_scheduler = processor_arc.clone();
 
@@ -611,6 +635,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         edge_update_tx: edge_update_tx.clone(),
         anonymous_live_queries: config.anonymous_live_queries,
         standalone: config.scheduler_url.is_none(),
+        schedule_engine,
         ttl_cleanup_interval_secs: config.ttl_cleanup_interval_secs,
         bootstrap_page_size: config.bootstrap_page_size,
         checkpoint_interval_secs: config.checkpoint_interval_secs,

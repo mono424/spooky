@@ -14,8 +14,8 @@ mod types;
 mod db_tests;
 
 pub use runner::{
-    append_error_helper, enqueue_recovered, fail_if_pending_helper, load_job_record,
-    rearm_recurring_helper, reset_for_retry_helper, set_assignee_helper, update_status_helper,
-    JobRunner, PENDING_DUE_CLAUSE, POKE_DUE_SQL,
+    append_error_helper, complete_success_helper, enqueue_recovered, fail_if_pending_helper,
+    load_job_record, reset_for_retry_helper, set_assignee_helper, update_status_helper, JobRunner,
+    JOB_RESULT_MAX_BYTES, PENDING_DUE_CLAUSE,
 };
 pub use types::{BackendInfo, JobConfig, JobControl, JobEntry};

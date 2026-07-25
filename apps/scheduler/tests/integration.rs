@@ -122,6 +122,8 @@ impl TestHarness {
             event_buffer: Arc::clone(&self.event_buffer),
             seq_counter: Arc::clone(&self.seq_counter),
             wal: Arc::clone(&self.wal),
+            db_config: Arc::new(self.config.db.clone()),
+            job_tables: Arc::new(vec![]),
         };
         ingest::create_ingest_router(state)
     }
@@ -184,6 +186,8 @@ impl TestHarness {
                 event_buffer: Arc::clone(&self.event_buffer),
                 seq_counter: Arc::clone(&self.seq_counter),
                 wal: Arc::clone(&self.wal),
+                db_config: Arc::new(self.config.db.clone()),
+                job_tables: Arc::new(vec![]),
             },
             replica: Arc::clone(&self.replica),
             surrealdb_version: Arc::new(RwLock::new("unknown".to_string())),
@@ -1210,6 +1214,8 @@ mod bootstrap_protocol_tests {
                 event_buffer: Arc::clone(&h.event_buffer),
                 seq_counter: Arc::clone(&h.seq_counter),
                 wal: Arc::clone(&h.wal),
+                db_config: Arc::new(h.config.db.clone()),
+                job_tables: Arc::new(vec![]),
             };
             let app = ingest::create_ingest_router(ingest_state);
 

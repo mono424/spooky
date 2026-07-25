@@ -22,6 +22,11 @@ mod parser;
 mod port_check;
 mod query;
 mod scaffold;
+mod dag_render;
+mod schedules;
+mod workflows;
+mod schedule_config;
+mod schedule_sync;
 mod schema_builder;
 mod schema_diff;
 mod schema_extract;
@@ -335,6 +340,26 @@ enum Commands {
         #[command(subcommand)]
         action: FlagCommands,
     },
+    /// Inspect and control server-side schedules (`schedules:` in sp00ky.yml)
+    Schedules {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[command(subcommand)]
+        action: SchedulesCommands,
+    },
+    /// Inspect workflow DAG runs, with a live view
+    Workflows {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[command(subcommand)]
+        action: WorkflowsCommands,
+    },
     /// Overview and control of background (outbox) jobs. Run without a
     /// subcommand to open the interactive dashboard.
     Jobs {
@@ -534,6 +559,92 @@ enum FlagCommands {
         /// Path to sp00ky.yml config file
         #[arg(long)]
         config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SchedulesCommands {
+    /// List deployed schedules with their cadence, state, and last outcome
+    #[command(visible_alias = "ls")]
+    List {
+        /// Emit JSON instead of a table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one schedule's definition, clock, and recent runs
+    Get {
+        /// Schedule name, as written in sp00ky.yml
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop future fires. Survives redeploys; runs already in flight finish
+    Pause {
+        name: String,
+    },
+    /// Resume a paused schedule, planning the next fire from now
+    Resume {
+        name: String,
+    },
+    /// Fire once now, without shifting the cadence
+    Trigger {
+        name: String,
+    },
+    /// Run history, newest first
+    Runs {
+        /// Limit to one schedule
+        name: Option<String>,
+        /// Filter by status (running, success, failed, skipped, replaced, killed)
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Re-push definitions from sp00ky.yml without a full deploy
+    Sync,
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkflowsCommands {
+    /// List deployed workflows
+    #[command(visible_alias = "ls")]
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Render a run's DAG (defaults to the newest run of a named workflow)
+    Show {
+        /// Workflow name or run id
+        target: String,
+        /// Force plain-ASCII output (the default when piped)
+        #[arg(long)]
+        ascii: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Live DAG view, updating as steps advance
+    Watch {
+        /// Workflow name or run id
+        target: String,
+    },
+    /// Run history, newest first
+    Runs {
+        /// Limit to one workflow
+        name: Option<String>,
+        /// Filter by status (running, success, failed, killed)
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop a run: in-flight steps are killed, the rest are skipped
+    Kill {
+        /// Workflow name or run id
+        run: String,
     },
 }
 
@@ -2460,6 +2571,32 @@ fn handle_lint(config_path: &Path) -> Result<()> {
         }
     }
 
+    // 4b. Schedules and workflows: `config.validate()` above already covered the
+    // structural rules (cadence, cron syntax, DAG acyclicity). What needs the
+    // backend route map — does that backend exist, does it have an outbox table,
+    // does that route exist on it — happens here, and is the same resolution the
+    // deploy-time sync performs, so anything that lints can actually be written.
+    if !config.schedules.is_empty() || !config.workflows.is_empty() {
+        let mut processor = backend::BackendProcessor::new();
+        match processor.process(config_path) {
+            Ok(()) => match schedule_sync::resolve_rows(&config, &processor, base_dir) {
+                Ok(rows) => {
+                    println!(
+                        "  Validated {} schedule/workflow definition(s).",
+                        rows.len()
+                    );
+                    for note in schedule_sync::dev_only_targets(&config) {
+                        warnings.push(format!("{note} — it will not run in a cloud deployment"));
+                    }
+                }
+                Err(e) => errors.push(format!("{e:#}")),
+            },
+            Err(e) => warnings.push(format!(
+                "could not resolve backends to validate schedules: {e:#}"
+            )),
+        }
+    }
+
     // 5. Print results
     if !warnings.is_empty() {
         println!();
@@ -2896,6 +3033,16 @@ fn main() -> Result<()> {
             config,
             action,
         }) => jobs::run(conn, config, action),
+        Some(Commands::Schedules {
+            conn,
+            config,
+            action,
+        }) => schedules::run(conn, config, action),
+        Some(Commands::Workflows {
+            conn,
+            config,
+            action,
+        }) => workflows::run(conn, config, action),
         Some(Commands::Query {
             query,
             json,

@@ -110,9 +110,11 @@ pub fn run(emit_json: bool, project_dir: &Path, treat_warn_as_ok: bool) -> Resul
         checks.extend(check_codegen_freshness(cfg, project_dir));
         // 4. Migrations dir presence (informational — not a hard failure)
         checks.push(check_migrations_dir(cfg, project_dir));
+        // 5. Leftover client-recurring fields on an outbox schema
+        checks.extend(check_legacy_recurring_fields(cfg, project_dir));
     }
 
-    // 5. Docker availability — warn (not fail). Local-dev users only need
+    // 6. Docker availability — warn (not fail). Local-dev users only need
     // docker for `spky migrate create`'s ephemeral DB.
     checks.push(check_docker());
 
@@ -256,6 +258,52 @@ fn check_migrations_dir(cfg: &Sp00kyConfig, project_dir: &Path) -> Check {
             format!("{} does not exist", path.display()),
         )
     }
+}
+
+/// Outbox schemas still carrying the fields the old client-driven recurring API
+/// used (`recurring`, `interval`, `next_run_at`).
+///
+/// Nothing reads them any more — recurring work is declared under `schedules:` and
+/// the scheduler creates a fresh job row per cycle. They are harmless as dead
+/// columns, but a `recurring = true` row left in the table is not: with nothing to
+/// re-arm it, the recovery sweep dispatches it once as a plain job and it then
+/// terminalizes. Worth telling people about exactly once, at upgrade time.
+fn check_legacy_recurring_fields(cfg: &Sp00kyConfig, project_dir: &Path) -> Vec<Check> {
+    const LEGACY: [&str; 3] = ["recurring", "interval", "next_run_at"];
+    let mut checks = Vec::new();
+
+    for (name, app) in &cfg.apps {
+        let Some(schema_rel) = app.method.as_ref().map(|m| m.schema.clone()) else { continue };
+        let Ok(content) = fs::read_to_string(project_dir.join(&schema_rel)) else { continue };
+        let found: Vec<&str> = LEGACY
+            .iter()
+            .copied()
+            .filter(|field| {
+                content
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with("--"))
+                    .any(|line| line.contains(&format!("DEFINE FIELD {field} ")))
+            })
+            .collect();
+        if found.is_empty() {
+            continue;
+        }
+        checks.push(Check::warn(
+            "outbox schema",
+            format!(
+                "drop {} from {} and delete any leftover rows: DELETE {} WHERE recurring = true",
+                found.join(", "),
+                schema_rel,
+                app.method.as_ref().and_then(|m| m.table.clone()).unwrap_or_else(|| "job".into()),
+            ),
+            format!(
+                "'{name}' still declares the client-recurring field(s) {} — unused since schedules \
+                 moved to `schedules:` in sp00ky.yml",
+                found.join(", ")
+            ),
+        ));
+    }
+    checks
 }
 
 fn check_docker() -> Check {

@@ -30,6 +30,7 @@ pub mod platform;
 pub mod ports;
 pub mod status;
 pub mod runtime;
+pub mod schedules;
 pub mod tables;
 pub mod view_metrics;
 pub mod timers;

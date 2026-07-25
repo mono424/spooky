@@ -26,6 +26,7 @@ pub mod ssp_management;
 pub mod wal;
 pub mod proxy;
 pub mod feature_flags;
+pub mod schedule_engine;
 
 use anyhow::{Context, Result};
 
@@ -199,6 +200,8 @@ impl Scheduler {
             event_buffer: Arc::clone(&self.event_buffer),
             seq_counter: Arc::clone(&self.seq_counter),
             wal: Arc::clone(&self.wal),
+            db_config: Arc::new(self.config().db.clone()),
+            job_tables: Arc::new(crate::schedule_engine::job_tables_from_env()),
         }
     }
 

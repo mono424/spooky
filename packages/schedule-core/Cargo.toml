@@ -1,0 +1,31 @@
+[package]
+name = "schedule-core"
+version = "0.0.1-canary.148"
+edition = "2021"
+description = "Portable scheduling/workflow engine core: cron/interval fire computation, DAG advancement, and the SQL it runs — shared by the singlenode SSP and the cluster scheduler so the two modes can never drift"
+
+[features]
+default = ["tz"]
+# IANA timezone support for cron schedules. Default on; a wasm shell that
+# never links the engine can shed the ~500KB chrono-tz table by disabling it
+# (schedules then accept only "UTC").
+tz = ["dep:chrono-tz"]
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+chrono-tz = { version = "0.10", optional = true }
+croner = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+# Embedded in-memory SurrealDB so the engine tests exercise the real SQL against
+# the real internal DDL. Native-only; the wasm portability gate is a plain
+# `cargo check`, which ignores dev-deps.
+surrealdb = { version = "3.1.2", default-features = false, features = ["kv-mem"] }
+tokio = { version = "1", features = ["full"] }

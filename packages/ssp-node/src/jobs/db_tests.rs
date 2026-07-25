@@ -1,8 +1,8 @@
 //! Close-to-e2e tests for the job engine THROUGH THE PORTS: a real embedded
 //! SurrealDB behind a `Db` adapter, a real mock HTTP backend behind an
-//! `HttpClient` adapter, driving the actual runner + re-arm SQL. Migrated
-//! from the former `packages/job-runner` — same coverage, but every DB write
-//! now travels the same `type::record($id)` SQL the production port uses.
+//! `HttpClient` adapter, driving the actual runner SQL. Migrated from the former
+//! `packages/job-runner` — same coverage, but every DB write now travels the
+//! same `type::record($id)` SQL the production port uses.
 
 use super::runner::*;
 use super::types::{JobControl, JobEntry};
@@ -110,18 +110,15 @@ async fn mem_db() -> (Arc<dyn Db>, Arc<Surreal<MemEngine>>) {
 }
 
 /// Insert a job row. `id_part` is the id after `job:`.
-async fn insert_job(db: &Surreal<MemEngine>, id_part: &str, status: &str, recurring: bool, interval_ms: i64) {
+async fn insert_job(db: &Surreal<MemEngine>, id_part: &str, status: &str) {
     db.query(
         "CREATE type::record('job', $id) SET \
-         status = $status, recurring = $recurring, interval = $interval, \
-         retries = 3, max_retries = 3, path = '/run', payload = {}, \
+         status = $status, retries = 3, max_retries = 3, path = '/run', payload = {}, \
          retry_strategy = 'linear', errors = [], \
          created_at = time::now(), updated_at = time::now()",
     )
     .bind(("id", id_part.to_string()))
     .bind(("status", status.to_string()))
-    .bind(("recurring", recurring))
-    .bind(("interval", interval_ms))
     .await
     .expect("insert job");
 }
@@ -149,7 +146,7 @@ fn make_runner(db: Arc<dyn Db>) -> JobRunner {
     )
 }
 
-fn job_entry(id: &str, base_url: String, recurring: bool, interval_ms: u64, max_retries: u32) -> JobEntry {
+fn job_entry(id: &str, base_url: String, max_retries: u32) -> JobEntry {
     JobEntry {
         id: id.to_string(),
         base_url,
@@ -160,70 +157,7 @@ fn job_entry(id: &str, base_url: String, recurring: bool, interval_ms: u64, max_
         retry_strategy: "linear".to_string(),
         auth_token: None,
         timeout: Duration::from_secs(5),
-        recurring,
-        interval_ms,
     }
-}
-
-// --- helper: rearm_recurring_helper ------------------------------------
-
-#[tokio::test]
-async fn rearm_advances_next_run_and_resets_to_pending() {
-    let (port, raw) = mem_db().await;
-    insert_job(&raw, "r1", "processing", true, 300_000).await;
-
-    rearm_recurring_helper(port.as_ref(), "job:r1", 300_000).await.unwrap();
-
-    assert_eq!(
-        select_string(&raw, "SELECT VALUE status FROM ONLY job:r1").await.as_deref(),
-        Some("pending"),
-        "re-armed row returns to pending, not success/failed"
-    );
-    assert_eq!(
-        select_i64(&raw, "SELECT VALUE retries FROM ONLY job:r1").await,
-        Some(0),
-        "retries reset for the next cycle"
-    );
-    assert_eq!(
-        select_bool(&raw, "SELECT VALUE next_run_at > time::now() FROM ONLY job:r1").await,
-        Some(true),
-        "next_run_at pushed into the future by ~interval"
-    );
-}
-
-#[tokio::test]
-async fn rearm_releases_the_assignee_claim() {
-    // The claim marker means "this SSP holds the job in-memory right now".
-    // A re-armed row waits for the recovery sweep — keeping the previous
-    // run's assignee makes the sweep's is_orphaned check skip the row while
-    // that SSP lives, so the next recurring run would never dispatch.
-    let (port, raw) = mem_db().await;
-    insert_job(&raw, "r3", "processing", true, 300_000).await;
-    raw.query("UPDATE job:r3 SET assignee = 'ssp-0'").await.expect("stamp assignee");
-
-    rearm_recurring_helper(port.as_ref(), "job:r3", 300_000).await.unwrap();
-
-    assert_eq!(
-        select_bool(&raw, "SELECT VALUE assignee = NONE FROM ONLY job:r3").await,
-        Some(true),
-        "re-arm must clear the claim so the sweep dispatches the next run"
-    );
-}
-
-#[tokio::test]
-async fn rearm_is_a_noop_when_not_processing() {
-    // Guard: never clobber a row that isn't the one this runner just ran
-    // (e.g. an operator killed it). Only a `processing` row is re-armed.
-    let (port, raw) = mem_db().await;
-    insert_job(&raw, "r2", "pending", true, 300_000).await;
-
-    rearm_recurring_helper(port.as_ref(), "job:r2", 300_000).await.unwrap();
-
-    assert_eq!(
-        select_bool(&raw, "SELECT VALUE next_run_at != NONE FROM ONLY job:r2").await,
-        Some(false),
-        "guarded WHERE status='processing' left the pending row untouched"
-    );
 }
 
 // --- helper: fail_if_pending through the port ---------------------------
@@ -231,8 +165,8 @@ async fn rearm_is_a_noop_when_not_processing() {
 #[tokio::test]
 async fn fail_if_pending_updates_only_pending_rows() {
     let (port, raw) = mem_db().await;
-    insert_job(&raw, "k1", "pending", false, 0).await;
-    insert_job(&raw, "k2", "processing", false, 0).await;
+    insert_job(&raw, "k1", "pending").await;
+    insert_job(&raw, "k2", "processing").await;
 
     let killed = fail_if_pending_helper(port.as_ref(), "job:k1", json!({"code": "killed"}))
         .await
@@ -253,113 +187,156 @@ async fn fail_if_pending_updates_only_pending_rows() {
     );
 }
 
-// --- full runner cycle: recurring success re-arms ----------------------
+// --- result capture -----------------------------------------------------
 
 #[tokio::test]
-async fn recurring_success_rearms_instead_of_terminalizing() {
+async fn success_captures_the_backend_response_as_json() {
     let backend = MockServer::start().await;
     Mock::given(method("POST"))
         .and(match_path("/run"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"fileId": "f_8123"})))
         .mount(&backend)
         .await;
 
     let (port, raw) = mem_db().await;
-    insert_job(&raw, "run1", "pending", true, 300_000).await;
+    insert_job(&raw, "res1", "pending").await;
     let runner = make_runner(Arc::clone(&port));
 
     runner
-        .execute_job(job_entry("job:run1", backend.uri(), true, 300_000, 3))
+        .execute_job(job_entry("job:res1", backend.uri(), 3))
         .await
         .unwrap();
 
-    assert_eq!(backend.received_requests().await.unwrap().len(), 1, "backend was called");
     assert_eq!(
-        select_string(&raw, "SELECT VALUE status FROM ONLY job:run1").await.as_deref(),
-        Some("pending"),
-        "recurring row never reaches terminal success"
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:res1").await.as_deref(),
+        Some("success")
     );
     assert_eq!(
-        select_bool(&raw, "SELECT VALUE next_run_at > time::now() FROM ONLY job:run1").await,
-        Some(true),
-        "clock re-armed to the future after completion"
+        select_string(&raw, "SELECT VALUE result.fileId FROM ONLY job:res1").await.as_deref(),
+        Some("f_8123"),
+        "a JSON body is stored parsed, so a dependent workflow step can address its fields"
     );
 }
 
-// --- full runner cycle: one-shot still terminalizes (regression) -------
-
 #[tokio::test]
-async fn one_shot_success_terminalizes() {
+async fn success_stores_a_non_json_body_as_a_string() {
     let backend = MockServer::start().await;
     Mock::given(method("POST"))
         .and(match_path("/run"))
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(200).set_body_string("done"))
         .mount(&backend)
         .await;
 
     let (port, raw) = mem_db().await;
-    insert_job(&raw, "run2", "pending", false, 0).await;
+    insert_job(&raw, "res2", "pending").await;
     let runner = make_runner(Arc::clone(&port));
 
     runner
-        .execute_job(job_entry("job:run2", backend.uri(), false, 0, 3))
+        .execute_job(job_entry("job:res2", backend.uri(), 3))
         .await
         .unwrap();
 
     assert_eq!(
-        select_string(&raw, "SELECT VALUE status FROM ONLY job:run2").await.as_deref(),
+        select_string(&raw, "SELECT VALUE result FROM ONLY job:res2").await.as_deref(),
+        Some("done")
+    );
+}
+
+#[tokio::test]
+async fn oversized_results_are_replaced_by_a_marker() {
+    let backend = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(match_path("/run"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("x".repeat(JOB_RESULT_MAX_BYTES + 1)),
+        )
+        .mount(&backend)
+        .await;
+
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "res3", "pending").await;
+    let runner = make_runner(Arc::clone(&port));
+
+    runner
+        .execute_job(job_entry("job:res3", backend.uri(), 3))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:res3").await.as_deref(),
         Some("success"),
-        "one-shot job terminalizes as before"
+        "an oversized body must not stop the job from completing"
+    );
+    assert_eq!(
+        select_bool(&raw, "SELECT VALUE result.truncated FROM ONLY job:res3").await,
+        Some(true),
+        "the operator can see WHY the output is missing"
     );
 }
 
-// --- full runner cycle: recurring failure re-arms (survives outage) ----
-
 #[tokio::test]
-async fn recurring_failure_rearms_instead_of_failing() {
+async fn success_still_terminalizes_when_the_table_has_no_result_field() {
+    // A project that upgraded the stack without re-applying its schema has a
+    // SCHEMAFULL outbox table with no `result` field. SurrealDB rejects the
+    // whole UPDATE — completing the job matters far more than storing output.
     let backend = MockServer::start().await;
     Mock::given(method("POST"))
         .and(match_path("/run"))
-        .respond_with(ResponseTemplate::new(500))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .mount(&backend)
         .await;
 
     let (port, raw) = mem_db().await;
-    insert_job(&raw, "run3", "pending", true, 300_000).await;
+    raw.query(
+        "DEFINE TABLE job SCHEMAFULL; \
+         DEFINE FIELD status ON job TYPE string; \
+         DEFINE FIELD path ON job TYPE option<string>; \
+         DEFINE FIELD payload ON job TYPE option<object> FLEXIBLE; \
+         DEFINE FIELD retries ON job TYPE option<int>; \
+         DEFINE FIELD max_retries ON job TYPE option<int>; \
+         DEFINE FIELD retry_strategy ON job TYPE option<string>; \
+         DEFINE FIELD errors ON job TYPE option<array>; \
+         DEFINE FIELD created_at ON job TYPE option<datetime>; \
+         DEFINE FIELD updated_at ON job TYPE option<datetime>;",
+    )
+    .await
+    .expect("define schemafull job table without a result field");
+    insert_job(&raw, "res4", "pending").await;
     let runner = make_runner(Arc::clone(&port));
 
-    // max_retries=0 => exhausts immediately (no backoff sleep), hits the
-    // terminal branch, which for a recurring job re-arms rather than fails.
     runner
-        .execute_job(job_entry("job:run3", backend.uri(), true, 300_000, 0))
+        .execute_job(job_entry("job:res4", backend.uri(), 3))
         .await
-        .unwrap();
+        .expect("job completion must not fail on a missing result field");
 
     assert_eq!(
-        select_string(&raw, "SELECT VALUE status FROM ONLY job:run3").await.as_deref(),
-        Some("pending"),
-        "a backend outage must not kill the schedule"
-    );
-    assert_eq!(
-        select_bool(&raw, "SELECT VALUE next_run_at > time::now() FROM ONLY job:run3").await,
-        Some(true),
-        "re-armed for the next interval despite the failure"
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:res4").await.as_deref(),
+        Some("success"),
+        "fell back to a status-only write"
     );
 }
 
 // --- the shared due-clause selects due rows and skips future ones -------
 
 #[tokio::test]
-async fn pending_due_clause_selects_due_and_skips_future() {
+async fn pending_due_clause_selects_due_and_skips_delayed() {
     let (_, raw) = mem_db().await;
-    // due recurring (next_run_at in the past)
-    raw.query("CREATE job:due SET status='pending', recurring=true, interval=300000, next_run_at = time::now() - 1s, created_at = time::now(), delay = 0").await.unwrap();
-    // not-yet-due recurring (next_run_at in the future)
-    raw.query("CREATE job:future SET status='pending', recurring=true, interval=300000, next_run_at = time::now() + 1h, created_at = time::now(), delay = 0").await.unwrap();
-    // one-shot still inside its delay window (created now + 1h delay)
-    raw.query("CREATE job:delayed SET status='pending', created_at = time::now(), delay = 3600000").await.unwrap();
-    // one-shot ready (no delay, no next_run_at)
-    raw.query("CREATE job:ready SET status='pending', created_at = time::now() - 1s, delay = 0").await.unwrap();
+    // Ready: no delay.
+    raw.query("CREATE job:ready SET status='pending', created_at = time::now() - 1s, delay = 0")
+        .await
+        .unwrap();
+    // Ready: its delay window has elapsed.
+    raw.query("CREATE job:elapsed SET status='pending', created_at = time::now() - 10s, delay = 1000")
+        .await
+        .unwrap();
+    // Still inside its delay window.
+    raw.query("CREATE job:delayed SET status='pending', created_at = time::now(), delay = 3600000")
+        .await
+        .unwrap();
+    // No delay field at all — the `?? 0` fallback makes it ready.
+    raw.query("CREATE job:nodelay SET status='pending', created_at = time::now() - 1s")
+        .await
+        .unwrap();
 
     let sql = format!(
         "SELECT VALUE type::string(id) FROM job WHERE status = 'pending' AND {} ORDER BY id",
@@ -367,31 +344,8 @@ async fn pending_due_clause_selects_due_and_skips_future() {
     );
     let ids: Vec<String> = raw.query(&sql).await.unwrap().take(0).unwrap();
 
-    assert!(ids.contains(&"job:due".to_string()), "due recurring selected");
-    assert!(ids.contains(&"job:ready".to_string()), "ready one-shot selected");
-    assert!(!ids.contains(&"job:future".to_string()), "future recurring skipped");
-    assert!(!ids.contains(&"job:delayed".to_string()), "delayed one-shot skipped");
-}
-
-// --- the SSP poke due-check SQL (poke=now => run; re-arm=future => skip) -
-
-#[tokio::test]
-async fn poke_due_sql_true_for_past_false_for_future() {
-    let (port, _raw) = mem_db().await;
-
-    let past = port
-        .query(POKE_DUE_SQL, &[("nra", json!("2000-01-01T00:00:00Z"))])
-        .await
-        .unwrap();
-    assert_eq!(past.first().and_then(|v| v.as_bool()), Some(true), "a poke (past) is due -> runs");
-
-    let future = port
-        .query(POKE_DUE_SQL, &[("nra", json!("2999-01-01T00:00:00Z"))])
-        .await
-        .unwrap();
-    assert_eq!(
-        future.first().and_then(|v| v.as_bool()),
-        Some(false),
-        "a re-arm (future) is not due -> no busy loop"
-    );
+    assert!(ids.contains(&"job:ready".to_string()));
+    assert!(ids.contains(&"job:elapsed".to_string()));
+    assert!(ids.contains(&"job:nodelay".to_string()), "an unset delay means ready now");
+    assert!(!ids.contains(&"job:delayed".to_string()), "a job inside its delay window waits");
 }

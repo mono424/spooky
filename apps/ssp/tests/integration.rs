@@ -153,6 +153,8 @@ impl TestHarness {
                     edge_update_tx: edge_update_tx.clone(),
                     anonymous_live_queries: false,
                     standalone: true,
+                    // These tests drive the HTTP surface, not the schedule sweep.
+                    schedule_engine: None,
                     ttl_cleanup_interval_secs: 60,
                     bootstrap_page_size: 200,
                     checkpoint_interval_secs: None,
