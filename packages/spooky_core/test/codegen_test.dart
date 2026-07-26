@@ -37,6 +37,30 @@ void main() {
     });
   });
 
+  group('relationships', () {
+    test('the emitted schema map carries forward + reverse relationships', () {
+      final src = emitSchemaMap(parseSchema(_surql));
+      expect(src, contains("'relationships': ["));
+      expect(
+        src,
+        contains(
+            "{'from': 'thread', 'field': 'author', 'to': 'user', 'cardinality': 'one'}"),
+      );
+      expect(
+        src,
+        contains(
+            "{'from': 'user', 'field': 'threads', 'to': 'thread', 'cardinality': 'many'}"),
+        reason: 'the reverse name is the pluralized source table',
+      );
+    });
+
+    test('a schema with no record fields emits no relationships key', () {
+      final src = emitSchemaMap(parseSchema(
+          'DEFINE TABLE thread SCHEMAFULL;\nDEFINE FIELD title ON thread TYPE string;'));
+      expect(src, isNot(contains('relationships')));
+    });
+  });
+
   group('emitSchemaMap', () {
     test('produces a usable ColumnSchema map literal', () {
       final src = emitSchemaMap(parseSchema(_surql));

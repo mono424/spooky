@@ -31,7 +31,7 @@ void main() {
 
   QueryBuilder builder() => QueryBuilder(
         'thread',
-        registrar: (sql, vars, ttl) async {
+        registrar: (sql, vars, ttl, relations) async {
           capturedSql = sql;
           capturedVars = vars;
           return 'hash1';

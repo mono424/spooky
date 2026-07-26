@@ -1,3 +1,4 @@
+import '../modules/relationships.dart';
 import 'openapi_parser.dart';
 import 'schema_parser.dart';
 
@@ -18,6 +19,15 @@ String emitSchemaMap(List<TableDef> tables, [List<AccessDef> accesses = const []
     buf.writeln('    },');
     buf.writeln('  },');
   }
+  final relationships = deriveRelationships(tables);
+  if (relationships.isNotEmpty) {
+    buf.writeln("  'relationships': [");
+    for (final rel in relationships) {
+      buf.writeln("    {'from': '${rel.from}', 'field': '${rel.field}', "
+          "'to': '${rel.to}', 'cardinality': '${rel.cardinality}'},");
+    }
+    buf.writeln('  ],');
+  }
   if (accesses.isNotEmpty) {
     buf.writeln("  'access': {");
     for (final a in accesses) {
@@ -31,6 +41,58 @@ String emitSchemaMap(List<TableDef> tables, [List<AccessDef> accesses = const []
   }
   buf.writeln('};');
   return buf.toString();
+}
+
+/// Derive the schema relationships from parsed tables, matching
+/// `apps/cli/src/json_schema.rs` so a Dart client and a JS client generated from
+/// the same schema expose the same relation names.
+///
+/// Forward: every `record<x>` field whose target is a known table becomes a
+/// `one` relationship under its own field name. Reverse: each of those adds a
+/// `many` relationship on the target, named by pluralizing the source table
+/// (skipped when the target already declares a field of that name, so an
+/// explicit field always wins).
+List<SchemaRelationship> deriveRelationships(List<TableDef> tables) {
+  final known = {for (final t in tables) t.name};
+  final fieldNames = {
+    for (final t in tables) t.name: {for (final f in t.fields) f.name},
+  };
+  final out = <SchemaRelationship>[];
+  final seen = <String>{};
+
+  void add(SchemaRelationship rel) {
+    if (seen.add('${rel.from}.${rel.field}')) out.add(rel);
+  }
+
+  for (final table in tables) {
+    for (final field in table.fields) {
+      final target = field.recordTable;
+      if (!field.isRecord || target == null || !known.contains(target)) continue;
+      add(SchemaRelationship(
+        from: table.name,
+        field: field.name,
+        to: target,
+        cardinality: 'one',
+      ));
+    }
+  }
+
+  for (final table in tables) {
+    for (final field in table.fields) {
+      final target = field.recordTable;
+      if (!field.isRecord || target == null || !known.contains(target)) continue;
+      final reverseField = pluralizeTableName(table.name);
+      if (fieldNames[target]?.contains(reverseField) ?? false) continue;
+      add(SchemaRelationship(
+        from: target,
+        field: reverseField,
+        to: table.name,
+        cardinality: 'many',
+      ));
+    }
+  }
+
+  return out;
 }
 
 String _accessParams(List<String> params) =>
