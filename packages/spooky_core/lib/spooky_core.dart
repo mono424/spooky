@@ -23,10 +23,15 @@ export 'src/modules/sync/queue/queue_up.dart'
 export 'src/utils/duration_utils.dart'
     show QueryTimeToLive, defaultTtl, parseDuration;
 export 'src/utils/parser.dart' show ColumnSchema;
+export 'src/utils/semver.dart' show semverGt;
 export 'src/surreal/remote_client.dart'
     show RemoteSurrealClient, WebSocketSurrealClient, LiveMessage;
 export 'src/modules/auth/auth_service.dart' show AuthService, AuthEventTypes;
 export 'src/modules/bucket.dart' show BucketHandle;
 export 'src/modules/feature_flag/feature_flag.dart'
     show FeatureFlagModule, FeatureFlagHandle, FeatureFlagSnapshot;
-export 'src/modules/query_builder.dart' show QueryBuilder, QueryOp;
+export 'src/modules/app_release/app_release.dart'
+    show AppReleaseModule, AppReleaseHandle, AppReleaseSnapshot;
+export 'src/modules/query_builder.dart'
+    show QueryBuilder, QueryOp, RelationPlan;
+export 'src/modules/relationships.dart' show SchemaRelationship;

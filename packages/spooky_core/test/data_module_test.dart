@@ -104,6 +104,95 @@ void main() {
     ]);
   });
 
+  group('windowed materialization', () {
+    // The local store is shared and, with sparse windowing, holds only some
+    // pages. A page-2 query must take its rows from the server's authoritative
+    // list_ref rather than from whatever the local circuit happens to hold —
+    // otherwise page 2 renders empty or shows page 1's rows.
+    const pageTwo =
+        'SELECT * FROM thread ORDER BY title asc LIMIT 2 START 2';
+
+    Future<String> registerPageTwo() =>
+        data.query('thread', pageTwo, {}, '10m');
+
+    void seed(String id, String title) => local.create(id, {'title': title});
+
+    test('materializes the remoteArray window when the circuit is empty',
+        () async {
+      seed('thread:c', 'c');
+      seed('thread:d', 'd');
+      final hash = await registerPageTwo();
+      // The circuit has no rows for this window (nothing was ingested), so the
+      // old localArray-only path returned nothing.
+      expect(data.getQueryByHash(hash)!.records, isEmpty);
+
+      await data.updateQueryRemoteArray(hash, [('thread:d', 1), ('thread:c', 1)]);
+      await data.notifyQuerySynced(hash);
+
+      final records = data.getQueryByHash(hash)!.records;
+      expect(records.map((r) => r['id']), ['thread:c', 'thread:d'],
+          reason: 'window rows come from list_ref, ordered by the query ORDER BY');
+    });
+
+    test('re-applies a descending ORDER BY', () async {
+      seed('thread:c', 'c');
+      seed('thread:d', 'd');
+      final hash = await data.query(
+          'thread', 'SELECT * FROM thread ORDER BY title desc LIMIT 2 START 2', {}, '10m');
+      await data.updateQueryRemoteArray(hash, [('thread:c', 1), ('thread:d', 1)]);
+      await data.notifyQuerySynced(hash);
+      expect(data.getQueryByHash(hash)!.records.map((r) => r['id']),
+          ['thread:d', 'thread:c']);
+    });
+
+    test('skips ids that are not resident locally yet', () async {
+      seed('thread:c', 'c');
+      final hash = await registerPageTwo();
+      await data.updateQueryRemoteArray(hash, [('thread:c', 1), ('thread:zz', 1)]);
+      await data.notifyQuerySynced(hash);
+      expect(data.getQueryByHash(hash)!.records.map((r) => r['id']),
+          ['thread:c']);
+    });
+
+    test('a non-windowed query still materializes from the circuit array',
+        () async {
+      seed('thread:a', 'a');
+      final hash =
+          await data.query('thread', 'SELECT * FROM thread', {}, '10m');
+      // A remoteArray must NOT override the circuit's view for an unwindowed
+      // query: the circuit is what applies WHERE/ORDER BY there.
+      await data.updateQueryRemoteArray(hash, [('thread:a', 1)]);
+      await data.notifyQuerySynced(hash);
+      expect(data.getQueryByHash(hash)!.records, isEmpty);
+    });
+
+    test('records a localFetch timing sample', () async {
+      final hash = await registerPageTwo();
+      expect(data.phaseStat(hash, TimingPhase.localFetch).count,
+          greaterThan(0));
+    });
+
+    test('a stream update materializes its own array, not the cached one',
+        () async {
+      // The cached localArray is still the PREVIOUS view while an update is
+      // being processed, so materializing from it would always render one view
+      // behind (an inserted row would never appear).
+      seed('thread:a', 'a');
+      final hash =
+          await data.query('thread', 'SELECT * FROM thread', {}, '10m');
+      expect(data.getQueryByHash(hash)!.records, isEmpty);
+
+      await data.onStreamUpdate(StreamUpdate(
+        queryHash: hash,
+        op: 'CREATE',
+        localArray: [('thread:a', 1)],
+      ));
+
+      expect(data.getQueryByHash(hash)!.records.map((r) => r['id']),
+          ['thread:a']);
+    });
+  });
+
   group('parseUpdateOptions', () {
     test('no debounce -> empty options', () {
       final o = parseUpdateOptions('thread:a', {'title': 'x'}, null);

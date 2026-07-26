@@ -103,7 +103,7 @@ OpenAPI spec (string/int/num/bool, else `dynamic`).
 
 ## Status
 
-Implemented and tested (54 tests):
+Implemented and tested (340 tests):
 - ssp-ffi C ABI + Dart FFI bindings (round-trip against the real native lib)
 - Foundations: RecordId, durations, surql builders, parser, EventSystem
 - Services: sqlite local store, stream-processor service, persistence
@@ -125,7 +125,30 @@ Implemented and tested (54 tests):
   .stream()`) compiling to the same SURQL shape as the JS builder.
 - Codegen (`package:spooky_core/codegen.dart` + `dart run spooky_core:spooky_gen
   <schema.surql> [out.dart]`): parses `DEFINE TABLE`/`DEFINE FIELD` and emits the
-  `ColumnSchema` map (for `Sp00kyConfig.schema`) plus typed model classes.
+  `ColumnSchema` map (for `Sp00kyConfig.schema`), the schema `relationships`, and
+  typed model classes.
+- **Sync health**: `syncHealth` / `subscribeToSyncHealth` / `syncHealthStream`
+  report `degraded` after a run of failed sync rounds (configurable via
+  `Sp00kyConfig.syncHealth`), with an exponential-backoff self-heal loop and the
+  idle `_00_list_ref` poll feeding health so a quiet client still recovers.
+- **Settled queries**: refcounted `beginFetching`/`endFetching` hold `fetching`
+  across a whole registration and land the debounced result BEFORE flipping to
+  `idle`, so `idle` means "this window is complete" (what a virtualized list
+  needs to size itself).
+- **Windowed queries**: an offset page (`LIMIT n START m`) materializes from the
+  server's authoritative `_00_list_ref` and re-applies the query's `ORDER BY`,
+  instead of re-deriving the page from whatever rows are resident locally.
+- **`preload()`** prewarms the local cache without registering a live view,
+  cache-aware through a durable `_00_preload` marker
+  (`onUse` / `background` / `stale` refresh policies), plus opt-in
+  `instantHydrate` for a cold query's first paint.
+- **`appRelease()`**: release announcements over the world-readable
+  `_00_app_release` table (`updateAvailable`, `mandatory`, `cacheBust`).
+- **`.related()`**: correlated subquery projections, with joined rows resolved
+  from the local cache (level-ordered batched fan-out, per-parent order/limit)
+  and subquery child bodies synced from the `parent`-tagged `_00_list_ref` edges.
+- `SyncScheduler.pause()` / `resume()`, `authenticate()` / `deauthenticate()`,
+  and `reportFrontendTiming()`.
 
 The full sync orchestration (up-queue -> remote, down-queue register + initial
 fetch, LIVE -> down-sync -> Stream) is verified end-to-end against a fake
@@ -168,7 +191,11 @@ SURREAL_IT_ENDPOINT=ws://127.0.0.1:18011 dart test --tags integration
 Validated against SurrealDB v2.1.4 and v3.1.2.
 
 Not yet implemented (seam in place):
-- CRDT collaborative fields (`openCrdtField`).
+- CRDT collaborative fields (`openCrdtField`) — needs a Loro binding for Dart.
+
+Deliberately not ported (browser-only in the JS core): the SQLite-WASM worker /
+OPFS engine and its `workerSelect` plan path, the SurrealQL-over-SQLite
+translator, the DevTools window bridge, and the OTel log exporter.
 
 ## Tests
 

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'events/event_system.dart';
 import 'ffi/stream_update.dart' show RecordVersionArray;
+import 'modules/query_builder.dart' show RelationPlan;
 import 'surreal/value.dart';
 import 'utils/duration_utils.dart';
 
@@ -60,6 +61,8 @@ class Sp00kyConfig {
     this.crdtDebounceMs = 500,
     this.refSyncIntervalMs = 500,
     this.enableAnonymousLiveQueries = false,
+    this.syncHealth = const SyncHealthConfig(),
+    this.instantHydrate = false,
   });
 
   final DatabaseConfig database;
@@ -84,6 +87,108 @@ class Sp00kyConfig {
   /// `sp00ky.yml` (this flag must match it). Defaults to false: anonymous
   /// clients can read one-shot (`queryRemote`) but never sync live.
   final bool enableAnonymousLiveQueries;
+
+  /// Surface sustained sync failures as a `degraded` health status the app can
+  /// observe via `Sp00kyClient.subscribeToSyncHealth` / `syncHealthStream` to
+  /// render a "can't reach the server" banner.
+  ///
+  /// Individual failures (a transient remote 500 on query registration, a
+  /// dropped WebSocket) are always swallowed and retried; they never throw at
+  /// the app. This only controls when a *run* of consecutive failures is
+  /// reported. Status flips back to `healthy` on the next successful round.
+  /// Defaults to `SyncHealthConfig()` (degrade after 3); pass
+  /// [SyncHealthConfig.disabled] to never report degraded.
+  final SyncHealthConfig? syncHealth;
+
+  /// Opt-in instant-hydrate for cold queries: when enabled and a query has not
+  /// yet fetched its server result, the client runs the query's own SURQL
+  /// one-shot against the remote and ingests the rows, so the query displays
+  /// immediately while the realtime registration proceeds in the background
+  /// (TS `Sp00kyConfig.instantHydrate`).
+  ///
+  /// Off by default: the register lifecycle is the single freshness path, and a
+  /// query already paints from the local cache with no network on the paint
+  /// path. Enable it when a cold query's first paint matters more than the extra
+  /// round-trip.
+  final bool instantHydrate;
+}
+
+/// When a warm (already-preloaded) query should be silently refetched
+/// (TS `PreloadRefresh`).
+enum PreloadRefresh {
+  /// Never refetch on preload; the data freshens when the real query mounts and
+  /// registers its live view. The default.
+  onUse,
+
+  /// Always kick a one-time silent refetch in the background.
+  background,
+
+  /// Refetch only when the cached snapshot is older than
+  /// [PreloadOptions.staleTime].
+  stale,
+}
+
+/// Options for `Sp00kyClient.preload` (TS `PreloadOptions`).
+class PreloadOptions {
+  const PreloadOptions({
+    this.refresh = PreloadRefresh.onUse,
+    this.staleTime = '1h',
+  });
+
+  final PreloadRefresh refresh;
+
+  /// Max age of a cached snapshot before [PreloadRefresh.stale] refetches it.
+  final QueryTimeToLive staleTime;
+}
+
+/// Tunables for sync-health reporting (TS `SyncHealthConfig`).
+/// See [Sp00kyConfig.syncHealth].
+class SyncHealthConfig {
+  const SyncHealthConfig({this.degradeAfterConsecutiveFailures = 3});
+
+  /// Never report `degraded` (TS `syncHealth: false`).
+  const SyncHealthConfig.disabled() : degradeAfterConsecutiveFailures = 0;
+
+  /// Consecutive failed sync rounds (up or down) before the status flips from
+  /// `healthy` to `degraded`. A single transient failure is absorbed by the
+  /// retry; only a sustained run trips the banner. `0` disables reporting.
+  final int degradeAfterConsecutiveFailures;
+}
+
+/// Sync-health state (TS `SyncHealthStatus`).
+enum SyncHealthStatus { healthy, degraded }
+
+/// Snapshot of sync health delivered to `subscribeToSyncHealth` subscribers
+/// (TS `SyncHealth`).
+class SyncHealth {
+  const SyncHealth({
+    required this.status,
+    required this.consecutiveFailures,
+    this.kind,
+    this.error,
+    required this.everConnected,
+  });
+
+  /// [SyncHealthStatus.degraded] once consecutive failures cross the threshold.
+  final SyncHealthStatus status;
+
+  /// Consecutive failed sync rounds at the moment of this report.
+  final int consecutiveFailures;
+
+  /// Classification of the most recent failure (`network` / `application`).
+  /// Only set while degraded.
+  final String? kind;
+
+  /// Message of the most recent failure. Only set while degraded.
+  final String? error;
+
+  /// True once at least one sync round has succeeded this session. Lets a UI
+  /// tell a first-time "connecting" phase (never reached the server, so a
+  /// cold-start failure run is expected) apart from a real lost connection
+  /// after a working session. Never resets once set.
+  final bool everConnected;
+
+  bool get isDegraded => status == SyncHealthStatus.degraded;
 }
 
 typedef QueryHash = String;
@@ -114,6 +219,7 @@ class QueryConfig {
     required this.ttl,
     required this.lastActiveAt,
     required this.tableName,
+    this.relations = const [],
   });
 
   final RecordId id;
@@ -124,11 +230,49 @@ class QueryConfig {
   QueryTimeToLive ttl;
   DateTime lastActiveAt;
   String tableName;
+
+  /// The query's `.related()` plan, resolved from the local cache on every
+  /// materialization. Not persisted: it is rebuilt from the caller's builder on
+  /// each registration (the surql, which IS persisted, already encodes the same
+  /// relation shape).
+  List<RelationPlan> relations;
+
+  /// Version array of the query's SUBQUERY child edges, diffed to fetch joined
+  /// bodies. In-memory only: child rows must never enter the persisted primary
+  /// [remoteArray], which is the query's own window.
+  RecordVersionArray? subqueryRemoteArray;
 }
 
 /// Cap on the rolling materialization-sample window per query
 /// (TS `MATERIALIZATION_SAMPLE_WINDOW`).
 const int materializationSampleWindow = 100;
+
+/// Timed processing phases surfaced per query (TS `TimingPhase`). `ssp` is the
+/// native-ingest wall time tracked separately in
+/// [QueryState.materializationSamples]; these are the rolling windows the core
+/// records around its own work.
+class TimingPhase {
+  static const localFetch = 'localFetch';
+  static const remoteFetch = 'remoteFetch';
+  static const frontend = 'frontend';
+}
+
+/// Percentile summary for one timed phase (TS `PhaseStat`).
+class PhaseStat {
+  const PhaseStat({
+    this.lastMs,
+    this.p50,
+    this.p90,
+    this.p99,
+    this.count = 0,
+  });
+
+  final double? lastMs;
+  final double? p50;
+  final double? p90;
+  final double? p99;
+  final int count;
+}
 
 /// Internal state of a live query (TS `QueryState`).
 class QueryState {
@@ -142,8 +286,12 @@ class QueryState {
     this.lastIngestLatencyMs,
     this.errorCount = 0,
     this.status = QueryStatus.idle,
+    Map<String, List<double>>? phaseSamples,
+    Map<String, double>? phaseLast,
   })  : records = records ?? [],
-        materializationSamples = materializationSamples ?? [];
+        materializationSamples = materializationSamples ?? [],
+        phaseSamples = phaseSamples ?? {},
+        phaseLast = phaseLast ?? {};
 
   QueryConfig config;
   List<Map<String, dynamic>> records;
@@ -154,9 +302,34 @@ class QueryState {
   double? lastIngestLatencyMs;
   int errorCount;
 
-  /// Current fetch status (idle/fetching). Driven by [Sp00kySync] around
+  /// Current fetch status (idle/fetching). Driven by the refcounted
+  /// `DataModule.beginFetching`/`endFetching` pair around registration and
   /// per-query record fetches; observed via `DataModule.subscribeStatus`.
+  ///
+  /// With a remote configured, queries are born [QueryStatus.fetching] (TS
+  /// `createNewQuery`): a freshly mounted query is loading until its
+  /// registration settles, so a consumer never sees a spurious `idle` before
+  /// the first result lands. Divergence from the TS core: in local-only mode
+  /// nothing ever registers the query remotely, so there is no lifecycle to
+  /// resolve the status and queries start [QueryStatus.idle] instead.
   QueryStatus status;
+
+  /// Rolling per-phase timing windows (TS `QueryState.phaseSamples`), capped at
+  /// [materializationSampleWindow] samples each. Keys are [TimingPhase] values.
+  final Map<String, List<double>> phaseSamples;
+
+  /// Most recent sample per phase (TS `QueryState.phaseLast`).
+  final Map<String, double> phaseLast;
+
+  /// Set once `applyHydration` has run for this query, so the cold
+  /// instant-hydrate path fires at most once (TS `QueryState.hydrated`).
+  bool hydrated = false;
+
+  /// Set once `notifyQuerySynced` has emitted for this query. Ephemeral (not
+  /// persisted): a re-registered query re-emits even when its result set is
+  /// unchanged, so an empty window still stops a consumer's loading state
+  /// (TS `QueryState.syncNotified`).
+  bool syncNotified = false;
 }
 
 /// Notified with the latest result set for a query (TS `QueryUpdateCallback`).

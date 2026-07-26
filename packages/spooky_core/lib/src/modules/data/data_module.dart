@@ -13,8 +13,12 @@ import '../../types.dart';
 import '../../utils/duration_utils.dart';
 import '../../utils/parser.dart';
 import '../../utils/record_id_utils.dart';
+import '../../utils/sort_rows.dart';
 import '../cache/cache_module.dart';
+import '../query_builder.dart' show RelationPlan;
 import '../sync/queue/queue_up.dart';
+import 'relation_resolver.dart';
+import 'window_query.dart';
 
 /// Unified query and mutation management (TS `DataModule`).
 ///
@@ -31,10 +35,12 @@ class DataModule {
     int streamDebounceTime = 100,
     void Function(String hash)? onHeartbeat,
     void Function(String hash)? onDeregister,
+    bool bornFetching = true,
   })  : _logger = logger.child('DataModule'),
         _streamDebounceTime = streamDebounceTime,
         _onHeartbeat = onHeartbeat,
-        _onDeregister = onDeregister;
+        _onDeregister = onDeregister,
+        _bornFetching = bornFetching;
 
   final CacheModule _cache;
   final LocalDatabaseService _local;
@@ -53,12 +59,24 @@ class DataModule {
   /// local-only mode (then [deregisterQuery] is a no-op, matching the TS core).
   final void Function(String hash)? _onDeregister;
 
+  /// Whether a new query starts [QueryStatus.fetching]. True with a remote
+  /// (a `register` down-event follows every registration and settles it);
+  /// false in local-only mode, where nothing would ever settle it.
+  final bool _bornFetching;
+
   final Map<String, QueryState> _activeQueries = {};
   final Map<String, Future<String>> _pendingQueries = {};
   final Map<String, Set<QueryUpdateCallback>> _subscriptions = {};
   final Map<String, Set<QueryStatusCallback>> _statusSubscriptions = {};
   final Set<MutationCallback> _mutationCallbacks = {};
   final Map<String, Timer> _debounceTimers = {};
+
+  /// Nesting depth of overlapping fetch cycles per query; see [beginFetching].
+  final Map<String, int> _fetchDepth = {};
+
+  /// The debounced stream update awaiting its trailing-edge flush, per query.
+  /// Kept so [flushPendingStreamUpdate] can land it early, before a status flip.
+  final Map<String, StreamUpdate> _pendingStreamUpdates = {};
 
   String _sessionId = '';
   String? _currentUserId;
@@ -78,8 +96,9 @@ class DataModule {
     String tableName,
     String surqlString,
     Map<String, dynamic> params,
-    QueryTimeToLive ttl,
-  ) async {
+    QueryTimeToLive ttl, {
+    List<RelationPlan> relations = const [],
+  }) async {
     final hash = calculateHash({'surql': surqlString, 'params': params});
     final recordId = RecordId('_00_query', hash);
 
@@ -92,7 +111,7 @@ class DataModule {
     }
 
     final promise = _createAndRegisterQuery(
-        hash, recordId, surqlString, params, ttl, tableName);
+        hash, recordId, surqlString, params, ttl, tableName, relations);
     _pendingQueries[hash] = promise;
     try {
       await promise;
@@ -166,6 +185,28 @@ class DataModule {
     }
   }
 
+  /// Enter a fetch cycle for a query (TS `beginFetching`). Refcounted:
+  /// registration and concurrent poll/LIVE sync rounds can overlap on the same
+  /// hash, and only the OUTERMOST cycle may flip the status. 0 -> 1 emits
+  /// `fetching`. Always pair with [endFetching] in a `finally`.
+  void beginFetching(String queryHash) {
+    final depth = _fetchDepth[queryHash] ?? 0;
+    _fetchDepth[queryHash] = depth + 1;
+    if (depth == 0) setQueryStatus(queryHash, QueryStatus.fetching);
+  }
+
+  /// Leave a fetch cycle started with [beginFetching]; the last exit emits
+  /// `idle` (TS `endFetching`).
+  void endFetching(String queryHash) {
+    final depth = _fetchDepth[queryHash] ?? 0;
+    if (depth <= 1) {
+      _fetchDepth.remove(queryHash);
+      setQueryStatus(queryHash, QueryStatus.idle);
+      return;
+    }
+    _fetchDepth[queryHash] = depth - 1;
+  }
+
   /// Subscribe to mutations (TS `onMutation`).
   void Function() onMutation(MutationCallback callback) {
     _mutationCallbacks.add(callback);
@@ -175,16 +216,37 @@ class DataModule {
   /// Handle a stream update from DBSP (TS `onStreamUpdate`). UPDATE is
   /// debounced; CREATE/DELETE propagate immediately.
   Future<void> onStreamUpdate(StreamUpdate update) async {
+    final hash = update.queryHash;
     if (update.op == 'UPDATE') {
-      _debounceTimers[update.queryHash]?.cancel();
-      _debounceTimers[update.queryHash] =
+      _debounceTimers[hash]?.cancel();
+      _pendingStreamUpdates[hash] = update;
+      _debounceTimers[hash] =
           Timer(Duration(milliseconds: _streamDebounceTime), () {
-        _debounceTimers.remove(update.queryHash);
+        _debounceTimers.remove(hash);
+        _pendingStreamUpdates.remove(hash);
         _processStreamUpdate(update);
       });
-    } else {
-      await _processStreamUpdate(update);
+      return;
     }
+    // An immediate update carries the full latest localArray, so any coalesced
+    // UPDATE it supersedes is already reflected — drop the pending entry so the
+    // flush path can't replay it.
+    _debounceTimers.remove(hash)?.cancel();
+    _pendingStreamUpdates.remove(hash);
+    await _processStreamUpdate(update);
+  }
+
+  /// Process a query's pending (debounced) stream update NOW instead of on the
+  /// trailing edge (TS `flushPendingStreamUpdate`). Called by sync before it
+  /// flips a query back to `idle`, so the status change never races ahead of the
+  /// rows it fetched. No-op when nothing is pending. The pending entry is
+  /// removed before the await, so a concurrently-firing timer can't process it
+  /// twice.
+  Future<void> flushPendingStreamUpdate(String queryHash) async {
+    _debounceTimers.remove(queryHash)?.cancel();
+    final pending = _pendingStreamUpdates.remove(queryHash);
+    if (pending == null) return;
+    await _processStreamUpdate(pending);
   }
 
   Future<void> _processStreamUpdate(StreamUpdate update) async {
@@ -205,7 +267,10 @@ class DataModule {
     }
 
     try {
-      final newRecords = _materialize(update.localArray);
+      // Materialize against the incoming array BEFORE it is cached, so a
+      // windowed query can prefer the authoritative remoteArray and still fall
+      // back to this update's own view.
+      final newRecords = _materialize(queryState, sspArray: update.localArray);
       queryState.config.localArray = update.localArray;
 
       final prevJson = jsonEncode(queryState.records);
@@ -226,15 +291,59 @@ class DataModule {
     }
   }
 
-  /// Resolve `[id, version]` pairs to full record bodies from local sqlite.
-  List<Map<String, dynamic>> _materialize(RecordVersionArray localArray) {
-    final out = <Map<String, dynamic>>[];
-    for (final pair in localArray) {
+  /// Resolve a query's result rows from local sqlite.
+  ///
+  /// Normal queries materialize the DBSP view's `localArray` in circuit order.
+  /// A windowed query (`LIMIT n START m`, m>0) instead takes its id-set from the
+  /// server's authoritative `_00_list_ref` (`remoteArray`) when it has one,
+  /// falling back to the incoming stream update's array and then the cached
+  /// `localArray`, and re-applies the query's `ORDER BY` in Dart. Deriving page 2
+  /// from whatever rows happen to be resident locally returns the wrong page (or
+  /// none at all). Mirrors TS `materializeRecords`.
+  List<Map<String, dynamic>> _materialize(
+    QueryState qs, {
+    RecordVersionArray? sspArray,
+  }) {
+    final window = buildWindowMaterialization(qs.config.surql);
+    final RecordVersionArray ids;
+    if (window == null) {
+      // The circuit's view IS the result set for a normal query: prefer the
+      // array from the update being processed over the cached one, which is
+      // still the previous view at this point.
+      ids = sspArray ?? qs.config.localArray;
+    } else if (qs.config.remoteArray.isNotEmpty) {
+      ids = qs.config.remoteArray;
+    } else if (sspArray != null && sspArray.isNotEmpty) {
+      ids = sspArray;
+    } else {
+      ids = qs.config.localArray;
+    }
+
+    final watch = Stopwatch()..start();
+    var out = <Map<String, dynamic>>[];
+    for (final pair in ids) {
       final record = _local.getById(pair.$1);
       if (record != null) out.add(record);
     }
+    if (window != null) out = sortRows(out, window.orderBy);
+
+    if (qs.config.relations.isNotEmpty) {
+      // Copy each row before attaching aliases: the maps come straight from
+      // `getById`, and a caller holding an earlier result must not see relation
+      // keys appear on it retroactively.
+      out = [for (final row in out) {...row}];
+      try {
+        resolveRelations(out, qs.config.relations, _relationFetcher);
+      } catch (err) {
+        _logger.error('Failed to resolve query relations', err);
+      }
+    }
+
+    _recordPhase(qs, TimingPhase.localFetch, watch.elapsedMicroseconds / 1000);
     return out;
   }
+
+  late final RelationFetcher _relationFetcher = LocalRelationFetcher(_local);
 
   void _persistQueryStats(QueryState qs) {
     final p = _computePercentiles(qs.materializationSamples);
@@ -258,6 +367,58 @@ class DataModule {
     }
 
     return (pick(0.55), pick(0.90), pick(0.99));
+  }
+
+  /// Record a per-phase timing sample (ms) on a query's rolling window
+  /// (TS `recordPhase`). Non-finite samples are ignored.
+  void _recordPhase(QueryState qs, String phase, double ms) {
+    if (!ms.isFinite) return;
+    final samples = qs.phaseSamples.putIfAbsent(phase, () => <double>[]);
+    samples.add(ms);
+    if (samples.length > materializationSampleWindow) samples.removeAt(0);
+    qs.phaseLast[phase] = ms;
+  }
+
+  /// Record the remote record-fetch time (ms) for a query (TS
+  /// `recordRemoteFetch`). Called by [Sp00kySync] after a record-body fetch.
+  void recordRemoteFetch(String hash, double ms) {
+    final qs = _activeQueries[hash];
+    if (qs != null) _recordPhase(qs, TimingPhase.remoteFetch, ms);
+  }
+
+  /// Record the UI reconcile time (ms) for a query (TS `recordFrontendTiming`).
+  /// Called from a Flutter widget via `Sp00kyClient.reportFrontendTiming` after
+  /// it applies an update.
+  void recordFrontendTiming(String hash, double ms) {
+    final qs = _activeQueries[hash];
+    if (qs != null) _recordPhase(qs, TimingPhase.frontend, ms);
+  }
+
+  /// Percentile summary for one timed [phase] of a query (TS `phaseStatOf`).
+  /// The `ssp` native-ingest phase lives in [QueryState.materializationSamples];
+  /// pass [TimingPhase] values for the rest.
+  PhaseStat phaseStat(String hash, String phase) {
+    final qs = _activeQueries[hash];
+    if (qs == null) return const PhaseStat();
+    return _phaseStatOf(
+        qs.phaseSamples[phase] ?? const [], qs.phaseLast[phase]);
+  }
+
+  PhaseStat _phaseStatOf(List<double> samples, double? lastMs) {
+    if (samples.isEmpty) return PhaseStat(lastMs: lastMs);
+    final sorted = [...samples]..sort();
+    double pick(double q) {
+      final idx = (q * sorted.length).floor();
+      return sorted[idx >= sorted.length ? sorted.length - 1 : idx];
+    }
+
+    return PhaseStat(
+      lastMs: lastMs,
+      p50: pick(0.5),
+      p90: pick(0.9),
+      p99: pick(0.99),
+      count: samples.length,
+    );
   }
 
   QueryState? getQueryByHash(String hash) => _activeQueries[hash];
@@ -335,16 +496,199 @@ class DataModule {
   /// Notify subscribers after a query's initial sync (TS `notifyQuerySynced`).
   /// Emits on first sync even with no results, so a `StreamBuilder` stops
   /// loading on an empty set.
+  ///
+  /// The emit gate is the ephemeral [QueryState.syncNotified] flag rather than a
+  /// persisted counter: a re-registered query (new subscriber on a hash whose
+  /// `updateCount` survived in `_00_query`) must still emit once, otherwise an
+  /// unchanged empty window leaves the consumer loading forever.
   Future<void> notifyQuerySynced(String queryHash) async {
     final qs = _activeQueries[queryHash];
     if (qs == null) return;
-    final newRecords = _materialize(qs.config.localArray);
+    final newRecords = _materialize(qs);
     final changed = jsonEncode(qs.records) != jsonEncode(newRecords);
     qs.records = newRecords;
-    if (changed || qs.updateCount == 0) {
+    if (changed || !qs.syncNotified) {
+      qs.syncNotified = true;
       qs.updateCount++;
       _notify(queryHash, qs.records);
     }
+  }
+
+  // ==================== HYDRATION & PRELOAD ====================
+
+  /// Cold-query guard for instant-hydrate (TS `isCold`): true when the query
+  /// exists, hasn't hydrated, and has NOT yet fetched its server result
+  /// (`remoteArray` empty).
+  ///
+  /// Gated on `remoteArray`, not on local records: a windowed query is often
+  /// partially pre-seeded from the circuit but still hasn't loaded its own window
+  /// from the server, so it should still hydrate. A warm re-subscribe
+  /// (remoteArray already populated) is skipped.
+  bool isCold(String hash) {
+    final qs = _activeQueries[hash];
+    return qs != null && !qs.hydrated && qs.config.remoteArray.isEmpty;
+  }
+
+  /// Instant-hydrate (TS `applyHydration`): ingest rows fetched one-shot from the
+  /// remote so the query displays immediately while the realtime registration
+  /// proceeds. Ingests with versions (`_00_rv`) so the later record-body sync
+  /// skips unchanged rows, and seeds `remoteArray` so a windowed query
+  /// materializes the correct window.
+  ///
+  /// Sets [QueryState.hydrated] before any early return, so [isCold] — the guard
+  /// the caller checks — closes for good even when the remote returned nothing.
+  Future<void> applyHydration(
+      String hash, List<Map<String, dynamic>> rows) async {
+    final qs = _activeQueries[hash];
+    if (qs == null) return;
+    qs.hydrated = true; // run-once, even when the remote returned nothing
+    if (rows.isEmpty) return;
+
+    await _buildAndSaveCacheBatch(qs.config.tableName, rows);
+
+    // Prime remoteArray from the hydrated id/version pairs: materialization
+    // prefers it for windowed queries and it feeds the version dedup.
+    // Registration later overwrites it with the authoritative `_00_list_ref`.
+    qs.config.remoteArray = [
+      for (final row in rows)
+        (row['id'].toString(), ((row['_00_rv'] as num?) ?? 1).toInt()),
+    ];
+
+    qs.records = _materialize(qs);
+    _notify(hash, qs.records);
+  }
+
+  /// Preload/prewarm (TS `persistSnapshot`): persist one-shot rows (and their
+  /// embedded related children) into the local cache WITHOUT registering a query
+  /// — no active-query entry, no `_00_query` view, no TTL heartbeat. The rows
+  /// live in sqlite as ordinary bodies so a later query seeds its first paint
+  /// from them instantly, then registers a live view to freshen.
+  Future<void> persistSnapshot(
+      String tableName, List<Map<String, dynamic>> rows) async {
+    if (rows.isEmpty) return;
+    await _buildAndSaveCacheBatch(tableName, rows);
+  }
+
+  /// Build and persist the cache batch for a set of one-shot rows
+  /// (TS `buildAndSaveCacheBatch`). Maps each row to a `CREATE` on its own table
+  /// and extracts EMBEDDED related children (at any depth) as standalone records,
+  /// so a later correlated re-materialization finds them. Shared by
+  /// [applyHydration] and [persistSnapshot].
+  Future<void> _buildAndSaveCacheBatch(
+      String tableName, List<Map<String, dynamic>> rows) async {
+    final batch = <CacheRecord>[
+      for (final record in rows)
+        CacheRecord(
+          table: tableName,
+          op: 'CREATE',
+          record: flattenRelationsForStorage(record, tableName),
+          version: ((record['_00_rv'] as num?) ?? 1).toInt(),
+        ),
+    ];
+
+    final seen = {for (final r in rows) r['id'].toString()};
+    for (final record in rows) {
+      collectEmbeddedChildren(record, batch, seen);
+    }
+
+    await _cache.saveBatch(batch);
+  }
+
+  /// Collect EMBEDDED related children of [record] as their own cache records
+  /// (TS `collectEmbeddedChildren`).
+  ///
+  /// A child is any field value that is itself a record — a Map whose `id` reads
+  /// as a record id — or a list of such records (one-to-many vs one-to-one). A
+  /// bare record-id reference is skipped, so a foreign-key column is never
+  /// mistaken for an embedded body. [seen] dedupes within the batch.
+  void collectEmbeddedChildren(
+    Map<String, dynamic> record,
+    List<CacheRecord> batch,
+    Set<String> seen,
+  ) {
+    for (final value in record.values) {
+      final children = <Map<String, dynamic>>[];
+      if (value is List) {
+        for (final v in value) {
+          if (_isEmbeddedRecord(v)) children.add((v as Map).cast());
+        }
+      } else if (_isEmbeddedRecord(value)) {
+        children.add((value as Map).cast());
+      }
+      for (final child in children) {
+        final key = child['id'].toString();
+        if (!seen.add(key)) continue;
+        // Recurse FIRST so nested grandchildren are captured before this child's
+        // own alias fields are flattened away.
+        collectEmbeddedChildren(child, batch, seen);
+        final table = extractTablePart(key);
+        batch.add(CacheRecord(
+          table: table,
+          op: 'CREATE',
+          record: flattenRelationsForStorage(child, table),
+          version: ((child['_00_rv'] as num?) ?? 1).toInt(),
+        ));
+      }
+    }
+  }
+
+  /// Prepare a subquery-bearing row (preload / hydration) for the local store
+  /// (TS `flattenRelationsForStorage`): replace an embedded FORWARD-relation
+  /// object (`author = {id, …}`) with its record id, and DROP reverse-subquery
+  /// ARRAYS (`comments = [ … ]`) whose rows are cached separately as their own
+  /// bodies. A flat record — as the live `SELECT * FROM $ids` sync returns, with
+  /// relations already ids — passes through unchanged.
+  Map<String, dynamic> flattenRelationsForStorage(
+      Map<String, dynamic> record, String tableName) {
+    final flat = <String, dynamic>{};
+    record.forEach((key, value) {
+      if (_isEmbeddedRecord(value)) {
+        flat[key] = (value as Map)['id'];
+      } else if (value is List && value.any(_isEmbeddedRecord)) {
+        return; // reverse subquery: cached as its own rows
+      } else {
+        flat[key] = value;
+      }
+    });
+    final columns = _schema.containsKey(tableName) ? _columnsFor(tableName) : null;
+    return columns != null ? cleanRecord(columns, flat) : flat;
+  }
+
+  /// Whether [value] is an embedded record body rather than a reference: a Map
+  /// carrying an `id` that reads as a record id.
+  bool _isEmbeddedRecord(Object? value) {
+    if (value is! Map) return false;
+    final id = value['id'];
+    if (id is RecordId) return true;
+    return id is String && id.contains(':');
+  }
+
+  /// Durable preload freshness marker for [hash], or null when this query was
+  /// never preloaded (TS `getPreloadMarker`). Stored as an ordinary
+  /// `_00_preload` document alongside the cached rows, so a local reset that
+  /// clears the data clears the marker too — a stale marker can never claim
+  /// "warm" when the rows are gone. Any read error reads as cold.
+  ({int fetchedAt, int rowCount})? getPreloadMarker(String hash) {
+    try {
+      final row = _local.getById('_00_preload:$hash');
+      if (row == null) return null;
+      return (
+        fetchedAt: ((row['fetchedAt'] as num?) ?? 0).toInt(),
+        rowCount: ((row['rowCount'] as num?) ?? 0).toInt(),
+      );
+    } catch (err) {
+      _logger.debug('Preload marker read failed; treating as cold: $err');
+      return null;
+    }
+  }
+
+  /// Stamp the preload freshness marker after a successful snapshot fetch
+  /// (TS `writePreloadMarker`).
+  void writePreloadMarker(String hash, int rowCount) {
+    _local.replace('_00_preload:$hash', {
+      'fetchedAt': DateTime.now().millisecondsSinceEpoch,
+      'rowCount': rowCount,
+    });
   }
 
   // ==================== BACKEND RUN ====================
@@ -380,6 +724,10 @@ class DataModule {
     final record = <String, dynamic>{
       'path': path,
       'payload': jsonEncode(payload),
+      // Seed the status locally so an optimistic job row reads as `pending`
+      // before the server touches it. Without it the row materializes with no
+      // status and a jobs list can't tell it apart from a finished job.
+      'status': 'pending',
       'max_retries': options?.maxRetries ?? 3,
       'retry_strategy': options?.retryStrategy ?? 'linear',
     };
@@ -530,9 +878,10 @@ class DataModule {
     Map<String, dynamic> params,
     QueryTimeToLive ttl,
     String tableName,
+    List<RelationPlan> relations,
   ) async {
     final queryState =
-        _createNewQuery(recordId, surqlString, params, ttl, tableName);
+        _createNewQuery(recordId, surqlString, params, ttl, tableName, relations);
 
     final localArray = _cache.registerQuery(QueryPlanConfig(
       queryHash: hash,
@@ -543,7 +892,7 @@ class DataModule {
     ));
 
     queryState.config.localArray = localArray;
-    queryState.records = _materialize(localArray);
+    queryState.records = _materialize(queryState);
 
     _local.patchQueryConfig(encodeRecordId(recordId), {
       'localArray': _encodeVersionArray(localArray),
@@ -592,6 +941,8 @@ class DataModule {
     final qs = _activeQueries[hash];
     if (qs != null) _stopTTLHeartbeat(qs);
     _debounceTimers.remove(hash)?.cancel();
+    _pendingStreamUpdates.remove(hash);
+    _fetchDepth.remove(hash);
     _cache.unregisterQuery(hash);
     _activeQueries.remove(hash);
     _subscriptions.remove(hash);
@@ -607,6 +958,7 @@ class DataModule {
       timer.cancel();
     }
     _debounceTimers.clear();
+    _pendingStreamUpdates.clear();
   }
 
   QueryState _createNewQuery(
@@ -615,6 +967,7 @@ class DataModule {
     Map<String, dynamic> params,
     QueryTimeToLive ttl,
     String tableName,
+    List<RelationPlan> relations,
   ) {
     // Validate the table exists in the schema so a typo'd table name fails
     // fast. `_00_`-prefixed system/meta tables (e.g. `_00_user_feature`, the
@@ -653,6 +1006,7 @@ class DataModule {
       ttl: ttl,
       lastActiveAt: DateTime.now(),
       tableName: tableName,
+      relations: relations,
     );
 
     return QueryState(
@@ -661,6 +1015,7 @@ class DataModule {
       ttlDurationMs: parseDuration(ttl),
       updateCount: ((configRecord['updateCount'] as num?) ?? 0).toInt(),
       errorCount: ((configRecord['errorCount'] as num?) ?? 0).toInt(),
+      status: _bornFetching ? QueryStatus.fetching : QueryStatus.idle,
     );
   }
 

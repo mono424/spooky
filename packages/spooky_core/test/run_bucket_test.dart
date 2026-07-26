@@ -16,6 +16,7 @@ void main() {
         'columns': {
           'path': const ColumnSchema(type: 'string'),
           'payload': const ColumnSchema(type: 'string'),
+          'status': const ColumnSchema(type: 'string'),
           'max_retries': const ColumnSchema(type: 'int'),
           'retry_strategy': const ColumnSchema(type: 'string'),
           'assigned_to': const ColumnSchema(type: 'string'),
@@ -55,6 +56,11 @@ void main() {
       expect(jsonDecode(rows.first['payload'] as String), {'url': 'http://x'});
       expect(rows.first['max_retries'], 3);
       expect(rows.first['retry_strategy'], 'linear');
+    });
+
+    test('seeds status pending on the optimistic row', () async {
+      await client.run('jobs', 'process', {'url': 'http://x'});
+      expect(client.local.getAll('job_outbox').first['status'], 'pending');
     });
 
     test('throws on a missing required arg', () async {
