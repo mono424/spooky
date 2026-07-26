@@ -8,6 +8,20 @@ import '../../utils/record_id_utils.dart';
 import '../cache/cache_module.dart';
 import 'sync_events.dart';
 
+/// Outcome of one [SyncEngine.syncRecords] pass.
+class SyncRecordsResult {
+  const SyncRecordsResult({
+    required this.remoteFetchMs,
+    required this.stillRemoteIds,
+  });
+
+  /// Wall time of the record-body `SELECT`; 0 when nothing was fetched.
+  final double remoteFetchMs;
+
+  /// Ids that left the query's `_00_list_ref` but still exist upstream.
+  final List<String> stillRemoteIds;
+}
+
 /// Fetches remote records for a diff, cleans them, and ingests via the cache
 /// (TS `SyncEngine`). Separates "how to sync" from "when to sync".
 class SyncEngine {
@@ -20,13 +34,19 @@ class SyncEngine {
   final SpookyLogger _logger;
   final EventSystem events = createSyncEventSystem();
 
-  Future<void> syncRecords(RecordVersionDiff diff) async {
+  /// Sync a diff's records, returning how long the remote body fetch took and
+  /// which "removed" ids still exist upstream (TS `syncRecords`).
+  Future<SyncRecordsResult> syncRecords(RecordVersionDiff diff) async {
+    var stillRemoteIds = const <String>[];
     if (diff.removed.isNotEmpty) {
-      await _handleRemovedRecords(diff.removed);
+      stillRemoteIds = await _handleRemovedRecords(diff.removed);
     }
 
     final toFetch = [...diff.added, ...diff.updated];
-    if (toFetch.isEmpty) return;
+    if (toFetch.isEmpty) {
+      return SyncRecordsResult(
+          remoteFetchMs: 0, stillRemoteIds: stillRemoteIds);
+    }
 
     final idsToFetch = toFetch.map((x) => x.id).toList();
     final versionMap = <String, int>{
@@ -35,8 +55,10 @@ class SyncEngine {
 
     // The CBOR client sends these record ids as real records, so a bare
     // `FROM $idsToFetch` fetches them directly (matches the TS core).
+    final fetchWatch = Stopwatch()..start();
     final results = await _remote
         .query('SELECT * FROM \$idsToFetch', {'idsToFetch': idsToFetch});
+    final remoteFetchMs = fetchWatch.elapsedMicroseconds / 1000;
     final remoteResults = firstRows(results).cast<Map<String, dynamic>>();
 
     final cacheBatch = <CacheRecord>[];
@@ -73,10 +95,16 @@ class SyncEngine {
     }
 
     events.emit(SyncEventTypes.remoteDataIngested, {'records': remoteResults});
+    return SyncRecordsResult(
+        remoteFetchMs: remoteFetchMs, stillRemoteIds: stillRemoteIds);
   }
 
   /// Verify removed records are truly gone upstream before deleting locally.
-  Future<void> _handleRemovedRecords(List<RecordId> removed) async {
+  /// Returns the ids that left the view's `_00_list_ref` but STILL exist
+  /// upstream: not deletions, just a view-membership change (a record whose
+  /// field changed so it no longer matches the query). The caller drops these
+  /// from `localArray` so the poll's diff stops re-flagging them every tick.
+  Future<List<String>> _handleRemovedRecords(List<RecordId> removed) async {
     final existingRemoteIds = <String>{};
     try {
       // The records to check ARE the FROM target. The CBOR client sends them as
@@ -93,15 +121,19 @@ class SyncEngine {
     } catch (err) {
       // On verification failure, skip deletion (avoid clobbering fresh data).
       _logger.warn('Remote existence check failed, skipping deletion: $err');
-      return;
+      return const [];
     }
 
+    final stillRemoteIds = <String>[];
     for (final recordId in removed) {
       final idStr = encodeRecordId(recordId);
       if (!existingRemoteIds.contains(idStr)) {
         await _cache.delete(recordId.table, idStr);
+      } else {
+        stillRemoteIds.add(idStr);
       }
     }
+    return stillRemoteIds;
   }
 
   Map<String, ColumnSchema>? _columnsFor(String table) {

@@ -16,6 +16,10 @@ class FakeEngineRemote implements RemoteSurrealClient {
   final Map<String, Map<String, dynamic>> records = {};
   final Set<String> existing = {};
 
+  /// Make the removed-record existence check fail, as a dropped connection
+  /// would.
+  bool failExistenceCheck = false;
+
   @override
   Future<List<dynamic>> query(String sql, [Map<String, dynamic>? vars]) async {
     // Record fetch: `SELECT * FROM $idsToFetch`. ($idsToFetch contains $ids as a
@@ -31,6 +35,7 @@ class FakeEngineRemote implements RemoteSurrealClient {
     }
     // Existence check: `SELECT id FROM $ids`.
     if (sql.contains(r'$ids')) {
+      if (failExistenceCheck) throw Exception('connection refused');
       final ids = (vars?['ids'] as List?) ?? const [];
       return [
         ids
@@ -168,8 +173,65 @@ void main() {
   });
 
   test('empty diff is a no-op', () async {
-    await engine
+    final result = await engine
         .syncRecords(RecordVersionDiff(added: [], updated: [], removed: []));
     expect(local.getAll('thread'), isEmpty);
+    expect(result.remoteFetchMs, 0);
+    expect(result.stillRemoteIds, isEmpty);
+  });
+
+  test('reports the record-fetch time when bodies are pulled', () async {
+    remoteClient.records['thread:a'] = {'id': 'thread:a', 'title': 'hi'};
+    final result = await engine.syncRecords(RecordVersionDiff(
+        added: [item('thread:a', 1)], updated: [], removed: []));
+    expect(result.remoteFetchMs, greaterThanOrEqualTo(0));
+    expect(result.stillRemoteIds, isEmpty);
+  });
+
+  test('reports removed-but-still-upstream ids for convergence', () async {
+    await cache.saveBatch([
+      CacheRecord(
+          table: 'thread',
+          op: 'CREATE',
+          record: {'id': 'thread:keep', 'title': 'k'},
+          version: 1),
+      CacheRecord(
+          table: 'thread',
+          op: 'CREATE',
+          record: {'id': 'thread:gone', 'title': 'g'},
+          version: 1),
+    ]);
+    remoteClient.existing.add('thread:keep');
+
+    final result = await engine.syncRecords(RecordVersionDiff(
+        added: [],
+        updated: [],
+        removed: [
+          RecordId.parse('thread:keep'),
+          RecordId.parse('thread:gone')
+        ]));
+
+    // thread:keep left the query's window but still exists: a membership
+    // change, reported so the caller can converge localArray.
+    expect(result.stillRemoteIds, ['thread:keep']);
+  });
+
+  test('a failed existence check reports nothing and deletes nothing',
+      () async {
+    await cache.saveBatch([
+      CacheRecord(
+          table: 'thread',
+          op: 'CREATE',
+          record: {'id': 'thread:a', 'title': 'a'},
+          version: 1),
+    ]);
+    remoteClient.failExistenceCheck = true;
+
+    final result = await engine.syncRecords(RecordVersionDiff(
+        added: [], updated: [], removed: [RecordId.parse('thread:a')]));
+
+    expect(result.stillRemoteIds, isEmpty);
+    expect(local.getById('thread:a'), isNotNull,
+        reason: 'must not delete on an unverified removal');
   });
 }

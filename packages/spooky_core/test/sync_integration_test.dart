@@ -170,6 +170,13 @@ class FakeRemote implements RemoteSurrealClient {
   final List<String> queries = [];
   final Map<String, Map<String, dynamic>> records = {};
 
+  /// Rows the `_00_list_ref` select returns (i.e. the server's view membership).
+  /// Empty by default so a registration finds no records.
+  List<Map<String, dynamic>> listRef = [];
+
+  /// Make mutation pushes hang, so an up-event stays pending in the outbox.
+  bool blockMutations = false;
+
   final _connected = StreamController<void>.broadcast();
   final _disconnected = StreamController<void>.broadcast();
   final _live = StreamController<LiveMessage>.broadcast();
@@ -205,6 +212,14 @@ class FakeRemote implements RemoteSurrealClient {
   @override
   Future<List<dynamic>> query(String sql, [Map<String, dynamic>? vars]) async {
     queries.add(sql);
+    if (blockMutations &&
+        (sql.contains('CREATE ONLY') ||
+            sql.startsWith('UPDATE') ||
+            sql.startsWith('DELETE'))) {
+      // A network-classified failure keeps the event queued in the outbox
+      // instead of rolling it back, so it stays pending.
+      throw Exception('connection refused');
+    }
     if (sql.contains(r'$auth.id')) {
       return [
         [
@@ -214,10 +229,7 @@ class FakeRemote implements RemoteSurrealClient {
     }
     if (sql.contains('session::id()')) return ['sess-1'];
     if (sql.contains('fn::query::register')) return [null];
-    if (sql.contains('FROM _00_list_ref')) {
-      // Initial fetch: empty list_ref.
-      return [<dynamic>[]];
-    }
+    if (sql.contains('FROM _00_list_ref')) return [listRef];
     if (sql.contains('FROM \$idsToFetch')) {
       final ids = (vars?['idsToFetch'] as List?) ?? const [];
       return [
