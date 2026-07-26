@@ -120,14 +120,75 @@ RecordVersionDiff createDiffFromDbOp(
 String buildListRefSelect(String table) =>
     'SELECT out, version FROM $table WHERE in = \$in AND parent IS NONE';
 
+/// SurrealQL select for a `.related()` query's SUBQUERY child edges
+/// (TS `buildSubqueryListRefSelect`). The SSP tags each matched child edge with
+/// `parent`/`parent_rel`, at any nesting depth, so `parent IS NOT NONE` is
+/// exactly the complement of [buildListRefSelect]'s primary window.
+String buildSubqueryListRefSelect(String table) =>
+    'SELECT out, version FROM $table WHERE in = \$in AND parent IS NOT NONE';
+
 /// Resolve the effective poll interval; non-positive falls back to the default.
 int resolveListRefPollInterval(int? opt) {
   if (opt == null || opt <= 0) return defaultListRefPollIntervalMs;
   return opt;
 }
 
+/// Ceiling for the adaptive `_00_list_ref` poll backoff (ms)
+/// (TS `LIST_REF_POLL_MAX_INTERVAL_MS`). An idle client coasts up to this
+/// cadence, so the worst-case catch-up latency for a missed cross-session
+/// change stays at the 5s the codebase already treats as acceptable.
+const int listRefPollMaxIntervalMs = 5000;
+
+/// Adaptive poll delay (TS `listRefPollDelayMs`): stay at the responsive
+/// [baseIntervalMs] while changes are arriving, and exponentially back off
+/// toward [maxIntervalMs] while `_00_list_ref` is quiet.
+///
+/// [idleStreak] is the count of consecutive poll cycles that observed no
+/// change. [Sp00kySync] resets it to 0 whenever a poll detects a real
+/// remoteArray change OR a LIVE event lands, so any activity snaps the poll
+/// straight back to [baseIntervalMs].
+///
+/// This supersedes [nextPollDelayMs], which slowed the poll only while LIVE was
+/// delivering; the cross-session LIVE-permission gap means LIVE frequently never
+/// fires, which left a fully idle client polling every base interval forever.
+/// Backing off on observed idleness covers the LIVE-healthy case for free (LIVE
+/// applies the change, the next poll sees nothing new, the streak grows).
+int listRefPollDelayMs({
+  required int idleStreak,
+  required int baseIntervalMs,
+  int maxIntervalMs = listRefPollMaxIntervalMs,
+}) {
+  final cap =
+      maxIntervalMs > baseIntervalMs ? maxIntervalMs : baseIntervalMs;
+  if (idleStreak <= 0) return baseIntervalMs;
+  // Clamp the exponent so a long-idle client can't overflow.
+  final exponent = idleStreak > 30 ? 30 : idleStreak;
+  final delay = baseIntervalMs * (1 << exponent);
+  return delay < cap ? delay : cap;
+}
+
+/// Order-insensitive equality for two [RecordVersionArray]s
+/// (TS `recordVersionArraysEqual`). The `_00_list_ref` SELECT has no
+/// `ORDER BY`, so row order can differ between polls without anything having
+/// changed; comparing as an id -> version map avoids false "changed" verdicts
+/// that would defeat the idle backoff. Record ids are unique within a query's
+/// list_ref, so a map is a faithful representation.
+bool recordVersionArraysEqual(RecordVersionArray a, RecordVersionArray b) {
+  if (a.length != b.length) return false;
+  final byId = {for (final e in a) e.$1: e.$2};
+  for (final e in b) {
+    if (byId[e.$1] != e.$2) return false;
+  }
+  return true;
+}
+
 /// Pick the next poll delay based on LIVE health (TS `nextPollDelayMs`). Pure
 /// for unit-testing.
+///
+/// Superseded by [listRefPollDelayMs], which backs off on observed change
+/// activity (LIVE *or* poll-detected) rather than LIVE liveness alone. Kept
+/// (and tested) for reference, matching the TS core.
+@Deprecated('Use listRefPollDelayMs')
 int nextPollDelayMs({
   required int now,
   required int? lastLiveEventAt,

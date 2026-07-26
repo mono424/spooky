@@ -49,7 +49,55 @@ void main() {
     });
   });
 
-  group('nextPollDelayMs', () {
+  group('listRefPollDelayMs', () {
+    test('no idle streak -> base interval', () {
+      expect(listRefPollDelayMs(idleStreak: 0, baseIntervalMs: 500), 500);
+      expect(listRefPollDelayMs(idleStreak: -1, baseIntervalMs: 500), 500);
+    });
+    test('backs off exponentially while idle', () {
+      expect(listRefPollDelayMs(idleStreak: 1, baseIntervalMs: 500), 1000);
+      expect(listRefPollDelayMs(idleStreak: 2, baseIntervalMs: 500), 2000);
+      expect(listRefPollDelayMs(idleStreak: 3, baseIntervalMs: 500), 4000);
+    });
+    test('caps at the max interval', () {
+      expect(listRefPollDelayMs(idleStreak: 4, baseIntervalMs: 500),
+          listRefPollMaxIntervalMs);
+      expect(listRefPollDelayMs(idleStreak: 500, baseIntervalMs: 500),
+          listRefPollMaxIntervalMs);
+    });
+    test('an aggressive base is never widened below itself', () {
+      // A base above the cap wins: the helper must not slow a deliberately
+      // aggressive configuration.
+      expect(listRefPollDelayMs(idleStreak: 0, baseIntervalMs: 8000), 8000);
+      expect(listRefPollDelayMs(idleStreak: 9, baseIntervalMs: 8000), 8000);
+    });
+  });
+
+  group('recordVersionArraysEqual', () {
+    test('order-insensitive equality', () {
+      expect(
+        recordVersionArraysEqual(
+            [('thread:a', 1), ('thread:b', 2)], [('thread:b', 2), ('thread:a', 1)]),
+        isTrue,
+      );
+    });
+    test('detects a version bump, an add, and a removal', () {
+      expect(
+        recordVersionArraysEqual([('thread:a', 1)], [('thread:a', 2)]),
+        isFalse,
+      );
+      expect(
+        recordVersionArraysEqual([('thread:a', 1)], [('thread:a', 1), ('thread:b', 1)]),
+        isFalse,
+      );
+      expect(recordVersionArraysEqual([('thread:a', 1)], []), isFalse);
+    });
+    test('two empty arrays are equal', () {
+      expect(recordVersionArraysEqual([], []), isTrue);
+    });
+  });
+
+  group('nextPollDelayMs (deprecated, superseded by listRefPollDelayMs)', () {
     test('no LIVE event -> base interval', () {
       expect(
         nextPollDelayMs(now: 1000, lastLiveEventAt: null, baseIntervalMs: 500),

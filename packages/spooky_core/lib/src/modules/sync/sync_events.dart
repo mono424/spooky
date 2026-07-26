@@ -18,10 +18,12 @@ abstract final class SyncEventTypes {
   static const queryUpdated = 'SYNC_QUERY_UPDATED';
   static const remoteDataIngested = 'SYNC_REMOTE_DATA_INGESTED';
   static const mutationRolledBack = 'SYNC_MUTATION_ROLLED_BACK';
+  static const syncHealthChanged = 'SYNC_HEALTH_CHANGED';
 }
 
 EventSystem createSyncEventSystem() => EventSystem([
       SyncEventTypes.queryUpdated,
       SyncEventTypes.remoteDataIngested,
       SyncEventTypes.mutationRolledBack,
+      SyncEventTypes.syncHealthChanged,
     ]);
