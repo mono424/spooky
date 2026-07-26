@@ -75,8 +75,11 @@ class StreamProcessorService {
   /// so `'true'` here is the same "trust the server filtered" model as every other
   /// synced table (e.g. `thread` seeds `'true'`). Extend this map for any future
   /// client-readable meta table.
+  /// `_00_app_release` is world-readable server-side (root-only writes), so
+  /// `'true'` is exact rather than a trust assumption.
   static const Map<String, String> _builtinSystemPermissions = {
     '_00_user_feature': 'true',
+    '_00_app_release': 'true',
   };
 
   void addReceiver(StreamUpdateReceiver receiver) => _receivers.add(receiver);

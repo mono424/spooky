@@ -1,0 +1,279 @@
+import 'package:spooky_core/spooky_core.dart';
+import 'package:spooky_core/src/ffi/stream_processor.dart';
+import 'package:spooky_core/src/modules/app_release/app_release.dart';
+import 'package:spooky_core/src/modules/cache/cache_module.dart';
+import 'package:spooky_core/src/modules/data/data_module.dart';
+import 'package:spooky_core/src/modules/sync/sync.dart';
+import 'package:spooky_core/src/services/database/local_database_service.dart';
+import 'package:spooky_core/src/services/database/remote_database_service.dart';
+import 'package:spooky_core/src/services/logger/logger.dart';
+import 'package:spooky_core/src/services/persistence/memory_persistence.dart';
+import 'package:spooky_core/src/services/stream_processor/stream_processor_service.dart';
+import 'package:test/test.dart';
+
+import 'sync_integration_test.dart' show FakeRemote;
+
+/// `AppReleaseModule` runs ONE shared live query over the world-readable
+/// `_00_app_release` table and fans per-app snapshots out to handles, so an app
+/// can prompt (or force) an update when the deployed version passes the running
+/// build.
+void main() {
+  final logger = SpookyLogger.root('test');
+  const schemaSurql =
+      'DEFINE TABLE thread SCHEMAFULL PERMISSIONS FOR select WHERE true;';
+  final schema = {
+    'thread': {
+      'columns': {'title': const ColumnSchema(type: 'string')},
+    },
+  };
+
+  Map<String, dynamic> releaseRow(
+    String app,
+    String version, {
+    bool? cacheBust,
+    bool? mandatory,
+    String? releasedAt,
+  }) =>
+      {
+        'id': '_00_app_release:$app',
+        'app': app,
+        'version': version,
+        'cache_bust': cacheBust,
+        'mandatory': mandatory,
+        'released_at': releasedAt,
+      };
+
+  group('module behavior', () {
+    late LocalDatabaseService local;
+    late StreamProcessorService sp;
+    late CacheModule cache;
+    late DataModule data;
+    late Sp00kySync sync;
+    late AppReleaseModule releases;
+    late _AuthStub auth;
+
+    /// Pushes delivered in the CURRENT test; reset per test because the first
+    /// ingest of a key must be a `CREATE` and the circuit is rebuilt each setUp.
+    var pushes = 0;
+
+    setUp(() async {
+      pushes = 0;
+      local = LocalDatabaseService.open(logger)..provision();
+      sp = StreamProcessorService(MemoryPersistenceClient(), logger);
+      await sp.init();
+      sp.seedPermissionsFromSchema(schemaSurql);
+      late DataModule d;
+      cache = CacheModule(local, sp, (u) => d.onStreamUpdate(u), logger);
+      d = DataModule(cache, local, schema, logger);
+      data = d;
+      await data.init('sess');
+      sync = Sp00kySync(
+        local,
+        RemoteDatabaseService(
+            const DatabaseConfig(namespace: 't', database: 't'),
+            FakeRemote(),
+            logger),
+        cache,
+        data,
+        schema,
+        logger,
+      );
+      auth = _AuthStub();
+      releases = AppReleaseModule(
+          dataModule: data, sync: sync, auth: auth, logger: logger);
+    });
+    tearDown(() async {
+      releases.closeAll();
+      await sync.close();
+      data.dispose();
+      await sp.close();
+      local.close();
+    });
+
+    /// Deliver release rows the way sync would: ingest them through the cache so
+    /// the circuit materializes the shared view and notifies its subscriber.
+    ///
+    /// The op matters. Re-ingesting an already-present key as `CREATE` is a
+    /// no-op in the DBSP circuit (the key's weight is unchanged, so no delta is
+    /// emitted) — a subsequent release must arrive as `UPDATE`, which retracts
+    /// and re-inserts, exactly as the sync engine labels it. `UPDATE` rides the
+    /// stream debounce, so the settle below has to outlast it.
+    Future<void> push(List<Map<String, dynamic>> rows) async {
+      await _tick(); // let the module's registration land
+      pushes++;
+      await cache.saveBatch([
+        for (final row in rows)
+          CacheRecord(
+            table: '_00_app_release',
+            op: pushes == 1 ? 'CREATE' : 'UPDATE',
+            record: row,
+            version: pushes,
+          ),
+      ]);
+      await _settle();
+    }
+
+    test('registers ONE shared, unfiltered query for many apps', () async {
+      releases.release('web');
+      releases.release('admin');
+      await _tick();
+
+      final hashes = data.getActiveQueryHashes();
+      expect(hashes, hasLength(1));
+      final surql = data.getQueryByHash(hashes.single)!.config.surql;
+      expect(surql, contains('FROM _00_app_release'));
+      expect(surql, isNot(contains('WHERE')));
+    });
+
+    test('fans the shared result out to each handle by app', () async {
+      final web = releases.release('web');
+      final missing = releases.release('missing');
+      await push([releaseRow('web', '1.2.0', cacheBust: true)]);
+
+      expect(web.version(), '1.2.0');
+      expect(web.cacheBust, isTrue);
+      expect(web.mandatory, isFalse, reason: 'a null flag reads as false');
+      expect(missing.version(), isNull);
+      expect(missing.updateAvailable('1.0.0'), isFalse);
+    });
+
+    test('updateAvailable compares semver against the running build', () async {
+      final web = releases.release('web');
+      await push([releaseRow('web', '1.2.0')]);
+
+      expect(web.updateAvailable('1.1.9'), isTrue);
+      expect(web.updateAvailable('1.2.0'), isFalse);
+      expect(web.updateAvailable('1.3.0'), isFalse);
+      expect(web.updateAvailable('garbage'), isFalse);
+    });
+
+    test('observes row updates live without re-registering', () async {
+      final web = releases.release('web');
+      await push([releaseRow('web', '1.0.0')]);
+      expect(web.updateAvailable('1.0.0'), isFalse);
+
+      await push([releaseRow('web', '1.0.1', mandatory: true)]);
+      expect(web.updateAvailable('1.0.0'), isTrue);
+      expect(web.mandatory, isTrue);
+      expect(data.getActiveQueryHashes(), hasLength(1));
+    });
+
+    test('seeds a late handle from the already-loaded snapshot', () async {
+      releases.release('web');
+      await push([releaseRow('web', '2.0.0')]);
+
+      final late = releases.release('web');
+      expect(late.version(), '2.0.0',
+          reason: 'a late handle must not flash empty');
+    });
+
+    test('subscribe fires immediately and on each change', () async {
+      final web = releases.release('web');
+      final seen = <String?>[];
+      web.subscribe((s) => seen.add(s.version));
+      expect(seen, [null], reason: 'immediate fire with the empty snapshot');
+
+      await push([releaseRow('web', '1.0.0')]);
+      expect(seen.last, '1.0.0');
+    });
+
+    test('a closed handle stops receiving snapshots', () async {
+      final web = releases.release('web');
+      final seen = <String?>[];
+      web.subscribe((s) => seen.add(s.version));
+      web.close();
+      await push([releaseRow('web', '9.9.9')]);
+      expect(seen, [null]);
+    });
+
+    test('re-registers on a user change', () async {
+      releases.init();
+      final web = releases.release('web');
+      await push([releaseRow('web', '1.0.0')]);
+      expect(web.version(), '1.0.0');
+
+      auth.emit('user:other');
+      await _tick();
+      // Still exactly one shared query, re-observed under the new session.
+      expect(data.getActiveQueryHashes(), hasLength(1));
+    });
+
+    test('rows without an app or version are ignored', () async {
+      final web = releases.release('web');
+      await push([
+        {'id': '_00_app_release:x', 'app': 'web'}, // no version
+      ]);
+      expect(web.version(), isNull);
+    });
+  });
+
+  group('circuit permission', () {
+    // `_00_app_release` is server-provisioned and absent from any app
+    // schemaSurql, so seedPermissionsFromSchema can't derive a permission. The
+    // service seeds a built-in `'true'`, else the default-deny circuit rejects
+    // the view and releases silently never arrive.
+    Map<String, dynamic> viewConfig() => {
+          'id': 'rel',
+          'surql': releaseQuery,
+          'params': <String, dynamic>{},
+          'clientId': 'local',
+          'ttl': '10m',
+          'lastActiveAt': '2026-01-01T00:00:00.000Z',
+        };
+
+    test('an explicit deny is enforced (permission control is active)', () {
+      final sp = StreamProcessor.create();
+      addTearDown(sp.dispose);
+      sp.setPermission('_00_app_release', 'false');
+      expect(() => sp.registerView(viewConfig()), throwsA(isA<SspException>()));
+    });
+
+    test('the built-in seed permits the view when the schema omits the table',
+        () async {
+      final svc = StreamProcessorService(MemoryPersistenceClient(), logger);
+      await svc.init();
+      addTearDown(svc.close);
+      svc.seedPermissionsFromSchema(schemaSurql);
+
+      svc.registerQueryPlan(QueryPlanConfig(
+        queryHash: 'rel',
+        surql: releaseQuery,
+        params: const {},
+        ttl: '10m',
+        lastActiveAt: DateTime.utc(2026),
+      ));
+
+      final updates = svc.ingest('_00_app_release', 'CREATE',
+          '_00_app_release:web', releaseRow('web', '1.0.0'));
+      final u = updates.firstWhere((e) => e.queryHash == 'rel');
+      expect(u.localArray.map((e) => e.$1), contains('_00_app_release:web'));
+    });
+  });
+}
+
+Future<void> _tick() => Future<void>.delayed(const Duration(milliseconds: 20));
+
+/// Longer than the default 100ms stream debounce, so a debounced UPDATE lands.
+Future<void> _settle() =>
+    Future<void>.delayed(const Duration(milliseconds: 160));
+
+/// Minimal [AuthService] stand-in exposing only the `subscribe` the module uses.
+class _AuthStub implements AuthService {
+  final List<void Function(String?)> _listeners = [];
+
+  void emit(String? userId) {
+    for (final cb in _listeners.toList()) {
+      cb(userId);
+    }
+  }
+
+  @override
+  void Function() subscribe(void Function(String? userId) cb) {
+    _listeners.add(cb);
+    cb(null);
+    return () => _listeners.remove(cb);
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
