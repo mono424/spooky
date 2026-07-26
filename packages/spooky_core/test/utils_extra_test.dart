@@ -59,6 +59,17 @@ void main() {
       expect(classifySyncError('socket timeout'), 'network');
       expect(classifySyncError('WebSocket disconnected'), 'network');
     });
+    test('surreal ConnectionUnavailableError is network, not application', () {
+      // Reads "connected", not "connection" — the canonical error on an
+      // idle-dropped socket. Misclassifying it rolls the mutation back and drops
+      // it instead of re-queuing for the reconnect.
+      expect(
+        classifySyncError(Exception(
+            'You must be connected to a SurrealDB instance before performing this operation')),
+        'network',
+      );
+      expect(classifySyncError('ConnectionUnavailableError'), 'network');
+    });
     test('everything else is application', () {
       expect(classifySyncError(StateError('bad data')), 'application');
       expect(classifySyncError('permission denied'), 'application');
