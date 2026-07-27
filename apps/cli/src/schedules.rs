@@ -13,7 +13,6 @@
 //! `trigger_requested_at`, and the engine owns `next_fire_at` / `last_*`. This
 //! module writes only the middle group.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -106,8 +105,10 @@ fn str_field(row: &Value, key: &str) -> String {
 /// Every field the list/get views read, with datetimes stringified so they
 /// deserialize as plain JSON strings.
 const SCHEDULE_FIELDS: &str = "name, kind, cron, every_ms, timezone, target_table, path, \
-     for_each, concurrency, paused, config_disabled, last_error, \
+     for_each, concurrency, paused, config_disabled, last_error, last_run_status, \
+     history_success_secs, history_failed_secs, \
      type::string(next_fire_at) AS next_fire_at, type::string(last_fire_at) AS last_fire_at, \
+     type::string(last_run_at) AS last_run_at, \
      type::string(trigger_requested_at) AS trigger_requested_at";
 
 // =============================================================
@@ -129,10 +130,6 @@ fn list(client: &SurrealClient, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Last outcome per schedule, so `list` answers "is it working" not just
-    // "does it exist".
-    let last_status = last_run_status(client)?;
-
     println!(
         "{BOLD}{:<24} {:<9} {:<14} {:<9} {:<20} {:<10}{RESET}",
         "NAME", "KIND", "CADENCE", "STATE", "NEXT FIRE", "LAST RUN"
@@ -140,7 +137,11 @@ fn list(client: &SurrealClient, json: bool) -> Result<()> {
     for row in &rows {
         let name = str_field(row, "name");
         let (state, color) = state_of(row);
-        let last = last_status.get(&name).cloned().unwrap_or_else(|| "-".into());
+        let last = row
+            .get("last_run_status")
+            .and_then(Value::as_str)
+            .unwrap_or("-")
+            .to_string();
         let (last_icon, last_color) = run_status_style(&last);
         println!(
             "{:<24} {:<9} {:<14} {color}{:<9}{RESET} {:<20} {last_color}{} {}{RESET}",
@@ -157,23 +158,6 @@ fn list(client: &SurrealClient, json: bool) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// `schedule_name -> status of its most recent run`.
-fn last_run_status(client: &SurrealClient) -> Result<BTreeMap<String, String>> {
-    // Ordering by a projected field only: SurrealDB v3 rejects ORDER BY on a
-    // column that isn't in the projection.
-    let rows = query_rows(
-        client,
-        "SELECT schedule_name, status, type::string(fire_at) AS fire_at \
-         FROM _00_schedule_run ORDER BY fire_at DESC LIMIT 500;",
-    )?;
-    let mut out = BTreeMap::new();
-    for row in rows {
-        let name = str_field(&row, "schedule_name");
-        out.entry(name).or_insert_with(|| str_field(&row, "status"));
-    }
-    Ok(out)
 }
 
 fn state_of(row: &Value) -> (String, &'static str) {
@@ -245,6 +229,8 @@ fn get(client: &SurrealClient, name: &str, json: bool) -> Result<()> {
         println!("  {RED}last error  : {err}{RESET}");
     }
 
+    print_rollup_totals(client, name)?;
+
     let recent = query_rows(
         client,
         &format!(
@@ -270,6 +256,44 @@ fn get(client: &SurrealClient, name: &str, json: bool) -> Result<()> {
             key
         );
     }
+    Ok(())
+}
+
+/// Lifetime totals for a schedule, summed from the retention rollup.
+///
+/// The rollup is written as history is pruned, so these totals cover runs whose rows
+/// are long gone — which is the point of keeping short retention windows. They are a
+/// LOWER bound, not an audit trail: rows removed by `spky jobs clear`, by an
+/// application's own DELETE, or before the rollup existed were never counted.
+fn print_rollup_totals(client: &SurrealClient, name: &str) -> Result<()> {
+    let rows = query_rows(
+        client,
+        &format!(
+            "SELECT math::sum(success) AS success, math::sum(failed) AS failed, \
+             math::sum(skipped) AS skipped, math::sum(replaced) AS replaced, \
+             math::sum(killed) AS killed \
+             FROM _00_run_rollup WHERE scope = 'schedule' AND name = '{}' GROUP ALL;",
+            esc(name)
+        ),
+    )?;
+    let Some(row) = rows.first() else { return Ok(()) };
+    let n = |key: &str| row.get(key).and_then(Value::as_i64).unwrap_or(0);
+    let (success, failed) = (n("success"), n("failed"));
+    let (skipped, replaced, killed) = (n("skipped"), n("replaced"), n("killed"));
+    if success + failed + skipped + replaced + killed == 0 {
+        return Ok(());
+    }
+
+    let mut parts = vec![format!("{GREEN}{success} ok{RESET}")];
+    if failed > 0 {
+        parts.push(format!("{RED}{failed} failed{RESET}"));
+    }
+    for (n, label) in [(skipped, "skipped"), (replaced, "replaced"), (killed, "killed")] {
+        if n > 0 {
+            parts.push(format!("{DIM}{n} {label}{RESET}"));
+        }
+    }
+    println!("  pruned      : {}", parts.join("  "));
     Ok(())
 }
 

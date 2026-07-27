@@ -63,6 +63,11 @@ DEFINE FIELD OVERWRITE spec_hash ON TABLE _00_schedule TYPE option<string>;
 -- `enabled: false` in config. Distinct from `paused` so config intent and
 -- operator intent can't overwrite each other.
 DEFINE FIELD OVERWRITE config_disabled ON TABLE _00_schedule TYPE bool DEFAULT false;
+-- Per-schedule retention override (`history:` in sp00ky.yml), in seconds. Unset
+-- means "use the project default from _00_retention". A noisy minutely fan-out
+-- wants minutes of history; a nightly report wants a month.
+DEFINE FIELD OVERWRITE history_success_secs ON TABLE _00_schedule TYPE option<int>;
+DEFINE FIELD OVERWRITE history_failed_secs ON TABLE _00_schedule TYPE option<int>;
 
 -- Operator: written by the CLI only.
 DEFINE FIELD OVERWRITE paused ON TABLE _00_schedule TYPE bool DEFAULT false;
@@ -74,6 +79,15 @@ DEFINE FIELD OVERWRITE last_fire_at ON TABLE _00_schedule TYPE option<datetime>;
 -- Why the schedule couldn't be planned or fanned out (bad cron, failing
 -- forEach query). Surfaced by `spky schedules list`.
 DEFINE FIELD OVERWRITE last_error ON TABLE _00_schedule TYPE option<string>;
+-- Outcome of the most recent run, denormalized off _00_schedule_run.
+--
+-- `spky schedules list` used to derive this by scanning the run table ordered by
+-- fire_at with a LIMIT across ALL schedules, so one wide fan-out schedule pushed
+-- every other schedule's last run out of the window within a minute. Keeping it
+-- here makes the lookup O(1) and, more importantly, makes it survive retention:
+-- the answer no longer depends on the run row still existing.
+DEFINE FIELD OVERWRITE last_run_status ON TABLE _00_schedule TYPE option<string>;
+DEFINE FIELD OVERWRITE last_run_at ON TABLE _00_schedule TYPE option<datetime>;
 
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_schedule TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_schedule TYPE datetime VALUE time::now();
@@ -107,7 +121,11 @@ DEFINE FIELD OVERWRITE trigger ON TABLE _00_schedule_run TYPE option<string>;
 -- table varies per schedule, so a typed link isn't expressible here.
 DEFINE FIELD OVERWRITE job_id ON TABLE _00_schedule_run TYPE option<string>;
 DEFINE FIELD OVERWRITE workflow_run ON TABLE _00_schedule_run TYPE option<record<_00_workflow_run>>;
--- Snapshot of the forEach row this run was spawned for.
+-- Snapshot of the forEach row this run was spawned for. NO LONGER WRITTEN: the
+-- same row is on the spawned job's `payload.row` (and on `_00_workflow_run.input`
+-- for workflow kinds), which is where every reader looks. A second copy here was
+-- write-only and, at high fan-out, most of this table's bytes. Kept defined so
+-- rows written by older deploys stay readable.
 DEFINE FIELD OVERWRITE row ON TABLE _00_schedule_run TYPE option<object> FLEXIBLE;
 DEFINE FIELD OVERWRITE error ON TABLE _00_schedule_run TYPE option<object> FLEXIBLE;
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_schedule_run TYPE datetime DEFAULT time::now() READONLY;
@@ -119,6 +137,16 @@ DEFINE INDEX OVERWRITE idx_srun_active ON TABLE _00_schedule_run
     COLUMNS schedule_name, key, status;
 -- Reverse lookup for the job-terminal observer.
 DEFINE INDEX OVERWRITE idx_srun_job ON TABLE _00_schedule_run COLUMNS job_id;
+-- Backs the retention prune. Column order matters: the prune filters one status
+-- by equality (an IndexScan) and then orders by finished_at, which this index
+-- serves without a Sort. A range predicate on finished_at is NOT pushed into the
+-- scan by SurrealDB, so the ordering is what makes the prune bounded rather than
+-- a whole-partition filter.
+DEFINE INDEX OVERWRITE idx_srun_retention ON TABLE _00_schedule_run
+    COLUMNS status, finished_at;
+-- `spky schedules list` / `get` / `runs` all sort by fire_at. Unindexed this was
+-- a whole-table sort on every invocation.
+DEFINE INDEX OVERWRITE idx_srun_fire ON TABLE _00_schedule_run COLUMNS fire_at;
 
 -- ==================================================
 -- SPOOKY WORKFLOW RUN (one DAG execution)
@@ -150,6 +178,11 @@ DEFINE FIELD OVERWRITE finished_at ON TABLE _00_workflow_run TYPE option<datetim
 
 DEFINE INDEX OVERWRITE idx_wfrun_status ON TABLE _00_workflow_run COLUMNS status;
 DEFINE INDEX OVERWRITE idx_wfrun_sched ON TABLE _00_workflow_run COLUMNS schedule_name;
+-- Retention prune, same shape as idx_srun_retention: status equality then
+-- finished_at ordering. Supersedes idx_wfrun_status for the prune, which is kept
+-- for the heal pass's `status = 'running'` lookup.
+DEFINE INDEX OVERWRITE idx_wfrun_retention ON TABLE _00_workflow_run
+    COLUMNS status, finished_at;
 
 -- ==================================================
 -- SPOOKY STEP RUN (one node of one workflow run)
@@ -179,3 +212,93 @@ DEFINE FIELD OVERWRITE finished_at ON TABLE _00_step_run TYPE option<datetime>;
 DEFINE INDEX OVERWRITE idx_step_wf ON TABLE _00_step_run COLUMNS workflow_run, step UNIQUE;
 DEFINE INDEX OVERWRITE idx_step_job ON TABLE _00_step_run COLUMNS job_id;
 DEFINE INDEX OVERWRITE idx_step_status ON TABLE _00_step_run COLUMNS workflow_run, status;
+
+-- ==================================================
+-- SPOOKY RETENTION (one singleton row: retention policy + prune targets)
+-- Written by deploy, read by the engine's prune pass.
+--
+-- The policy lives in the database rather than in an env var so that singlenode,
+-- cluster, and Cloudflare deployments all read the identical thing without a new
+-- variable threaded through three shells (and through the separate cloud control
+-- plane, which assembles the SSP's environment server-side). It also means an
+-- operator can retune retention with one UPDATE and no redeploy, the same way
+-- `spky schedules pause` works.
+--
+-- Retention is asymmetric by outcome, not by table: a successful run is read once
+-- (if at all) and then never again, while a failure is the thing you came to look
+-- for. `skipped` and `replaced` count as successes here — with the default
+-- `concurrency: skip` a slow wide fan-out writes one `skipped` row per item per
+-- fire, which is the highest-volume, lowest-information row in the system.
+--
+-- Pending and processing rows are NEVER pruned at any age.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_retention SCHEMAFULL PERMISSIONS NONE;
+
+-- Outbox job rows, keyed off `updated_at` (a terminal job's last write IS its
+-- terminalization). Deliberately not `created_at`: that field is only the
+-- creation time, so a job that waited on a delay or burned retries would be
+-- judged by when it was queued rather than when it finished.
+DEFINE FIELD OVERWRITE success_secs ON TABLE _00_retention TYPE int DEFAULT 21600;
+DEFINE FIELD OVERWRITE failed_secs ON TABLE _00_retention TYPE int DEFAULT 1209600;
+
+-- `_00_schedule_run` / `_00_workflow_run` history, keyed off `finished_at`.
+-- The failed window matches the previous hardcoded 30 days, so upgrading can
+-- never drop failure history a project already had.
+DEFINE FIELD OVERWRITE run_success_secs ON TABLE _00_retention TYPE int DEFAULT 86400;
+DEFINE FIELD OVERWRITE run_failed_secs ON TABLE _00_retention TYPE int DEFAULT 2592000;
+
+-- Hard cap on rows in a trimmable (success-shaped) status, per target. 0 = off.
+-- The windows above already bound volume at rate x window; this is the valve for
+-- the pathological case where even a short window holds more than the deployment
+-- can carry. Checked on a slow multiple of the prune cadence because it has to
+-- COUNT, and it never trims a failure — a volume cap must not be the reason a
+-- failure disappears.
+DEFINE FIELD OVERWRITE max_rows ON TABLE _00_retention TYPE int DEFAULT 0;
+
+-- Outbox tables the prune pass may sweep, written by deploy from each app's
+-- `method.table`. The engine therefore never reads sp00ky.yml or SPKY_JOB_CONFIG
+-- to find them, and a table that is not listed here is never touched.
+DEFINE FIELD OVERWRITE job_tables ON TABLE _00_retention TYPE array<string> DEFAULT [];
+DEFINE FIELD OVERWRITE job_tables[*] ON TABLE _00_retention TYPE string;
+
+DEFINE FIELD OVERWRITE updated_at ON TABLE _00_retention TYPE datetime VALUE time::now();
+
+-- ==================================================
+-- SPOOKY RUN ROLLUP (permanent hourly counters for what retention deleted)
+-- One row per (scope, name, hour). Written by the prune pass immediately before
+-- it deletes a batch, so the counts are a by-product of work already being done
+-- rather than a second pass over the data.
+--
+-- This is what makes short retention windows acceptable: the raw rows go, but
+-- "how much ran, and how much of it failed" survives forever at a few rows a day.
+-- Bounded by construction — 24 rows per day per (scope, name).
+--
+-- KNOWN GAP: only the prune pass folds into this table. Rows removed by
+-- `spky jobs clear`, by an application's own DELETE, or by a build that predates
+-- this table are not counted, so a rollup total is a lower bound on what really
+-- ran. It is not an audit log.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_run_rollup SCHEMAFULL PERMISSIONS NONE;
+
+-- 'schedule' counts _00_schedule_run / _00_workflow_run rows and `name` is the
+-- schedule name; 'job' counts outbox rows and `name` is the table name.
+DEFINE FIELD OVERWRITE scope ON TABLE _00_run_rollup TYPE string
+    ASSERT $value INSIDE ['schedule', 'job'];
+DEFINE FIELD OVERWRITE name ON TABLE _00_run_rollup TYPE string;
+-- Start of the hour the pruned rows finished in.
+DEFINE FIELD OVERWRITE bucket ON TABLE _00_run_rollup TYPE datetime;
+
+-- One named int per outcome rather than a map: `+=` on a named field is a single
+-- atomic SET, whereas incrementing a computed key inside an object is not
+-- expressible in one statement — and a blind atomic UPSERT is what lets two
+-- pruners fold concurrently without a read-modify-write race.
+DEFINE FIELD OVERWRITE success ON TABLE _00_run_rollup TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE failed ON TABLE _00_run_rollup TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE skipped ON TABLE _00_run_rollup TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE replaced ON TABLE _00_run_rollup TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE killed ON TABLE _00_run_rollup TYPE int DEFAULT 0;
+
+DEFINE FIELD OVERWRITE updated_at ON TABLE _00_run_rollup TYPE datetime VALUE time::now();
+
+DEFINE INDEX OVERWRITE idx_rollup_lookup ON TABLE _00_run_rollup
+    COLUMNS scope, name, bucket;

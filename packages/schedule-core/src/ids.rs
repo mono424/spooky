@@ -26,6 +26,7 @@ pub const SCHEDULE: &str = "_00_schedule";
 pub const SCHEDULE_RUN: &str = "_00_schedule_run";
 pub const WORKFLOW_RUN: &str = "_00_workflow_run";
 pub const STEP_RUN: &str = "_00_step_run";
+pub const RUN_ROLLUP: &str = "_00_run_rollup";
 
 /// Longest raw name/key fragment kept verbatim before it is hashed away. Keeps
 /// ids readable (`_00_schedule_run:game-sync_1769337000000_9f2a1c4d8b30`)
@@ -160,6 +161,19 @@ pub fn job(table: &str, run_key: &str) -> Ref {
 /// used anyway.
 pub fn step_job(table: &str, run_key: &str, step: &str) -> Ref {
     Ref::new(table, format!("wf_{}_{}", sanitize_job(run_key), sanitize_job(step)))
+}
+
+/// Key for one rollup bucket: `<scope>_<name>_<hour>`.
+///
+/// Deterministic so a fold is a blind `UPSERT ... SET n += x` with no read first:
+/// two pruners (or a retried pass) landing on the same bucket accumulate instead of
+/// racing a read-modify-write. The name is sanitized rather than hashed so the row
+/// stays greppable, and the bucket is an RFC 3339 hour with its punctuation
+/// stripped.
+pub fn rollup(scope: &str, name: &str, bucket: &str) -> Ref {
+    let stamp: String =
+        bucket.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    Ref::new(RUN_ROLLUP, format!("{}_{}_{}", sanitize(scope), sanitize(name), stamp))
 }
 
 /// The run key back out of any engine record id. Lets a workflow run find its

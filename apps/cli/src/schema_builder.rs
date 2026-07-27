@@ -74,10 +74,19 @@ pub fn build_remote_functions_schema(mode: &DeployMode, endpoint: &str, secret: 
 /// `IF NOT EXISTS` (not OVERWRITE) so an explicit user definition is never
 /// clobbered. Emitted by both schema paths: `migrate::apply_internal_schema`
 /// (VM) and `build_server_schema` (free/Cloudflare push).
-pub fn build_outbox_platform_fields<'a, I>(outbox_tables: I) -> String
+pub fn build_outbox_platform_fields<'a, I>(outbox_tables: I, mode: &DeployMode) -> String
 where
     I: IntoIterator<Item = &'a str>,
 {
+    // Building an index blocks writes to the table while it fills, and an outbox
+    // table can already hold millions of rows by the time this ships. `CONCURRENTLY`
+    // builds it in the background instead — but only the server engines support it,
+    // so the embedded/WASM path takes the blocking form (where the table is a
+    // client-side cache and small by construction).
+    let concurrently = match mode {
+        DeployMode::Singlenode | DeployMode::Cluster => " CONCURRENTLY",
+        _ => "",
+    };
     let mut out = String::new();
     for table in outbox_tables {
         if table.is_empty() {
@@ -102,6 +111,25 @@ where
         out.push_str(&format!(
             "DEFINE FIELD IF NOT EXISTS errors[*] ON {} TYPE object FLEXIBLE;\n",
             table
+        ));
+        // `timeout` is set by `db.run(..., { timeout })` and by a schedule's
+        // `timeout:`. The documented template used to omit the field, and on a
+        // SCHEMAFULL table that rejects the ENTIRE create with "Found field
+        // 'timeout', but no such field exists" — so a schedule declaring a timeout
+        // could never spawn a job. Injected here so a project that has not
+        // re-applied its own schema is healed by the next deploy.
+        out.push_str(&format!(
+            "DEFINE FIELD IF NOT EXISTS timeout ON {} TYPE option<int> \
+             PERMISSIONS FOR create, select WHERE true FOR update WHERE false;\n",
+            table
+        ));
+        // Backs the retention prune. `(status, updated_at)` in that order: the prune
+        // filters one status by equality and orders by `updated_at`, and this index
+        // serves the ordering without a sort. Without it the prune is a full table
+        // scan of the very table that grows fastest.
+        out.push_str(&format!(
+            "DEFINE INDEX IF NOT EXISTS idx_{table}_retention{concurrently} ON {table} \
+             COLUMNS status, updated_at;\n"
         ));
     }
     out
@@ -150,6 +178,7 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
             content.push('\n');
             content.push_str(&build_outbox_platform_fields(
                 tables.iter().map(String::as_str),
+                &config.mode,
             ));
         }
     }
@@ -678,10 +707,12 @@ mod tests {
 #[cfg(test)]
 mod outbox_platform_field_tests {
     use super::build_outbox_platform_fields;
+    use crate::backend::DeployMode;
 
     #[test]
     fn emits_if_not_exists_assignee_per_table() {
-        let sql = build_outbox_platform_fields(["job", "statistics_job"]);
+        let sql =
+            build_outbox_platform_fields(["job", "statistics_job"], &DeployMode::Singlenode);
         assert_eq!(sql.matches("DEFINE FIELD IF NOT EXISTS assignee ON ").count(), 2);
         assert!(sql.contains("ON job TYPE option<string>"));
         assert!(sql.contains("ON statistics_job TYPE option<string>"));
@@ -693,7 +724,41 @@ mod outbox_platform_field_tests {
 
     #[test]
     fn empty_input_emits_nothing() {
-        assert!(build_outbox_platform_fields([]).is_empty());
-        assert!(build_outbox_platform_fields([""]).is_empty());
+        assert!(build_outbox_platform_fields([], &DeployMode::Singlenode).is_empty());
+        assert!(build_outbox_platform_fields([""], &DeployMode::Singlenode).is_empty());
+    }
+
+    /// `timeout` is injected so a project that never re-applied its own schema can
+    /// still run a schedule that declares a timeout — without the field, a
+    /// SCHEMAFULL outbox table rejects the whole job CREATE.
+    #[test]
+    fn injects_the_timeout_field_existing_schemas_are_missing() {
+        let sql = build_outbox_platform_fields(["job"], &DeployMode::Singlenode);
+        assert!(sql.contains("DEFINE FIELD IF NOT EXISTS timeout ON job TYPE option<int>"));
+    }
+
+    /// The retention index must lead with `status` and follow with `updated_at`:
+    /// the prune filters one status by equality then orders by `updated_at`.
+    /// Reversing the columns still works and silently loses the index.
+    #[test]
+    fn injects_the_retention_index_in_prune_order() {
+        let sql = build_outbox_platform_fields(["job"], &DeployMode::Singlenode);
+        assert!(sql.contains("DEFINE INDEX IF NOT EXISTS idx_job_retention"));
+        assert!(sql.contains("ON job COLUMNS status, updated_at;"));
+    }
+
+    /// Index builds block writes while they fill, and an outbox table can already
+    /// hold millions of rows — so the server engines build it in the background.
+    /// The embedded/WASM path does not support that and takes the blocking form.
+    #[test]
+    fn the_retention_index_builds_concurrently_only_on_server_engines() {
+        for mode in [DeployMode::Singlenode, DeployMode::Cluster] {
+            assert!(
+                build_outbox_platform_fields(["job"], &mode).contains("CONCURRENTLY"),
+                "{mode:?} should build the index in the background"
+            );
+        }
+        assert!(!build_outbox_platform_fields(["job"], &DeployMode::Surrealism)
+            .contains("CONCURRENTLY"));
     }
 }

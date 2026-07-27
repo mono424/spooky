@@ -15,13 +15,14 @@
 //! recovery sweeps) applies to scheduled work for free. The engine's own writes
 //! are confined to the `_00_schedule*` tables.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{json, Map, Value};
 
-use crate::db::{first_row, rows, ScheduleDb, ScheduleDbError};
+use crate::db::{count_value, first_row, rows, ScheduleDb, ScheduleDbError};
 use crate::kill::JobKill;
 use crate::spec::{Concurrency, ScheduleKind, ScheduleSpec};
 use crate::{ids, sql};
@@ -44,6 +45,94 @@ impl Default for EngineConfig {
     }
 }
 
+/// Resolved retention policy for one prune pass.
+///
+/// Read from `_00_retention:default` (written by deploy) so singlenode, cluster,
+/// and Cloudflare hosts all obey the same numbers without another environment
+/// variable threaded through three shells. Falls back to [`EngineConfig`] when the
+/// row is absent — a fresh database, or a stack running ahead of its CLI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Retention {
+    /// Outbox rows in `success`.
+    job_success: Duration,
+    /// Outbox rows in `failed`.
+    job_failed: Duration,
+    /// Run history in `success` / `skipped` / `replaced`.
+    run_success: Duration,
+    /// Run history in `failed` / `killed`.
+    run_failed: Duration,
+    /// Outbox tables this pass may sweep. Empty = sweep none.
+    job_tables: Vec<String>,
+    /// Hard cap on rows in a trimmable status, or `None` when disabled.
+    max_rows: Option<usize>,
+}
+
+impl Retention {
+    /// The window for one run status. Success-shaped statuses share the short
+    /// window: with the default `concurrency: skip`, a slow wide fan-out writes one
+    /// `skipped` row per item per fire, which is the highest-volume and
+    /// lowest-information row the engine produces.
+    fn for_run_status(&self, status: &str) -> Duration {
+        match status {
+            "failed" | "killed" => self.run_failed,
+            _ => self.run_success,
+        }
+    }
+
+    fn for_job_status(&self, status: &str) -> Duration {
+        match status {
+            "failed" => self.job_failed,
+            _ => self.job_success,
+        }
+    }
+}
+
+/// Where a rollup row's `name` comes from.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RollupName<'a> {
+    /// Read it off each pruned row (the schedule name).
+    Field(&'a str),
+    /// Use a constant (the outbox table name).
+    Fixed(&'a str),
+}
+
+/// Which rollup counter a batch of deleted rows belongs to.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Fold<'a> {
+    scope: &'a str,
+    status: &'a str,
+    name: RollupName<'a>,
+}
+
+/// How often the prune pass actually runs, independent of the sweep interval.
+/// Retention does not need 5-second responsiveness and each prune statement is a
+/// scan; firing and healing do need it.
+const PRUNE_INTERVAL_SECS: i64 = 60;
+
+/// Rows deleted per prune statement. Small on purpose: on a synced table each
+/// deleted row fires the generated `_00_<t>_delete` event, which POSTs the record
+/// to `/ingest` — the cost per row is a network round-trip, not a b-tree write.
+const PRUNE_BATCH: usize = 500;
+
+/// Statements per (table, status) per pass. With the batch size above this drains
+/// 10k rows per target per minute, so any realistic backlog clears in hours
+/// without ever spiking the ingest path.
+const PRUNE_MAX_BATCHES: usize = 20;
+
+/// Run the row cap once every N prune passes. The cap has to COUNT, which is an
+/// index walk, and it is a safety valve rather than the main mechanism — the age
+/// windows already bound volume at rate x window.
+const CAP_EVERY_N_PRUNES: u64 = 10;
+
+/// Statuses the cap may trim. Success-shaped only: a volume cap must never be the
+/// reason a failure disappears.
+const CAP_TRIMMABLE_RUN_STATUSES: [&str; 3] = ["success", "skipped", "replaced"];
+const CAP_TRIMMABLE_JOB_STATUSES: [&str; 1] = ["success"];
+
+/// `_00_run_rollup.scope` values.
+const SCOPE_SCHEDULE: &str = "schedule";
+const SCOPE_JOB: &str = "job";
+
 /// What one `tick_pass` did. Returned for logging and asserted on in tests.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TickReport {
@@ -63,6 +152,11 @@ pub struct ScheduleEngine {
     pub(crate) db: Arc<dyn ScheduleDb>,
     pub(crate) kill: Arc<dyn JobKill>,
     cfg: EngineConfig,
+    /// Epoch millis of the last prune, or 0 for "never". Gates the prune pass to
+    /// [`PRUNE_INTERVAL_SECS`] without needing a second timer or a mutex.
+    last_prune_at: AtomicI64,
+    /// Prune passes so far, so the row cap can run on a slow multiple of them.
+    prune_passes: AtomicU64,
 }
 
 /// How a fire was initiated — recorded on the run row so `spky schedules runs`
@@ -84,7 +178,7 @@ impl Trigger {
 
 impl ScheduleEngine {
     pub fn new(db: Arc<dyn ScheduleDb>, kill: Arc<dyn JobKill>, cfg: EngineConfig) -> Self {
-        Self { db, kill, cfg }
+        Self { db, kill, cfg, last_prune_at: AtomicI64::new(0), prune_passes: AtomicU64::new(0) }
     }
 
     pub fn db(&self) -> &Arc<dyn ScheduleDb> {
@@ -204,42 +298,91 @@ impl ScheduleEngine {
         trigger: Trigger,
         report: &mut TickReport,
     ) {
-        let items = match self.fan_out_rows(spec).await {
-            Ok(items) => items,
+        let (items, truncated_from) = match self.fan_out_rows(spec).await {
+            Ok(out) => out,
             Err(e) => {
                 self.record_error(id, &format!("forEach query failed: {e}"), report).await;
                 return;
             }
         };
+        // A clipped fan-out is a partial fire, so it belongs on the row an operator
+        // reads — not only in the server log.
+        if let Some(rows) = truncated_from {
+            self.record_error(
+                id,
+                &format!(
+                    "forEach returned {rows} rows, over the fan-out limit of {} — \
+                     dropped {} row(s) for this fire",
+                    self.cfg.fanout_max,
+                    rows - self.cfg.fanout_max
+                ),
+                report,
+            )
+            .await;
+        }
+
+        // A run's id is derived from (schedule, fire time, key), so two rows that
+        // produce the SAME key collide on that id and the second is read as "this
+        // fire already happened" — the row is silently dropped. That is a `key:`
+        // misconfiguration (a non-unique field, or one the rows don't have, which
+        // makes every key ''), and it costs work nobody asked to lose, so it is
+        // reported rather than swallowed.
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut duplicates = 0usize;
 
         for item in items {
             let key = item.as_ref().map(|row| fan_out_key(row, spec.key_field())).unwrap_or_default();
+            if !seen.insert(key.clone()) {
+                duplicates += 1;
+            }
             if let Err(e) = self.spawn_one(id, spec, fire_at, trigger, &key, item, report).await {
                 // A single item must never take down the rest of the fan-out.
                 tracing::warn!(schedule = %id, key = %key, error = %e, "could not spawn run");
                 report.errored += 1;
             }
         }
+
+        if duplicates > 0 {
+            let field = spec.key_field();
+            self.record_error(
+                id,
+                &format!(
+                    "forEach produced {duplicates} duplicate key(s) for `{field}` — those rows \
+                     share a run id and only the first spawned; give `key` a field that is \
+                     unique per row"
+                ),
+                report,
+            )
+            .await;
+        }
     }
 
-    /// `None` = no fan-out (one run per fire); `Some(rows)` = one run per row.
-    async fn fan_out_rows(&self, spec: &ScheduleSpec) -> Result<Vec<Option<Value>>, ScheduleDbError> {
+    /// `None` items = no fan-out (one run per fire). The second field is the
+    /// pre-truncation row count when `fanout_max` clipped the query.
+    #[allow(clippy::type_complexity)]
+    async fn fan_out_rows(
+        &self,
+        spec: &ScheduleSpec,
+    ) -> Result<(Vec<Option<Value>>, Option<usize>), ScheduleDbError> {
         let Some(query) = spec.for_each.as_deref() else {
-            return Ok(vec![None]);
+            return Ok((vec![None], None));
         };
         let mut items = rows(self.db.query(query, &[]).await?);
+        let mut truncated_from = None;
         if items.len() > self.cfg.fanout_max {
-            // Truncation is logged loudly: silently covering "most" of the fan-out
-            // reads as success when it isn't.
+            // Truncation is surfaced twice on purpose: silently covering "most" of
+            // the fan-out reads as success when it isn't, and a log line alone is
+            // invisible to `spky schedules`. The caller records it on the row.
             tracing::error!(
                 schedule = %spec.name,
                 rows = items.len(),
                 limit = self.cfg.fanout_max,
                 "forEach returned more rows than the fan-out limit — dropping the excess"
             );
+            truncated_from = Some(items.len());
             items.truncate(self.cfg.fanout_max);
         }
-        Ok(items.into_iter().map(Some).collect())
+        Ok((items.into_iter().map(Some).collect(), truncated_from))
     }
 
     /// Apply the concurrency policy, then spawn (or record a skip).
@@ -269,7 +412,6 @@ impl ScheduleEngine {
                         key,
                         fire_at,
                         trigger,
-                        item,
                         "skipped",
                         None,
                         None,
@@ -305,7 +447,6 @@ impl ScheduleEngine {
                         key,
                         fire_at,
                         trigger,
-                        item.clone(),
                         "running",
                         Some(&job.as_string()),
                         None,
@@ -359,7 +500,7 @@ impl ScheduleEngine {
     async fn active_run_count(&self, name: &str, key: &str) -> Result<i64, ScheduleDbError> {
         let results =
             self.db.query(sql::COUNT_ACTIVE_RUNS, &[("name", json!(name)), ("key", json!(key))]).await?;
-        Ok(first_row(results).and_then(|v| v.as_i64()).unwrap_or(0))
+        Ok(count_value(results))
     }
 
     /// Kill whatever is in flight for this key and mark those runs `replaced`.
@@ -392,6 +533,12 @@ impl ScheduleEngine {
 
     /// Create the history row. `false` = this fire already produced one.
     #[allow(clippy::too_many_arguments)]
+    /// Create the run row for one fire of one fan-out item.
+    ///
+    /// Deliberately does NOT store the fan-out item. The row is already on the
+    /// spawned job's `payload.row` (job kind) or the workflow run's `input`
+    /// (workflow kind), which is where every reader looks; a second copy here
+    /// was write-only and, at high fan-out, most of this table's bytes.
     pub(crate) async fn create_schedule_run(
         &self,
         schedule_id: &ids::Ref,
@@ -400,7 +547,6 @@ impl ScheduleEngine {
         key: &str,
         fire_at: DateTime<Utc>,
         trigger: Trigger,
-        item: Option<Value>,
         status: &str,
         job_id: Option<&str>,
         workflow_run: Option<&str>,
@@ -421,9 +567,6 @@ impl ScheduleEngine {
         if let Some(wf) = workflow_run {
             content.insert("workflow_run".into(), json!(wf));
         }
-        if let Some(row) = item {
-            content.insert("row".into(), row);
-        }
         let mut binds = bind_ref("", &ids::schedule_run(run_key)).to_vec();
         binds.extend(bind_ref("schedule", schedule_id));
         binds.extend([("content", Value::Object(content)), ("fire", json!(stamp(fire_at)))]);
@@ -437,7 +580,17 @@ impl ScheduleEngine {
         let result = self.db.query(stmt, &binds).await;
 
         match result {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                // A run born terminal (a suppressed `skip`) never reaches
+                // `finalize_schedule_run`, so it reports its own outcome. The
+                // `fire_at` guard collapses a whole fan-out's worth of these into a
+                // single write.
+                if status != "running" {
+                    let row = json!({ "schedule_name": spec.name, "fire_at": stamp(fire_at) });
+                    self.record_last_run(&row, status).await;
+                }
+                Ok(true)
+            }
             // The deterministic id turns a duplicate into the idempotency check:
             // two tickers racing the same fire, or a replayed sweep, collide here
             // instead of double-spawning.
@@ -459,8 +612,33 @@ impl ScheduleEngine {
         }
         let mut binds = bind_ref("", run).to_vec();
         binds.push(("patch", Value::Object(patch)));
-        self.db.query(sql::FINALIZE_SCHEDULE_RUN, &binds).await?;
+        let finalized = self.db.query(sql::FINALIZE_SCHEDULE_RUN, &binds).await?;
+
+        // An empty result means the `running` guard didn't match (already
+        // finalized, or killed), and a run that didn't transition must not report
+        // an outcome onto its schedule.
+        if let Some(row) = first_row(finalized) {
+            self.record_last_run(&row, status).await;
+        }
         Ok(())
+    }
+
+    /// Denormalize a run's outcome onto its schedule row.
+    ///
+    /// Best-effort: this is an operator convenience (`spky schedules list`), so a
+    /// failure here must not turn a completed run into a failed sweep.
+    async fn record_last_run(&self, run_row: &Value, status: &str) {
+        let Some(name) = run_row.get("schedule_name").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(fire_at) = run_row.get("fire_at").and_then(Value::as_str) else {
+            return;
+        };
+        let mut binds = bind_ref("", &ids::schedule(name)).to_vec();
+        binds.extend([("status", json!(status)), ("at", json!(fire_at))]);
+        if let Err(e) = self.db.query(sql::SET_LAST_RUN, &binds).await {
+            tracing::warn!(schedule = name, error = %e, "could not record last run outcome");
+        }
     }
 
     // -- observing ----------------------------------------------------------
@@ -564,15 +742,377 @@ impl ScheduleEngine {
 
     // -- retention ----------------------------------------------------------
 
+    /// Drop terminal history past the retention window.
+    ///
+    /// Runs on its own slow cadence ([`PRUNE_INTERVAL_SECS`]) rather than every
+    /// sweep: firing and healing need 5-second responsiveness, retention does not,
+    /// and each prune statement is a scan over a status partition. At high fan-out
+    /// this pass is the most expensive thing in the tick while deleting nothing
+    /// almost every time it runs.
+    ///
+    /// **Ordering is load-bearing.** [`Self::tick_pass`] runs `heal_pass` before
+    /// this and propagates its error, so by the time a prune happens every
+    /// `running` job-run has already been reconciled against its job row. That is
+    /// what stops a prune from manufacturing the `job_missing` failure in
+    /// [`Self::heal_pass`]: the grace needed between a job going terminal and its
+    /// row becoming prunable is one sweep interval, not one retention window. Do
+    /// not reorder these passes, and do not let a heal failure fall through to a
+    /// prune.
     async fn prune_pass(&self, now: DateTime<Utc>, report: &mut TickReport) -> anyhow::Result<()> {
-        let before = json!(stamp(now - self.cfg.history_max_age));
-        for stmt in [sql::PRUNE_STEP_RUNS, sql::PRUNE_WORKFLOW_RUNS, sql::PRUNE_SCHEDULE_RUNS] {
-            match self.db.query(stmt, &[("before", before.clone())]).await {
-                Ok(results) => report.pruned += rows(results).len(),
-                Err(e) => tracing::warn!(error = %e, "history prune failed"),
+        if !self.claim_prune(now) {
+            return Ok(());
+        }
+        let policy = self.load_retention().await;
+        let overrides = self.load_history_overrides().await;
+        let except = json!(overrides.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>());
+
+        // Schedules with their own `history:` window are excluded from the global
+        // pass and pruned per-schedule below, so neither window can clobber the
+        // other.
+        for status in sql::SCHEDULE_RUN_PRUNABLE {
+            let before = json!(stamp(now - policy.for_run_status(status)));
+            self.prune_batches(
+                sql::PRUNE_SCHEDULE_RUNS,
+                &[("status", json!(status)), ("except", except.clone())],
+                &before,
+                Fold { scope: SCOPE_SCHEDULE, status, name: RollupName::Field("schedule_name") },
+                report,
+            )
+            .await;
+        }
+        for (name, success, failed) in &overrides {
+            for status in sql::SCHEDULE_RUN_PRUNABLE {
+                let window = match status {
+                    "failed" | "killed" => failed.unwrap_or(policy.run_failed),
+                    _ => success.unwrap_or(policy.run_success),
+                };
+                let before = json!(stamp(now - window));
+                self.prune_batches(
+                    sql::PRUNE_SCHEDULE_RUNS_FOR,
+                    &[("status", json!(status)), ("name", json!(name))],
+                    &before,
+                    Fold { scope: SCOPE_SCHEDULE, status, name: RollupName::Fixed(name) },
+                    report,
+                )
+                .await;
             }
         }
+        for status in sql::WORKFLOW_RUN_PRUNABLE {
+            let before = json!(stamp(now - policy.for_run_status(status)));
+            self.prune_batches(
+                sql::PRUNE_WORKFLOW_RUNS,
+                &[("status", json!(status))],
+                &before,
+                Fold { scope: SCOPE_SCHEDULE, status, name: RollupName::Field("schedule_name") },
+                report,
+            )
+            .await;
+        }
+
+        // Outbox job rows. These are ordinary synced user tables, so every deleted
+        // row fires the table's generated delete event and POSTs the record to
+        // `/ingest` — which is why the batch budget matters far more here than on
+        // the `_00_*` tables.
+        for table in &policy.job_tables {
+            if !sql::is_plain_identifier(table) {
+                tracing::warn!(table = %table, "skipping retention for an unsafe table name");
+                continue;
+            }
+            let stmt = sql::prune_job_table(table);
+            for status in sql::JOB_PRUNABLE {
+                let before = json!(stamp(now - policy.for_job_status(status)));
+                self.prune_batches(
+                    &stmt,
+                    &[("status", json!(status))],
+                    &before,
+                    Fold { scope: SCOPE_JOB, status, name: RollupName::Fixed(table) },
+                    report,
+                )
+                .await;
+            }
+        }
+
+        self.enforce_row_cap(now, &policy, report).await;
         Ok(())
+    }
+
+    /// Trim whatever is left over a hard row cap, regardless of age.
+    ///
+    /// The age windows already bound volume at rate x window, so this is a valve for
+    /// the pathological case: a fan-out so wide that even a short window holds more
+    /// rows than the deployment can carry. `max_rows: 0` (the default) disables it.
+    ///
+    /// Runs on a slow multiple of the prune cadence because it has to COUNT, which is
+    /// an index walk rather than a point read. Only success-shaped statuses are ever
+    /// trimmed: a cap must never be the reason a failure disappears, so a table can
+    /// legitimately sit above the cap if failures alone exceed it.
+    async fn enforce_row_cap(
+        &self,
+        now: DateTime<Utc>,
+        policy: &Retention,
+        report: &mut TickReport,
+    ) {
+        let Some(max_rows) = policy.max_rows else { return };
+        if !self.prune_passes.fetch_add(1, Ordering::Relaxed).is_multiple_of(CAP_EVERY_N_PRUNES) {
+            return;
+        }
+        // No age bound: the cap is about volume, so every terminal row is a
+        // candidate and the batch size is what limits the damage.
+        let unbounded = json!(stamp(now));
+
+        for status in CAP_TRIMMABLE_RUN_STATUSES {
+            let n = self.count_status(sql::COUNT_RUNS_IN_STATUS, status).await;
+            let Some(over) = n.checked_sub(max_rows).filter(|o| *o > 0) else { continue };
+            tracing::info!(status, over, max_rows, "trimming schedule-run history over the cap");
+            self.prune_batches_capped(
+                sql::PRUNE_SCHEDULE_RUNS,
+                &[("status", json!(status)), ("except", json!(Vec::<String>::new()))],
+                &unbounded,
+                Fold { scope: SCOPE_SCHEDULE, status, name: RollupName::Field("schedule_name") },
+                Some(over),
+                report,
+            )
+            .await;
+        }
+
+        for table in &policy.job_tables {
+            if !sql::is_plain_identifier(table) {
+                continue;
+            }
+            let count_stmt = sql::count_jobs_in_status(table);
+            let prune_stmt = sql::prune_job_table(table);
+            for status in CAP_TRIMMABLE_JOB_STATUSES {
+                let n = self.count_status(&count_stmt, status).await;
+                let Some(over) = n.checked_sub(max_rows).filter(|o| *o > 0) else { continue };
+                tracing::info!(table = %table, status, over, max_rows, "trimming jobs over the cap");
+                self.prune_batches_capped(
+                    &prune_stmt,
+                    &[("status", json!(status))],
+                    &unbounded,
+                    Fold { scope: SCOPE_JOB, status, name: RollupName::Fixed(table) },
+                    Some(over),
+                    report,
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn count_status(&self, stmt: &str, status: &str) -> usize {
+        match self.db.query(stmt, &[("status", json!(status))]).await {
+            Ok(results) => count_value(results).max(0) as usize,
+            Err(e) => {
+                tracing::warn!(error = %e, status, "could not count rows for the cap");
+                0
+            }
+        }
+    }
+
+    /// Read the deploy-written policy, falling back to the engine defaults.
+    async fn load_retention(&self) -> Retention {
+        let fallback = Retention {
+            job_success: self.cfg.history_max_age,
+            job_failed: self.cfg.history_max_age,
+            run_success: self.cfg.history_max_age,
+            run_failed: self.cfg.history_max_age,
+            job_tables: Vec::new(),
+            max_rows: None,
+        };
+        let row = match self.db.query(sql::SELECT_RETENTION, &[]).await {
+            Ok(results) => first_row(results),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read retention policy; using defaults");
+                return fallback;
+            }
+        };
+        let Some(row) = row.filter(|v| v.is_object()) else {
+            return fallback;
+        };
+        let secs = |key: &str, default: Duration| {
+            row.get(key)
+                .and_then(Value::as_i64)
+                .filter(|n| *n > 0)
+                .map(Duration::seconds)
+                .unwrap_or(default)
+        };
+        Retention {
+            job_success: secs("success_secs", fallback.job_success),
+            job_failed: secs("failed_secs", fallback.job_failed),
+            run_success: secs("run_success_secs", fallback.run_success),
+            run_failed: secs("run_failed_secs", fallback.run_failed),
+            job_tables: row
+                .get("job_tables")
+                .and_then(Value::as_array)
+                .map(|xs| xs.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default(),
+            // 0 (the DDL default) means disabled, not "keep nothing".
+            max_rows: row
+                .get("max_rows")
+                .and_then(Value::as_i64)
+                .filter(|n| *n > 0)
+                .map(|n| n as usize),
+        }
+    }
+
+    /// `(schedule name, success window, failed window)` for schedules that set
+    /// `history:` in config.
+    #[allow(clippy::type_complexity)]
+    async fn load_history_overrides(&self) -> Vec<(String, Option<Duration>, Option<Duration>)> {
+        let rows = match self.db.query(sql::SELECT_HISTORY_OVERRIDES, &[]).await {
+            Ok(results) => rows(results),
+            Err(e) => {
+                tracing::warn!(error = %e, "could not read per-schedule retention overrides");
+                return Vec::new();
+            }
+        };
+        rows.into_iter()
+            .filter_map(|row| {
+                let name = row.get("name").and_then(Value::as_str)?.to_string();
+                let win = |key: &str| {
+                    row.get(key).and_then(Value::as_i64).filter(|n| *n > 0).map(Duration::seconds)
+                };
+                Some((name, win("history_success_secs"), win("history_failed_secs")))
+            })
+            .collect()
+    }
+
+    /// Make the next sweep prune regardless of when the last one did.
+    ///
+    /// Test-only: the cadence gate is deliberately not reachable in production — a
+    /// host that wants a different interval should change the constant rather than
+    /// race the gate. Tests need it because most of them already ran a sweep (and
+    /// so claimed the prune slot) while arranging their fixture.
+    #[cfg(test)]
+    pub(crate) fn force_prune_next_pass(&self) {
+        self.last_prune_at.store(0, Ordering::Relaxed);
+    }
+
+    /// Has `PRUNE_INTERVAL_SECS` elapsed since the last prune? Claims the slot if
+    /// so. The first call after start always claims, so a restart loop cannot
+    /// starve retention.
+    fn claim_prune(&self, now: DateTime<Utc>) -> bool {
+        let now_ms = now.timestamp_millis();
+        let last = self.last_prune_at.load(Ordering::Relaxed);
+        if last != 0 && now_ms - last < PRUNE_INTERVAL_SECS * 1000 {
+            return false;
+        }
+        self.last_prune_at.store(now_ms, Ordering::Relaxed);
+        true
+    }
+
+    /// Run one prune statement repeatedly until it stops returning a full batch.
+    ///
+    /// Bounded twice over: `PRUNE_BATCH` rows per statement and
+    /// `PRUNE_MAX_BATCHES` statements per call. Deleting a row on a synced table
+    /// costs an HTTP round-trip out of the database (the generated
+    /// `_00_<t>_delete` event ingests the record), so a backlog has to drain at a
+    /// deliberate rate rather than in one transaction. A partial batch means this
+    /// status is drained, so stop.
+    ///
+    /// Never returns `Err`: retention failing is a warning, not a reason to abort a
+    /// sweep that has already planned and fired.
+    async fn prune_batches(
+        &self,
+        stmt: &str,
+        extra: &[(&str, Value)],
+        before: &Value,
+        fold: Fold<'_>,
+        report: &mut TickReport,
+    ) {
+        self.prune_batches_capped(stmt, extra, before, fold, None, report).await
+    }
+
+    /// As [`Self::prune_batches`], but stopping after `total` rows.
+    ///
+    /// `total` is what the row cap needs and what the age-based prune must NOT have:
+    /// the age prune drains everything past its window (bounded only by the per-pass
+    /// batch budget), while the cap wants exactly the overage. Without the bound the
+    /// cap's loop keeps going as long as batches come back full — and since it runs
+    /// with no age filter, "full" is always true until the table is empty. That would
+    /// delete a project's entire success history the first time a cap was set.
+    async fn prune_batches_capped(
+        &self,
+        stmt: &str,
+        extra: &[(&str, Value)],
+        before: &Value,
+        fold: Fold<'_>,
+        total: Option<usize>,
+        report: &mut TickReport,
+    ) {
+        let mut remaining = total.unwrap_or(usize::MAX);
+        for _ in 0..PRUNE_MAX_BATCHES {
+            let batch = PRUNE_BATCH.min(remaining);
+            if batch == 0 {
+                return;
+            }
+            let mut binds = vec![("before", before.clone()), ("batch", json!(batch))];
+            binds.extend(extra.iter().cloned());
+            match self.db.query(stmt, &binds).await {
+                Ok(results) => {
+                    let doomed = rows(results);
+                    let n = doomed.len();
+                    report.pruned += n;
+                    // Fold BEFORE deciding to stop: the rows are already deleted, so a
+                    // fold that never happens is a count lost for good.
+                    self.fold_rollup(&doomed, fold).await;
+                    remaining = remaining.saturating_sub(n);
+                    if n < batch || remaining == 0 {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, status = %fold.status, "history prune failed");
+                    return;
+                }
+            }
+        }
+        tracing::info!(
+            status = %fold.status,
+            batches = PRUNE_MAX_BATCHES,
+            "history prune hit its per-pass batch budget; continuing next pass"
+        );
+    }
+
+    /// Accumulate a deleted batch into the hourly rollup.
+    ///
+    /// The counts come out of the projection the prune already selected, so this
+    /// costs one UPSERT per (name, hour) touched — typically one — and no extra read.
+    /// Best-effort: losing a counter must never turn a completed prune into an error.
+    async fn fold_rollup(&self, doomed: &[Value], fold: Fold<'_>) {
+        if doomed.is_empty() {
+            return;
+        }
+        let mut buckets: BTreeMap<(String, String), i64> = BTreeMap::new();
+        for row in doomed {
+            let Some(bucket) = row.get("bucket").and_then(Value::as_str) else { continue };
+            let name = match fold.name {
+                RollupName::Fixed(name) => name.to_string(),
+                RollupName::Field(field) => match row.get(field).and_then(Value::as_str) {
+                    Some(name) => name.to_string(),
+                    // A workflow run spawned ad hoc has no owning schedule; count it
+                    // under a stable placeholder rather than dropping it.
+                    None => "(ad-hoc)".to_string(),
+                },
+            };
+            *buckets.entry((name, bucket.to_string())).or_default() += 1;
+        }
+
+        for ((name, bucket), n) in buckets {
+            let id = ids::rollup(fold.scope, &name, &bucket);
+            let mut binds = bind_ref("", &id).to_vec();
+            binds.extend([
+                ("scope", json!(fold.scope)),
+                ("name", json!(name)),
+                ("bucket", json!(bucket)),
+            ]);
+            // Exactly one counter moves per statement; the rest must still be bound.
+            for status in ["success", "failed", "skipped", "replaced", "killed"] {
+                binds.push((status, json!(if status == fold.status { n } else { 0 })));
+            }
+            if let Err(e) = self.db.query(sql::UPSERT_ROLLUP, &binds).await {
+                tracing::warn!(error = %e, scope = fold.scope, "could not fold rollup counters");
+            }
+        }
     }
 
     // -- shared helpers -----------------------------------------------------

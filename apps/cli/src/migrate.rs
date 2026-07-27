@@ -796,6 +796,7 @@ pub fn apply_internal_schema(
         internal_sql.push('\n');
         internal_sql.push_str(&crate::schema_builder::build_outbox_platform_fields(
             outbox.iter().map(String::as_str),
+            mode,
         ));
     }
 

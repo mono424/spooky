@@ -43,6 +43,7 @@ For a fully annotated reference covering every option, see [`example/sp00ky.yml`
 | `schedules` | map \| path | `{}` | Server-side cron/interval jobs. See [Schedules](/docs/jobs/schedules). |
 | `workflows` | map \| path | `{}` | Server-side workflow DAGs. See [Workflows](/docs/jobs/workflows). |
 | `deployment` | object | (none) | Cloud deployment knobs: `sspCount`, `backup`. See [Cloud Deployment](/docs/cloud/deploying). |
+| `retention` | object | (see below) | How long finished jobs and run history are kept. See [Retention](#retention). |
 
 ## Apps
 
@@ -109,6 +110,22 @@ deploy:
 
 The referenced file holds a single app config (the same fields you'd inline under `apps.<name>`) and validates against its own [`app.schema.json`](https://sp00ky.cloud/schema/app.schema.json). Its relative paths are resolved from the service directory, and at load time the whole thing is merged into one effective config. Any field you also set alongside `path` in the root file wins (main overrides sub). The split is entirely optional, leave your apps inline and nothing changes.
 
+## Retention
+
+Finished jobs and run history are deleted automatically, asymmetrically by outcome: a success is read once if at all, a failure is what you went looking for.
+
+<CodeBlock code={ymlRetention} lang="yaml" />
+
+| Field | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `success` | duration | `6h` | Job rows in `success`. |
+| `failed` | duration | `14d` | Job rows in `failed`. |
+| `runSuccess` | duration | `24h` | Schedule/workflow runs in `success`, `skipped`, `replaced`. |
+| `runFailed` | duration | `30d` | Schedule/workflow runs in `failed`, `killed`. |
+| `maxRows` | integer | `0` (off) | Hard ceiling on rows in a successful status, per table. Trims oldest-first and never touches failures. A valve for very wide fan-out; the age windows above are the main mechanism. |
+
+Whatever retention deletes is first folded into permanent hourly counters (`_00_run_rollup`), so totals survive the rows; `spky schedules get` shows them. `pending` and `processing` jobs, and `running` runs, are never pruned at any age. An individual schedule can override the run-history windows with `history:` (see [Schedules and workflows](#schedules-and-workflows)). Full behaviour in [Jobs → Retention](/docs/jobs#retention).
+
 ## Schedules and workflows
 
 `schedules` and `workflows` declare work that runs server-side on a clock, whether or not a client is connected. Each cycle the scheduler creates a new job row in the target backend's outbox table, so a scheduled run is an ordinary job with the usual retry, kill, and recovery behaviour.
@@ -116,6 +133,12 @@ The referenced file holds a single app config (the same fields you'd inline unde
 <CodeBlock code={ymlSchedules} lang="yaml" />
 
 A schedule sets exactly one of `cron` (a 5-field expression, evaluated in `timezone`, default UTC) or `every` (a fixed interval, minimum 10s). `forEach` fans one schedule out into one job per row, and `concurrency` decides what a fire does when that row's previous run is still going: `skip` (default) records the suppressed tick, `allow` permits overlap, `replace` kills the in-flight run first.
+
+A schedule may also set `history: { success, failed }` to override the project's [retention](#retention) for its own run history — worth doing for a wide fan-out, which writes one run row per item per fire.
+
+<Warning>
+  `forEach.key` must be unique per row. The run id is derived from it, so two rows producing the same key collide and only the first spawns; a `key` naming a field the rows don't have collapses the whole fan-out onto one run. The scheduler records this on the schedule, visible in `spky schedules list`.
+</Warning>
 
 A workflow is a DAG: steps with no `dependsOn` are roots and run in parallel, a step with several dependencies is a fan-in join, and each step receives its dependencies' response bodies under `payload.steps`. See [Schedules](/docs/jobs/schedules) and [Workflows](/docs/jobs/workflows) for the full behaviour and the `spky schedules` / `spky workflows` commands.
 
@@ -193,6 +216,12 @@ export const ymlApps = `apps:
     image: livekit/livekit-server:latest
     ports: [7880, 7881, "7882/udp"]
     args: ["--dev", "--bind", "0.0.0.0"]`;
+
+export const ymlRetention = `retention:
+  success: 6h        # job rows that succeeded
+  failed: 14d        # job rows that failed
+  runSuccess: 24h    # run history: success | skipped | replaced
+  runFailed: 30d     # run history: failed | killed`;
 
 export const ymlSchedules = `schedules:
   nightly-cleanup:

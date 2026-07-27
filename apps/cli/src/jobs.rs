@@ -132,6 +132,23 @@ fn result_rows(result: Option<&Value>) -> Vec<Value> {
     }
 }
 
+/// Read a statement result as a count.
+///
+/// A count comes back either as a bare number or wrapped — `count()` under
+/// `GROUP ALL` yields `{ "count": n }` on some query plans and a plain int on
+/// others, and which one you get depends on whether an index covers the
+/// predicate. Accept both rather than silently reading zero.
+fn result_count(result: &Value) -> Option<usize> {
+    let first = match result {
+        Value::Array(arr) => arr.first()?,
+        other => other,
+    };
+    match first {
+        Value::Object(map) => map.get("count").and_then(Value::as_u64).map(|n| n as usize),
+        other => other.as_u64().map(|n| n as usize),
+    }
+}
+
 // =============================================================
 // Data model
 // =============================================================
@@ -200,7 +217,8 @@ impl StatusCounts {
         self.pending + self.processing + self.success + self.failed + self.other
     }
 
-    /// Failed as a fraction of all terminal jobs (success + failed).
+    /// Failed as a fraction of terminal jobs (success + failed) in the counting
+    /// window — the last hour, not all of history. See `fetch_table`.
     fn fail_rate(&self) -> f64 {
         let terminal = self.success + self.failed;
         if terminal == 0 {
@@ -225,6 +243,12 @@ struct Snapshot {
 
 /// Query one job table in a single round-trip (rows + status counts + 1-minute
 /// success throughput + oldest pending timestamp).
+///
+/// The status counts cover in-flight work plus the last hour of terminal work, not
+/// all of history. Two reasons: an all-time `GROUP BY status` is an unbounded
+/// aggregate over the whole table on every 1-second TUI refresh, and once retention
+/// keeps failures longer than successes an all-time ratio reports a fail rate that
+/// climbs as successes age out. A bounded window is the only honest denominator.
 fn fetch_table(
     client: &SurrealClient,
     table: &str,
@@ -235,7 +259,9 @@ fn fetch_table(
         "SELECT type::string(id) AS id, status, path, retries, max_retries, retry_strategy, \
          type::string(created_at) AS created_at, type::string(updated_at) AS updated_at, errors, payload \
          FROM {table} ORDER BY updated_at DESC LIMIT {limit}; \
-         SELECT status, count() AS n FROM {table} GROUP BY status; \
+         SELECT status, count() AS n FROM {table} \
+         WHERE status IN ['pending', 'processing'] OR updated_at > time::now() - 1h \
+         GROUP BY status; \
          SELECT count() AS n FROM {table} WHERE status = 'success' AND updated_at > time::now() - 1m GROUP ALL; \
          SELECT type::string(created_at) AS created_at FROM {table} WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1;",
         table = table,
@@ -495,11 +521,11 @@ fn list(
         .unwrap_or_else(|| "-".to_string());
     println!();
     println!(
-        "{BOLD}jobs{RESET}  {YELLOW}{} pending{RESET}  {CYAN}{} processing{RESET}  {GREEN}{} success{RESET}  {RED}{} failed{RESET}  {DIM}({} total){RESET}",
+        "{BOLD}jobs{RESET}  {YELLOW}{} pending{RESET}  {CYAN}{} processing{RESET}  {GREEN}{} success{RESET}  {RED}{} failed{RESET}  {DIM}({} in last hour){RESET}",
         c.pending, c.processing, c.success, c.failed, c.total()
     );
     println!(
-        "{DIM}fail rate {:.1}%   throughput {} ✓/min   oldest pending {}{RESET}",
+        "{DIM}fail rate {:.1}% (1h)   throughput {} ✓/min   oldest pending {}{RESET}",
         c.fail_rate(),
         snapshot.throughput_1m,
         oldest
@@ -680,34 +706,70 @@ fn retry(client: &SurrealClient, id: &str) -> Result<()> {
 // `spky jobs clear`
 // =============================================================
 
+/// Rows deleted per statement when clearing a job table.
+///
+/// Deleting a job row is not a local write: an outbox table is a synced user
+/// table, so each DELETE fires the generated `_00_<table>_delete` event, whose body
+/// removes the row's `_00_version` entry and `http::post`s the whole record to the
+/// SSP's `/ingest`. One unbounded `DELETE` over a table with millions of rows is
+/// therefore millions of HTTP round-trips and WAL appends inside a single
+/// transaction, which is how this command used to stall a cluster. The cost per row
+/// is a network round-trip, so keep this small.
+const CLEAR_BATCH: usize = 500;
+
 /// Delete jobs from all discovered job tables. By default only terminal jobs
 /// (status `success` or `failed`) are removed — finished history, with no
 /// in-flight pickup to coordinate with the SSP, so a plain `DELETE` is correct.
 /// With `all`, pending (queued) jobs are also dropped. `processing` (in-flight)
 /// jobs are NEVER deleted — killing a job mid-run is `spky jobs kill`'s domain.
+///
+/// Drains in bounded batches (see [`CLEAR_BATCH`]) rather than one statement.
 fn clear(client: &SurrealClient, tables: &BTreeMap<String, String>, all: bool) -> Result<()> {
     let mut total = 0usize;
     for table in tables.keys() {
         // `table` is a config-derived identifier (same direct interpolation the
-        // SELECTs use); `RETURN BEFORE` yields the deleted rows so we can count.
-        // `all` widens the terminal set to include pending, but always spares
-        // `processing` so a running job is never yanked out from under the SSP.
-        let query = if all {
-            format!("DELETE {table} WHERE status != 'processing' RETURN BEFORE;")
+        // SELECTs use). `all` widens the terminal set to include pending, but always
+        // spares `processing` so a running job is never yanked out from under the SSP.
+        let cond = if all {
+            "status != 'processing'"
         } else {
-            format!("DELETE {table} WHERE status = 'success' OR status = 'failed' RETURN BEFORE;")
+            "status IN ['success', 'failed']"
         };
-        let responses = client
-            .execute(&query)
-            .with_context(|| format!("Failed to clear jobs in '{}'", table))?;
-        let n = responses
-            .into_iter()
-            .next()
-            .and_then(|r| r.result)
-            .map(|r| result_rows(Some(&r)).len())
-            .unwrap_or(0);
+        // One statement per batch, wrapped in a block so the result is a single
+        // count. Projecting `id` instead of `RETURN BEFORE` keeps the response small:
+        // a job row carries an uncapped `payload` and up to 64 KiB of `result`, and
+        // we only ever wanted the number.
+        let query = format!(
+            "RETURN {{ \
+             LET $doomed = (SELECT id FROM {table} WHERE {cond} LIMIT {CLEAR_BATCH}); \
+             DELETE $doomed.id; \
+             RETURN count($doomed); \
+             }};"
+        );
+        let mut n = 0usize;
+        loop {
+            let responses = client
+                .execute(&query)
+                .with_context(|| format!("Failed to clear jobs in '{}'", table))?;
+            let batch = responses
+                .into_iter()
+                .next()
+                .and_then(|r| r.result)
+                .and_then(|r| result_count(&r))
+                .unwrap_or(0);
+            n += batch;
+            if batch > 0 {
+                // Progress matters here: a large backlog takes many batches, and a
+                // silent multi-minute command reads as a hang.
+                print!("\r  {DIM}{table} : cleared {n} job(s)…{RESET}");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+            }
+            if batch < CLEAR_BATCH {
+                break;
+            }
+        }
         if n > 0 {
-            println!("  {GREEN}✓{RESET} {table} : removed {n} job(s)");
+            println!("\r  {GREEN}✓{RESET} {table} : removed {n} job(s)          ");
         }
         total += n;
     }
@@ -1041,13 +1103,13 @@ fn render_metrics(f: &mut Frame, area: Rect, app: &TuiApp) {
             Style::default().fg(Color::Red),
         ),
         Span::styled(
-            format!("   ({} total)", c.total()),
+            format!("   ({} in last hour)", c.total()),
             Style::default().fg(Color::DarkGray),
         ),
     ]);
     let detail_line = Line::from(Span::styled(
         format!(
-            "fail rate {:.1}%    throughput {} ✓/min    oldest pending {}",
+            "fail rate {:.1}% (1h)    throughput {} ✓/min    oldest pending {}",
             c.fail_rate(),
             app.snapshot.throughput_1m,
             oldest

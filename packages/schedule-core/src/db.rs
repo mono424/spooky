@@ -71,6 +71,26 @@ pub fn first_row(results: Vec<serde_json::Value>) -> Option<serde_json::Value> {
     rows(results).into_iter().next()
 }
 
+/// First statement's result read as a count.
+///
+/// `SELECT VALUE count() ... GROUP ALL` does NOT have a stable result shape: on
+/// some query plans it yields a bare int, on others a `{ "count": n }` group
+/// object — and merely defining an index that covers the predicate is enough to
+/// flip it. Reading only the int shape is therefore a latent bug: adding
+/// `idx_srun_retention` silently turned `COUNT_ACTIVE_RUNS` into `0`, which
+/// disables `concurrency: skip` and `replace` without any error anywhere.
+///
+/// So every count goes through here, and accepts either shape.
+pub fn count_value(results: Vec<serde_json::Value>) -> i64 {
+    match first_row(results) {
+        Some(serde_json::Value::Object(map)) => {
+            map.get("count").and_then(serde_json::Value::as_i64).unwrap_or(0)
+        }
+        Some(v) => v.as_i64().unwrap_or(0),
+        None => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +102,18 @@ mod tests {
         assert_eq!(rows(vec![json!({"a": 1})]).len(), 1);
         assert!(rows(vec![json!(null)]).is_empty());
         assert!(rows(vec![]).is_empty());
+    }
+
+    /// Both shapes `SELECT VALUE count() ... GROUP ALL` can return, because which
+    /// one you get depends on the query plan and therefore on which indexes exist.
+    #[test]
+    fn count_value_accepts_either_aggregate_shape() {
+        assert_eq!(count_value(vec![json!([3])]), 3);
+        assert_eq!(count_value(vec![json!([{ "count": 3 }])]), 3);
+        assert_eq!(count_value(vec![json!(3)]), 3);
+        assert_eq!(count_value(vec![json!({ "count": 3 })]), 3);
+        assert_eq!(count_value(vec![json!(null)]), 0);
+        assert_eq!(count_value(vec![]), 0);
     }
 
     #[test]

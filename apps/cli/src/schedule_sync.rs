@@ -17,7 +17,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::backend::{AppScope, AppType, BackendProcessor, Sp00kyConfig};
+use crate::backend::{AppScope, AppType, BackendProcessor, ResolvedRetention, Sp00kyConfig};
 use crate::migrate::checksum_str;
 use crate::schedule_config::{normalize_schedule, normalize_workflow};
 use crate::surreal_client::MigrationDB;
@@ -206,6 +206,8 @@ pub fn sync(
     let rows = resolve_rows(config, processor, base_dir)?;
     let mut report = SyncReport::default();
 
+    sync_retention(client, config, processor)?;
+
     let stored = read_stored_hashes(client)?;
 
     for (name, spec) in &rows {
@@ -249,6 +251,51 @@ pub fn sync(
     }
 
     Ok(report)
+}
+
+/// Write the project's retention policy and the list of outbox tables the engine may
+/// sweep to `_00_retention:default`.
+///
+/// The policy lives in the database rather than in an environment variable so that
+/// singlenode, cluster, and Cloudflare deployments all read the identical thing
+/// without another variable threaded through three different shells — and through
+/// the separate cloud control plane, which assembles the SSP's environment
+/// server-side. It also means retention can be retuned with one UPDATE and no
+/// redeploy, the same way `spky schedules pause` works.
+///
+/// `job_tables` is the allowlist: the engine prunes nothing that is not named here,
+/// so it never has to read sp00ky.yml or guess a table name.
+fn sync_retention(
+    client: &dyn MigrationDB,
+    config: &Sp00kyConfig,
+    processor: &BackendProcessor,
+) -> Result<()> {
+    let r = config.resolved_retention()?;
+    let mut tables = crate::schema_builder::outbox_tables(processor);
+    tables.sort();
+    tables.dedup();
+    let sql = retention_patch_sql(&r, &tables)?;
+    client.execute(&sql).context("failed to write the retention policy")?;
+    Ok(())
+}
+
+/// Build the retention UPSERT. Split out so a test can pin the field names against
+/// the shipped DDL: the CLI writes them, the DDL defines them, and the engine reads
+/// them, and a mismatch in any of the three is silent (an undefined field is
+/// rejected on a SCHEMAFULL table; a field the engine doesn't read is ignored).
+fn retention_patch_sql(r: &ResolvedRetention, tables: &[String]) -> Result<String> {
+    // MERGE so an operator's manual tweak to a field this deploy does not own
+    // survives, and so the row's own DEFAULTs still apply on first write.
+    Ok(format!(
+        "UPSERT _00_retention:default MERGE {{ success_secs: {}, failed_secs: {}, \
+         run_success_secs: {}, run_failed_secs: {}, max_rows: {}, job_tables: {} }};",
+        r.success_secs,
+        r.failed_secs,
+        r.run_success_secs,
+        r.run_failed_secs,
+        r.max_rows,
+        serde_json::to_string(tables)?
+    ))
 }
 
 /// `name -> spec_hash` for every config-owned schedule currently in the DB.
@@ -326,5 +373,66 @@ mod tests {
         report.updated = 1;
         assert!(!report.is_noop());
         assert_eq!(report.summary(), "0 created, 1 updated, 3 unchanged, 0 removed");
+    }
+}
+
+#[cfg(test)]
+mod retention_sync_tests {
+    use super::*;
+    use crate::backend::RetentionConfig;
+
+    /// The shipped DDL, so this test is about what actually deploys.
+    const SCHEDULE_TABLES: &str = include_str!("schedule_tables.surql");
+
+    /// Every field this UPSERT writes must be defined on `_00_retention`.
+    ///
+    /// `_00_retention` is SCHEMAFULL, so writing a field the table does not define
+    /// fails the whole statement — and it fails at deploy time, on a statement whose
+    /// only job is bookkeeping. Pinning the names here means renaming a DDL field
+    /// breaks a unit test instead of someone's deploy.
+    #[test]
+    fn every_field_the_upsert_writes_is_defined_by_the_ddl() {
+        let sql = retention_patch_sql(&RetentionConfig::DEFAULTS, &["job".to_string()])
+            .expect("builds");
+        for field in
+            [
+                "success_secs",
+                "failed_secs",
+                "run_success_secs",
+                "run_failed_secs",
+                "max_rows",
+                "job_tables",
+            ]
+        {
+            assert!(sql.contains(&format!("{field}:")), "the UPSERT should write {field}: {sql}");
+            assert!(
+                SCHEDULE_TABLES.contains(&format!("{field} ON TABLE _00_retention")),
+                "`{field}` is written by deploy but not defined on _00_retention"
+            );
+        }
+    }
+
+    /// The row is MERGEd, never CONTENTed: `CONTENT` would drop any field this deploy
+    /// does not name, including an operator's manual tweak.
+    #[test]
+    fn the_policy_is_merged_not_replaced() {
+        let sql = retention_patch_sql(&RetentionConfig::DEFAULTS, &[]).expect("builds");
+        assert!(sql.starts_with("UPSERT _00_retention:default MERGE"), "{sql}");
+        assert!(!sql.contains("CONTENT"));
+    }
+
+    /// `job_tables` is the allowlist the engine prunes against, so it has to arrive as
+    /// a JSON array of names — quoted, not a bare identifier list.
+    #[test]
+    fn job_tables_are_written_as_a_quoted_array() {
+        let sql =
+            retention_patch_sql(&RetentionConfig::DEFAULTS, &["job".into(), "stats_job".into()])
+                .expect("builds");
+        assert!(sql.contains(r#"job_tables: ["job","stats_job"]"#), "{sql}");
+
+        // No outbox tables at all means an empty allowlist, i.e. prune nothing —
+        // never "prune everything".
+        let empty = retention_patch_sql(&RetentionConfig::DEFAULTS, &[]).expect("builds");
+        assert!(empty.contains("job_tables: []"), "{empty}");
     }
 }

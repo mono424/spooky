@@ -419,6 +419,11 @@ pub struct Sp00kyConfig {
     /// Deployment configuration (SSP count, scaling options)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment: Option<DeploymentConfig>,
+    /// How long finished jobs and run history are kept. Written to
+    /// `_00_retention:default` at deploy time and read by the schedule engine's
+    /// prune pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention: Option<RetentionConfig>,
     /// Override the Sp00ky Cloud API endpoint (e.g. for staging).
     #[serde(default, rename = "cloudApi", skip_serializing_if = "Option::is_none")]
     pub cloud_api: Option<String>,
@@ -497,7 +502,85 @@ pub fn detect_bucket_backends(content: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// `retention:` in sp00ky.yml.
+///
+/// Asymmetric by outcome, because the two are read for different reasons: a
+/// successful job is inspected once if at all, while a failure is the thing you
+/// went looking for. Anything unset falls back to [`RetentionConfig::DEFAULTS`].
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RetentionConfig {
+    /// Outbox jobs in `success` (`6h`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    /// Outbox jobs in `failed` (`14d`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<String>,
+    /// Run history in `success` / `skipped` / `replaced` (`24h`).
+    #[serde(default, rename = "runSuccess", skip_serializing_if = "Option::is_none")]
+    pub run_success: Option<String>,
+    /// Run history in `failed` / `killed` (`30d`).
+    #[serde(default, rename = "runFailed", skip_serializing_if = "Option::is_none")]
+    pub run_failed: Option<String>,
+    /// Hard cap on rows in a trimmable (successful) status, per table. Unset or `0`
+    /// disables it. The windows above already bound volume at rate x window; this is
+    /// the valve for a fan-out so wide that even a short window holds too much.
+    /// Failures are never trimmed by it.
+    #[serde(default, rename = "maxRows", skip_serializing_if = "Option::is_none")]
+    pub max_rows: Option<i64>,
+}
+
+/// Resolved retention windows in seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedRetention {
+    pub success_secs: i64,
+    pub failed_secs: i64,
+    pub run_success_secs: i64,
+    pub run_failed_secs: i64,
+    /// `0` disables the cap.
+    pub max_rows: i64,
+}
+
+impl RetentionConfig {
+    /// `(job success, job failed, run success, run failed)` in seconds.
+    ///
+    /// The run-failure window matches what the engine used to hardcode, so
+    /// upgrading can never drop failure history a project already had. Job rows get
+    /// a much shorter success window because nothing reads them once the job is
+    /// done, and they are the ones that pile up: a minutely fan-out over 500 rows
+    /// writes 500 of them a minute.
+    pub const DEFAULTS: ResolvedRetention = ResolvedRetention {
+        success_secs: 6 * 60 * 60,
+        failed_secs: 14 * 24 * 60 * 60,
+        run_success_secs: 24 * 60 * 60,
+        run_failed_secs: 30 * 24 * 60 * 60,
+        // Off by default: the age windows are the mechanism, and a cap that
+        // surprises someone by deleting inside their retention window is worse than
+        // no cap at all.
+        max_rows: 0,
+    };
+}
+
 impl Sp00kyConfig {
+    /// Retention windows in seconds, with every unset value defaulted.
+    pub fn resolved_retention(&self) -> Result<ResolvedRetention> {
+        let d = RetentionConfig::DEFAULTS;
+        let Some(cfg) = self.retention.as_ref() else { return Ok(d) };
+        let secs = |raw: &Option<String>, default: i64| -> Result<i64> {
+            match raw {
+                Some(raw) => Ok(crate::schedule_config::parse_duration_ms(raw)? / 1000),
+                None => Ok(default),
+            }
+        };
+        Ok(ResolvedRetention {
+            success_secs: secs(&cfg.success, d.success_secs)?,
+            failed_secs: secs(&cfg.failed, d.failed_secs)?,
+            run_success_secs: secs(&cfg.run_success, d.run_success_secs)?,
+            run_failed_secs: secs(&cfg.run_failed, d.run_failed_secs)?,
+            max_rows: cfg.max_rows.unwrap_or(d.max_rows).max(0),
+        })
+    }
+
     /// GB allocated for persistent bucket storage, or `None` when disabled
     /// (no `deployment.storage` block, or `sizeGB` unset/zero). When `Some`,
     /// buckets use a file backend and a storage volume is provisioned.
@@ -2890,5 +2973,80 @@ mod surrealdb_tests {
         assert_eq!(r.username.literal_or_default(), "root");
         assert_eq!(r.password.literal_or_default(), "root");
         assert_eq!(r.hosting, HostingMode::Cloud);
+    }
+}
+
+#[cfg(test)]
+mod retention_config_tests {
+    use super::*;
+
+    fn config(yaml: &str) -> Sp00kyConfig {
+        serde_yaml::from_str(yaml).expect("parses")
+    }
+
+    /// With no `retention:` block a project gets the built-in windows. The
+    /// run-failure window matches what the engine used to hardcode, so upgrading can
+    /// never silently drop failure history a project already had.
+    #[test]
+    fn an_absent_block_resolves_to_the_defaults() {
+        let r = config("slug: demo\n").resolved_retention().expect("resolves");
+        assert_eq!(r, RetentionConfig::DEFAULTS);
+        assert_eq!(r.run_failed_secs, 30 * 24 * 60 * 60);
+    }
+
+    /// Successes are kept far more briefly than failures — the asymmetry is the
+    /// point, so it is pinned rather than left to a comment.
+    #[test]
+    fn the_defaults_keep_failures_far_longer_than_successes() {
+        let d = RetentionConfig::DEFAULTS;
+        assert!(d.failed_secs > d.success_secs * 10);
+        assert!(d.run_failed_secs > d.run_success_secs * 10);
+    }
+
+    #[test]
+    fn durations_resolve_to_seconds_and_partial_blocks_keep_the_rest() {
+        let r = config("retention:\n  success: 30m\n  runFailed: 7d\n")
+            .resolved_retention()
+            .expect("resolves");
+        assert_eq!(r.success_secs, 1800);
+        assert_eq!(r.run_failed_secs, 7 * 24 * 60 * 60);
+        // Untouched keys keep their defaults.
+        assert_eq!(r.failed_secs, RetentionConfig::DEFAULTS.failed_secs);
+        assert_eq!(r.run_success_secs, RetentionConfig::DEFAULTS.run_success_secs);
+    }
+
+    /// An unparseable or zero duration must fail the deploy. Resolving it to 0 would
+    /// mean "prune everything immediately", which is the worst possible fallback.
+    #[test]
+    fn a_bad_duration_fails_rather_than_defaulting_to_zero() {
+        assert!(config("retention:\n  success: soon\n").resolved_retention().is_err());
+        assert!(config("retention:\n  success: 0s\n").resolved_retention().is_err());
+    }
+
+    /// The cap is OFF by default. A cap that deletes inside someone's retention
+    /// window without them asking is worse than no cap at all.
+    #[test]
+    fn the_row_cap_is_disabled_unless_asked_for() {
+        assert_eq!(RetentionConfig::DEFAULTS.max_rows, 0);
+        let r = config("retention:\n  success: 1h\n").resolved_retention().expect("resolves");
+        assert_eq!(r.max_rows, 0, "setting an unrelated window must not enable the cap");
+    }
+
+    #[test]
+    fn the_row_cap_is_read_from_config_and_never_negative() {
+        let r = config("retention:\n  maxRows: 50000\n").resolved_retention().expect("resolves");
+        assert_eq!(r.max_rows, 50_000);
+        // A negative cap would underflow into "keep nothing" downstream.
+        let r = config("retention:\n  maxRows: -5\n").resolved_retention().expect("resolves");
+        assert_eq!(r.max_rows, 0);
+    }
+
+    /// A typo must be rejected, not ignored — a silently dropped retention setting is
+    /// discovered by running out of disk.
+    #[test]
+    fn an_unknown_retention_key_is_rejected() {
+        let err = serde_yaml::from_str::<Sp00kyConfig>("retention:\n  sucess: 1h\n")
+            .expect_err("unknown key must not parse");
+        assert!(err.to_string().contains("sucess"), "got: {err}");
     }
 }

@@ -20,7 +20,12 @@ DEFINE TABLE {table} SCHEMAFULL
 PERMISSIONS
   FOR select, create, update, delete WHERE true;
 
-DEFINE FIELD assigned_to ON TABLE {table} TYPE record
+-- The domain record this job belongs to, used by row-level permissions
+-- (`assigned_to.author.id = $auth.id`). OPTIONAL on purpose: a server-side
+-- schedule (`schedules:` in sp00ky.yml) spawns system-initiated jobs that belong
+-- to no single record, so the scheduler creates rows without it. Requiring it
+-- makes every scheduled fire fail with "Expected `record` but found `NONE`".
+DEFINE FIELD assigned_to ON TABLE {table} TYPE option<record>
 PERMISSIONS
   FOR create, select WHERE true
   FOR update WHERE false;
@@ -63,14 +68,24 @@ PERMISSIONS
 -- `{{ code, reason }}` entries as unknown fields (`errors[0].code`).
 DEFINE FIELD errors[*] ON TABLE {table} TYPE object FLEXIBLE;
 
+-- Set on create, and thereafter only when a writer sets it explicitly. Every
+-- platform write does (`UPDATE ... SET status = ..., updated_at = time::now()`),
+-- and the recovery sweeps' staleness clocks read it -- so it must NOT be `VALUE
+-- time::now()`: the SSP's assignee stamp deliberately leaves this field alone so
+-- claiming a job does not reset how long it has looked stuck.
 DEFINE FIELD updated_at ON TABLE {table} TYPE datetime
 DEFAULT ALWAYS time::now()
 PERMISSIONS
   FOR create, select WHERE true
   FOR update WHERE false;
 
+-- `DEFAULT`, deliberately NOT `VALUE`. A `VALUE time::now()` field is recomputed
+-- on every UPDATE, so `created_at` would silently mean "last modified": the
+-- delay window (`created_at + delay`, the job-due clause both recovery sweeps
+-- share) would slide forward on any write to a pending row, and `spky jobs`
+-- would report ages from the last write instead of from creation.
 DEFINE FIELD created_at ON TABLE {table} TYPE datetime
-VALUE time::now()
+DEFAULT time::now()
 PERMISSIONS
   FOR create, select WHERE true
   FOR update WHERE false;
@@ -92,6 +107,16 @@ DEFINE FIELD result ON TABLE {table} TYPE any
 PERMISSIONS
   FOR select WHERE true
   FOR create, update WHERE false;
+
+-- Per-job HTTP timeout in ms, overriding the backend default. Set by
+-- `db.run(..., {{ timeout }})` and by a schedule's `timeout:`. The field must
+-- exist: the scheduler puts it in the job content whenever the schedule declares
+-- one, and a SCHEMAFULL table without it rejects the whole CREATE with
+-- "Found field 'timeout', but no such field exists".
+DEFINE FIELD timeout ON TABLE {table} TYPE option<int>
+PERMISSIONS
+  FOR create, select WHERE true
+  FOR update WHERE false;
 
 -- One-shot delay in ms: the job becomes due at `created_at + delay`
 -- (`db.run(..., {{ delay }})`). Recurring work is no longer a field on this
@@ -363,4 +388,78 @@ pub fn add_api(
     println!();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Slice out one `DEFINE FIELD <name> ON TABLE <t> ...;` statement.
+    fn field_def(ddl: &str, name: &str) -> String {
+        let at = ddl
+            .find(&format!("DEFINE FIELD {name} ON TABLE"))
+            .unwrap_or_else(|| panic!("no `{name}` field in the outbox template"));
+        let rest = &ddl[at..];
+        rest[..rest.find(';').expect("field statement ends")].to_string()
+    }
+
+    /// `created_at` must never be a `VALUE` field.
+    ///
+    /// A `VALUE time::now()` field is recomputed on EVERY update, so `created_at`
+    /// would silently mean "last modified". Two things read it and would be wrong:
+    /// the job-due clause both recovery sweeps share (`created_at + delay`, so a
+    /// delayed job's window slides forward on any write to the pending row) and
+    /// `spky jobs`' age / oldest-pending columns.
+    ///
+    /// Nothing errors when this is wrong, which is exactly why it is pinned here.
+    #[test]
+    fn created_at_is_set_once_not_recomputed_on_every_update() {
+        let created = field_def(&outbox_template("job"), "created_at");
+        assert!(
+            !created.contains("VALUE"),
+            "created_at must not be a VALUE field, or it means \"last modified\": {created}"
+        );
+        assert!(
+            created.contains("DEFAULT time::now()"),
+            "created_at should default on create: {created}"
+        );
+    }
+
+    /// `updated_at` must stay explicit-write-only — `DEFAULT ALWAYS`, never `VALUE`.
+    ///
+    /// Every platform transition sets it by hand, and the recovery sweeps use it as
+    /// the staleness clock (`updated_at < time::now() - 30s`). The SSP's assignee
+    /// stamp deliberately does NOT touch it so that claiming a job cannot reset how
+    /// long that job has looked stuck. Making this `VALUE time::now()` would bump it
+    /// on the assignee stamp and stop recovery from ever seeing a wedged job.
+    #[test]
+    fn updated_at_is_not_bumped_by_writes_that_leave_it_alone() {
+        let updated = field_def(&outbox_template("job"), "updated_at");
+        assert!(
+            !updated.contains("VALUE"),
+            "updated_at must not be a VALUE field, or the assignee stamp resets the \
+             recovery staleness clock: {updated}"
+        );
+        assert!(updated.contains("DEFAULT ALWAYS time::now()"), "got: {updated}");
+    }
+
+    /// The statuses the template's ASSERT allows are exactly the four the runner
+    /// writes. A status the runner writes but the ASSERT rejects is a silently
+    /// dropped write on a SCHEMAFULL table.
+    #[test]
+    fn the_status_assert_covers_every_status_the_runner_writes() {
+        let status = field_def(&outbox_template("job"), "status");
+        for s in ["pending", "processing", "success", "failed"] {
+            assert!(status.contains(s), "status ASSERT is missing '{s}': {status}");
+        }
+    }
+
+    /// `errors[*]` has to be FLEXIBLE or the runner's `{ code, reason }` append is
+    /// rejected by a SCHEMAFULL table — and the append is fire-and-forget, so the
+    /// job still completes and the error history is just silently empty.
+    #[test]
+    fn error_entries_are_flexible_objects() {
+        let ddl = outbox_template("job");
+        assert!(ddl.contains("DEFINE FIELD errors[*] ON TABLE job TYPE object FLEXIBLE"));
+    }
 }

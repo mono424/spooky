@@ -107,6 +107,33 @@ await db.update('email', 'email:abc123', { retracted: true });
 if (email.retracted) return { skipped: true };
 await mailer.send(email);`;
 
+export const retentionCode = `# sp00ky.yml
+retention:
+  success: 6h        # job rows that succeeded
+  failed: 14d        # job rows that failed
+  runSuccess: 24h    # schedule/workflow run history for success|skipped|replaced
+  runFailed: 30d     # ... and for failed|killed`;
+
+export const perScheduleRetentionCode = `schedules:
+  sync-every-tenant:
+    every: 1m
+    backend: api
+    route: /sync
+    forEach:
+      query: SELECT id FROM tenant
+      key: id
+    history:
+      success: 15m     # this schedule alone keeps far less
+      failed: 30d`;
+
+export const rollupOutputCode = `$ spky schedules get sync-every-tenant
+  ...
+  pruned      : 41230 ok  12 failed  388 skipped`;
+
+export const maxRowsCode = `retention:
+  success: 6h
+  maxRows: 50000     # hard ceiling on successful rows per table (0/unset = off)`;
+
 export const cliCode = `spky jobs                      # live dashboard (status counts, recent jobs)
 spky jobs list                 # static, scriptable table (alias: ls)
 spky jobs list --status failed
@@ -114,7 +141,7 @@ spky jobs list --limit 1000 --json
 spky jobs get job:abc123       # full payload, result, and error history
 spky jobs kill job:abc123      # cancel in-flight, or drop if still queued
 spky jobs retry job:abc123     # re-run a terminal job
-spky jobs clear                # delete terminal (success/failed) jobs
+spky jobs clear                # delete terminal (success/failed) jobs, in batches
 
 # Every command targets the local dev stack by default; --cloud targets the
 # deployed database, resolved from "spky login" plus the slug in sp00ky.yml.
@@ -208,8 +235,62 @@ The job runner is built into the SSP. There is nothing to install or implement:
 4. **A recovery sweep catches what events miss:** rows created while the SSP was down, jobs whose delay elapsed during a restart, and `processing` rows orphaned by a crash. In cluster mode the scheduler owns that sweep and uses `assignee` to tell whether the owning SSP is still alive.
 
 <Warning>
-  A SCHEMAFULL job table must define the platform's own fields, or those writes are rejected at the statement level and quietly lost. `spky deploy` injects `assignee`, `result`, and `errors[*]` with `IF NOT EXISTS`, so re-deploying an older project fixes it.
+  A SCHEMAFULL job table must define the platform's own fields, or those writes are rejected at the statement level and quietly lost. `spky deploy` injects `assignee`, `result`, `errors[*]`, and `timeout` with `IF NOT EXISTS` (plus the retention index below), so re-deploying an older project fixes it.
+
+  One thing a deploy **cannot** fix for you: `assigned_to` must be optional. A scheduled job belongs to no domain record, so the scheduler creates rows without it — and if your outbox table declares `assigned_to TYPE record<...>` rather than `option<record<...>>`, every scheduled fire fails to spawn with `Expected record but found NONE`. Deploys never relax a field you defined yourself, so change it in your own `.surql`.
 </Warning>
+
+<Warning>
+  Never mark an outbox table `-- @nosync`. It looks like a way to stop job rows syncing to clients, but job **dispatch** is driven by the table's create event — `@nosync` silently disables the job runner.
+</Warning>
+
+## Retention
+
+Finished jobs are deleted automatically. Retention is asymmetric by outcome, because the two are read for different reasons: a successful job is inspected once if at all, while a failure is the thing you went looking for.
+
+<CodeBlock code={retentionCode} lang="yaml" />
+
+| | default | applies to |
+| --- | --- | --- |
+| `success` | 6h | job rows in `success` |
+| `failed` | 14d | job rows in `failed` |
+| `runSuccess` | 24h | run history in `success`, `skipped`, `replaced` |
+| `runFailed` | 30d | run history in `failed`, `killed` |
+| `maxRows` | off | hard ceiling on successful rows per table, see below |
+
+`pending` and `processing` rows are **never** pruned, at any age. `skipped` and `replaced` follow the success window on purpose: with the default `concurrency: skip`, a slow wide fan-out writes one `skipped` row per item per fire, and those are the highest-volume, lowest-information rows in the system.
+
+### What survives the delete
+
+Before each batch is deleted it is folded into permanent hourly counters, so "how much ran, and how much of it failed" outlives the rows themselves. That is what makes a 6-hour window acceptable rather than lossy. `spky schedules get <name>` shows the totals:
+
+<CodeBlock code={rollupOutputCode} lang="bash" />
+
+The counters are bounded by construction — 24 rows a day per schedule or table — and are written as a by-product of a delete that was happening anyway, so they cost no extra pass over the data.
+
+<Warning>
+  These are a **lower bound, not an audit log.** Only automatic retention folds into them; rows removed by `spky jobs clear`, by your own `DELETE`, or before this feature existed were never counted.
+</Warning>
+
+### The row cap
+
+An age window bounds volume at *rate x window*, which is normally enough. For a fan-out so wide that even a short window holds more than you want to carry, `maxRows` is a hard ceiling:
+
+<CodeBlock code={maxRowsCode} lang="yaml" />
+
+It is **off by default**, and deliberately narrow: it only ever trims successful rows (never `failed`, `killed`, `pending`, or `processing`), it trims the oldest first, and it still folds what it removes into the counters. A table can legitimately sit above the cap if failures alone exceed it. Because it has to count rows, it runs on a slow multiple of the prune cadence rather than every pass.
+
+A single schedule can override the run-history windows, which is what a noisy fan-out needs:
+
+<CodeBlock code={perScheduleRetentionCode} lang="yaml" />
+
+<Note>
+  Job rows age by `updated_at` — a terminal job's last write *is* its terminalization. Run history ages by `finished_at`. Neither uses `created_at`, which is only the queue time.
+
+  Pruning is deliberately paced (batched, once a minute) rather than done in one sweep. An outbox table is a synced user table, so **every deleted row fires the table's delete event and posts the record to the SSP** — the cost per row is a network round-trip, not a local write. A large backlog therefore drains over minutes instead of stalling the database. The same is true of `spky jobs clear`, which batches for the same reason.
+
+  Retention is stored in the database (`_00_retention:default`), written by `spky deploy`. You can retune it with a single `UPDATE` and no redeploy, the same way `spky schedules pause` works. Note that the Cloudflare Workers host does not run the prune pass.
+</Note>
 
 ## Job table schema
 

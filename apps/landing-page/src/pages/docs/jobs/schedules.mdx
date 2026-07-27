@@ -79,6 +79,18 @@ nightly-cleanup          job       0 3 * * *      paused    2026-07-26 01:00:00 
 stale-poller             job       every 1h       error     -                    ·  -
   last error: forEach query failed: query: Parse error at 'FROM'`;
 
+export const historyCode = `schedules:
+  sync-every-tenant:
+    every: 1m
+    backend: api
+    route: /sync
+    forEach:
+      query: SELECT id FROM tenant
+      key: id
+    history:
+      success: 15m     # this schedule keeps far less than the project default
+      failed: 30d`;
+
 export const cliOpsCode = `spky schedules get game-sync        # definition, clock, recent runs
 spky schedules pause game-sync     # stop future fires
 spky schedules resume game-sync    # plan the next fire from now
@@ -179,8 +191,25 @@ Worth knowing, because it explains what is and isn't guaranteed:
 
 - **Definitions are rows.** `spky deploy` (and `spky dev`) upserts each definition into an internal `_00_schedule` table. Three writers own disjoint fields: your manifest owns the definition, you own `paused`, and the scheduler owns the clock. That is why a redeploy can never un-pause something you paused, and why pausing never fights the scheduler over a field.
 - **One ticker.** A sweep runs every 5 seconds, in the SSP for a singlenode deployment, in the scheduler service for a cluster. A fire is claimed with a compare-and-swap on the schedule's next-fire time, so even two tickers cannot double-fire.
-- **Runs are recorded, not inferred.** Every fire writes a `_00_schedule_run` row (including suppressed ones), which is both your history and the per-key concurrency state. Because it is state in the database rather than memory, restarts don't lose it.
+- **Runs are recorded, not inferred.** Every fire writes a `_00_schedule_run` row (including suppressed ones), which is both your history and the per-key concurrency state. Because it is state in the database rather than memory, restarts don't lose it. History is *not* kept forever, though — see [Retention](#retention) below.
+- **The fan-out row is not duplicated.** A run row records which key it was for, not a copy of the row itself; the row travels on the spawned job's `payload.row` (and on a workflow run's `input`), which is where `spky jobs get` shows it.
 - **Completion is observed, and also healed.** The scheduler learns a job finished from the same event stream your app's writes travel on, and every sweep also reconciles directly against the job rows. So a dropped event delays things by one sweep instead of stalling them.
+
+## Retention
+
+Run history is pruned automatically, asymmetrically by outcome: `success`, `skipped`, and `replaced` runs are kept for 24h by default, while `failed` and `killed` are kept for 30d. A run that is still `running` is never pruned, however old.
+
+That default is a project-wide setting (`retention:` in sp00ky.yml — see [Jobs](/docs/jobs#retention)), and any single schedule can override it:
+
+<CodeBlock code={historyCode} lang="yaml" />
+
+This matters most for fan-out. A minutely schedule over 500 rows writes 500 run rows *and* 500 job rows every minute; with `concurrency: skip`, a slow one writes 500 `skipped` rows per fire on top. Those are the rows nobody reads, so give that schedule a short `history.success` and keep the long window for failures.
+
+<Note>
+  Pruned runs are counted before they are deleted, so `spky schedules get <name>` still reports lifetime totals (`pruned : 41230 ok  12 failed`) long after the rows are gone. They are a lower bound — see [Jobs → Retention](/docs/jobs#retention).
+
+  `spky schedules list` shows each schedule's last outcome from the schedule row itself, not by scanning history, so it stays correct after the run rows are gone — and stays fast when one schedule fans out very wide. Within a single fire of a fan-out, a failure is reported in preference to a sibling success, since one status cannot summarise many items.
+</Note>
 
 ## Validation
 

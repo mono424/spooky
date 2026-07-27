@@ -72,7 +72,6 @@ impl ScheduleEngine {
                 key,
                 fire_at,
                 trigger,
-                item.clone(),
                 "running",
                 None,
                 None,

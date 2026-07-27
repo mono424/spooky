@@ -174,8 +174,12 @@ A step receives the JSON body each of its **direct** dependencies responded with
 <CodeBlock code={rootStepCode} lang="typescript" />
 
 <Warning>
-  A step's output is its HTTP response body, captured on the job row. Keep it small (identifiers, counts, paths) rather than the data itself. Bodies over 64 KB are replaced with a marker and the step still succeeds, so a large response fails quietly as *missing input* to the next step rather than as an error.
+  A step's output is its HTTP response body. Keep it small (identifiers, counts, paths) rather than the data itself. Bodies over 64 KB are replaced with a marker and the step still succeeds, so a large response fails quietly as *missing input* to the next step rather than as an error.
 </Warning>
+
+<Note>
+  The output is **copied onto the step row** when the step finalizes, and dependants read it from there rather than from the job row. That is what makes job retention safe: deleting finished job rows can never break a chain, however long the workflow runs.
+</Note>
 
 ## Per-step retries, timeouts, and backends
 
@@ -242,6 +246,7 @@ A workflow run has no long-lived coordinator process. Every advancement reads th
 - **A step is dispatched exactly once.** The `blocked → ready` promotion is a compare-and-swap; whichever pass wins it is the one that creates the job. Two concurrent advancements can't double-dispatch.
 - **A join waits for all of its dependencies to succeed.** Not "most", and not "all finished": a dependency that failed means the join can never become ready, so it is skipped instead.
 - **Completion is observed, then verified.** The engine reacts to job-completion events, and every 5-second sweep also reconciles against the job rows directly, so a dropped event costs one sweep of latency rather than stalling the run.
+- **History is pruned, in-flight runs are not.** Finished `_00_workflow_run` rows (and their step rows, which are always removed together) are subject to the same asymmetric retention as everything else: 24h for a success, 30d for a failure or kill, by default. A run that is still `running` is never pruned, whatever its age. See [Jobs → Retention](/docs/jobs#retention).
 
 ## Reference
 

@@ -59,6 +59,26 @@ pub struct ScheduleConfig {
     /// operator `spky schedules pause`, which config never overwrites.
     #[serde(default = "default_true")]
     pub enabled: bool,
+
+    /// Per-schedule run-history retention, overriding the project-level
+    /// `retention:`. This is the knob a noisy fan-out needs: a minutely schedule
+    /// over 500 rows writes 500 history rows a minute, and almost none of them are
+    /// ever read, while a nightly report wants its month.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<HistoryConfig>,
+}
+
+/// `history:` on one schedule. Either window may be omitted, in which case that
+/// outcome falls back to the project default.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryConfig {
+    /// How long `success` / `skipped` / `replaced` runs are kept (`15m`, `6h`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    /// How long `failed` / `killed` runs are kept (`30d`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -369,7 +389,31 @@ pub fn normalize_schedule(
         row.insert("timeout".into(), serde_json::json!(parse_duration_ms(timeout)? / 1000));
     }
     row.insert("config_disabled".into(), serde_json::json!(!cfg.enabled));
+    insert_history(&mut row, cfg.history.as_ref())?;
     Ok(serde_json::Value::Object(row))
+}
+
+/// Flatten `history:` to the seconds the engine reads. Absent windows are left out
+/// of the row entirely rather than nulled, so the engine sees NONE and falls back to
+/// the project default.
+fn insert_history(
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    history: Option<&HistoryConfig>,
+) -> Result<()> {
+    let Some(history) = history else { return Ok(()) };
+    if let Some(success) = &history.success {
+        row.insert(
+            "history_success_secs".into(),
+            serde_json::json!(parse_duration_ms(success)? / 1000),
+        );
+    }
+    if let Some(failed) = &history.failed {
+        row.insert(
+            "history_failed_secs".into(),
+            serde_json::json!(parse_duration_ms(failed)? / 1000),
+        );
+    }
+    Ok(())
 }
 
 /// Same, for a workflow: the DAG is flattened to an ordered step list so the
@@ -503,6 +547,46 @@ mod tests {
 
     fn workflows(yaml: &str) -> BTreeMap<String, WorkflowConfig> {
         serde_yaml::from_str(yaml).expect("parses")
+    }
+
+    /// `history:` becomes the seconds the engine reads, and an omitted window is
+    /// LEFT OUT of the row rather than nulled — the engine reads NONE as "fall back
+    /// to the project default", and `option<int>` rejects a bound NULL outright.
+    #[test]
+    fn per_schedule_history_normalizes_to_seconds() {
+        let s = schedule(
+            "noisy:\n  every: 1m\n  backend: api\n  route: /r\n  \
+             history:\n    success: 15m\n    failed: 30d\n",
+        );
+        let row = normalize_schedule("noisy", &s["noisy"], "job").unwrap();
+        assert_eq!(row["history_success_secs"], serde_json::json!(900));
+        assert_eq!(row["history_failed_secs"], serde_json::json!(2_592_000));
+
+        let partial = schedule(
+            "half:\n  every: 1m\n  backend: api\n  route: /r\n  history:\n    success: 1h\n",
+        );
+        let row = normalize_schedule("half", &partial["half"], "job").unwrap();
+        assert_eq!(row["history_success_secs"], serde_json::json!(3600));
+        assert!(
+            row.get("history_failed_secs").is_none(),
+            "an unset window must be absent, not null"
+        );
+
+        let none = schedule("plain:\n  every: 1m\n  backend: api\n  route: /r\n");
+        let row = normalize_schedule("plain", &none["plain"], "job").unwrap();
+        assert!(row.get("history_success_secs").is_none());
+        assert!(row.get("history_failed_secs").is_none());
+    }
+
+    /// A typo in `history:` must fail the deploy rather than being ignored —
+    /// silently dropping a retention override is how you discover it a month later.
+    #[test]
+    fn an_unknown_history_key_is_rejected() {
+        let err = serde_yaml::from_str::<BTreeMap<String, ScheduleConfig>>(
+            "s:\n  every: 1m\n  backend: api\n  route: /r\n  history:\n    sucess: 1h\n",
+        )
+        .expect_err("unknown key must not parse");
+        assert!(err.to_string().contains("sucess"), "got: {err}");
     }
 
     #[test]
