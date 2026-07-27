@@ -248,10 +248,20 @@ class StreamProcessorService {
     }
     final normalizedParams =
         _normalizeValue(plan.params) as Map<String, dynamic>;
+    // Mirror the server's `fn::query::register`
+    // (`object::extend(params, { auth: { id: $auth.id }, access: $access })`).
+    // Without these, the SSP's permission_inject rejects any query whose table
+    // permission references $auth with "requires $auth but registration params
+    // lack it" - which silently breaks every owner-scoped live query.
+    final paramsWithAuth = <String, dynamic>{
+      ...normalizedParams,
+      'auth': {'id': _sessionAuthId},
+      'access': _sessionAccess,
+    };
     final initial = processor.registerView({
       'id': plan.queryHash,
       'surql': plan.surql,
-      'params': normalizedParams,
+      'params': paramsWithAuth,
       'clientId': 'local',
       'ttl': plan.ttl.toString(),
       'lastActiveAt': plan.lastActiveAt.toUtc().toIso8601String(),
@@ -267,6 +277,24 @@ class StreamProcessorService {
     );
     saveState();
     return update;
+  }
+
+  /// Current session identity used for permission injection. Empty strings
+  /// (never null) match the TS client, which sends `''` when signed out.
+  String _sessionAuthId = '';
+  String _sessionAccess = '';
+
+  /// Set the signed-in identity for permission injection, mirroring the TS
+  /// `setSessionAuth`. MUST be called before a `$auth`-gated query registers,
+  /// and re-called on every auth change, or the SSP rejects the registration
+  /// with "requires $auth but registration params lack it".
+  void setSessionAuth(String? authId, String? access) {
+    _sessionAuthId = authId ?? '';
+    _sessionAccess = access ?? '';
+    _logger.debug(
+      'Session auth context updated (authId=$_sessionAuthId, '
+      'access=$_sessionAccess)',
+    );
   }
 
   void unregisterQueryPlan(String queryHash) {

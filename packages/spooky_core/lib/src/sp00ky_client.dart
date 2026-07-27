@@ -203,6 +203,11 @@ class Sp00kyClient {
       // userQuery's initial fetch sees the right per-user list_ref table.
       auth.subscribe((userId) async {
         _dataModule.setCurrentUserId(userId); // sync, before any await
+        // Also synchronous and before any await: a $auth-gated query can
+        // register immediately after this callback (the app's own auth listener
+        // fires from here), and the SSP rejects the registration outright if the
+        // session identity is not already in place.
+        _streamProcessor.setSessionAuth(userId, auth.access);
         final next = await _fetchSessionId();
         _dataModule.setSessionId(next);
         try {

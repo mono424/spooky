@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../events/event_system.dart';
 import '../../services/database/remote_database_service.dart';
 import '../../services/logger/logger.dart';
@@ -32,6 +34,14 @@ class AuthService {
   bool isAuthenticated = false;
   bool isLoading = true;
 
+  /// The record-access method the session was opened with (TS `auth.access`),
+  /// e.g. "account". Needed for SSP permission injection: a table permission
+  /// written against `$access` cannot resolve locally without it.
+  ///
+  /// Set on signIn/signUp, and recovered from the token's `AC` claim on
+  /// [check] so it survives a restart (where no signIn call happens).
+  String? access;
+
   EventSystem get eventSystem => _events;
 
   Future<void> init() => check();
@@ -53,6 +63,28 @@ class AuthService {
   void _notifyListeners() {
     _events.emit(
         AuthEventTypes.authStateChanged, currentUser?['id']?.toString());
+  }
+
+
+  /// Read the `AC` (access) claim out of a SurrealDB JWT without verifying it.
+  /// Verification is the server's job; this only recovers which access method
+  /// the existing session used so [access] survives a restart.
+  static String? _accessFromToken(String? jwt) {
+    if (jwt == null) return null;
+    final parts = jwt.split('.');
+    if (parts.length < 2) return null;
+    try {
+      var payload = parts[1].replaceAll('-', '+').replaceAll('_', '/');
+      payload = payload.padRight((payload.length + 3) ~/ 4 * 4, '=');
+      final decoded = jsonDecode(utf8.decode(base64.decode(payload)));
+      if (decoded is Map && decoded['AC'] is String) {
+        return decoded['AC'] as String;
+      }
+    } catch (_) {
+      // A malformed token is not worth failing auth over; the caller falls
+      // back to a null access.
+    }
+    return null;
   }
 
   /// Validate an existing or supplied token and hydrate the user.
@@ -97,6 +129,7 @@ class AuthService {
     token = null;
     currentUser = null;
     isAuthenticated = false;
+    access = null;
     await _persistence.remove(_tokenKey);
     try {
       await _remote.getClient().invalidate();
@@ -112,12 +145,19 @@ class AuthService {
     this.token = token;
     currentUser = user;
     isAuthenticated = true;
+    // The token is authoritative for the access method, and is the only source
+    // on a restored session (no signIn call ran). Keep any explicitly-set value
+    // as the fallback for tokens without an AC claim.
+    access = _accessFromToken(token) ?? access;
     await _persistence.set(_tokenKey, token);
+    // _notifyListeners is LAST: subscribers may register $auth-gated queries
+    // synchronously, and they need token/currentUser/access already in place.
     _notifyListeners();
   }
 
   Future<void> signUp(String accessName, Map<String, dynamic> params) async {
     _validateAccessParams(accessName, 'signup', params);
+    access = accessName;
     final result =
         await _remote.signup({'access': accessName, 'variables': params});
     await check(_extractAccessToken(result));
@@ -125,6 +165,7 @@ class AuthService {
 
   Future<void> signIn(String accessName, Map<String, dynamic> params) async {
     _validateAccessParams(accessName, 'signIn', params);
+    access = accessName;
     final result =
         await _remote.signin({'access': accessName, 'variables': params});
     await check(_extractAccessToken(result));
