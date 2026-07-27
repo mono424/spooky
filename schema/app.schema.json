@@ -188,6 +188,11 @@
         "schema": {
           "type": "string",
           "description": "Path to the SurrealQL schema file that defines the job table structure."
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many of this outbox table's jobs may run at once. Defaults to 1. Rows above the limit stay 'pending' and are admitted oldest-first as slots free, so the outbox itself is the queue. Exact per SSP process; best-effort across replicas."
         }
       },
       "additionalProperties": false
