@@ -68,17 +68,99 @@ pub struct ScheduleConfig {
     pub history: Option<HistoryConfig>,
 }
 
-/// `history:` on one schedule. Either window may be omitted, in which case that
-/// outcome falls back to the project default.
+/// `history:` on one schedule.
+///
+/// Accepts the shorthand `history: failures-only` as well as the full object, because
+/// "never keep a successful run" is the common answer for a wide fan-out and should
+/// not require thinking about durations at all.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum HistoryConfig {
+    /// `history: failures-only` (or `all`).
+    Mode(HistoryMode),
+    /// `history: { mode?, success?, failed? }`.
+    Detailed(HistoryDetail),
+}
+
+/// Hand-written rather than `#[serde(untagged)]`, the same dual-form idiom as
+/// `VersionConfig`. An untagged enum reports a typo inside the object as "data did not
+/// match any variant", which names neither the key nor the schedule — and a retention
+/// setting that is silently hard to diagnose is one people give up on.
+impl<'de> Deserialize<'de> for HistoryConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match &value {
+            serde_yaml::Value::String(_) => {
+                let mode: HistoryMode =
+                    serde_yaml::from_value(value).map_err(serde::de::Error::custom)?;
+                Ok(HistoryConfig::Mode(mode))
+            }
+            serde_yaml::Value::Mapping(_) => {
+                // `deny_unknown_fields` on HistoryDetail does the work; propagating its
+                // error verbatim is what keeps "unknown field `sucess`" readable.
+                let detail: HistoryDetail =
+                    serde_yaml::from_value(value).map_err(serde::de::Error::custom)?;
+                Ok(HistoryConfig::Detailed(detail))
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "`history` must be `failures-only`, `all`, or a mapping of \
+                 mode/success/failed — got {other:?}"
+            ))),
+        }
+    }
+}
+
+impl HistoryMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HistoryMode::All => "all",
+            HistoryMode::FailuresOnly => "failures-only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HistoryMode {
+    /// Keep every run until its retention window elapses. The default.
+    All,
+    /// Never persist a successful run: a suppressed tick writes no row at all, and a
+    /// run that completes cleanly is deleted as it finalizes. Counts still land in the
+    /// rollup, so totals survive.
+    FailuresOnly,
+}
+
+/// Either window may be omitted, in which case that outcome falls back to the
+/// project default.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct HistoryConfig {
+pub struct HistoryDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<HistoryMode>,
     /// How long `success` / `skipped` / `replaced` runs are kept (`15m`, `6h`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub success: Option<String>,
     /// How long `failed` / `killed` runs are kept (`30d`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed: Option<String>,
+}
+
+impl HistoryConfig {
+    pub(crate) fn mode(&self) -> Option<HistoryMode> {
+        match self {
+            HistoryConfig::Mode(m) => Some(*m),
+            HistoryConfig::Detailed(d) => d.mode,
+        }
+    }
+
+    fn windows(&self) -> (Option<&String>, Option<&String>) {
+        match self {
+            HistoryConfig::Mode(_) => (None, None),
+            HistoryConfig::Detailed(d) => (d.success.as_ref(), d.failed.as_ref()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -371,6 +453,7 @@ pub fn normalize_schedule(
     name: &str,
     cfg: &ScheduleConfig,
     outbox_table: &str,
+    default_mode: Option<HistoryMode>,
 ) -> Result<serde_json::Value> {
     let mut row = serde_json::Map::new();
     row.insert("name".into(), serde_json::json!(name));
@@ -389,7 +472,7 @@ pub fn normalize_schedule(
         row.insert("timeout".into(), serde_json::json!(parse_duration_ms(timeout)? / 1000));
     }
     row.insert("config_disabled".into(), serde_json::json!(!cfg.enabled));
-    insert_history(&mut row, cfg.history.as_ref())?;
+    insert_history(&mut row, cfg.history.as_ref(), default_mode)?;
     Ok(serde_json::Value::Object(row))
 }
 
@@ -399,15 +482,22 @@ pub fn normalize_schedule(
 fn insert_history(
     row: &mut serde_json::Map<String, serde_json::Value>,
     history: Option<&HistoryConfig>,
+    default_mode: Option<HistoryMode>,
 ) -> Result<()> {
+    // The schedule's own mode wins; otherwise the project default applies. Resolved here,
+    // at deploy time, so the engine reads one field and never has to combine two sources.
+    if let Some(mode) = history.and_then(HistoryConfig::mode).or(default_mode) {
+        row.insert("history_mode".into(), serde_json::json!(mode.as_str()));
+    }
     let Some(history) = history else { return Ok(()) };
-    if let Some(success) = &history.success {
+    let (success, failed) = history.windows();
+    if let Some(success) = success {
         row.insert(
             "history_success_secs".into(),
             serde_json::json!(parse_duration_ms(success)? / 1000),
         );
     }
-    if let Some(failed) = &history.failed {
+    if let Some(failed) = failed {
         row.insert(
             "history_failed_secs".into(),
             serde_json::json!(parse_duration_ms(failed)? / 1000),
@@ -558,14 +648,14 @@ mod tests {
             "noisy:\n  every: 1m\n  backend: api\n  route: /r\n  \
              history:\n    success: 15m\n    failed: 30d\n",
         );
-        let row = normalize_schedule("noisy", &s["noisy"], "job").unwrap();
+        let row = normalize_schedule("noisy", &s["noisy"], "job", None).unwrap();
         assert_eq!(row["history_success_secs"], serde_json::json!(900));
         assert_eq!(row["history_failed_secs"], serde_json::json!(2_592_000));
 
         let partial = schedule(
             "half:\n  every: 1m\n  backend: api\n  route: /r\n  history:\n    success: 1h\n",
         );
-        let row = normalize_schedule("half", &partial["half"], "job").unwrap();
+        let row = normalize_schedule("half", &partial["half"], "job", None).unwrap();
         assert_eq!(row["history_success_secs"], serde_json::json!(3600));
         assert!(
             row.get("history_failed_secs").is_none(),
@@ -573,9 +663,57 @@ mod tests {
         );
 
         let none = schedule("plain:\n  every: 1m\n  backend: api\n  route: /r\n");
-        let row = normalize_schedule("plain", &none["plain"], "job").unwrap();
+        let row = normalize_schedule("plain", &none["plain"], "job", None).unwrap();
         assert!(row.get("history_success_secs").is_none());
         assert!(row.get("history_failed_secs").is_none());
+    }
+
+    /// The shorthand is the point: "never keep a successful run" is the common answer
+    /// for a wide fan-out and should not require thinking about durations.
+    #[test]
+    fn the_failures_only_shorthand_normalizes_to_a_mode() {
+        let s = schedule(
+            "noisy:\n  every: 1m\n  backend: api\n  route: /r\n  history: failures-only\n",
+        );
+        let row = normalize_schedule("noisy", &s["noisy"], "job", None).unwrap();
+        assert_eq!(row["history_mode"], serde_json::json!("failures-only"));
+        // The shorthand carries no windows — the project defaults still apply to the
+        // failures it DOES keep.
+        assert!(row.get("history_success_secs").is_none());
+        assert!(row.get("history_failed_secs").is_none());
+    }
+
+    /// The object form can set the mode and the windows together: discard successes,
+    /// and keep failures for a specific time.
+    #[test]
+    fn the_object_form_can_combine_a_mode_with_windows() {
+        let s = schedule(
+            "noisy:\n  every: 1m\n  backend: api\n  route: /r\n  \
+             history:\n    mode: failures-only\n    failed: 7d\n",
+        );
+        let row = normalize_schedule("noisy", &s["noisy"], "job", None).unwrap();
+        assert_eq!(row["history_mode"], serde_json::json!("failures-only"));
+        assert_eq!(row["history_failed_secs"], serde_json::json!(604_800));
+    }
+
+    /// `all` is the explicit spelling of the default, and must not be confused with
+    /// the shorthand.
+    #[test]
+    fn the_all_mode_round_trips() {
+        let s = schedule("calm:\n  every: 1m\n  backend: api\n  route: /r\n  history: all\n");
+        let row = normalize_schedule("calm", &s["calm"], "job", None).unwrap();
+        assert_eq!(row["history_mode"], serde_json::json!("all"));
+    }
+
+    /// An unknown mode must be rejected, not silently treated as `all` — that would
+    /// quietly keep every row on a schedule the author meant to be lean.
+    #[test]
+    fn an_unknown_history_mode_is_rejected() {
+        let err = serde_yaml::from_str::<BTreeMap<String, ScheduleConfig>>(
+            "s:\n  every: 1m\n  backend: api\n  route: /r\n  history: failures\n",
+        )
+        .expect_err("unknown mode must not parse");
+        assert!(!err.to_string().is_empty());
     }
 
     /// A typo in `history:` must fail the deploy rather than being ignored —
@@ -734,7 +872,7 @@ monthly-report:
              retry: { max: 3, strategy: exponential }\n  concurrency: replace\n  \
              forEach:\n    query: SELECT id FROM connection\n    key: id\n  enabled: false\n",
         );
-        let row = normalize_schedule("game-sync", &s["game-sync"], "job").unwrap();
+        let row = normalize_schedule("game-sync", &s["game-sync"], "job", None).unwrap();
         assert_eq!(row["kind"], serde_json::json!("job"));
         assert_eq!(row["every_ms"], serde_json::json!(300_000), "`5m` becomes milliseconds");
         assert_eq!(row["target_table"], serde_json::json!("job"), "backend resolved to its table");
@@ -778,7 +916,7 @@ monthly-report:
     #[test]
     fn normalized_rows_deserialize_as_engine_specs() {
         let s = schedule("nightly:\n  cron: \"0 3 * * *\"\n  backend: api\n  route: /cleanup\n");
-        let row = normalize_schedule("nightly", &s["nightly"], "job").unwrap();
+        let row = normalize_schedule("nightly", &s["nightly"], "job", None).unwrap();
         let spec = schedule_core::ScheduleSpec::from_row(&row).expect("engine reads it");
         assert_eq!(spec.name, "nightly");
         assert!(spec.fire_spec().is_ok());
@@ -789,5 +927,74 @@ monthly-report:
         let dag = schedule_core::WorkflowDag::validate(spec.workflow.as_ref().unwrap())
             .expect("engine validates the DAG");
         assert_eq!(dag.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod project_default_mode_tests {
+    use super::*;
+
+    fn schedule(yaml: &str) -> BTreeMap<String, ScheduleConfig> {
+        serde_yaml::from_str(yaml).expect("parses")
+    }
+
+    const PLAIN: &str = "s:\n  every: 1m\n  backend: api\n  route: /r\n";
+
+    /// A schedule with no `history:` inherits the project default. This is what makes
+    /// `retention.mode: failures-only` a one-line switch for a whole project.
+    #[test]
+    fn a_schedule_without_history_inherits_the_project_default() {
+        let s = schedule(PLAIN);
+        let row =
+            normalize_schedule("s", &s["s"], "job", Some(HistoryMode::FailuresOnly)).unwrap();
+        assert_eq!(row["history_mode"], serde_json::json!("failures-only"));
+    }
+
+    /// And with no project default either, the field stays absent — the engine reads
+    /// NONE as "keep everything", so an unconfigured project is unaffected.
+    #[test]
+    fn no_default_and_no_history_leaves_the_field_unset() {
+        let s = schedule(PLAIN);
+        let row = normalize_schedule("s", &s["s"], "job", None).unwrap();
+        assert!(row.get("history_mode").is_none());
+    }
+
+    /// A schedule can opt OUT of a project-wide `failures-only` — the case for an audit
+    /// trail that must keep every run.
+    #[test]
+    fn a_schedule_can_opt_back_out_of_the_project_default() {
+        let s = schedule(
+            "s:\n  every: 1m\n  backend: api\n  route: /r\n  history: all\n",
+        );
+        let row =
+            normalize_schedule("s", &s["s"], "job", Some(HistoryMode::FailuresOnly)).unwrap();
+        assert_eq!(
+            row["history_mode"],
+            serde_json::json!("all"),
+            "the schedule's own mode must win over the project default"
+        );
+    }
+
+    /// And opt IN when the project default is `all` (or unset).
+    #[test]
+    fn a_schedule_can_opt_in_against_the_project_default() {
+        let s = schedule(
+            "s:\n  every: 1m\n  backend: api\n  route: /r\n  history: failures-only\n",
+        );
+        let row = normalize_schedule("s", &s["s"], "job", Some(HistoryMode::All)).unwrap();
+        assert_eq!(row["history_mode"], serde_json::json!("failures-only"));
+    }
+
+    /// Setting windows but no mode must not accidentally clear an inherited mode: the
+    /// two settings are independent.
+    #[test]
+    fn per_schedule_windows_do_not_clear_the_inherited_mode() {
+        let s = schedule(
+            "s:\n  every: 1m\n  backend: api\n  route: /r\n  history:\n    success: 15m\n",
+        );
+        let row =
+            normalize_schedule("s", &s["s"], "job", Some(HistoryMode::FailuresOnly)).unwrap();
+        assert_eq!(row["history_mode"], serde_json::json!("failures-only"));
+        assert_eq!(row["history_success_secs"], serde_json::json!(900));
     }
 }

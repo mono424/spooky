@@ -136,6 +136,14 @@ where
             "DEFINE INDEX IF NOT EXISTS idx_{table}_retention ON {table} \
              COLUMNS status, updated_at{concurrently};\n"
         ));
+        // Backs the dispatcher's drain: `status = 'pending' ORDER BY created_at
+        // LIMIT n`. Distinct from the retention index above because the order
+        // column differs — the drain must admit oldest-first, and `updated_at`
+        // moves every time a job is retried, which would reshuffle the queue.
+        out.push_str(&format!(
+            "DEFINE INDEX IF NOT EXISTS idx_{table}_dispatch ON {table} \
+             COLUMNS status, created_at{concurrently};\n"
+        ));
     }
     out
 }
@@ -764,6 +772,31 @@ mod outbox_platform_field_tests {
         assert!(
             server.contains(
                 "DEFINE INDEX IF NOT EXISTS idx_job_retention ON job COLUMNS status, updated_at CONCURRENTLY;"
+            ),
+            "CONCURRENTLY is a trailing clause, got: {server}"
+        );
+    }
+
+    /// The dispatcher's drain filters `status = 'pending'` and orders by
+    /// `created_at`, so its index cannot be the retention one: `updated_at`
+    /// moves on every retry, which would reshuffle a FIFO queue mid-backlog.
+    ///
+    /// Whole-statement assertion for the same reason as the retention index —
+    /// the `CONCURRENTLY`-placement bug matched every substring check.
+    #[test]
+    fn injects_the_dispatch_index_in_drain_order() {
+        let embedded = build_outbox_platform_fields(["job"], &DeployMode::Surrealism);
+        assert!(
+            embedded.contains(
+                "DEFINE INDEX IF NOT EXISTS idx_job_dispatch ON job COLUMNS status, created_at;"
+            ),
+            "got: {embedded}"
+        );
+
+        let server = build_outbox_platform_fields(["job"], &DeployMode::Singlenode);
+        assert!(
+            server.contains(
+                "DEFINE INDEX IF NOT EXISTS idx_job_dispatch ON job COLUMNS status, created_at CONCURRENTLY;"
             ),
             "CONCURRENTLY is a trailing clause, got: {server}"
         );

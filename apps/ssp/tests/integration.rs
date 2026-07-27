@@ -32,7 +32,7 @@ struct TestHarness {
     status: Arc<RwLock<SspStatus>>,
     metrics: Arc<Metrics>,
     job_config: Arc<JobConfig>,
-    job_queue_tx: mpsc::Sender<JobEntry>,
+    job_dispatcher: Arc<ssp_node::jobs::JobDispatcher>,
     job_queue_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<JobEntry>>>,
     db: SharedDb,
     crdt_cache: Arc<CrdtCache>,
@@ -79,12 +79,36 @@ impl TestHarness {
             c
         };
 
+        let job_config = Arc::new(job_config);
+        let job_dispatcher = {
+            // Timer receiver dropped: tests never dispatch on_timer.
+            let (platform, _timer_rx) =
+                ssp_server::adapters::vm_platform(Arc::new(db.clone()), Arc::clone(&metrics));
+            let dispatcher = Arc::new(ssp_node::jobs::JobDispatcher::new(
+                Arc::clone(&platform.db),
+                Arc::clone(&platform.spawner),
+                Arc::clone(&platform.scheduler),
+                tx,
+                ssp_node::jobs::JobControl::new(),
+                Arc::clone(&job_config),
+                "test-ssp".to_string(),
+                true,
+            ));
+            // These tests assert on what lands in the queue and never run a
+            // runner, so nothing ever releases a slot. Give the tables enough
+            // room that admission is not what a test is accidentally measuring.
+            for table in job_config.job_tables.keys() {
+                dispatcher.set_limit(table, 1000);
+            }
+            dispatcher
+        };
+
         Self {
             processor: Arc::new(RwLock::new(circuit)),
             status: Arc::new(RwLock::new(status)),
             metrics,
-            job_config: Arc::new(job_config),
-            job_queue_tx: tx,
+            job_config,
+            job_dispatcher,
             job_queue_rx: Arc::new(tokio::sync::Mutex::new(rx)),
             db: Arc::new(db),
             crdt_cache: Arc::new(CrdtCache::new(64, CrdtAllowList::default())),
@@ -107,7 +131,7 @@ impl TestHarness {
             status: Arc::clone(&self.status),
             metrics: Arc::clone(&self.metrics),
             job_config: Arc::clone(&self.job_config),
-            job_queue_tx: self.job_queue_tx.clone(),
+            job_dispatcher: Arc::clone(&self.job_dispatcher),
             job_control: ssp_node::jobs::JobControl::new(),
             ssp_id: "test-ssp".to_string(),
             scheduler_url: None,
@@ -136,7 +160,7 @@ impl TestHarness {
                     processor: Arc::clone(&self.processor),
                     job_config: Arc::clone(&self.job_config),
                     job_control: ssp_node::jobs::JobControl::new(),
-                    job_queue_tx: self.job_queue_tx.clone(),
+                    job_dispatcher: Arc::clone(&self.job_dispatcher),
                     ssp_id: "test-ssp".to_string(),
                     auth_secret: AUTH_SECRET.to_string(),
                     ref_mode: ssp_protocol::RefMode::Single,
@@ -1247,14 +1271,32 @@ mod db_integration_tests {
             c
         };
 
+        let metrics = Arc::new(Metrics::new(&provider));
+        let job_config = Arc::new(JobConfig::default());
+        let db = Arc::new(db);
+        let job_dispatcher = {
+            let (platform, _timer_rx) =
+                ssp_server::adapters::vm_platform(Arc::clone(&db), Arc::clone(&metrics));
+            Arc::new(ssp_node::jobs::JobDispatcher::new(
+                Arc::clone(&platform.db),
+                Arc::clone(&platform.spawner),
+                Arc::clone(&platform.scheduler),
+                tx,
+                ssp_node::jobs::JobControl::new(),
+                Arc::clone(&job_config),
+                "test-ssp".to_string(),
+                true,
+            ))
+        };
+
         TestHarness {
             processor: Arc::new(RwLock::new(circuit)),
             status: Arc::new(RwLock::new(SspStatus::Ready)),
-            metrics: Arc::new(Metrics::new(&provider)),
-            job_config: Arc::new(JobConfig::default()),
-            job_queue_tx: tx,
+            metrics,
+            job_config,
+            job_dispatcher,
             job_queue_rx: Arc::new(tokio::sync::Mutex::new(rx)),
-            db: Arc::new(db),
+            db,
             crdt_cache: Arc::new(CrdtCache::new(64, CrdtAllowList::default())),
             start_time: std::time::Instant::now(),
         }

@@ -236,15 +236,30 @@ fn build_node(
         telemetry: Arc::new(NoopTelemetry),
         circuit_store: store,
     };
+    // `_job_rx` is dropped: no runner in this shell. The dispatcher latches
+    // itself off on the first closed send rather than querying for a backlog it
+    // could never work through.
     let (job_queue_tx, _job_rx) = mpsc::channel(64);
     let (edge_update_tx, _edge_rx) = mpsc::unbounded_channel();
+    let job_config = Arc::new(ssp_node::jobs::JobConfig::default());
+    let job_control = ssp_node::jobs::JobControl::new();
+    let job_dispatcher = Arc::new(ssp_node::jobs::JobDispatcher::new(
+        Arc::clone(&platform.db),
+        Arc::clone(&platform.spawner),
+        Arc::clone(&platform.scheduler),
+        job_queue_tx,
+        job_control.clone(),
+        Arc::clone(&job_config),
+        "portable-ssp".to_string(),
+        true,
+    ));
     let node = Arc::new(SspNode {
         platform,
         status: Arc::new(RwLock::new(SspStatus::Bootstrapping)),
         processor: Arc::new(RwLock::new(Circuit::new())),
-        job_config: Arc::new(ssp_node::jobs::JobConfig::default()),
-        job_control: ssp_node::jobs::JobControl::new(),
-        job_queue_tx,
+        job_config,
+        job_control,
+        job_dispatcher,
         ssp_id: "portable-ssp".to_string(),
         auth_secret: secret.to_string(),
         ref_mode: ssp_protocol::RefMode::Single,

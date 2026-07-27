@@ -20,7 +20,7 @@ use ssp::circuit::Circuit;
 use crate::api::{ApiRequest, ApiResponse, RouteId};
 use crate::jobs::{
     enqueue_recovered, fail_if_pending_helper, load_job_record, reset_for_retry_helper,
-    set_assignee_helper, JobConfig, JobControl, JobEntry,
+    set_assignee_helper, JobConfig, JobControl, JobDispatcher, JobEntry,
 };
 use crate::platform::Platform;
 use crate::ports::{BackendHealth, Db, Telemetry};
@@ -34,7 +34,10 @@ pub struct SspNode {
     pub processor: Arc<RwLock<Circuit>>,
     pub job_config: Arc<JobConfig>,
     pub job_control: JobControl,
-    pub job_queue_tx: mpsc::Sender<JobEntry>,
+    /// Admission control for job execution. Everything that wants to run a job
+    /// goes through here rather than holding the queue sender directly, so no
+    /// path can push a table past its configured concurrency.
+    pub job_dispatcher: Arc<JobDispatcher>,
     pub ssp_id: String,
     /// Bearer secret for authenticated routes (`NodeConfig.auth_secret`).
     pub auth_secret: String,
@@ -85,11 +88,22 @@ pub struct SspNode {
 pub const JOB_RECOVERY_INTERVAL_SECS: u64 = 60;
 const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
 const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
+/// Rows one sweep pass reads per table per category. A concurrency-limited
+/// table can hold an arbitrarily deep pending backlog, and the sweep is a
+/// safety net, not the pickup path — the drain is.
+const JOB_RECOVERY_PAGE: usize = 200;
+
+/// Drain-timer cadence while any table still has a known backlog. Only armed
+/// while there is one, so a quiet deployment never wakes for this.
+pub const JOB_DRAIN_INTERVAL_SECS: u64 = 2;
 
 /// Projection for recovery row reads: `type::string(id) AS id` keeps the
 /// RecordId out of the flattened JSON.
+/// `created_at` / `updated_at` are selected only so the sweep can ORDER BY
+/// them: SurrealDB v3 rejects an order idiom that the projection does not
+/// select. `from_record` ignores both.
 const RECOVERY_FIELDS: &str = "type::string(id) AS id, status, path, payload, retries, \
-                               max_retries, retry_strategy, timeout";
+                               max_retries, retry_strategy, timeout, created_at, updated_at";
 
 #[derive(Deserialize, Debug)]
 struct LogRequest {
@@ -354,19 +368,18 @@ impl SspNode {
         );
         job.retries = 0;
 
-        // Guard against a concurrent retry / recovery sweep enqueueing the
-        // same id twice. Already queued ⇒ this retry is a no-op.
-        if !self.job_control.mark_enqueued(&action.id) {
-            return Some(ok_json(
-                json!({ "id": action.id, "status": "pending", "message": "already queued" }),
-            ));
-        }
-        if let Err(e) = self.job_queue_tx.send(job).await {
-            self.job_control.clear_enqueued(&action.id);
-            return Some(err_json(500, "enqueue_failed", e.to_string()));
-        }
+        // Through admission, which also carries the `mark_enqueued` guard
+        // against a concurrent retry or recovery sweep taking the same id.
+        // Refused means the table is at its limit: the row is `pending` again
+        // after the reset above, so the drain picks it up in its turn.
+        let message = if self.job_dispatcher.try_admit(job).await {
+            "re-enqueued"
+        } else {
+            self.job_dispatcher.note_backlog(table);
+            "queued"
+        };
 
-        Some(ok_json(json!({ "id": action.id, "status": "pending", "message": "re-enqueued" })))
+        Some(ok_json(json!({ "id": action.id, "status": "pending", "message": message })))
     }
 
     /// `POST /job/recover` — cluster recovery entry point. This SSP takes
@@ -416,18 +429,14 @@ impl SspNode {
             warn!(job_id = %action.id, error = %e, "Failed to persist assignee on recover");
         }
 
-        let message = if enqueue_recovered(
-            &self.job_control,
-            &self.job_queue_tx,
-            &backend,
-            &action.id,
-            &record,
-        )
-        .await
+        let message = if enqueue_recovered(&self.job_dispatcher, &backend, &action.id, &record).await
         {
             "re-enqueued"
         } else {
-            // Already queued or in-flight on this SSP — idempotent no-op.
+            // Already queued or in-flight on this SSP (idempotent no-op), or the
+            // table is at its limit. Either way the row keeps its place in the
+            // backlog and needs no further action from the caller.
+            self.job_dispatcher.note_backlog(table);
             "already queued"
         };
         Some(ok_json(json!({ "id": action.id, "status": "pending", "message": message })))
@@ -1012,9 +1021,52 @@ impl SspNode {
         );
         let delay_ms = payload.record.get("delay").and_then(|v| v.as_u64()).unwrap_or(0);
         let job_id = job_entry.id.clone();
+        let table = job_entry.table.clone();
 
-        if !self.job_control.mark_enqueued(&job_id) {
-            debug!(job_id = %job_id, "Skipping enqueue — already queued");
+        if delay_ms == 0 {
+            self.admit_or_backlog(job_entry).await;
+        } else {
+            // Delayed: sleep on a port timer, THEN ask for a slot. Admitting up
+            // front would let a job with `delay: 1h` hold the table's only
+            // execution slot for an hour without running anything.
+            //
+            // The enqueued mark is taken at the same moment as the slot (inside
+            // admission), so a duplicate CREATE during the sleep can produce a
+            // second sleeper; the mark still lets exactly one of them through.
+            let dispatcher = Arc::clone(&self.job_dispatcher);
+            let scheduler = Arc::clone(&self.platform.scheduler);
+            let delay = std::time::Duration::from_millis(delay_ms);
+            let standalone = self.standalone;
+            let ssp_id = self.ssp_id.clone();
+            let db = Arc::clone(&self.platform.db);
+            self.platform.spawner.spawn(Box::pin(async move {
+                scheduler.sleep(delay).await;
+                if dispatcher.try_admit(job_entry).await {
+                    if !standalone {
+                        if let Err(e) = crate::jobs::set_assignee_helper(db.as_ref(), &job_id, &ssp_id).await {
+                            warn!(job_id = %job_id, error = %e, "Failed to persist job assignee");
+                        }
+                    }
+                } else {
+                    dispatcher.note_backlog(&table);
+                    debug!(job_id = %job_id, "Delayed job deferred to the backlog");
+                }
+            }));
+        }
+    }
+
+    /// Admit a job, or leave its row `pending` for the drain to pick up.
+    ///
+    /// The assignee stamp only happens on success. Stamping a job this node
+    /// then refused would tell the cluster sweep "a live owner has this",
+    /// so the row would wait out the full orphan window before anyone looked
+    /// at it again.
+    async fn admit_or_backlog(&self, entry: JobEntry) {
+        let job_id = entry.id.clone();
+        let table = entry.table.clone();
+        if !self.job_dispatcher.try_admit(entry).await {
+            self.job_dispatcher.note_backlog(&table);
+            debug!(job_id = %job_id, "Job deferred to the backlog");
             return;
         }
         if !self.standalone {
@@ -1023,25 +1075,6 @@ impl SspNode {
             {
                 warn!(job_id = %job_id, error = %e, "Failed to persist job assignee");
             }
-        }
-        if delay_ms == 0 {
-            if let Err(e) = self.job_queue_tx.send(job_entry).await {
-                self.job_control.clear_enqueued(&job_id);
-                error!(error = %e, "Failed to queue job");
-            }
-        } else {
-            // Delayed: hold the enqueued mark across a port sleep, then send.
-            let tx = self.job_queue_tx.clone();
-            let job_control = self.job_control.clone();
-            let scheduler = Arc::clone(&self.platform.scheduler);
-            let delay = std::time::Duration::from_millis(delay_ms);
-            self.platform.spawner.spawn(Box::pin(async move {
-                scheduler.sleep(delay).await;
-                if let Err(e) = tx.send(job_entry).await {
-                    job_control.clear_enqueued(&job_id);
-                    error!(job_id = %job_id, error = %e, "Failed to queue delayed job");
-                }
-            }));
         }
     }
 
@@ -1087,26 +1120,39 @@ impl SspNode {
         let db = self.platform.db.as_ref();
 
         // 1. Due pending rows older than the grace window.
+        //
+        // Bounded and ordered, unlike before: with a concurrency limit a table
+        // can legitimately hold a very large pending backlog, and this used to
+        // SELECT all of it into memory once a minute. Oldest first, so what the
+        // sweep does pick up matches the order the drain would have used.
         let pending_q = format!(
             "SELECT {fields} FROM {table} \
-             WHERE status = 'pending' AND updated_at < time::now() - {grace}s AND {due}",
+             WHERE status = 'pending' AND updated_at < time::now() - {grace}s AND {due} \
+             ORDER BY created_at ASC LIMIT {limit}",
             fields = RECOVERY_FIELDS,
             grace = JOB_RECOVERY_PENDING_GRACE_SECS,
             due = crate::jobs::PENDING_DUE_CLAUSE,
+            limit = JOB_RECOVERY_PAGE,
         );
+        let mut deferred = false;
         for row in rows_of(db.query(&pending_q, &[]).await?) {
             if let Some(id) = row.get("id").and_then(|v| v.as_str()) {
-                if crate::jobs::enqueue_recovered(&self.job_control, &self.job_queue_tx, backend, id, &row).await {
+                if crate::jobs::enqueue_recovered(&self.job_dispatcher, backend, id, &row).await {
                     warn!(target: "ssp::job_recovery", job_id = %id, "Re-enqueued stuck pending job");
+                } else {
+                    deferred = true;
                 }
             }
         }
 
         // 2. Orphaned processing rows (processing far longer than any job runs).
         let stale_q = format!(
-            "SELECT {fields} FROM {table} WHERE status = 'processing' AND updated_at < time::now() - {stale}s",
+            "SELECT {fields} FROM {table} WHERE status = 'processing' \
+             AND updated_at < time::now() - {stale}s \
+             ORDER BY updated_at ASC LIMIT {limit}",
             fields = RECOVERY_FIELDS,
             stale = JOB_RECOVERY_STALE_PROCESSING_SECS,
+            limit = JOB_RECOVERY_PAGE,
         );
         for row in rows_of(db.query(&stale_q, &[]).await?) {
             let Some(id) = row.get("id").and_then(|v| v.as_str()) else { continue };
@@ -1117,12 +1163,22 @@ impl SspNode {
                 warn!(target: "ssp::job_recovery", job_id = %id, error = %e, "Failed to reset stale processing job");
                 continue;
             }
-            if crate::jobs::enqueue_recovered(&self.job_control, &self.job_queue_tx, backend, id, &row).await {
+            if crate::jobs::enqueue_recovered(&self.job_dispatcher, backend, id, &row).await {
                 warn!(target: "ssp::job_recovery", job_id = %id, "Recovered orphaned processing job");
+            } else {
+                deferred = true;
             }
+        }
+
+        // Anything the limit turned away is a known backlog: flag it so the
+        // drain timer keeps working through it rather than waiting for the next
+        // sweep a minute from now.
+        if deferred {
+            self.job_dispatcher.note_backlog(table);
         }
         Ok(())
     }
+
 
     /// One TTL sweep over this node's ports (see [`ttl_cleanup_sweep`]).
     pub async fn ttl_cleanup_sweep(&self) -> usize {

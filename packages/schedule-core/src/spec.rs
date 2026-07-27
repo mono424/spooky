@@ -84,7 +84,15 @@ pub struct ScheduleSpec {
     /// overrides — see `BackendInfo::effective_timeout` in ssp-node).
     #[serde(default)]
     pub timeout: Option<i64>,
+
+    /// `all` (or unset) keeps every run until its retention window elapses;
+    /// `failures-only` never persists a successful one at all.
+    #[serde(default)]
+    pub history_mode: Option<String>,
 }
+
+/// `history_mode` value that suppresses successful run rows entirely.
+pub const HISTORY_FAILURES_ONLY: &str = "failures-only";
 
 impl ScheduleSpec {
     /// Deserialize from a `_00_schedule` row (flattened-JSON convention).

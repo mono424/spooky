@@ -4681,12 +4681,10 @@ pub fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
         &format!("/v1/projects/{}/restart", pid),
         &serde_json::json!({ "clean": clean, "upgrade": upgrade, "surreal": surreal }),
     )?;
-    let result: serde_json::Value = resp.into_json().context("Failed to parse response")?;
-    let stopped = result["stopped"].as_u64().unwrap_or(0);
-    println!(
-        "  Stopped {} container(s). Worker will recreate them shortly.",
-        stopped
-    );
+    let _: serde_json::Value = resp.into_json().context("Failed to parse response")?;
+    // The API only queues the request; the worker stops and recreates the
+    // containers itself so there is a single writer of container lifecycle.
+    println!("  Restart queued. Worker will recreate the containers shortly.");
     Ok(())
 }
 

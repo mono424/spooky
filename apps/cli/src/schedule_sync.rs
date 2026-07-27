@@ -55,12 +55,14 @@ pub fn resolve_rows(
     base_dir: &Path,
 ) -> Result<Vec<(String, Value)>> {
     let mut rows = Vec::new();
+    // Project-wide default, applied to any schedule that doesn't state its own.
+    let default_mode = config.default_history_mode();
 
     for (name, cfg) in &config.schedules {
         let label = format!("schedule '{name}'");
         let table = outbox_table_for(config, &cfg.backend, &label)?;
         check_route(config, processor, base_dir, &cfg.backend, &cfg.route, &label)?;
-        rows.push((name.clone(), normalize_schedule(name, cfg, &table)?));
+        rows.push((name.clone(), normalize_schedule(name, cfg, &table, default_mode)?));
     }
 
     for (name, cfg) in &config.workflows {
@@ -203,10 +205,15 @@ pub fn sync(
     processor: &BackendProcessor,
     base_dir: &Path,
 ) -> Result<SyncReport> {
+    // Before `resolve_rows`, deliberately. It returns `Err` when a single
+    // schedule names a missing backend or an undefined route, and these two
+    // writes have nothing to do with schedules — a project-wide policy must not
+    // silently stop being written because one schedule entry is malformed.
+    sync_retention(client, config, processor)?;
+    sync_job_policy(client, config)?;
+
     let rows = resolve_rows(config, processor, base_dir)?;
     let mut report = SyncReport::default();
-
-    sync_retention(client, config, processor)?;
 
     let stored = read_stored_hashes(client)?;
 
@@ -296,6 +303,58 @@ fn retention_patch_sql(r: &ResolvedRetention, tables: &[String]) -> Result<Strin
         r.max_rows,
         serde_json::to_string(tables)?
     ))
+}
+
+/// Write each outbox table's execution limit to `_00_job_policy:⟨table⟩`.
+///
+/// Same reasoning as [`sync_retention`]: the policy lives in the database so all
+/// three shells read the identical thing, and so it can be retuned with one
+/// UPDATE and no redeploy — which matters more for a throttle than for
+/// retention, because the reason you reach for one is that a backend is falling
+/// over right now.
+///
+/// Only tables that declare `method.concurrency` get a row. An absent row means
+/// the default of 1, so a project that never sets the key keeps exactly the
+/// serial behavior it had before. There is deliberately no removal sweep: a row
+/// for a table that no longer exists is inert, and keeping it preserves the
+/// operator's setting if the table comes back.
+fn sync_job_policy(client: &dyn MigrationDB, config: &Sp00kyConfig) -> Result<()> {
+    for (table, concurrency) in declared_job_limits(config) {
+        client
+            .execute(&job_policy_upsert_sql(&table, concurrency))
+            .with_context(|| format!("failed to write the job policy for '{table}'"))?;
+    }
+    Ok(())
+}
+
+/// `(outbox table, concurrency)` for every backend that declares a limit.
+/// Sorted and deduplicated so two apps pointing at one table write once, and so
+/// the statement order is stable across runs.
+fn declared_job_limits(config: &Sp00kyConfig) -> Vec<(String, u32)> {
+    let mut out: BTreeMap<String, u32> = BTreeMap::new();
+    for (_, app) in config.backends() {
+        let Some(method) = &app.method else { continue };
+        let Some(concurrency) = method.concurrency else { continue };
+        let Some(table) = method.table.as_ref().filter(|t| !t.is_empty()) else { continue };
+        // Two apps on one table is already a misconfiguration; take the tighter
+        // bound rather than letting map order decide.
+        out.entry(table.clone())
+            .and_modify(|v| *v = (*v).min(concurrency))
+            .or_insert(concurrency);
+    }
+    out.into_iter().collect()
+}
+
+/// Build one policy UPSERT. Split out so a test can pin the field names against
+/// the shipped DDL, the same way [`retention_patch_sql`] is.
+fn job_policy_upsert_sql(table: &str, concurrency: u32) -> String {
+    // MERGE, not CONTENT, and clamped to >= 1: the DDL asserts `> 0`, and a
+    // rejected statement here would fail the deploy over bookkeeping.
+    format!(
+        "UPSERT _00_job_policy:⟨{}⟩ MERGE {{ concurrency: {} }};",
+        table.replace('⟩', ""),
+        concurrency.max(1)
+    )
 }
 
 /// `name -> spec_hash` for every config-owned schedule currently in the DB.
@@ -434,5 +493,63 @@ mod retention_sync_tests {
         // never "prune everything".
         let empty = retention_patch_sql(&RetentionConfig::DEFAULTS, &[]).expect("builds");
         assert!(empty.contains("job_tables: []"), "{empty}");
+    }
+}
+
+#[cfg(test)]
+mod job_policy_sync_tests {
+    use super::*;
+
+    /// The shipped DDL, so this test is about what actually deploys.
+    const SCHEDULE_TABLES: &str = include_str!("schedule_tables.surql");
+
+    /// Every field this UPSERT writes must be defined on `_00_job_policy`.
+    /// SCHEMAFULL rejects the whole statement otherwise, at deploy time, on a
+    /// statement whose only job is bookkeeping.
+    #[test]
+    fn every_field_the_upsert_writes_is_defined_by_the_ddl() {
+        let sql = job_policy_upsert_sql("job", 8);
+        for field in ["concurrency"] {
+            assert!(sql.contains(&format!("{field}:")), "the UPSERT should write {field}: {sql}");
+            assert!(
+                SCHEDULE_TABLES.contains(&format!("{field} ON TABLE _00_job_policy")),
+                "`{field}` is written by deploy but not defined on _00_job_policy"
+            );
+        }
+    }
+
+    /// The reader lives in another crate (`ssp-node`'s job dispatcher), which
+    /// cannot `include_str!` this DDL. So pin the field names it reads here, in
+    /// the crate that owns the schema — the mirror of
+    /// `schedule_core::sql`'s retention-reader test.
+    #[test]
+    fn the_policy_row_defines_exactly_what_the_dispatcher_reads() {
+        for field in ["concurrency"] {
+            assert!(
+                SCHEDULE_TABLES.contains(&format!("{field} ON TABLE _00_job_policy")),
+                "ssp-node's dispatcher reads `{field}`, which _00_job_policy does not define"
+            );
+        }
+    }
+
+    /// MERGE, never CONTENT: an operator's live retune must survive the next deploy.
+    #[test]
+    fn the_policy_is_merged_not_replaced() {
+        let sql = job_policy_upsert_sql("job", 4);
+        assert!(sql.starts_with("UPSERT _00_job_policy:⟨job⟩ MERGE"), "{sql}");
+        assert!(!sql.contains("CONTENT"));
+    }
+
+    /// The DDL asserts `> 0`. A 0 in the manifest must not fail the deploy.
+    #[test]
+    fn zero_is_clamped_to_one_rather_than_rejected() {
+        assert!(job_policy_upsert_sql("job", 0).contains("concurrency: 1"));
+    }
+
+    /// ⟨⟩ quoting for the same reason schedule ids use it: table names may
+    /// contain characters a bare record id would choke on.
+    #[test]
+    fn the_table_name_is_quoted() {
+        assert!(job_policy_upsert_sql("stats_job", 2).contains("_00_job_policy:⟨stats_job⟩"));
     }
 }

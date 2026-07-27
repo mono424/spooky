@@ -4,8 +4,9 @@
 //! `packages/job-runner` — same coverage, but every DB write now travels the
 //! same `type::record($id)` SQL the production port uses.
 
+use super::dispatcher::JobDispatcher;
 use super::runner::*;
-use super::types::{JobControl, JobEntry};
+use super::types::{BackendInfo, JobConfig, JobControl, JobEntry};
 use crate::api::Method;
 use crate::ports::{
     CancelWatch, Db, DbError, HttpClient, HttpError, OutboundRequest, OutboundResponse,
@@ -163,22 +164,65 @@ async fn select_bool(db: &Surreal<MemEngine>, sql: &str) -> Option<bool> {
 async fn select_i64(db: &Surreal<MemEngine>, sql: &str) -> Option<i64> {
     db.query(sql).await.expect("query").take(0).expect("take")
 }
+/// `SELECT VALUE count() ... GROUP ALL` comes back as a bare int on some plans
+/// and as `{ count: n }` on others — defining an index is enough to flip it.
+async fn count_rows(db: &Surreal<MemEngine>, sql: &str) -> i64 {
+    let v: surrealdb::types::Value = db.query(sql).await.expect("query").take(0).expect("take");
+    match v.into_json_value() {
+        Value::Number(n) => n.as_i64().unwrap_or(0),
+        Value::Array(rows) => rows
+            .first()
+            .and_then(|r| r.get("count").or(Some(r)))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+        Value::Object(map) => map.get("count").and_then(|v| v.as_i64()).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// A dispatcher over the same ports, with `job` configured to reach `base_url`.
+/// `concurrency` is what the `_00_job_policy` row would say.
+fn make_dispatcher(db: Arc<dyn Db>, base_url: String) -> (Arc<JobDispatcher>, mpsc::Receiver<JobEntry>) {
+    let (tx, rx) = mpsc::channel::<JobEntry>(64);
+    let mut job_tables = std::collections::HashMap::new();
+    job_tables.insert(
+        "job".to_string(),
+        BackendInfo {
+            name: "api".to_string(),
+            base_url,
+            auth_token: None,
+            timeout: Some(5),
+            timeout_overridable: false,
+        },
+    );
+    let dispatcher = Arc::new(JobDispatcher::new(
+        db,
+        Arc::new(TestSpawner),
+        Arc::new(TestScheduler),
+        tx,
+        JobControl::new(),
+        Arc::new(JobConfig { job_tables }),
+        "ssp-test".to_string(),
+        true,
+    ));
+    (dispatcher, rx)
+}
 
 fn make_runner(db: Arc<dyn Db>) -> JobRunner {
-    let (tx, rx) = mpsc::channel::<JobEntry>(16);
+    let (dispatcher, rx) = make_dispatcher(Arc::clone(&db), "http://unused".to_string());
     JobRunner::new(
         rx,
-        tx,
         db,
         Arc::new(TestHttp(reqwest::Client::new())),
         Arc::new(TestScheduler),
         Arc::new(TestSpawner),
-        JobControl::new(),
+        dispatcher,
     )
 }
 
 fn job_entry(id: &str, base_url: String, max_retries: u32) -> JobEntry {
     JobEntry {
+        table: crate::jobs::table_of(id).unwrap_or_default().to_string(),
         id: id.to_string(),
         base_url,
         path: "/run".to_string(),
@@ -188,6 +232,8 @@ fn job_entry(id: &str, base_url: String, max_retries: u32) -> JobEntry {
         retry_strategy: "linear".to_string(),
         auth_token: None,
         timeout: Duration::from_secs(5),
+        // Driving `execute_job` directly, so no slot was taken.
+        permit: None,
     }
 }
 
@@ -540,5 +586,303 @@ async fn a_job_that_exhausts_its_retries_lands_failed_with_its_error_history() {
     assert!(
         select_i64(&raw, "SELECT VALUE array::len(errors) FROM ONLY job:r").await.unwrap_or(0) >= 1,
         "the failure reason must be recorded on the row"
+    );
+}
+
+// --- admission control + drain ------------------------------------------------
+
+/// `_00_job_policy` as `apps/cli/src/schedule_tables.surql` defines it, plus the
+/// dispatch index `build_outbox_platform_fields` injects. The index matters:
+/// adding one changes the plan for `SELECT VALUE count() ... GROUP ALL`, and
+/// with it the shape the result comes back in.
+const DISPATCH_DDL: &str = "\
+DEFINE TABLE OVERWRITE _00_job_policy SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE concurrency ON TABLE _00_job_policy TYPE int DEFAULT 1
+    ASSERT $value > 0;
+DEFINE FIELD OVERWRITE updated_at ON TABLE _00_job_policy TYPE datetime VALUE time::now();
+DEFINE INDEX IF NOT EXISTS idx_job_dispatch ON job COLUMNS status, created_at;";
+
+struct DispatchHarness {
+    dispatcher: Arc<JobDispatcher>,
+    rx: mpsc::Receiver<JobEntry>,
+    raw: Arc<Surreal<MemEngine>>,
+}
+
+impl DispatchHarness {
+    async fn new(standalone: bool, base_url: String) -> Self {
+        let (port, raw) = mem_db().await;
+        raw.query(DISPATCH_DDL).await.expect("apply dispatch schema");
+        let (tx, rx) = mpsc::channel::<JobEntry>(64);
+        let mut job_tables = std::collections::HashMap::new();
+        job_tables.insert(
+            "job".to_string(),
+            BackendInfo {
+                name: "api".to_string(),
+                base_url,
+                auth_token: None,
+                timeout: Some(5),
+                timeout_overridable: false,
+            },
+        );
+        let dispatcher = Arc::new(JobDispatcher::new(
+            port,
+            Arc::new(TestSpawner),
+            Arc::new(TestScheduler),
+            tx,
+            JobControl::new(),
+            Arc::new(JobConfig { job_tables }),
+            "ssp-test".to_string(),
+            standalone,
+        ));
+        Self { dispatcher, rx, raw }
+    }
+
+    /// A pending row created `age_ms` ago, so a test can fix the drain order
+    /// without sleeping.
+    async fn pending(&self, id_part: &str, age_ms: i64, path: &str) {
+        self.raw
+            .query(
+                "CREATE type::record('job', $id) SET \
+                 status = 'pending', retries = 0, max_retries = 1, path = $path, payload = {}, \
+                 retry_strategy = 'linear', errors = [], \
+                 created_at = time::now() - <duration>(string::concat(<string>$age, 'ms')), \
+                 updated_at = time::now()",
+            )
+            .bind(("id", id_part.to_string()))
+            .bind(("age", age_ms))
+            .bind(("path", path.to_string()))
+            .await
+            .expect("insert pending job");
+    }
+
+    /// Ids currently sitting on the queue, in the order they were admitted.
+    fn admitted(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(entry) = self.rx.try_recv() {
+            out.push(entry.id.clone());
+            // Hold the entry (and so its permit) for the length of the test:
+            // dropping it here would release the slot and defeat the point.
+            std::mem::forget(entry);
+        }
+        out
+    }
+}
+
+/// The cap is the point: above it, rows stay `pending` rather than piling up in
+/// memory. And the order is `created_at`, so the oldest waiting row goes first.
+#[tokio::test]
+async fn the_drain_admits_the_oldest_rows_up_to_the_limit() {
+    let mut h = DispatchHarness::new(true, "http://unused".to_string()).await;
+    h.dispatcher.set_limit("job", 2);
+    // Deliberately inserted newest-first, so passing cannot be an accident of
+    // insertion order.
+    for (id, age) in [("k1", 100), ("k2", 200), ("k3", 300), ("k4", 400), ("k5", 500)] {
+        h.pending(id, age, "/run").await;
+    }
+
+    h.dispatcher.note_backlog("job");
+    h.dispatcher.drain("job").await;
+
+    assert_eq!(
+        h.admitted(),
+        vec!["job:k5".to_string(), "job:k4".to_string()],
+        "only the two oldest rows may be admitted at concurrency 2"
+    );
+    assert_eq!(
+        count_rows(&h.raw, "SELECT VALUE count() FROM job WHERE status = 'pending' GROUP ALL").await,
+        5,
+        "the other three stay pending — the outbox is the queue"
+    );
+}
+
+/// A limit that cannot be read must never become a stop: no policy row means
+/// the serial behavior that predates this feature, not zero.
+#[tokio::test]
+async fn a_missing_policy_row_means_one_not_zero() {
+    let mut h = DispatchHarness::new(true, "http://unused".to_string()).await;
+    h.pending("k1", 100, "/run").await;
+    h.pending("k2", 200, "/run").await;
+
+    h.dispatcher.note_backlog("job");
+    h.dispatcher.drain("job").await;
+
+    assert_eq!(h.admitted().len(), 1, "the default is one, and it is enforced");
+}
+
+/// The deployed policy is what governs, not the default.
+#[tokio::test]
+async fn the_limit_comes_from_the_policy_row() {
+    let mut h = DispatchHarness::new(true, "http://unused".to_string()).await;
+    h.raw
+        .query("UPSERT _00_job_policy:job MERGE { concurrency: 3 }")
+        .await
+        .expect("write policy");
+    for (id, age) in [("k1", 100), ("k2", 200), ("k3", 300), ("k4", 400)] {
+        h.pending(id, age, "/run").await;
+    }
+
+    h.dispatcher.note_backlog("job");
+    h.dispatcher.drain("job").await;
+
+    assert_eq!(h.admitted().len(), 3);
+}
+
+/// A row left `processing` by a crashed SSP would otherwise hold the cluster
+/// budget until the recovery sweep resets it — ten minutes of a table that
+/// admits nothing.
+#[tokio::test]
+async fn the_cluster_count_ignores_stale_processing_rows() {
+    let mut h = DispatchHarness::new(false, "http://unused".to_string()).await;
+    h.raw
+        .query(
+            "CREATE job:orphan SET status = 'processing', retries = 0, max_retries = 1, \
+             path = '/run', payload = {}, retry_strategy = 'linear', errors = [], \
+             created_at = time::now() - 700s, updated_at = time::now() - 700s",
+        )
+        .await
+        .expect("insert orphan");
+    h.pending("k1", 100, "/run").await;
+
+    h.dispatcher.note_backlog("job");
+    h.dispatcher.drain("job").await;
+
+    assert_eq!(
+        h.admitted(),
+        vec!["job:k1".to_string()],
+        "an abandoned 'processing' row must not spend the budget"
+    );
+}
+
+/// The same count, when the row is fresh, is exactly what bounds the cluster.
+#[tokio::test]
+async fn a_live_processing_row_elsewhere_spends_the_cluster_budget() {
+    let mut h = DispatchHarness::new(false, "http://unused".to_string()).await;
+    h.raw
+        .query(
+            "CREATE job:elsewhere SET status = 'processing', retries = 0, max_retries = 1, \
+             path = '/run', payload = {}, retry_strategy = 'linear', errors = [], \
+             created_at = time::now(), updated_at = time::now()",
+        )
+        .await
+        .expect("insert in-flight row");
+    h.pending("k1", 100, "/run").await;
+
+    h.dispatcher.note_backlog("job");
+    h.dispatcher.drain("job").await;
+
+    assert!(
+        h.admitted().is_empty(),
+        "another node is already using the table's single slot"
+    );
+}
+
+/// Cloudflare and the portable shell construct a queue and drop the receiver —
+/// they have no runner. Without the latch, every ingest on those hosts would
+/// kick a drain query for work that could never run.
+#[tokio::test]
+async fn a_closed_queue_latches_dispatch_off() {
+    let mut h = DispatchHarness::new(true, "http://unused".to_string()).await;
+    h.dispatcher.set_limit("job", 4);
+    h.pending("k1", 100, "/run").await;
+    drop(std::mem::replace(&mut h.rx, mpsc::channel::<JobEntry>(1).1));
+
+    h.dispatcher.note_backlog("job");
+    h.dispatcher.drain("job").await;
+
+    assert!(
+        h.dispatcher.backlogged_tables().is_empty(),
+        "a host with no runner must stop looking for work"
+    );
+    // And the marker stays off for every later attempt.
+    h.dispatcher.note_backlog("job");
+    assert!(h.dispatcher.backlogged_tables().is_empty());
+}
+
+/// The permit is released when execution ends, NOT when the `enqueued` mark is
+/// cleared. Those differ across retry backoff — the mark is deliberately held,
+/// and holding the slot with it would idle a `concurrency: 1` table through
+/// every backoff, which the serial runner this replaces never did.
+#[tokio::test]
+async fn a_retry_backoff_does_not_hold_the_slot() {
+    let backend = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(match_path("/fail"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("nope"))
+        .mount(&backend)
+        .await;
+    Mock::given(method("POST"))
+        .and(match_path("/ok"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("done"))
+        .mount(&backend)
+        .await;
+
+    let (port, raw) = mem_db().await;
+    raw.query(DISPATCH_DDL).await.expect("apply dispatch schema");
+    let (tx, rx) = mpsc::channel::<JobEntry>(64);
+    let mut job_tables = std::collections::HashMap::new();
+    job_tables.insert(
+        "job".to_string(),
+        BackendInfo {
+            name: "api".to_string(),
+            base_url: backend.uri(),
+            auth_token: None,
+            timeout: Some(5),
+            timeout_overridable: false,
+        },
+    );
+    let dispatcher = Arc::new(JobDispatcher::new(
+        Arc::clone(&port),
+        Arc::new(TestSpawner),
+        Arc::new(TestScheduler),
+        tx,
+        JobControl::new(),
+        Arc::new(JobConfig { job_tables }),
+        "ssp-test".to_string(),
+        true,
+    ));
+    // One slot, so the second job can only run if the first has given it up.
+    dispatcher.set_limit("job", 1);
+
+    let runner = JobRunner::new(
+        rx,
+        port,
+        Arc::new(TestHttp(reqwest::Client::new())),
+        Arc::new(TestScheduler),
+        Arc::new(TestSpawner),
+        Arc::clone(&dispatcher),
+    );
+    tokio::spawn(runner.run());
+
+    // `retriable` fails immediately, then sleeps 400ms (linear backoff, attempt
+    // 1) before its second attempt. `follower` is younger, so FIFO puts it
+    // second — it can only get in during that sleep.
+    raw.query(
+        "CREATE job:retriable SET status = 'pending', retries = 0, max_retries = 5, \
+         path = '/fail', payload = {}, retry_strategy = 'linear', errors = [], \
+         created_at = time::now() - 500ms, updated_at = time::now();
+         CREATE job:follower SET status = 'pending', retries = 0, max_retries = 1, \
+         path = '/ok', payload = {}, retry_strategy = 'linear', errors = [], \
+         created_at = time::now() - 100ms, updated_at = time::now()",
+    )
+    .await
+    .expect("insert jobs");
+
+    dispatcher.note_backlog("job");
+    dispatcher.drain("job").await;
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:follower").await.as_deref(),
+        Some("success"),
+        "the follower must run while the first job sits in its 400ms backoff"
+    );
+    // Still mid-backoff, so the follower really did overlap it rather than
+    // running after it finished. The row reads `processing` for the whole
+    // backoff — it is only reset to `pending` immediately before the re-admit.
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:retriable").await.as_deref(),
+        Some("processing"),
+        "the first job must still be in its backoff, not finished"
     );
 }

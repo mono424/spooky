@@ -178,6 +178,9 @@
     "deployment": {
       "$ref": "#/$defs/deploymentConfig"
     },
+    "retention": {
+      "$ref": "#/$defs/retentionConfig"
+    },
     "cloudApi": {
       "type": "string",
       "description": "Override the Sp00ky Cloud API endpoint (e.g. for staging).",
@@ -581,6 +584,80 @@
         }
       }
     },
+    "retentionConfig": {
+      "type": "object",
+      "description": "How long finished jobs and run history are kept, before they are deleted automatically. Asymmetric by outcome: a success is read once if at all, a failure is what you went looking for. Whatever is deleted is first folded into permanent hourly counters, so totals survive the rows. `pending` and `processing` jobs, and `running` runs, are never pruned at any age.",
+      "additionalProperties": false,
+      "properties": {
+        "success": {
+          "type": "string",
+          "description": "How long outbox jobs in `success` are kept, e.g. `6h`. Ages by `updated_at` — a terminal job's last write is its terminalization.",
+          "default": "6h"
+        },
+        "failed": {
+          "type": "string",
+          "description": "How long outbox jobs in `failed` are kept, e.g. `14d`.",
+          "default": "14d"
+        },
+        "runSuccess": {
+          "type": "string",
+          "description": "How long schedule/workflow runs in `success`, `skipped` or `replaced` are kept, e.g. `24h`. Ages by `finished_at`.",
+          "default": "24h"
+        },
+        "runFailed": {
+          "type": "string",
+          "description": "How long schedule/workflow runs in `failed` or `killed` are kept, e.g. `30d`.",
+          "default": "30d"
+        },
+        "maxRows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Hard ceiling on rows in a successful status, per table. `0` (the default) disables it. Trims oldest-first and never touches failures — a valve for very wide fan-out, where the age windows above are the main mechanism.",
+          "default": 0
+        },
+        "mode": {
+          "enum": [
+            "all",
+            "failures-only"
+          ],
+          "default": "all",
+          "description": "Default history mode for every schedule. `failures-only` means a successful execution leaves nothing but a rollup counter. A schedule's own `history:` overrides it either way. Resolved at deploy time, so changing it needs a redeploy — unlike the windows above, which are one UPDATE away. Never applies to client `db.run()` jobs."
+        }
+      }
+    },
+    "historyConfig": {
+      "description": "Per-schedule override of the project's run-history retention. Accepts the shorthand `failures-only` (or `all`) as well as the full object, because \"never keep a successful run\" is the common answer for a wide fan-out and should not require thinking about durations.",
+      "oneOf": [
+        {
+          "enum": [
+            "all",
+            "failures-only"
+          ],
+          "description": "Shorthand for `{ mode: ... }`."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "all",
+                "failures-only"
+              ],
+              "description": "`failures-only` never persists a successful run: a suppressed tick writes no row at all, and a clean run is deleted as it finalizes. Counts still land in the rollup."
+            },
+            "success": {
+              "type": "string",
+              "description": "How long this schedule's `success` / `skipped` / `replaced` runs are kept, e.g. `15m`. Omitted falls back to the project's `retention.runSuccess`."
+            },
+            "failed": {
+              "type": "string",
+              "description": "How long this schedule's `failed` / `killed` runs are kept, e.g. `30d`. Omitted falls back to the project's `retention.runFailed`."
+            }
+          }
+        }
+      ]
+    },
     "scheduleEntry": {
       "description": "A server-side schedule: either an inline definition, or a path to a YAML file containing one. Set exactly one of `cron` or `every`. `cron` is a standard 5-field expression evaluated in `timezone` (default UTC); `every` is a fixed interval measured from each fire.",
       "oneOf": [
@@ -643,6 +720,9 @@
               "type": "boolean",
               "default": true,
               "description": "`false` deploys the schedule but leaves it inert. Distinct from `spky schedules pause`, which config never overwrites."
+            },
+            "history": {
+              "$ref": "#/$defs/historyConfig"
             }
           }
         }

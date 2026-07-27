@@ -26,8 +26,9 @@ use crate::dag::{StepStatus, WorkflowDag};
 use crate::db::{first_row, rows};
 use crate::engine::{
     bind_ref, build_job_content, build_payload, last_error, row_ref, ScheduleEngine, Trigger,
+    ROLLUP_NAME_AD_HOC, SCOPE_SCHEDULE,
 };
-use crate::spec::{OnFailure, ScheduleSpec, StepDef};
+use crate::spec::{OnFailure, ScheduleSpec, StepDef, HISTORY_FAILURES_ONLY};
 use crate::{ids, sql};
 
 /// A step row as the engine reads it back.
@@ -86,6 +87,12 @@ impl ScheduleEngine {
         content.insert("workflow_name".into(), json!(spec.name));
         // Frozen: redeploying the workflow can't change a run already in flight.
         content.insert("dag".into(), serde_json::to_value(def)?);
+        // Same reasoning for the history mode: a successful run is discarded as it
+        // finalizes, and at that point its owning schedule run may already be gone, so
+        // the mode has to travel with the run rather than be read back.
+        if let Some(mode) = spec.history_mode.as_deref() {
+            content.insert("history_mode".into(), json!(mode));
+        }
         content.insert("status".into(), json!("running"));
         if let Some(table) = spec.target_table.as_deref() {
             content.insert("target_table".into(), json!(table));
@@ -243,8 +250,15 @@ impl ScheduleEngine {
         }
 
         // 4. Finalize when nothing can move any more.
+        //
+        // `!steps.is_empty()` is load-bearing: `Iterator::all` is `true` for an EMPTY
+        // list and `find(Failed)` is then `None`, so a run whose step rows had vanished
+        // would be reported a clean `success` — announcing work that provably never
+        // finished. A run always has at least one step (an empty DAG is rejected at
+        // validation), so no rows means something deleted them, not that there was
+        // nothing to do.
         let steps = self.load_step_rows(wf_run).await?;
-        let all_terminal = steps.iter().all(|s| s.status.is_terminal());
+        let all_terminal = !steps.is_empty() && steps.iter().all(|s| s.status.is_terminal());
         if all_terminal {
             match steps.iter().find(|s| s.status == StepStatus::Failed) {
                 Some(step) => {
@@ -463,10 +477,14 @@ impl ScheduleEngine {
         patch.insert("status".into(), json!("success"));
         let mut binds = bind_ref("", wf_run).to_vec();
         binds.push(("patch", Value::Object(patch)));
-        self.db.query(sql::FINALIZE_WORKFLOW_RUN, &binds).await?;
-        if let Some(run) = self.load_workflow_run(wf_run).await? {
-            self.finalize_owning_schedule_run(wf_run, &run, "success", None).await?;
-        }
+        // `RETURN AFTER` rather than a re-read: by the time this returns the row may
+        // be on its way out, and reading it back to find `schedule_name` is what
+        // would strand the owning schedule run as `running` forever.
+        let finalized = self.db.query(sql::FINALIZE_WORKFLOW_RUN, &binds).await?;
+        let Some(run) = first_row(finalized) else { return Ok(()) };
+        self.finalize_owning_schedule_run(wf_run, &run, "success", None).await?;
+        // Strictly last: everything above has already taken what it needs off the row.
+        self.discard_workflow_if_failures_only(wf_run, &run).await;
         Ok(())
     }
 
@@ -476,11 +494,75 @@ impl ScheduleEngine {
         patch.insert("error".into(), error.clone());
         let mut binds = bind_ref("", wf_run).to_vec();
         binds.push(("patch", Value::Object(patch)));
-        self.db.query(sql::FINALIZE_WORKFLOW_RUN, &binds).await?;
-        if let Some(run) = self.load_workflow_run(wf_run).await? {
+        // Same shape as the success path. A failed run is never discarded — its rows are
+        // the whole reason `failures-only` exists.
+        let finalized = self.db.query(sql::FINALIZE_WORKFLOW_RUN, &binds).await?;
+        if let Some(run) = first_row(finalized) {
             self.finalize_owning_schedule_run(wf_run, &run, "failed", Some(error)).await?;
         }
         Ok(())
+    }
+
+    /// Under `history: failures-only`, a workflow run that succeeded leaves nothing
+    /// behind: its steps, its step jobs and the run row itself all go.
+    ///
+    /// Called ONLY from the success path. `kill_workflow_run` and the `bad_dag` failure
+    /// finalize a run while steps are still `dispatched`/`blocked`, so "the run
+    /// finalized" does not imply "its steps are terminal" — only `success` does, because
+    /// it is gated on `all_terminal`.
+    ///
+    /// Everything that reads the run has already run by this point: the outcome is
+    /// mirrored onto the owning schedule run, and the rollup is folded here BEFORE the
+    /// delete, because afterwards there is nothing left to count.
+    async fn discard_workflow_if_failures_only(&self, wf_run: &ids::Ref, run: &Value) {
+        if run.get("history_mode").and_then(Value::as_str) != Some(HISTORY_FAILURES_ONLY) {
+            return;
+        }
+
+        // `_00_workflow_run` has no `fire_at`, so the hourly bucket comes off
+        // `created_at`. An ad-hoc `spky workflows trigger` run has no owning schedule;
+        // count it under the same placeholder the prune's fold uses rather than dropping
+        // it on the floor.
+        let name =
+            run.get("schedule_name").and_then(Value::as_str).unwrap_or(ROLLUP_NAME_AD_HOC);
+        let at = run
+            .get("created_at")
+            .and_then(Value::as_str)
+            .and_then(crate::cron::parse_datetime)
+            .unwrap_or_else(Utc::now);
+        self.fold_rollup_one(run, at, SCOPE_SCHEDULE, "success", name).await;
+
+        // The step rows carry the job ids, so they have to be read before they go. Their
+        // `output` was copied onto them when each step finalized, so nothing downstream
+        // needs the job rows any more.
+        let steps = rows(
+            self.db
+                .query(sql::SELECT_STEP_RUNS, &bind_ref("wf", wf_run))
+                .await
+                .unwrap_or_default(),
+        );
+        let jobs: Vec<String> = steps
+            .iter()
+            .filter_map(|s| s.get("job_id").and_then(Value::as_str))
+            .filter_map(ids::Ref::parse)
+            .filter(|j| {
+                sql::is_plain_identifier(&j.table) && sql::is_plain_identifier(&j.key)
+            })
+            .map(|j| j.as_string())
+            .collect();
+        if !jobs.is_empty() {
+            if let Err(e) = self.db.query(&sql::delete_records(&jobs), &[]).await {
+                tracing::warn!(error = %e, "could not discard a workflow's job rows");
+            }
+        }
+
+        // Steps and run together, steps first — see DELETE_WORKFLOW_RUN_CASCADE.
+        if let Err(e) =
+            self.db.query(sql::DELETE_WORKFLOW_RUN_CASCADE, &bind_ref("", wf_run)).await
+        {
+            // Leaving the rows behind is harmless: retention collects them later.
+            tracing::warn!(run = %wf_run, error = %e, "could not discard a successful workflow run");
+        }
     }
 
     /// Mirror a workflow run's outcome onto the schedule run that spawned it.

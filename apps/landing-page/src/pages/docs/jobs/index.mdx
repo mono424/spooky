@@ -134,6 +134,19 @@ export const maxRowsCode = `retention:
   success: 6h
   maxRows: 50000     # hard ceiling on successful rows per table (0/unset = off)`;
 
+export const concurrencyCode = `# sp00ky.yml
+apps:
+  api:
+    type: backend
+    method:
+      type: outbox
+      schema: schema/src/outbox/api.surql
+      table: job
+      concurrency: 8     # at most 8 of this table's jobs run at once`;
+
+export const concurrencyTuneCode = `-- retune live, no redeploy
+UPDATE _00_job_policy:job SET concurrency = 20;`;
+
 export const cliCode = `spky jobs                      # live dashboard (status counts, recent jobs)
 spky jobs list                 # static, scriptable table (alias: ls)
 spky jobs list --status failed
@@ -243,6 +256,32 @@ The job runner is built into the SSP. There is nothing to install or implement:
 <Warning>
   Never mark an outbox table `-- @nosync`. It looks like a way to stop job rows syncing to clients, but job **dispatch** is driven by the table's create event — `@nosync` silently disables the job runner.
 </Warning>
+
+## Concurrency
+
+By default a job table runs **one job at a time**. Raise it per table:
+
+<CodeBlock code={concurrencyCode} lang="yaml" />
+
+Above the limit, nothing is queued in memory: the extra rows simply stay `pending` in the outbox and are admitted in `created_at` order as slots free. The outbox *is* the queue. That is what makes a spike safe — a fan-out can create 10,000 rows in one fire, and the table will still only ever have `concurrency` of them in flight. Because the backlog is rows in the database, it survives a restart, needs no new status, and is visible with the same `spky jobs list --status pending` you already use.
+
+This is the knob to reach for when a fan-out is more than the backend behind it can take. Everything funnels through the outbox — ad-hoc `db.run()` calls, scheduled fires, and workflow steps alike — so one limit per table governs all three.
+
+<Note>
+  Not to be confused with a schedule's `concurrency: skip | allow | replace`, which decides what happens when a schedule fires again while a previous run of the *same fan-out key* is still going. That one is about overlap; this one is about how many run at once. See [schedules](/docs/jobs/schedules#concurrency).
+</Note>
+
+The limit is exact within one SSP process. Across a multi-replica deployment it is a best-effort ceiling: each node also counts the `processing` rows the others hold and takes the tighter of the two views, so two nodes admitting in the same instant can briefly overshoot before converging. A single-node deployment never runs that count and is exact.
+
+Like retention, the policy lives in the database (`_00_job_policy:<table>`), written by `spky deploy`. A throttle is the setting you least want to need a redeploy for:
+
+<CodeBlock code={concurrencyTuneCode} lang="sql" />
+
+<Note>
+  Raising this means your handler will be called concurrently. If it mutates shared state, writes to the same rows, or was written assuming one-at-a-time delivery, make it safe for that first. The default stays at 1 precisely so upgrading changes nothing until you opt in.
+
+  Retry backoff does not hold a slot — a job sleeping between attempts lets the next one through.
+</Note>
 
 ## Retention
 

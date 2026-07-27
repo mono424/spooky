@@ -68,6 +68,13 @@ DEFINE FIELD OVERWRITE config_disabled ON TABLE _00_schedule TYPE bool DEFAULT f
 -- wants minutes of history; a nightly report wants a month.
 DEFINE FIELD OVERWRITE history_success_secs ON TABLE _00_schedule TYPE option<int>;
 DEFINE FIELD OVERWRITE history_failed_secs ON TABLE _00_schedule TYPE option<int>;
+-- `history: failures-only` in sp00ky.yml. A successful run then never persists at
+-- all: a suppressed tick writes no row, and a run that completes successfully is
+-- deleted as it finalizes. Its counts still land in _00_run_rollup, so the totals
+-- survive even though no row ever does. NONE means 'all' (keep everything until
+-- its retention window elapses).
+DEFINE FIELD OVERWRITE history_mode ON TABLE _00_schedule TYPE option<string>
+    ASSERT $value INSIDE ['all', 'failures-only'];
 
 -- Operator: written by the CLI only.
 DEFINE FIELD OVERWRITE paused ON TABLE _00_schedule TYPE bool DEFAULT false;
@@ -128,6 +135,12 @@ DEFINE FIELD OVERWRITE workflow_run ON TABLE _00_schedule_run TYPE option<record
 -- rows written by older deploys stay readable.
 DEFINE FIELD OVERWRITE row ON TABLE _00_schedule_run TYPE option<object> FLEXIBLE;
 DEFINE FIELD OVERWRITE error ON TABLE _00_schedule_run TYPE option<object> FLEXIBLE;
+-- Copy of the schedule's `history_mode`, frozen at spawn like the workflow `dag`.
+-- Finalizing a run has to know whether to keep it, and reading the schedule row
+-- back for every completion would be a point read per fan-out item; this makes it
+-- free, and means changing the config never changes the fate of a run already in
+-- flight.
+DEFINE FIELD OVERWRITE history_mode ON TABLE _00_schedule_run TYPE option<string>;
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_schedule_run TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_schedule_run TYPE datetime VALUE time::now();
 DEFINE FIELD OVERWRITE finished_at ON TABLE _00_schedule_run TYPE option<datetime>;
@@ -172,6 +185,11 @@ DEFINE FIELD OVERWRITE status ON TABLE _00_workflow_run TYPE string DEFAULT 'run
     ASSERT $value INSIDE ['running', 'success', 'failed', 'killed'];
 DEFINE FIELD OVERWRITE kill_requested ON TABLE _00_workflow_run TYPE bool DEFAULT false;
 DEFINE FIELD OVERWRITE error ON TABLE _00_workflow_run TYPE option<object> FLEXIBLE;
+-- Copy of the schedule's `history_mode`, frozen at spawn like the `dag` above. A
+-- successful run is discarded as it finalizes, and by then its owning
+-- _00_schedule_run may already be gone -- so the mode cannot be read back from
+-- there and has to live here.
+DEFINE FIELD OVERWRITE history_mode ON TABLE _00_workflow_run TYPE option<string>;
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_workflow_run TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_workflow_run TYPE datetime VALUE time::now();
 DEFINE FIELD OVERWRITE finished_at ON TABLE _00_workflow_run TYPE option<datetime>;
@@ -302,3 +320,35 @@ DEFINE FIELD OVERWRITE updated_at ON TABLE _00_run_rollup TYPE datetime VALUE ti
 
 DEFINE INDEX OVERWRITE idx_rollup_lookup ON TABLE _00_run_rollup
     COLUMNS scope, name, bucket;
+
+-- ==================================================
+-- SPOOKY JOB POLICY (per-outbox-table execution limits)
+-- One row per outbox table, id `_00_job_policy:<table>`, written by deploy from
+-- each app's `method.concurrency`.
+--
+-- Lives in the database for the same reason `_00_retention` does: singlenode,
+-- cluster, and Cloudflare all read the identical thing without another variable
+-- threaded through three shells and the separate cloud control plane, which
+-- assembles the SSP's environment server-side. And a throttle is exactly the
+-- setting you want to retune live — the reason you reach for one is that a
+-- backend is falling over right now, not next deploy.
+--
+-- `concurrency` bounds how many of this table's jobs are `processing` at once.
+-- Everything above the bound stays `pending` in the outbox and is admitted in
+-- `created_at` order as slots free: the queue is the table itself, so a backlog
+-- survives a restart and needs no new status. Absent row => 1, which is what the
+-- runner did before this existed.
+--
+-- Enforced per SSP process and, in cluster mode, best-effort across processes by
+-- counting non-stale `processing` rows. A single-node deployment is therefore
+-- exact.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_job_policy SCHEMAFULL PERMISSIONS NONE;
+
+-- `> 0`, not `>= 0`: `0` would read as "pause this table", and there is no
+-- unpause UX to go with it. Pausing a backend is `spky schedules pause` or a
+-- deploy, not a silently wedged outbox.
+DEFINE FIELD OVERWRITE concurrency ON TABLE _00_job_policy TYPE int DEFAULT 1
+    ASSERT $value > 0;
+
+DEFINE FIELD OVERWRITE updated_at ON TABLE _00_job_policy TYPE datetime VALUE time::now();

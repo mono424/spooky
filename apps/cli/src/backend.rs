@@ -528,6 +528,16 @@ pub struct RetentionConfig {
     /// Failures are never trimmed by it.
     #[serde(default, rename = "maxRows", skip_serializing_if = "Option::is_none")]
     pub max_rows: Option<i64>,
+    /// Default history mode for every schedule. `failures-only` means a successful
+    /// execution leaves nothing behind but a rollup counter. A schedule's own
+    /// `history:` overrides this in either direction.
+    ///
+    /// Resolved at DEPLOY time into each `_00_schedule.history_mode` rather than read
+    /// by the engine, so there is exactly one field to read at runtime and no staleness
+    /// window — at the cost of needing a redeploy to change, unlike the windows above
+    /// which are one `UPDATE` away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::schedule_config::HistoryMode>,
 }
 
 /// Resolved retention windows in seconds.
@@ -562,6 +572,11 @@ impl RetentionConfig {
 }
 
 impl Sp00kyConfig {
+    /// Project-wide default history mode, or `None` when unset.
+    pub fn default_history_mode(&self) -> Option<crate::schedule_config::HistoryMode> {
+        self.retention.as_ref().and_then(|r| r.mode)
+    }
+
     /// Retention windows in seconds, with every unset value defaulted.
     pub fn resolved_retention(&self) -> Result<ResolvedRetention> {
         let d = RetentionConfig::DEFAULTS;
@@ -1752,6 +1767,16 @@ pub struct BackendMethod {
     pub method_type: MethodType,
     pub schema: String,
     pub table: Option<String>,
+    /// How many of this outbox table's jobs may be `processing` at once.
+    /// Omitted => 1, which is what the runner did before this knob existed.
+    /// Everything above the bound waits as a `pending` row and is admitted in
+    /// `created_at` order — the outbox itself is the queue.
+    ///
+    /// Lives on `method:` rather than `deploy:` because it is a property of the
+    /// outbox, not of the container: `deploy:` is serialized wholesale into the
+    /// cloud deploy manifest, and this value never leaves the database.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Clone)]

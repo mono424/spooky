@@ -5,6 +5,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use super::dispatcher::JobDispatcher;
 use super::types::{JobControl, JobEntry};
 use crate::api::Method;
 use crate::ports::{Db, HttpClient, HttpError, OutboundRequest, Scheduler, Spawner};
@@ -35,52 +36,87 @@ fn validate_job_id(job_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub struct JobRunner {
-    queue_rx: mpsc::Receiver<JobEntry>,
-    queue_tx: mpsc::Sender<JobEntry>,
+/// Everything executing a job needs, minus the receiver. Split out from
+/// [`JobRunner`] so the loop can hand an `Arc` of it to each spawned execution.
+pub struct JobRunnerCtx {
     db: Arc<dyn Db>,
     http: Arc<dyn HttpClient>,
     scheduler: Arc<dyn Scheduler>,
     spawner: Arc<dyn Spawner>,
+    dispatcher: Arc<JobDispatcher>,
     job_control: JobControl,
+}
+
+pub struct JobRunner {
+    queue_rx: mpsc::Receiver<JobEntry>,
+    ctx: Arc<JobRunnerCtx>,
 }
 
 impl JobRunner {
     pub fn new(
         queue_rx: mpsc::Receiver<JobEntry>,
-        queue_tx: mpsc::Sender<JobEntry>,
         db: Arc<dyn Db>,
         http: Arc<dyn HttpClient>,
         scheduler: Arc<dyn Scheduler>,
         spawner: Arc<dyn Spawner>,
-        job_control: JobControl,
+        dispatcher: Arc<JobDispatcher>,
     ) -> Self {
+        let job_control = dispatcher.job_control().clone();
         Self {
             queue_rx,
-            queue_tx,
-            db,
-            http,
-            scheduler,
-            spawner,
-            job_control,
+            ctx: Arc::new(JobRunnerCtx {
+                db,
+                http,
+                scheduler,
+                spawner,
+                dispatcher,
+                job_control,
+            }),
         }
     }
 
-    /// Run the job runner loop
+    /// The execution context, for callers that need to run a job directly.
+    pub fn ctx(&self) -> &Arc<JobRunnerCtx> {
+        &self.ctx
+    }
+
+    /// Run the job runner loop.
+    ///
+    /// The loop dispatches and moves on rather than awaiting each job: how many
+    /// run at once is the [`JobDispatcher`]'s decision, and nothing reaches this
+    /// receiver without a permit. Awaiting here would pin every table in the
+    /// deployment to one concurrent job no matter what the policy says.
     pub async fn run(mut self) {
         info!("Job runner started");
 
         while let Some(job) = self.queue_rx.recv().await {
             debug!(job_id = %job.id, path = %job.path, "Processing job");
 
-            if let Err(e) = self.execute_job(job).await {
-                error!(error = %e, "Error executing job");
-            }
+            let ctx = Arc::clone(&self.ctx);
+            let table = job.table.clone();
+            self.ctx.spawner.spawn(Box::pin(async move {
+                if let Err(e) = ctx.execute_job(job).await {
+                    error!(error = %e, "Error executing job");
+                }
+                // The permit went with the entry, so the slot is free by now.
+                ctx.dispatcher.kick_drain(&table);
+            }));
         }
 
         info!("Job runner stopped");
     }
 
+    /// Execute one job on this runner's context, bypassing the queue.
+    ///
+    /// Test-only: production always arrives through `run()`, which is what
+    /// guarantees a job carries the permit that bounds concurrency.
+    #[cfg(test)]
+    pub(crate) async fn execute_job(&self, job: JobEntry) -> Result<()> {
+        self.ctx.execute_job(job).await
+    }
+}
+
+impl JobRunnerCtx {
     /// Execute a single job
     pub(crate) async fn execute_job(&self, job: JobEntry) -> Result<()> {
         // Killed-while-pending: an operator called /job/kill before this job was
@@ -230,13 +266,21 @@ impl JobRunner {
                 "Job will be retried"
             );
 
+            // Release the execution slot for the duration of the backoff. A job
+            // asleep on a timer is not running, and holding its permit would
+            // mean a table with `concurrency: 1` sits idle through every
+            // backoff — a regression against the serial runner this replaces.
+            job.permit = None;
+
             // Requeue with delay: a fire-and-forget task that sleeps through the
             // backoff. Lost on restart/eviction by design — the recovery sweep
             // re-picks the pending row (deadlines live in SurrealQL, not here).
-            let queue_tx = self.queue_tx.clone();
+            let dispatcher = Arc::clone(&self.dispatcher);
             let db = Arc::clone(&self.db);
             let scheduler = Arc::clone(&self.scheduler);
+            let job_control = self.job_control.clone();
             let job_id = job.id.clone();
+            let table = job.table.clone();
             self.spawner.spawn(Box::pin(async move {
                 scheduler.sleep(delay).await;
 
@@ -246,9 +290,16 @@ impl JobRunner {
                     return;
                 }
 
-                // Re-queue the job
-                if let Err(e) = queue_tx.send(job).await {
-                    error!(job_id = %job_id, error = %e, "Failed to re-queue job");
+                // Re-queue the job — through admission, so a retry cannot push
+                // the table over its limit. Refused means the slots are full:
+                // release the in-flight mark and let the row take its turn in
+                // the backlog like any other pending row. The attempt count
+                // survives on the row (`increment_retries` above), which is how
+                // the recovery path has always rebuilt it.
+                if !dispatcher.try_admit(job).await {
+                    job_control.clear_enqueued(&job_id);
+                    dispatcher.note_backlog(&table);
+                    debug!(job_id = %job_id, "Retry deferred to the backlog");
                 }
             }));
         } else {
@@ -468,19 +519,18 @@ pub async fn load_job_record(db: &dyn Db, job_id: &str) -> Result<Option<Value>>
 }
 
 /// Mark + enqueue a recovered/re-dispatched job. Returns `false` when the job
-/// is already queued or in-flight (the `mark_enqueued` guard) or the queue is
-/// closed. Shared by the singlenode recovery sweep, the
-/// and `/job/recover`.
+/// is already queued or in-flight (the `mark_enqueued` guard), when the queue is
+/// closed, or when the table is at its concurrency limit. Shared by the
+/// singlenode recovery sweep and `/job/recover`.
+///
+/// A `false` from the limit is not a failure: the row stays `pending`, which is
+/// where the backlog lives, and the drain will admit it in `created_at` order.
 pub async fn enqueue_recovered(
-    job_control: &super::types::JobControl,
-    job_queue_tx: &tokio::sync::mpsc::Sender<JobEntry>,
+    dispatcher: &Arc<JobDispatcher>,
     backend_info: &super::types::BackendInfo,
     id: &str,
     row: &Value,
 ) -> bool {
-    if !job_control.mark_enqueued(id) {
-        return false; // already queued or in-flight
-    }
     let timeout_override = row.get("timeout").and_then(|v| v.as_u64()).map(|v| v as u32);
     let job_entry = JobEntry::from_record(
         id.to_string(),
@@ -489,12 +539,7 @@ pub async fn enqueue_recovered(
         row,
         backend_info.effective_timeout(timeout_override),
     );
-    if let Err(e) = job_queue_tx.send(job_entry).await {
-        job_control.clear_enqueued(id);
-        warn!(target: "ssp::job_recovery", job_id = %id, error = %e, "Failed to enqueue recovered job");
-        return false;
-    }
-    true
+    dispatcher.try_admit(job_entry).await
 }
 
 /// Calculate retry delay based on strategy

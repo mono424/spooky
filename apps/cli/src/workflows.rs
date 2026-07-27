@@ -160,10 +160,13 @@ fn load_run(client: &SurrealClient, run_id: &str) -> Result<RunView> {
             esc(run_id)
         ),
     )?;
-    let run = rows
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("No workflow run '{run_id}'"))?;
+    let run = rows.into_iter().next().ok_or_else(|| {
+        anyhow!(
+            "No workflow run '{run_id}'.\n\nA successful run leaves no rows behind on a \
+             schedule with `history: failures-only` — check `spky schedules get <name>` for \
+             the totals, which survive the rows."
+        )
+    })?;
 
     let step_rows = query_rows(
         client,
@@ -435,7 +438,16 @@ fn watch(client: &SurrealClient, target: &str) -> Result<()> {
     crossterm::terminal::disable_raw_mode()?;
     crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-    result
+
+    // Say what happened AFTER leaving the alternate screen, or the message is drawn on a
+    // buffer that is about to be discarded.
+    if matches!(result?, WatchOutcome::RunGone) {
+        println!(
+            "{DIM}Run finished and was discarded (`history: failures-only`). \
+             `spky schedules get` still has the totals.{RESET}"
+        );
+    }
+    Ok(())
 }
 
 struct WatchState {
@@ -446,12 +458,19 @@ struct WatchState {
     message: Option<String>,
 }
 
+/// Why the watch stopped. The run disappearing is a normal ending, not an error: it is
+/// what a success looks like on a `history: failures-only` schedule.
+enum WatchOutcome {
+    Quit,
+    RunGone,
+}
+
 fn watch_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     client: &SurrealClient,
     target: &str,
     run: &mut RunView,
-) -> Result<()> {
+) -> Result<WatchOutcome> {
     let mut state = WatchState { selected: 0, selected_name: None, message: None };
     let mut last_poll = Instant::now();
 
@@ -461,7 +480,7 @@ fn watch_loop(
         if event::poll(Duration::from_millis(120))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(WatchOutcome::Quit),
                     KeyCode::Down | KeyCode::Char('j') => {
                         if !run.steps.is_empty() {
                             state.selected = (state.selected + 1) % run.steps.len();
@@ -495,17 +514,23 @@ fn watch_loop(
 
         if last_poll.elapsed() >= POLL {
             last_poll = Instant::now();
-            if let Ok(fresh) = resolve_run(client, target) {
-                *run = fresh;
-                // Re-anchor the selection to the remembered step name.
-                if let Some(name) = &state.selected_name {
-                    if let Some(i) = run.steps.iter().position(|s| &s.step == name) {
-                        state.selected = i;
-                    }
+            match resolve_run(client, target) {
+                Ok(fresh) => *run = fresh,
+                // The run is gone. On a `history: failures-only` schedule that is exactly
+                // what SUCCESS looks like, so swallowing this froze the TUI on the last
+                // pre-success frame forever and never rendered an outcome. Watching by
+                // NAME was worse: `resolve_run` takes the newest surviving run, so it
+                // silently re-anchored to an older, failed one under the operator.
+                Err(_) => return Ok(WatchOutcome::RunGone),
+            }
+            // Re-anchor the selection to the remembered step name.
+            if let Some(name) = &state.selected_name {
+                if let Some(i) = run.steps.iter().position(|s| &s.step == name) {
+                    state.selected = i;
                 }
-                if state.selected >= run.steps.len() {
-                    state.selected = 0;
-                }
+            }
+            if state.selected >= run.steps.len() {
+                state.selected = 0;
             }
         }
     }

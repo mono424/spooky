@@ -239,13 +239,24 @@ async fn build(opts: HarnessOpts) -> Harness {
     let rx = Arc::new(tokio::sync::Mutex::new(rx));
 
     let job_control = JobControl::new();
+    let job_config = Arc::new(job_config);
+    let job_dispatcher = Arc::new(ssp_node::jobs::JobDispatcher::new(
+        Arc::clone(&platform.db),
+        Arc::clone(&platform.spawner),
+        Arc::clone(&platform.scheduler),
+        tx,
+        job_control.clone(),
+        Arc::clone(&job_config),
+        "test-ssp".to_string(),
+        true,
+    ));
     let node = SspNode {
         platform,
         status: Arc::new(RwLock::new(opts.status)),
         processor: Arc::new(RwLock::new(Circuit::new())),
-        job_config: Arc::new(job_config),
+        job_config,
         job_control: job_control.clone(),
-        job_queue_tx: tx,
+        job_dispatcher,
         ssp_id: "test-ssp".to_string(),
         auth_secret: SECRET.to_string(),
         ref_mode: opts.ref_mode,
@@ -656,6 +667,52 @@ async fn ingest_non_pending_job_not_enqueued() {
     let r = h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap();
     assert_eq!(r.status, 200);
     assert!(h.job_rx.lock().await.try_recv().is_err(), "non-pending job must not enqueue");
+}
+
+/// Above the table's limit, ingest leaves the row alone. That is the whole
+/// mechanism: the outbox row IS the queue entry, so there is nothing to hold in
+/// memory and nothing to lose on a restart.
+#[tokio::test]
+async fn ingest_stops_at_the_table_concurrency_limit() {
+    let h = build(HarnessOpts { job_tables: vec![("job", "http://backend")], ..Default::default() }).await;
+    for id in ["job:a", "job:b", "job:c"] {
+        let body = json!({
+            "table": "job", "op": "CREATE", "id": id,
+            "record": { "status": "pending", "path": "/run", "payload": {} }
+        });
+        assert_eq!(h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap().status, 200);
+    }
+
+    let mut rx = h.job_rx.lock().await;
+    assert_eq!(rx.try_recv().expect("the first job runs").id, "job:a");
+    assert!(
+        rx.try_recv().is_err(),
+        "the default limit is 1 — the rest stay pending in the outbox"
+    );
+}
+
+/// A job waiting out its delay window is not running, so it must not be
+/// holding the table's execution slot. Getting this wrong means one
+/// `db.run(..., { delay: 3600000 })` stalls a `concurrency: 1` table for an
+/// hour.
+#[tokio::test]
+async fn a_delayed_job_does_not_hold_a_slot() {
+    let h = build(HarnessOpts { job_tables: vec![("job", "http://backend")], ..Default::default() }).await;
+    let delayed = json!({
+        "table": "job", "op": "CREATE", "id": "job:later",
+        "record": { "status": "pending", "path": "/run", "payload": {}, "delay": 3_600_000 }
+    });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", delayed)).await.unwrap().status, 200);
+
+    let now = json!({
+        "table": "job", "op": "CREATE", "id": "job:now",
+        "record": { "status": "pending", "path": "/run", "payload": {} }
+    });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", now)).await.unwrap().status, 200);
+
+    let mut rx = h.job_rx.lock().await;
+    let job = rx.try_recv().expect("the immediate job must not wait on the delayed one");
+    assert_eq!(job.id, "job:now");
 }
 
 #[tokio::test]

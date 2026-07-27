@@ -203,9 +203,23 @@ pub const SKIP_STEP: &str = "\
 UPDATE type::record($tb, $key) SET status = 'skipped', finished_at = time::now() \
 WHERE status INSIDE ['blocked', 'ready']";
 
+/// `RETURN AFTER` so the caller gets `schedule_name`, `history_mode` and `created_at`
+/// back without re-reading the row.
+///
+/// That re-read was a live hazard once a successful run can be DELETED: the caller
+/// needs `schedule_name` to finalize the owning `_00_schedule_run`, and if the row is
+/// gone by then the schedule run is never finalized at all. It would stay `running`
+/// forever — the workflow heal only selects `running` WORKFLOW runs, and
+/// `SELECT_RUNNING_JOB_RUNS` filters `kind = 'job'`, so nothing reaches it — which
+/// makes `COUNT_ACTIVE_RUNS` count it forever and permanently wedges
+/// `concurrency: skip` for that key. Prune can't collect it either, since `running`
+/// is deliberately absent from `SCHEDULE_RUN_PRUNABLE`.
+///
+/// An empty result means the `running` guard didn't match, which is also exactly when
+/// the caller must not report an outcome or discard anything.
 pub const FINALIZE_WORKFLOW_RUN: &str = "\
 UPDATE type::record($tb, $key) MERGE object::extend($patch, { finished_at: time::now() }) \
-WHERE status = 'running'";
+WHERE status = 'running' RETURN AFTER";
 
 /// Runs an operator asked to kill.
 pub const SELECT_KILL_REQUESTED: &str =
@@ -229,6 +243,60 @@ WHERE job_id = $job_id AND status = 'dispatched'";
 // Heal pass
 // ---------------------------------------------------------------------------
 
+/// Terminal state of MANY spawned jobs in one round-trip.
+///
+/// Two things here are deliberate:
+///
+/// * **The ids are interpolated, not bound.** A bound array of strings does not
+///   coerce to record ids: `FROM $ids` echoes the strings straight back and
+///   `WHERE id IN $ids` matches nothing — both SILENTLY, so the heal pass would
+///   conclude every job had vanished and fail every live run with `job_missing`.
+///   Every id here comes from [`crate::ids::job`] / [`crate::ids::step_job`], which
+///   sanitize to `[a-z0-9_]`, and the caller additionally checks the table name.
+/// * **No `result`.** Healing a schedule run needs the status and, on failure, the
+///   error — never the body. A job `result` is up to 64 KiB, so selecting it for
+///   every in-flight run of a wide fan-out would haul megabytes per sweep.
+///
+/// Ids that no longer exist are simply absent from the result, which is how the
+/// caller detects a pruned or operator-deleted job.
+pub fn select_jobs_terminal(record_ids: &[String]) -> String {
+    format!("SELECT id, status, errors FROM {}", record_ids.join(", "))
+}
+
+/// Drop a run row outright. Used by `history: failures-only`, where a successful
+/// run is not history anybody asked to keep — its counts are already folded into
+/// the rollup by the time this runs.
+pub const DELETE_SCHEDULE_RUN: &str = "DELETE type::record($tb, $key)";
+
+/// Drop a successful workflow run and its steps, steps FIRST, in one statement.
+///
+/// The order and the atomicity are both load-bearing. A step row is only ever
+/// reachable through the run table (`PRUNE_WORKFLOW_RUNS` finds steps via
+/// `workflow_run INSIDE $ids`), so deleting the run first — or dying between two
+/// separate statements — leaks those steps permanently with nothing left able to
+/// find them.
+///
+/// The caller must also guarantee the run row is already NON-`running` before this
+/// runs: `advance_workflow` computes `all_terminal` with `Iterator::all`, which is
+/// `true` for an EMPTY step list, so a `running` run whose steps vanished gets
+/// flipped straight to `success` by the next pass.
+pub const DELETE_WORKFLOW_RUN_CASCADE: &str = "\
+RETURN { \
+LET $run = type::record($tb, $key); \
+DELETE _00_step_run WHERE workflow_run = $run; \
+DELETE $run; \
+}";
+
+/// Drop specific records by id.
+///
+/// Ids are interpolated for the same reason as [`select_jobs_terminal`]: a bound
+/// array of strings does not coerce to record ids, and both `FROM $ids` and
+/// `id IN $ids` fail SILENTLY. Callers pass only engine-minted ids and check each
+/// with [`is_plain_identifier`].
+pub fn delete_records(record_ids: &[String]) -> String {
+    format!("DELETE {}", record_ids.join(", "))
+}
+
 /// Atomic-job runs whose job row may already have reached a terminal status
 /// while the run row is still `running` — i.e. the ingest event that should have
 /// notified the engine was lost (SSP restart, dropped `http::post`). Polling for
@@ -237,6 +305,16 @@ WHERE job_id = $job_id AND status = 'dispatched'";
 pub const SELECT_RUNNING_JOB_RUNS: &str = "\
 SELECT id, job_id FROM _00_schedule_run \
 WHERE status = 'running' AND kind = 'job' AND job_id != NONE";
+
+/// Success-shaped run statuses — the ones `history: failures-only` discards. Kept
+/// next to [`SCHEDULE_RUN_PRUNABLE`] because the two must agree on which outcomes
+/// count as "nothing went wrong".
+pub const RUN_SUCCESS_SHAPED: [&str; 3] = ["success", "skipped", "replaced"];
+
+/// Whether an outcome is one `failures-only` throws away.
+pub fn is_success_shaped(status: &str) -> bool {
+    RUN_SUCCESS_SHAPED.contains(&status)
+}
 
 /// Workflow runs to re-examine for the same reason.
 pub const SELECT_RUNNING_WORKFLOW_RUNS: &str =
@@ -773,6 +851,94 @@ mod tests {
             );
             assert!(SELECT_HISTORY_OVERRIDES.contains(field));
         }
+    }
+
+    /// `history_mode` has to exist on BOTH tables: deploy writes it to the schedule,
+    /// and the engine freezes a copy onto each run so finalizing one needs no extra
+    /// read. Missing it on the run table would make every run read as "keep", which
+    /// looks like the feature simply not working.
+    #[test]
+    fn both_tables_define_the_history_mode() {
+        for table in ["_00_schedule", "_00_schedule_run", "_00_workflow_run"] {
+            assert!(
+                SCHEDULE_TABLES.contains(&format!("history_mode ON TABLE {table}")),
+                "{table} is missing `history_mode`"
+            );
+        }
+        // The schedule's copy is constrained; the run's is a frozen echo of it.
+        assert!(SCHEDULE_TABLES.contains("ASSERT $value INSIDE ['all', 'failures-only']"));
+    }
+
+    /// The statuses `failures-only` discards must be exactly the success-shaped ones,
+    /// and must never include a failure or an in-flight run — discarding either would
+    /// lose the history the mode exists to keep, or break `concurrency: skip`.
+    #[test]
+    fn only_success_shaped_outcomes_are_discardable() {
+        assert!(is_success_shaped("success"));
+        assert!(is_success_shaped("skipped"));
+        assert!(is_success_shaped("replaced"));
+        assert!(!is_success_shaped("failed"));
+        assert!(!is_success_shaped("killed"));
+        assert!(!is_success_shaped("running"));
+        // Every discardable status is one the DDL actually allows, and one the prune
+        // also treats as success-shaped.
+        for status in RUN_SUCCESS_SHAPED {
+            assert!(SCHEDULE_RUN_PRUNABLE.contains(&status), "{status} must be prunable too");
+        }
+    }
+
+    /// The workflow cascade must delete STEPS before the run, in ONE statement.
+    ///
+    /// A step row is only ever reachable through the run table, so deleting the run first
+    /// — or dying between two separate statements — leaks those steps with nothing left
+    /// able to find them. That is the invariant the prune's combined delete already
+    /// protects, and this is the second place that has to honour it.
+    #[test]
+    fn the_workflow_cascade_deletes_steps_before_the_run() {
+        let sql = DELETE_WORKFLOW_RUN_CASCADE;
+        assert!(sql.starts_with("RETURN {"), "must be one statement: {sql}");
+        let steps = sql.find("DELETE _00_step_run").expect("deletes steps");
+        let run = sql.rfind("DELETE $run").expect("deletes the run");
+        assert!(steps < run, "steps must go first: {sql}");
+    }
+
+    /// Only `success` is discardable for a WORKFLOW run. `is_success_shaped` also admits
+    /// `skipped`/`replaced`, which are schedule-run statuses a workflow run can never
+    /// hold — so reusing it here would be over-broad.
+    #[test]
+    fn only_a_successful_workflow_run_is_discardable() {
+        assert!(WORKFLOW_RUN_PRUNABLE.contains(&"success"));
+        for status in ["skipped", "replaced"] {
+            assert!(
+                !WORKFLOW_RUN_PRUNABLE.contains(&status),
+                "`{status}` is not a workflow-run status"
+            );
+        }
+        // Failures and kills are exactly what the mode keeps.
+        assert!(WORKFLOW_RUN_PRUNABLE.contains(&"failed"));
+        assert!(WORKFLOW_RUN_PRUNABLE.contains(&"killed"));
+    }
+
+    /// Finalizing a workflow run must hand the row back, or the caller has to re-read it
+    /// to find `schedule_name` — and a re-read that returns nothing strands the owning
+    /// schedule run as `running` forever, which permanently wedges `concurrency: skip`.
+    #[test]
+    fn finalizing_a_workflow_run_returns_the_row() {
+        assert!(FINALIZE_WORKFLOW_RUN.contains("RETURN AFTER"));
+    }
+
+    /// The batched heal lookup must not select `result`: a job result is up to 64 KiB,
+    /// so pulling it for every in-flight run of a wide fan-out would move megabytes
+    /// per sweep for a field the heal never reads.
+    #[test]
+    fn the_batched_job_lookup_stays_narrow() {
+        let sql = select_jobs_terminal(&["job:sch_a".to_string(), "job:sch_b".to_string()]);
+        assert!(sql.contains("SELECT id, status, errors FROM job:sch_a, job:sch_b"), "{sql}");
+        assert!(!sql.contains("result"), "the heal never needs the body: {sql}");
+        // Bound string arrays do NOT coerce to record ids — `FROM $ids` echoes them
+        // back and `id IN $ids` matches nothing, both silently. So the ids are
+        // interpolated, and must not be parameterised by a later refactor.
+        assert!(!sql.contains("$ids"), "{sql}");
     }
 
     /// Same for the denormalized last-run fields the CLI now reads instead of

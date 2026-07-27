@@ -28,6 +28,14 @@ pub enum TimerKind {
     BackendHealth,
     /// HTTP-engine token refresh (re-arms every `RESIGNIN_INTERVAL_SECS`).
     DbResignin,
+    /// Admit backlogged jobs for one outbox table (re-arms every
+    /// `JOB_DRAIN_INTERVAL_SECS` while that table still has a known backlog).
+    ///
+    /// Armed in BOTH standalone and cluster mode, unlike the recovery sweep.
+    /// It is the only wakeup that covers the case where the cluster-wide count
+    /// is what blocks admission: this node then has free local slots, runs
+    /// nothing, and so never completes a job to kick its own drain.
+    JobDrain { table: String },
     /// A job created with a delay window, due later.
     DelayedJob { id: String },
     /// Retry backoff for a failed job dispatch.

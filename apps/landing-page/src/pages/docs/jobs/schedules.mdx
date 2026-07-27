@@ -79,6 +79,37 @@ nightly-cleanup          job       0 3 * * *      paused    2026-07-26 01:00:00 
 stale-poller             job       every 1h       error     -                    ·  -
   last error: forEach query failed: query: Parse error at 'FROM'`;
 
+export const projectModeCode = `# sp00ky.yml — the default for every schedule
+retention:
+  mode: failures-only
+  failed: 14d          # failures still keep a real window
+
+schedules:
+  audit-trail:
+    cron: "0 3 * * *"
+    backend: api
+    route: /audit
+    history: all       # ...except this one, which keeps everything`;
+
+export const failuresOnlyCode = `schedules:
+  sync-every-tenant:
+    every: 1m
+    backend: api
+    route: /sync
+    forEach:
+      query: SELECT id FROM tenant
+      key: id
+    history: failures-only    # successful runs never persist
+
+  # Or combine the mode with a window for the failures you do keep:
+  other-job:
+    every: 5m
+    backend: api
+    route: /other
+    history:
+      mode: failures-only
+      failed: 7d`;
+
 export const historyCode = `schedules:
   sync-every-tenant:
     every: 1m
@@ -165,6 +196,10 @@ The query runs with root privileges on every fire, so it always sees current dat
   A suppressed tick is recorded as a `skipped` run, not silently dropped, so `spky schedules runs` shows you a schedule falling behind instead of just looking idle.
 </Note>
 
+<Note>
+  This is about **overlap**, not throughput. A fan-out over 10,000 rows spawns 10,000 jobs with 10,000 distinct keys, so no policy here restrains it — every one of them is a first run for its own key. What bounds how many actually execute at once is the job table's own [`concurrency`](/docs/jobs#concurrency), which holds the excess as `pending` rows and admits them oldest-first as slots free.
+</Note>
+
 ## Definitions in their own files
 
 Once you have more than a handful, `schedules:` can live in separate files, per entry or wholesale. Paths are relative to the manifest that names them.
@@ -204,6 +239,32 @@ That default is a project-wide setting (`retention:` in sp00ky.yml — see [Jobs
 <CodeBlock code={historyCode} lang="yaml" />
 
 This matters most for fan-out. A minutely schedule over 500 rows writes 500 run rows *and* 500 job rows every minute; with `concurrency: skip`, a slow one writes 500 `skipped` rows per fire on top. Those are the rows nobody reads, so give that schedule a short `history.success` and keep the long window for failures.
+
+### Keeping nothing but failures
+
+If successful runs are of no interest at all, skip the window and say so — per schedule, or project-wide as the default:
+
+<CodeBlock code={failuresOnlyCode} lang="yaml" />
+
+<CodeBlock code={projectModeCode} lang="yaml" />
+
+A schedule's own `history:` always wins over the project default, in either direction — so one project-wide line plus an opt-out is usually all you need. Note that `retention.mode` is resolved when you deploy, unlike the retention *windows* which can be retuned with a single `UPDATE`.
+
+Then a successful run never persists: a suppressed tick writes **no row at all**, and a run that completes cleanly is deleted as it finalizes rather than waiting out a window. Failures and kills are kept as normal, on the usual long window.
+
+Nothing you read gets worse for it. The counts still land in the rollup (`spky schedules get` reports lifetime totals), and the schedule still records its last outcome, so `spky schedules list` is unchanged.
+
+<Note>
+  Two guarantees worth knowing. A run that is still **running** is never discarded, whatever the mode — `concurrency: skip` counts in-flight runs, so removing them early would let a slow fan-out stack up on itself. And the mode is frozen onto each run when it spawns, like a workflow's DAG, so a redeploy never changes the fate of work already in flight.
+
+  It applies to the whole execution. A workflow that succeeds discards its run, every step row, and every job row its steps spawned — all together, once the run finalizes. A workflow that **fails** keeps all of it, including the job rows of the steps that succeeded, because those are what you read to work out why it died.
+</Note>
+
+<Warning>
+  A discarded job row is a job you can no longer inspect: `spky jobs get` and `spky jobs retry` on a successful scheduled job report not-found, because there is no row left. That is the trade — and it is why this only ever applies to jobs a *schedule* spawned. A job created from your app with `db.run()` is never discarded this way, so a UI can still watch it succeed and read its `result`.
+
+  It also skews `spky jobs`: `throughput ✓/min` reads 0 and `fail rate` reads 100% whenever anything has failed, because both count surviving rows and the successes are gone. On a `failures-only` schedule the authoritative success volume is `spky schedules get <name>`, which reads the counters.
+</Warning>
 
 <Note>
   Pruned runs are counted before they are deleted, so `spky schedules get <name>` still reports lifetime totals (`pruned : 41230 ok  12 failed`) long after the rows are gone. They are a lower bound — see [Jobs → Retention](/docs/jobs#retention).

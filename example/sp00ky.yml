@@ -147,6 +147,10 @@ apps:
       type: outbox
       table: job
       schema: ./schema/src/outbox/api.surql
+      # How many of this table's jobs run at once. Default 1 (serial).
+      # Anything over the limit waits as a `pending` row and is admitted
+      # oldest-first as slots free — the outbox is the queue.
+      concurrency: 4
     env:
       dev: '.env.local'
       cloud:

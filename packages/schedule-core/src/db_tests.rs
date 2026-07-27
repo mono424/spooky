@@ -1887,3 +1887,507 @@ async fn a_zero_row_cap_means_disabled_not_keep_nothing() {
 }
 
 
+
+// --- batched healing ---------------------------------------------------------
+
+/// Healing many in-flight runs must resolve them in one pass, and must classify each
+/// one independently: a finished job, a failed job, and a vanished job all appear in
+/// the same batch.
+///
+/// The lookup reads the job rows in bulk. The previous form issued one query per
+/// running run, sequentially, so a 500-wide fan-out cost 500 round-trips every five
+/// seconds — and sweep latency is exactly what bounds how long a lost ingest event
+/// delays a completion.
+#[tokio::test]
+async fn one_heal_pass_resolves_a_whole_fan_out_of_in_flight_runs() {
+    let h = harness().await;
+    // Three runs, each waiting on its own job: one succeeded, one failed, one gone.
+    for (n, status) in [("ok", Some("success")), ("bad", Some("failed")), ("gone", None)] {
+        h.raw
+            .query(
+                "CREATE type::record('_00_schedule_run', $rid) CONTENT { \
+                 schedule_name: 'wide', key: $rid, fire_at: time::now(), kind: 'job', \
+                 status: 'running', job_id: $jid }",
+            )
+            .bind(("rid", n.to_string()))
+            .bind(("jid", format!("job:sch_{n}")))
+            .await
+            .expect("seed run");
+        if let Some(status) = status {
+            h.raw
+                .query(
+                    "CREATE type::record('job', $id) CONTENT { path: '/x', payload: {}, \
+                     status: $status, errors: $errors }",
+                )
+                .bind(("id", format!("sch_{n}")))
+                .bind(("status", status.to_string()))
+                .bind((
+                    "errors",
+                    if status == "failed" {
+                        json!([{ "code": 500, "reason": "boom" }])
+                    } else {
+                        json!([])
+                    },
+                ))
+                .await
+                .expect("seed job");
+        }
+    }
+
+    let report = h.engine.tick_pass().await.unwrap();
+    assert_eq!(report.healed, 3, "all three resolved in one pass");
+
+    let mut statuses = Vec::new();
+    for id in ["ok", "bad", "gone"] {
+        let sql = format!("SELECT VALUE status FROM ONLY _00_schedule_run:{id} LIMIT 1");
+        statuses.push(h.one_string(&sql).await);
+    }
+    assert_eq!(statuses[0].as_deref(), Some("success"));
+    assert_eq!(statuses[1].as_deref(), Some("failed"));
+    assert_eq!(
+        statuses[2].as_deref(),
+        Some("failed"),
+        "a run whose job row vanished cannot complete, so it stops being `running`"
+    );
+    assert_eq!(
+        h.one_string("SELECT VALUE error.code FROM ONLY _00_schedule_run:gone LIMIT 1")
+            .await
+            .as_deref(),
+        Some("job_missing")
+    );
+    assert_eq!(
+        h.one_string("SELECT VALUE error.reason FROM ONLY _00_schedule_run:bad LIMIT 1")
+            .await
+            .as_deref(),
+        Some("boom"),
+        "the failing job's error is carried onto its run"
+    );
+}
+
+/// A job id that isn't a plain identifier is refused rather than spliced into the
+/// lookup statement. The ids the engine writes are always safe; a hand-edited row is
+/// the case this guards.
+#[tokio::test]
+async fn an_unsafe_job_id_on_a_run_is_refused_not_interpolated() {
+    let h = harness().await;
+    h.set(
+        "CREATE _00_schedule_run:evil CONTENT { schedule_name: 'x', key: '', \
+         fire_at: time::now(), kind: 'job', status: 'running', \
+         job_id: 'job:a; REMOVE TABLE _00_schedule_run' }",
+    )
+    .await;
+
+    // The sweep must complete normally, and the table must still be there.
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(
+        h.one_string("SELECT VALUE status FROM ONLY _00_schedule_run:evil LIMIT 1")
+            .await
+            .as_deref(),
+        Some("running"),
+        "the run is skipped, not healed off a statement we refused to build"
+    );
+}
+
+// --- history: failures-only ---------------------------------------------------
+
+/// Define a fan-out schedule in `failures-only` mode and make it due.
+async fn failures_only_harness() -> Harness {
+    let h = harness().await;
+    h.set("CREATE connection:alice SET active = true").await;
+    h.define_schedule(
+        "lean",
+        json!({
+            "kind": "job",
+            "every_ms": 300_000,
+            "target_table": "job",
+            "path": "/sync",
+            "for_each": "SELECT id FROM connection WHERE active = true",
+            "for_each_key": "id",
+            "concurrency": "skip",
+            "history_mode": "failures-only",
+        }),
+    )
+    .await;
+    h.engine.tick_pass().await.unwrap();
+    h.set("UPDATE _00_schedule:lean SET next_fire_at = time::now() - 1s").await;
+    h.engine.tick_pass().await.unwrap();
+    h
+}
+
+/// A run that finishes cleanly leaves no row at all — but its count and its outcome
+/// both survive, so nothing an operator reads gets worse.
+#[tokio::test]
+async fn a_successful_run_under_failures_only_leaves_no_row() {
+    let h = failures_only_harness().await;
+    let job = h
+        .one_string("SELECT VALUE job_id FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+        .await
+        .expect("a job was spawned");
+
+    h.finish_job(&job, "success", json!({"ok": true})).await;
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM _00_schedule_run GROUP ALL").await,
+        0,
+        "the successful run is discarded as it finalizes, not left for retention"
+    );
+    assert_eq!(
+        rollup_rows(&h).await,
+        vec!["schedule/lean s=1 f=0 sk=0 r=0 k=0"],
+        "its count still lands in the rollup"
+    );
+    assert_eq!(
+        h.one_string("SELECT VALUE last_run_status FROM ONLY _00_schedule:lean").await.as_deref(),
+        Some("success"),
+        "and the schedule still reports its last outcome"
+    );
+}
+
+/// A FAILED run is kept, which is the entire point of the mode.
+#[tokio::test]
+async fn a_failed_run_under_failures_only_is_kept() {
+    let h = failures_only_harness().await;
+    let job = h
+        .one_string("SELECT VALUE job_id FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+        .await
+        .expect("a job was spawned");
+
+    h.fail_job(&job, "boom").await;
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(
+        h.one_string("SELECT VALUE status FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+            .await
+            .as_deref(),
+        Some("failed")
+    );
+    assert_eq!(
+        h.one_string("SELECT VALUE error.reason FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+            .await
+            .as_deref(),
+        Some("boom"),
+        "with its error intact"
+    );
+}
+
+/// A suppressed tick writes NO row in the first place. This is the case that matters
+/// at width: with `concurrency: skip`, a slow wide fan-out is mostly suppressed ticks,
+/// and creating a row only to prune it later is the cost the mode exists to avoid.
+#[tokio::test]
+async fn a_suppressed_tick_under_failures_only_writes_nothing() {
+    let h = failures_only_harness().await;
+    // alice's run is still in flight; fire again so this tick is suppressed.
+    h.set("UPDATE _00_schedule:lean SET next_fire_at = time::now() - 1s").await;
+    let report = h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(report.skipped, 1, "the tick was suppressed");
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM _00_schedule_run WHERE status = 'skipped' GROUP ALL")
+            .await,
+        0,
+        "and left no row behind"
+    );
+    assert_eq!(
+        rollup_rows(&h).await,
+        vec!["schedule/lean s=0 f=0 sk=1 r=0 k=0"],
+        "the suppression is still counted, so it is observable in aggregate"
+    );
+}
+
+/// The RUNNING row must still exist while the job is in flight, or `concurrency: skip`
+/// would stop suppressing: it counts running rows, so discarding them early would let
+/// a slow fan-out stack up on itself — the exact failure the policy prevents.
+#[tokio::test]
+async fn failures_only_still_keeps_the_row_while_the_run_is_in_flight() {
+    let h = failures_only_harness().await;
+
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM _00_schedule_run WHERE status = 'running' GROUP ALL")
+            .await,
+        1,
+        "an in-flight run is never discarded, whatever the history mode"
+    );
+
+    // And the suppression it drives still happens.
+    h.set("UPDATE _00_schedule:lean SET next_fire_at = time::now() - 1s").await;
+    let report = h.engine.tick_pass().await.unwrap();
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.spawned, 0, "skip still sees the in-flight run");
+}
+
+/// The mode is frozen onto the run at spawn, like a workflow's `dag`. Switching the
+/// schedule to `all` mid-flight must not resurrect a run already destined for discard,
+/// and vice versa — otherwise a deploy would silently change the fate of work in
+/// progress.
+#[tokio::test]
+async fn the_history_mode_is_frozen_at_spawn() {
+    let h = failures_only_harness().await;
+    let job = h
+        .one_string("SELECT VALUE job_id FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+        .await
+        .expect("a job was spawned");
+    assert_eq!(
+        h.one_string("SELECT VALUE history_mode FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+            .await
+            .as_deref(),
+        Some("failures-only"),
+        "the run carries its own copy"
+    );
+
+    // A redeploy flips the schedule back to keeping everything.
+    h.set("UPDATE _00_schedule:lean SET history_mode = 'all'").await;
+    h.finish_job(&job, "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM _00_schedule_run GROUP ALL").await,
+        0,
+        "the in-flight run keeps the mode it was spawned under"
+    );
+}
+
+/// A schedule left in the default mode is unaffected: successful runs persist until
+/// their retention window elapses.
+#[tokio::test]
+async fn the_default_mode_still_keeps_successful_runs() {
+    let h = harness().await;
+    let job = fire_once(&h).await;
+    h.finish_job(&job, "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(
+        h.one_string("SELECT VALUE status FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+            .await
+            .as_deref(),
+        Some("success"),
+        "without `failures-only` a successful run is ordinary history"
+    );
+}
+
+// --- failures-only cascades through a workflow --------------------------------
+
+/// A two-step workflow schedule in `failures-only` mode, fired once.
+async fn failures_only_workflow() -> Harness {
+    let h = harness().await;
+    h.define_schedule(
+        "lean-wf",
+        json!({
+            "kind": "workflow",
+            "every_ms": 3_600_000,
+            "target_table": "job",
+            "history_mode": "failures-only",
+            "workflow": {
+                "target_table": "job",
+                "steps": [
+                    {"name": "first", "path": "/first"},
+                    {"name": "second", "path": "/second", "depends_on": ["first"]},
+                ],
+                "on_failure": "halt",
+            },
+        }),
+    )
+    .await;
+    h.engine.tick_pass().await.unwrap();
+    h.set("UPDATE _00_schedule:`lean-wf` SET next_fire_at = time::now() - 1s").await;
+    h.engine.tick_pass().await.unwrap();
+    h
+}
+
+/// Drive a step to success by finishing its job and sweeping.
+async fn finish_step(h: &Harness, step: &str) {
+    let job = h
+        .one_string(&format!(
+            "SELECT VALUE job_id FROM ONLY _00_step_run WHERE step = '{step}' LIMIT 1"
+        ))
+        .await
+        .unwrap_or_else(|| panic!("{step} dispatched a job"));
+    h.finish_job(&job, "success", json!({ "from": step })).await;
+    h.engine.tick_pass().await.unwrap();
+}
+
+/// A workflow that succeeds end to end leaves NOTHING: no workflow run, no steps, no
+/// outer schedule run, and none of the job rows its steps spawned. Only the counters
+/// and the schedule's last outcome survive.
+#[tokio::test]
+async fn a_successful_workflow_under_failures_only_leaves_nothing_behind() {
+    let h = failures_only_workflow().await;
+    finish_step(&h, "first").await;
+    finish_step(&h, "second").await;
+
+    for (table, label) in [
+        ("_00_workflow_run", "the workflow run"),
+        ("_00_step_run", "its step rows"),
+        ("_00_schedule_run", "the outer schedule run"),
+        ("job", "the job rows its steps spawned"),
+    ] {
+        assert_eq!(
+            h.count(&format!("SELECT VALUE count() FROM {table} GROUP ALL")).await,
+            0,
+            "{label} should be gone"
+        );
+    }
+
+    assert_eq!(
+        rollup_rows(&h).await,
+        vec!["schedule/lean-wf s=2 f=0 sk=0 r=0 k=0"],
+        "both the schedule run and the workflow run are counted"
+    );
+    assert_eq!(
+        h.one_string("SELECT VALUE last_run_status FROM ONLY _00_schedule:`lean-wf`")
+            .await
+            .as_deref(),
+        Some("success")
+    );
+}
+
+/// The owning schedule run must be finalized BEFORE anything is deleted (hazard 1).
+///
+/// If the workflow run were deleted first, the schedule run would never be finalized and
+/// would stay `running` forever: the workflow heal only selects `running` WORKFLOW runs,
+/// and the job heal filters `kind = 'job'`, so nothing would ever reach it. It would then
+/// be counted by `COUNT_ACTIVE_RUNS` forever and permanently wedge `concurrency: skip`.
+/// Asserting the active count is 0 is what catches that.
+#[tokio::test]
+async fn discarding_a_workflow_never_strands_its_schedule_run_as_running() {
+    let h = failures_only_workflow().await;
+    finish_step(&h, "first").await;
+    finish_step(&h, "second").await;
+
+    assert_eq!(
+        h.count(
+            "SELECT VALUE count() FROM _00_schedule_run WHERE status = 'running' GROUP ALL"
+        )
+        .await,
+        0,
+        "a run left `running` here would wedge this schedule's concurrency forever"
+    );
+    // And a further sweep must not resurrect or mislabel anything.
+    let report = h.engine.tick_pass().await.unwrap();
+    assert_eq!(report.healed, 0);
+    assert_eq!(h.count("SELECT VALUE count() FROM _00_schedule_run GROUP ALL").await, 0);
+}
+
+/// A workflow that FAILS keeps everything — including the job rows of the steps that
+/// succeeded, which are exactly what you read to work out why the run died.
+#[tokio::test]
+async fn a_failed_workflow_under_failures_only_keeps_all_of_it() {
+    let h = failures_only_workflow().await;
+    finish_step(&h, "first").await;
+
+    let job = h
+        .one_string("SELECT VALUE job_id FROM ONLY _00_step_run WHERE step = 'second' LIMIT 1")
+        .await
+        .expect("second dispatched");
+    h.fail_job(&job, "boom").await;
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(h.workflow_status().await.as_deref(), Some("failed"));
+    assert_eq!(h.step_status("first").await.as_deref(), Some("success"));
+    assert_eq!(h.step_status("second").await.as_deref(), Some("failed"));
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM _00_schedule_run GROUP ALL").await,
+        1,
+        "the outer run is kept too"
+    );
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM job GROUP ALL").await,
+        2,
+        "both step jobs survive, including the one that succeeded"
+    );
+}
+
+/// A run whose steps vanished while it was still `running` must NOT be flipped to
+/// `success` (hazard 2): `all_terminal` is computed with `Iterator::all`, which is `true`
+/// for an empty list, and `find(Failed)` is then `None`. Seed exactly that state.
+#[tokio::test]
+async fn a_running_run_with_no_steps_is_not_flipped_to_success() {
+    let h = failures_only_workflow().await;
+    let before = h.workflow_status().await;
+    assert_eq!(before.as_deref(), Some("running"), "fixture is a live run");
+
+    h.set("DELETE _00_step_run").await;
+    h.engine.tick_pass().await.unwrap();
+
+    // It must NOT be reported as a completed workflow. `Iterator::all` is `true` for an
+    // empty list, so without the `!steps.is_empty()` guard this run is flipped to
+    // `success` and then — under failures-only — discarded, announcing work that
+    // provably never finished. The row surviving is the evidence the guard held.
+    assert_eq!(
+        h.workflow_status().await.as_deref(),
+        Some("running"),
+        "a run whose steps vanished is left alone, not declared successful"
+    );
+    assert_eq!(
+        h.one_string("SELECT VALUE last_run_status FROM ONLY _00_schedule:`lean-wf`")
+            .await
+            .as_deref(),
+        None,
+        "and it certainly must not report success onto its schedule"
+    );
+}
+
+/// Steps are never left behind without their run (hazard 3). They are only reachable
+/// through the run table, so an orphan is unreachable forever.
+#[tokio::test]
+async fn steps_never_outlive_their_workflow_run() {
+    let h = failures_only_workflow().await;
+    finish_step(&h, "first").await;
+    finish_step(&h, "second").await;
+
+    let orphans = h
+        .count(
+            "SELECT VALUE count() FROM _00_step_run \
+             WHERE workflow_run NOT IN (SELECT VALUE id FROM _00_workflow_run) GROUP ALL",
+        )
+        .await;
+    assert_eq!(orphans, 0, "a step with no run can never be found again");
+}
+
+/// A dependant still receives its input even though the upstream step's JOB row is
+/// destined for deletion — the output is copied onto the step row when the step
+/// finalizes, one pass before anything is discarded (hazard 5).
+#[tokio::test]
+async fn a_dependant_still_gets_its_input_under_failures_only() {
+    let h = failures_only_workflow().await;
+    finish_step(&h, "first").await;
+
+    assert_eq!(h.step_status("second").await.as_deref(), Some("dispatched"));
+    let payload = h
+        .one_string(
+            "SELECT VALUE <string>payload.steps.first.from FROM ONLY job \
+             WHERE path = '/second' LIMIT 1",
+        )
+        .await;
+    assert_eq!(
+        payload.as_deref(),
+        Some("first"),
+        "the second step was dispatched with the first step's captured output"
+    );
+}
+
+/// A `kind: job` schedule discards its spawned job row along with the run, and a heal
+/// sweep afterwards must not mislabel anything as `job_missing` (hazard 6).
+#[tokio::test]
+async fn a_discarded_job_row_is_not_mistaken_for_a_missing_one() {
+    let h = failures_only_harness().await;
+    let job = h
+        .one_string("SELECT VALUE job_id FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+        .await
+        .expect("a job was spawned");
+    h.finish_job(&job, "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(h.job_ids().await, Vec::<String>::new(), "the job row went with the run");
+
+    // A further sweep has nothing running to heal, so nothing can be failed.
+    let report = h.engine.tick_pass().await.unwrap();
+    assert_eq!(report.healed, 0);
+    assert_eq!(
+        h.one_string("SELECT VALUE last_run_status FROM ONLY _00_schedule:lean").await.as_deref(),
+        Some("success"),
+        "the outcome recorded before the delete still stands"
+    );
+}
+

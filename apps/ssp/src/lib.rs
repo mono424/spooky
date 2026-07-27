@@ -33,7 +33,7 @@ use metrics::Metrics;
 use view_metrics::ViewMetrics;
 
 use ssp_node::jobs::{
-    JobConfig, JobControl, JobEntry, JobRunner,
+    JobConfig, JobControl, JobDispatcher, JobEntry, JobRunner,
 };
 use tokio::sync::mpsc;
 
@@ -50,7 +50,8 @@ pub struct AppState {
     pub status: Arc<RwLock<SspStatus>>,
     pub metrics: Arc<Metrics>,
     pub job_config: Arc<JobConfig>,
-    pub job_queue_tx: mpsc::Sender<JobEntry>,
+    /// Admission control for job execution — the only way onto the runner.
+    pub job_dispatcher: Arc<JobDispatcher>,
     /// Shared cancellation/kill state, also held by the `JobRunner`. Lets the
     /// `/job/kill` and `/job/retry` handlers cancel in-flight requests and drop
     /// queued jobs without racing the runner (which stays the sole `status` writer).
@@ -465,23 +466,42 @@ pub async fn run_server() -> anyhow::Result<()> {
     // Load job configuration from SPKY_JOB_CONFIG env var
     let job_config = load_job_config_from_env();
 
-    // Create job queue channel
-    let (job_queue_tx, job_queue_rx) = mpsc::channel::<JobEntry>(100);
+    // Create job queue channel. This is a handoff buffer, not the queue: the
+    // real queue is the backlog of `pending` rows in the outbox, and the
+    // dispatcher is what bounds how many leave it at once. Sized well above any
+    // sane per-table limit so a burst of admissions is never the thing that
+    // blocks.
+    let (job_queue_tx, job_queue_rx) = mpsc::channel::<JobEntry>(1024);
 
     // Shared kill/cancel state. Constructed unconditionally (AppState always needs
     // it); the runner only gets a clone when there are job tables to run.
     let job_control = JobControl::new();
 
+    let job_dispatcher = Arc::new(JobDispatcher::new(
+        Arc::clone(&platform.db),
+        Arc::clone(&platform.spawner),
+        Arc::clone(&platform.scheduler),
+        job_queue_tx,
+        job_control.clone(),
+        job_config.clone(),
+        config.ssp_id.clone(),
+        config.scheduler_url.is_none(),
+    ));
+
     // Spawn job runner if there are job tables configured
     if !job_config.job_tables.is_empty() {
+        // Read each table's `_00_job_policy` row once up front, so the first
+        // burst after a restart is governed by the deployed limit instead of
+        // running at the default until the first drain refreshes it.
+        job_dispatcher.preload_policies().await;
+
         let job_runner = JobRunner::new(
             job_queue_rx,
-            job_queue_tx.clone(),
             Arc::clone(&platform.db),
             Arc::clone(&platform.http),
             Arc::clone(&platform.scheduler),
             Arc::clone(&platform.spawner),
-            job_control.clone(),
+            Arc::clone(&job_dispatcher),
         );
         tokio::spawn(async move {
             job_runner.run().await;
@@ -620,7 +640,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         processor: processor_arc.clone(),
         job_config: job_config.clone(),
         job_control: job_control.clone(),
-        job_queue_tx: job_queue_tx.clone(),
+        job_dispatcher: Arc::clone(&job_dispatcher),
         ssp_id: config.ssp_id.clone(),
         auth_secret: config.auth_secret.clone(),
         ref_mode: config.ref_mode,
@@ -695,7 +715,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         status: status.clone(),
         metrics: metrics.clone(),
         job_config,
-        job_queue_tx,
+        job_dispatcher,
         job_control,
         ssp_id: config.ssp_id.clone(),
         scheduler_url: config.scheduler_url.clone(),

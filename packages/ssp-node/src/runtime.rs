@@ -38,7 +38,8 @@ impl Runtime {
     }
 
     /// Dispatch one fired timer. Handles the PORTABLE periodic kinds
-    /// (`JobRecoverySweep`, `ScheduleSweep`, `TtlCleanup`, `CircuitCheckpoint`) — each runs its
+    /// (`JobRecoverySweep`, `JobDrain`, `ScheduleSweep`, `TtlCleanup`,
+    /// `CircuitCheckpoint`) — each runs its
     /// work (gated on `Ready`) then re-arms itself via the `Scheduler` port.
     /// Host-specific kinds (`DbResignin`, `BackendHealth` — they need the
     /// non-wasm `maintenance` crate) are NOT handled here; the shell's drain
@@ -60,6 +61,16 @@ impl Runtime {
                             now_epoch_ms() + JOB_RECOVERY_INTERVAL_SECS * 1000,
                         )
                         .await;
+                }
+            }
+            TimerKind::JobDrain { table } => {
+                // Armed in BOTH modes, unlike the recovery sweep: the cluster
+                // case is precisely where a node can have free local slots, be
+                // blocked by the global count, and so never complete a job to
+                // kick its own drain. The drain re-arms this itself while the
+                // table still has a backlog.
+                if *node.status.read().await == SspStatus::Ready {
+                    node.job_dispatcher.drain(&table).await;
                 }
             }
             TimerKind::ScheduleSweep => {

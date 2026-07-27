@@ -632,9 +632,13 @@ fn get(
     let tb = tb.as_str();
     let key = key.as_str();
     let backend_name = tables.get(tb).cloned().unwrap_or_else(|| tb.to_string());
+    // `result` is selected here but NOT in the list query: it is the backend's response
+    // body (capped at 64 KiB), which is worth showing for one job and far too much to
+    // pull for every row of a listing. The docs have always promised `get` shows it.
     let query = format!(
         "SELECT type::string(id) AS id, status, path, retries, max_retries, retry_strategy, \
-         type::string(created_at) AS created_at, type::string(updated_at) AS updated_at, errors, payload \
+         type::string(created_at) AS created_at, type::string(updated_at) AS updated_at, \
+         errors, payload, result \
          FROM type::record('{}', '{}');",
         esc(tb),
         esc(key)
@@ -673,6 +677,17 @@ fn get(
         "  payload     : {}",
         serde_json::to_string(&job.payload).unwrap_or_default()
     );
+    // Only on success: on any other status there is nothing to show, and printing
+    // `null` reads as "the backend returned nothing" rather than "it never ran".
+    if job.status == "success" {
+        match row.get("result") {
+            Some(Value::Null) | None => println!("  result      : {DIM}none{RESET}"),
+            Some(result) => println!(
+                "  result      : {}",
+                serde_json::to_string(result).unwrap_or_default()
+            ),
+        }
+    }
     if job.errors.is_empty() {
         println!("  errors      : {DIM}none{RESET}");
     } else {

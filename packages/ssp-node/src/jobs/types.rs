@@ -168,9 +168,16 @@ impl JobConfig {
 }
 
 /// A job entry in the queue (includes which backend to call)
-#[derive(Clone, Debug)]
+///
+/// Deliberately not `Clone`: it owns a [`super::Permit`], and a copy would
+/// either double-count a slot or silently run without one.
+#[derive(Debug)]
 pub struct JobEntry {
     pub id: String,       // e.g., "job:abc123"
+    /// Outbox table this job lives in, i.e. the id's table half. Carried rather
+    /// than re-derived per call site so there is one place that has to get
+    /// bracket-quoted ids right (see `super::table_of`).
+    pub table: String,
     pub base_url: String, // e.g., "http://localhost:3000"
     pub path: String,     // e.g., "/spookify"
     pub payload: Value,
@@ -179,6 +186,9 @@ pub struct JobEntry {
     pub retry_strategy: String, // "linear" or "exponential"
     pub auth_token: Option<String>,
     pub timeout: Duration,
+    /// The execution slot this job holds, released when the entry is dropped.
+    /// `None` only before admission, and in tests that drive the runner directly.
+    pub permit: Option<super::Permit>,
 }
 
 impl JobEntry {
@@ -191,6 +201,7 @@ impl JobEntry {
         timeout: Duration,
     ) -> Self {
         Self {
+            table: super::table_of(&id).unwrap_or_default().to_string(),
             id,
             base_url,
             path: record
@@ -211,6 +222,7 @@ impl JobEntry {
                 .to_string(),
             auth_token,
             timeout,
+            permit: None,
         }
     }
 }

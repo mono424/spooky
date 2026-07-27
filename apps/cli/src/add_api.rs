@@ -333,6 +333,9 @@ pub fn add_api(
             method_type: MethodType::Outbox,
             schema: schema_output_str.clone(),
             table: Some(table_name.clone()),
+            // Scaffolded apps take the default (serial). Opting into
+            // parallelism is a deliberate act, not a starter-template value.
+            concurrency: None,
         }),
         image: None,
         ports: Vec::new(),

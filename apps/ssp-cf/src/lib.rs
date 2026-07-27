@@ -366,15 +366,30 @@ impl SspNodeDo {
 }
 
 fn build_node(platform: Platform, cfg: &NodeConfigCf) -> SspNode {
+    // `_job_rx` is dropped: there is no runner on Workers. The dispatcher
+    // notices the closed channel on its first send and latches itself off, so
+    // it never issues a drain query on a host that could not run the result.
     let (job_queue_tx, _job_rx) = tokio::sync::mpsc::channel(64);
     let (edge_update_tx, _edge_rx) = tokio::sync::mpsc::unbounded_channel();
+    let job_config = Arc::new(ssp_node::jobs::JobConfig::from_json(&cfg.job_config));
+    let job_control = ssp_node::jobs::JobControl::new();
+    let job_dispatcher = Arc::new(ssp_node::jobs::JobDispatcher::new(
+        Arc::clone(&platform.db),
+        Arc::clone(&platform.spawner),
+        Arc::clone(&platform.scheduler),
+        job_queue_tx,
+        job_control.clone(),
+        Arc::clone(&job_config),
+        cfg.ssp_id.clone(),
+        true,
+    ));
     SspNode {
         platform,
         status: Arc::new(RwLock::new(SspStatus::Bootstrapping)),
         processor: Arc::new(RwLock::new(Circuit::new())),
-        job_config: Arc::new(ssp_node::jobs::JobConfig::from_json(&cfg.job_config)),
-        job_control: ssp_node::jobs::JobControl::new(),
-        job_queue_tx,
+        job_config,
+        job_control,
+        job_dispatcher,
         ssp_id: cfg.ssp_id.clone(),
         auth_secret: cfg.auth_secret.clone(),
         ref_mode: cfg.ref_mode,

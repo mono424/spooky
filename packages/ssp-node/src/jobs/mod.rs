@@ -7,12 +7,14 @@
 //! the portable [`crate::ports::CancelHandle`]/[`CancelWatch`] pair instead
 //! of `tokio_util::CancellationToken`.
 
+mod dispatcher;
 mod runner;
 mod types;
 
 #[cfg(test)]
 mod db_tests;
 
+pub use dispatcher::{table_of, JobDispatcher, Permit, DEFAULT_CONCURRENCY};
 pub use runner::{
     append_error_helper, complete_success_helper, enqueue_recovered, fail_if_pending_helper,
     load_job_record, reset_for_retry_helper, set_assignee_helper, update_status_helper, JobRunner,

@@ -19,12 +19,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Timelike, Utc};
 use serde_json::{json, Map, Value};
 
 use crate::db::{count_value, first_row, rows, ScheduleDb, ScheduleDbError};
 use crate::kill::JobKill;
-use crate::spec::{Concurrency, ScheduleKind, ScheduleSpec};
+use crate::spec::{Concurrency, ScheduleKind, ScheduleSpec, HISTORY_FAILURES_ONLY};
 use crate::{ids, sql};
 
 /// Tunables. Defaults are deliberate rather than configurable-by-accident: a
@@ -87,6 +87,18 @@ impl Retention {
     }
 }
 
+/// Add the hour bucket [`ScheduleEngine::fold_rollup`] groups by.
+///
+/// The batched prunes get this from SurrealDB's `time::floor`; a single row folded in
+/// Rust (a `failures-only` discard) has to floor it here, and the two must agree or
+/// one run's counts land in a bucket of their own.
+fn bucketed(row: &Value, at: DateTime<Utc>) -> Value {
+    let hour = at.with_minute(0).and_then(|t| t.with_second(0)).and_then(|t| t.with_nanosecond(0));
+    let mut out = row.as_object().cloned().unwrap_or_default();
+    out.insert("bucket".into(), json!(stamp(hour.unwrap_or(at))));
+    Value::Object(out)
+}
+
 /// Where a rollup row's `name` comes from.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RollupName<'a> {
@@ -119,6 +131,10 @@ const PRUNE_BATCH: usize = 500;
 /// without ever spiking the ingest path.
 const PRUNE_MAX_BATCHES: usize = 20;
 
+/// Job rows looked up per statement when healing. The ids are interpolated, so this
+/// bounds statement length as well as result size.
+const HEAL_LOOKUP_BATCH: usize = 500;
+
 /// Run the row cap once every N prune passes. The cap has to COUNT, which is an
 /// index walk, and it is a safety valve rather than the main mechanism — the age
 /// windows already bound volume at rate x window.
@@ -130,8 +146,12 @@ const CAP_TRIMMABLE_RUN_STATUSES: [&str; 3] = ["success", "skipped", "replaced"]
 const CAP_TRIMMABLE_JOB_STATUSES: [&str; 1] = ["success"];
 
 /// `_00_run_rollup.scope` values.
-const SCOPE_SCHEDULE: &str = "schedule";
-const SCOPE_JOB: &str = "job";
+pub(crate) const SCOPE_SCHEDULE: &str = "schedule";
+
+/// Bucket name for a run with no owning schedule (`spky workflows trigger`). Counted
+/// under a stable placeholder rather than dropped.
+pub(crate) const ROLLUP_NAME_AD_HOC: &str = "(ad-hoc)";
+pub(crate) const SCOPE_JOB: &str = "job";
 
 /// What one `tick_pass` did. Returned for logging and asserted on in tests.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -567,6 +587,28 @@ impl ScheduleEngine {
         if let Some(wf) = workflow_run {
             content.insert("workflow_run".into(), json!(wf));
         }
+
+        // `failures-only`: a run that is BORN terminal and went fine is not history
+        // anyone asked for, so it is never written at all — no row to create and then
+        // prune. Its counts still reach the rollup, and it still reports its outcome
+        // onto the schedule, so `spky schedules` is unaffected. This is the case that
+        // matters at width: with `concurrency: skip` a slow wide fan-out is mostly
+        // suppressed ticks.
+        let failures_only = spec.history_mode.as_deref() == Some(HISTORY_FAILURES_ONLY);
+        if failures_only && status != "running" && sql::is_success_shaped(status) {
+            let row = json!({ "schedule_name": spec.name, "fire_at": stamp(fire_at) });
+            self.fold_rollup(
+                &[bucketed(&row, fire_at)],
+                Fold { scope: SCOPE_SCHEDULE, status, name: RollupName::Fixed(&spec.name) },
+            )
+            .await;
+            self.record_last_run(&row, status).await;
+            return Ok(true);
+        }
+        if failures_only {
+            content.insert("history_mode".into(), json!(HISTORY_FAILURES_ONLY));
+        }
+
         let mut binds = bind_ref("", &ids::schedule_run(run_key)).to_vec();
         binds.extend(bind_ref("schedule", schedule_id));
         binds.extend([("content", Value::Object(content)), ("fire", json!(stamp(fire_at)))]);
@@ -619,8 +661,64 @@ impl ScheduleEngine {
         // an outcome onto its schedule.
         if let Some(row) = first_row(finalized) {
             self.record_last_run(&row, status).await;
+            self.discard_if_failures_only(run, &row, status).await;
         }
         Ok(())
+    }
+
+    /// Under `history: failures-only`, a run that finished cleanly is deleted as it
+    /// finalizes rather than waiting out a retention window.
+    ///
+    /// Order matters: the outcome is recorded on the schedule and folded into the
+    /// rollup FIRST, because after the delete there is nothing left to count. The mode
+    /// is read off the run row itself (frozen there at spawn), so this costs no extra
+    /// read and a config change never alters the fate of a run already in flight.
+    async fn discard_if_failures_only(&self, run: &ids::Ref, row: &Value, status: &str) {
+        if row.get("history_mode").and_then(Value::as_str) != Some(HISTORY_FAILURES_ONLY) {
+            return;
+        }
+        if !sql::is_success_shaped(status) {
+            return;
+        }
+        let Some(name) = row.get("schedule_name").and_then(Value::as_str) else { return };
+        let bucket_at = row
+            .get("fire_at")
+            .and_then(Value::as_str)
+            .and_then(crate::cron::parse_datetime)
+            .unwrap_or_else(Utc::now);
+        self.fold_rollup(
+            &[bucketed(row, bucket_at)],
+            Fold { scope: SCOPE_SCHEDULE, status, name: RollupName::Fixed(name) },
+        )
+        .await;
+
+        // The job this run spawned goes too. Safe only in this order: the run is already
+        // terminal, and the heal pass only ever selects `running` runs — so no pass can
+        // now see the job as missing and mislabel a successful run `job_missing`. A rival
+        // engine mid-heal may still write that, but its finalize is guarded on `running`
+        // and matches nothing, so it is a no-op (it does over-count `report.healed` by
+        // one, which is cosmetic).
+        //
+        // Workflow runs are excluded: their step jobs are discarded with the workflow
+        // run, so that a run which FAILED keeps the successful steps' jobs — those are
+        // what you read to work out why it died.
+        if row.get("kind").and_then(Value::as_str) == Some("job") {
+            if let Some(job) = row.get("job_id").and_then(Value::as_str).and_then(ids::Ref::parse)
+            {
+                if sql::is_plain_identifier(&job.table) && sql::is_plain_identifier(&job.key) {
+                    let stmt = sql::delete_records(&[job.as_string()]);
+                    if let Err(e) = self.db.query(&stmt, &[]).await {
+                        tracing::warn!(error = %e, "could not discard a successful job row");
+                    }
+                }
+            }
+        }
+
+        if let Err(e) = self.db.query(sql::DELETE_SCHEDULE_RUN, &bind_ref("", run)).await {
+            // Leaving the row behind is harmless — retention collects it later — so
+            // this must not fail the run.
+            tracing::warn!(run = %run, error = %e, "could not discard a successful run");
+        }
     }
 
     /// Denormalize a run's outcome onto its schedule row.
@@ -698,32 +796,60 @@ impl ScheduleEngine {
     /// directly: any `running` job-run whose job row is already terminal gets
     /// finalized here, capping the worst-case delay at one sweep interval.
     async fn heal_pass(&self, report: &mut TickReport) -> anyhow::Result<()> {
+        // Every in-flight run, paired with the job it is waiting on. Collected up
+        // front so the job rows can be read in bulk: this used to be one query per
+        // running run, issued sequentially, which at fan-out width is hundreds of
+        // round-trips every five seconds — and the sweep's latency is what caps how
+        // long a lost event delays a completion.
+        let mut waiting: Vec<(ids::Ref, String)> = Vec::new();
         for run in rows(self.db.query(sql::SELECT_RUNNING_JOB_RUNS, &[]).await?) {
             let Some(run_ref) = row_ref(&run) else { continue };
             let Some(job_id) = run.get("job_id").and_then(Value::as_str) else { continue };
-            let Some(job) = self.load_job(job_id).await? else {
-                // The job row is gone (pruned, or an operator deleted it): the
-                // run can never complete, so stop calling it `running`.
-                self.finalize_schedule_run(
-                    &run_ref,
-                    "failed",
-                    Some(json!({ "code": "job_missing", "reason": "job row no longer exists" })),
-                )
-                .await?;
-                report.healed += 1;
+            let Some(job) = ids::Ref::parse(job_id) else {
+                tracing::warn!(job_id, "unparseable job id on a running run");
                 continue;
             };
-            let status = job.get("status").and_then(Value::as_str).unwrap_or("");
-            match status {
-                "success" => {
-                    self.finalize_schedule_run(&run_ref, "success", None).await?;
+            // The id is spliced into the statement, so both halves must look like
+            // identifiers. `ids::job` guarantees it; a hand-edited row need not.
+            if !sql::is_plain_identifier(&job.table) || !sql::is_plain_identifier(&job.key) {
+                tracing::warn!(job_id, "refusing to look up an unsafe job id");
+                continue;
+            }
+            waiting.push((run_ref, job.as_string()));
+        }
+
+        for chunk in waiting.chunks(HEAL_LOOKUP_BATCH) {
+            let ids: Vec<String> = chunk.iter().map(|(_, job)| job.clone()).collect();
+            let found = rows(self.db.query(&sql::select_jobs_terminal(&ids), &[]).await?);
+            let by_id: BTreeMap<&str, &Value> = found
+                .iter()
+                .filter_map(|row| row.get("id").and_then(Value::as_str).map(|id| (id, row)))
+                .collect();
+
+            for (run_ref, job_id) in chunk {
+                let Some(job) = by_id.get(job_id.as_str()) else {
+                    // The job row is gone (pruned, or an operator deleted it): the
+                    // run can never complete, so stop calling it `running`.
+                    self.finalize_schedule_run(
+                        run_ref,
+                        "failed",
+                        Some(json!({ "code": "job_missing", "reason": "job row no longer exists" })),
+                    )
+                    .await?;
                     report.healed += 1;
+                    continue;
+                };
+                match job.get("status").and_then(Value::as_str).unwrap_or("") {
+                    "success" => {
+                        self.finalize_schedule_run(run_ref, "success", None).await?;
+                        report.healed += 1;
+                    }
+                    "failed" => {
+                        self.finalize_schedule_run(run_ref, "failed", last_error(job)).await?;
+                        report.healed += 1;
+                    }
+                    _ => {}
                 }
-                "failed" => {
-                    self.finalize_schedule_run(&run_ref, "failed", last_error(&job)).await?;
-                    report.healed += 1;
-                }
-                _ => {}
             }
         }
 
@@ -1073,6 +1199,23 @@ impl ScheduleEngine {
         );
     }
 
+    /// Fold a SINGLE row into the rollup, hour-bucketing it here.
+    ///
+    /// The batched prunes get their bucket from SurrealDB's `time::floor`; a row
+    /// discarded one at a time has to floor it in Rust, and the two must agree or the
+    /// same hour ends up split across two buckets.
+    pub(crate) async fn fold_rollup_one(
+        &self,
+        row: &Value,
+        at: DateTime<Utc>,
+        scope: &str,
+        status: &str,
+        name: &str,
+    ) {
+        self.fold_rollup(&[bucketed(row, at)], Fold { scope, status, name: RollupName::Fixed(name) })
+            .await;
+    }
+
     /// Accumulate a deleted batch into the hourly rollup.
     ///
     /// The counts come out of the projection the prune already selected, so this
@@ -1091,7 +1234,7 @@ impl ScheduleEngine {
                     Some(name) => name.to_string(),
                     // A workflow run spawned ad hoc has no owning schedule; count it
                     // under a stable placeholder rather than dropping it.
-                    None => "(ad-hoc)".to_string(),
+                    None => ROLLUP_NAME_AD_HOC.to_string(),
                 },
             };
             *buckets.entry((name, bucket.to_string())).or_default() += 1;
