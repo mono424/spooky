@@ -1886,3 +1886,4 @@ async fn a_zero_row_cap_means_disabled_not_keep_nothing() {
     assert_eq!(h.count("SELECT VALUE count() FROM _00_schedule_run GROUP ALL").await, 3);
 }
 
+

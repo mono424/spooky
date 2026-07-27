@@ -83,6 +83,11 @@ where
     // builds it in the background instead — but only the server engines support it,
     // so the embedded/WASM path takes the blocking form (where the table is a
     // client-side cache and small by construction).
+    //
+    // It is a TRAILING clause: `DEFINE INDEX <name> ON <table> COLUMNS <cols>
+    // CONCURRENTLY`. Putting it after the index name parses as far as the name and
+    // then dies on "Unexpected token `CONCURRENTLY`, expected ON" — which fails the
+    // ENTIRE internal-schema batch, and the deploy only logs that as a warning.
     let concurrently = match mode {
         DeployMode::Singlenode | DeployMode::Cluster => " CONCURRENTLY",
         _ => "",
@@ -128,8 +133,8 @@ where
         // serves the ordering without a sort. Without it the prune is a full table
         // scan of the very table that grows fastest.
         out.push_str(&format!(
-            "DEFINE INDEX IF NOT EXISTS idx_{table}_retention{concurrently} ON {table} \
-             COLUMNS status, updated_at;\n"
+            "DEFINE INDEX IF NOT EXISTS idx_{table}_retention ON {table} \
+             COLUMNS status, updated_at{concurrently};\n"
         ));
     }
     out
@@ -708,6 +713,8 @@ mod tests {
 mod outbox_platform_field_tests {
     use super::build_outbox_platform_fields;
     use crate::backend::DeployMode;
+    use surrealdb_core::dbs::Capabilities;
+    use surrealdb_core::syn::parse_with_capabilities;
 
     #[test]
     fn emits_if_not_exists_assignee_per_table() {
@@ -740,11 +747,26 @@ mod outbox_platform_field_tests {
     /// The retention index must lead with `status` and follow with `updated_at`:
     /// the prune filters one status by equality then orders by `updated_at`.
     /// Reversing the columns still works and silently loses the index.
+    ///
+    /// Asserted as the WHOLE statement rather than by substring, because the bug this
+    /// replaces was a misplaced clause that every substring check still matched.
     #[test]
     fn injects_the_retention_index_in_prune_order() {
-        let sql = build_outbox_platform_fields(["job"], &DeployMode::Singlenode);
-        assert!(sql.contains("DEFINE INDEX IF NOT EXISTS idx_job_retention"));
-        assert!(sql.contains("ON job COLUMNS status, updated_at;"));
+        let embedded = build_outbox_platform_fields(["job"], &DeployMode::Surrealism);
+        assert!(
+            embedded.contains(
+                "DEFINE INDEX IF NOT EXISTS idx_job_retention ON job COLUMNS status, updated_at;"
+            ),
+            "got: {embedded}"
+        );
+
+        let server = build_outbox_platform_fields(["job"], &DeployMode::Singlenode);
+        assert!(
+            server.contains(
+                "DEFINE INDEX IF NOT EXISTS idx_job_retention ON job COLUMNS status, updated_at CONCURRENTLY;"
+            ),
+            "CONCURRENTLY is a trailing clause, got: {server}"
+        );
     }
 
     /// Index builds block writes while they fill, and an outbox table can already
@@ -760,5 +782,39 @@ mod outbox_platform_field_tests {
         }
         assert!(!build_outbox_platform_fields(["job"], &DeployMode::Surrealism)
             .contains("CONCURRENTLY"));
+    }
+
+    /// Everything this function emits must PARSE.
+    ///
+    /// Containing the right words is not the same as being valid SurrealQL, and this
+    /// is the one function whose output is spliced into the internal-schema batch: a
+    /// single bad statement makes SurrealDB reject all ~110 KB of it with one HTTP
+    /// 400, and `spky deploy` downgrades that to a warning and still exits 0. So the
+    /// symptom is a deploy that reports success while every meta table silently stays
+    /// at its previous definition.
+    ///
+    /// That is exactly what shipped: `CONCURRENTLY` was emitted after the index name
+    /// instead of as the trailing clause, and the old assertions passed because the
+    /// broken string still contained both `CONCURRENTLY` and `ON job COLUMNS ...`.
+    #[test]
+    fn every_generated_statement_is_valid_surrealql() {
+        for mode in [DeployMode::Singlenode, DeployMode::Cluster, DeployMode::Surrealism] {
+            let sql = build_outbox_platform_fields(["job", "statistics_job"], &mode);
+            if let Err(e) =
+                parse_with_capabilities(&sql, &Capabilities::all())
+            {
+                panic!("outbox platform fields do not parse for {mode:?}:\n{sql}\n→ {e}");
+            }
+        }
+    }
+
+    /// The shipped internal scheduling DDL must parse too — it is `include_str!`'d
+    /// into the same batch, so a typo there has the same all-or-nothing blast radius.
+    #[test]
+    fn the_shipped_scheduling_ddl_parses() {
+        let ddl = include_str!("schedule_tables.surql");
+        if let Err(e) = parse_with_capabilities(ddl, &Capabilities::all()) {
+            panic!("schedule_tables.surql does not parse: {e}");
+        }
     }
 }
