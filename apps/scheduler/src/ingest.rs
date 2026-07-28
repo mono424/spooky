@@ -30,6 +30,9 @@ pub struct IngestState {
     pub event_buffer: Arc<RwLock<VecDeque<BufferedEvent>>>,
     pub seq_counter: Arc<AtomicU64>,
     pub wal: Arc<RwLock<EventWal>>,
+    /// Serializes every `drain_and_apply` caller (periodic updater, SSP
+    /// registration, pre-backup); see `Scheduler::drain_lock`.
+    pub drain_lock: Arc<tokio::sync::Mutex<()>>,
     /// Upstream DB connection details, for the schedule engine's observer hook.
     pub db_config: Arc<crate::config::DbConfig>,
     /// Outbox tables from `SPKY_JOB_CONFIG`: only an UPDATE on one of these can

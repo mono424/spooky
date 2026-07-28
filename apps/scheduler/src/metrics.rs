@@ -159,17 +159,30 @@ async fn get_metrics(
     Ok(Json(metrics))
 }
 
+/// Optional lag threshold (in seqs) above which `/health` reports `degraded`.
+/// Off by default: lag is workload-dependent and only an operator knows what
+/// "too far behind" means for their deployment.
+fn health_max_lag() -> Option<u64> {
+    std::env::var("SPKY_HEALTH_MAX_LAG")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n: &u64| *n > 0)
+}
+
 /// Health check
 async fn health_check(
     State(state): State<MetricsState>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let pool = state.ssp_pool.read().await;
-    let total_ssps = pool.count();
-    let ready_ssps = pool
-        .all()
-        .iter()
-        .filter(|ssp| pool.is_ready(&ssp.id))
-        .count();
+    let (total_ssps, ready_ssps, has_active_bootstrap) = {
+        let pool = state.ssp_pool.read().await;
+        let total = pool.count();
+        let ready = pool
+            .all()
+            .iter()
+            .filter(|ssp| pool.is_ready(&ssp.id))
+            .count();
+        (total, ready, pool.has_active_bootstrap())
+    };
 
     let backends = state.backend_health.read().await;
     let total_backends = backends.len();
@@ -181,10 +194,30 @@ async fn health_check(
     let all_backends_ok = total_backends == 0 || healthy_backends == total_backends;
     let all_backends_down = total_backends > 0 && (unreachable_backends + unhealthy_backends) == total_backends;
 
-    let (status_code, status_str) = if ssps_ok && all_backends_ok {
-        (StatusCode::OK, "healthy")
-    } else if !ssps_ok || all_backends_down {
+    // Snapshot-pipeline visibility: `stalled` is the exact latch predicate —
+    // a frozen/updating status that no active bootstrap justifies. With the
+    // updater's self-recovery this should clear within one tick; it degrades
+    // (200 + "degraded") rather than 503s because an orchestrator restart
+    // provably does NOT fix it (the WAL refills the same buffer on boot).
+    let scheduler_status = *state.status.read().await;
+    let status_label = match scheduler_status {
+        SchedulerStatus::Cloning => "cloning",
+        SchedulerStatus::Ready => "ready",
+        SchedulerStatus::SnapshotFrozen => "frozen",
+        SchedulerStatus::SnapshotUpdating => "updating",
+        SchedulerStatus::Restoring => "restoring",
+    };
+    let stalled = matches!(
+        scheduler_status,
+        SchedulerStatus::SnapshotFrozen | SchedulerStatus::SnapshotUpdating
+    ) && !has_active_bootstrap;
+    let pending = pending_events_snapshot(&state.ingest).await;
+    let lag_exceeded = health_max_lag().is_some_and(|max| pending.lag > max);
+
+    let (status_code, status_str) = if !ssps_ok || all_backends_down {
         (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
+    } else if ssps_ok && all_backends_ok && !stalled && !lag_exceeded {
+        (StatusCode::OK, "healthy")
     } else {
         (StatusCode::OK, "degraded")
     };
@@ -200,6 +233,14 @@ async fn health_check(
             "unhealthy": unhealthy_backends,
             "unreachable": unreachable_backends,
             "total": total_backends,
+        },
+        "scheduler": {
+            "status": status_label,
+            "pending_events": pending.pending_events,
+            "snapshot_seq": pending.snapshot_seq,
+            "latest_seq": pending.latest_seq,
+            "lag": pending.lag,
+            "stalled": stalled,
         }
     })))
 }
@@ -223,7 +264,15 @@ async fn ready_check(
     } else {
         StatusCode::OK
     };
-    (code, Json(serde_json::json!({ "status": status_str })))
+    let pending = pending_events_snapshot(&state.ingest).await;
+    (
+        code,
+        Json(serde_json::json!({
+            "status": status_str,
+            "pending_events": pending.pending_events,
+            "lag": pending.lag,
+        })),
+    )
 }
 
 /// Per-table replica record counts AND content hashes. Used by `spky verify`

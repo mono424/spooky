@@ -60,7 +60,7 @@ You'll see real-time progress as each step completes.
 | --- | --- |
 | `--upgrade` | Also pull the latest SSP and Scheduler images. |
 | `--only api,web` | Build and deploy just these apps. Everything else keeps running untouched. |
-| `--clean` | Wipe the scheduler's persistent volume first. For state corruption; your SurrealDB data is not touched. |
+| `--clean` | Wipe the scheduler's persistent volume first. Last resort: the scheduler self-heals stale snapshot state on startup, and `spky verify --fix` (or `POST /admin/resync` on the scheduler) repairs it without a wipe. Your SurrealDB data is not touched either way. |
 | `--force-schema` | Re-apply the internal schema and remote functions even when the hash says nothing changed. Drift recovery. |
 | `--cache-bust` | Clients reloading onto this version clear service-worker caches first. |
 | `--mandatory` | Clients reload immediately instead of being offered a notification. Broken-build kill switch. |

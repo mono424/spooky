@@ -131,6 +131,10 @@ pub struct Scheduler {
     pub event_buffer: Arc<RwLock<VecDeque<BufferedEvent>>>,
     pub seq_counter: Arc<AtomicU64>,
     pub wal: Arc<RwLock<EventWal>>,
+    /// Serializes every `drain_and_apply` caller (periodic updater, SSP
+    /// registration, pre-backup) so none of them ever observes — or hands
+    /// out hashes for — a half-applied batch.
+    pub drain_lock: Arc<tokio::sync::Mutex<()>>,
     start_time: std::time::Instant,
     /// Upstream SurrealDB server version, queried once on connect and surfaced
     /// via `/info` (`"unknown"` until the bootstrap connect populates it).
@@ -185,6 +189,7 @@ impl Scheduler {
             event_buffer: Arc::new(RwLock::new(event_buffer)),
             seq_counter: Arc::new(AtomicU64::new(initial_seq)),
             wal: Arc::new(RwLock::new(wal)),
+            drain_lock: Arc::new(tokio::sync::Mutex::new(())),
             start_time: std::time::Instant::now(),
             surrealdb_version: Arc::new(RwLock::new("unknown".to_string())),
         })
@@ -200,6 +205,7 @@ impl Scheduler {
             event_buffer: Arc::clone(&self.event_buffer),
             seq_counter: Arc::clone(&self.seq_counter),
             wal: Arc::clone(&self.wal),
+            drain_lock: Arc::clone(&self.drain_lock),
             db_config: Arc::new(self.config().db.clone()),
             job_tables: Arc::new(crate::schedule_engine::job_tables_from_env()),
         }
@@ -414,9 +420,10 @@ impl Scheduler {
         }
 
         // Startup self-check: hash the replica fresh and compare against
-        // what's persisted. Mismatch ⇒ the on-disk replica disagrees with
-        // its own metadata (corruption, bad backup, manual edits) and we
-        // can't trust it. Triggers a re-clone before we serve any SSPs.
+        // what's persisted. Mismatch ⇒ the on-disk metadata disagrees with
+        // the replica content (crash mid-drain, bad backup, manual edits);
+        // the content is what /proxy serves, so the hashes are recomputed
+        // from it before any SSP can register against stale ones.
         if let Err(e) = self.startup_integrity_check().await {
             warn!(error = %e, "Startup integrity check encountered errors");
         }
@@ -444,18 +451,28 @@ impl Scheduler {
     }
 
     /// Recompute every table's hash from the current replica state and
-    /// compare against the persisted `snapshot_hashes`. Logs each mismatch
-    /// and returns Ok regardless — the caller decides whether to escalate.
-    async fn startup_integrity_check(&self) -> Result<()> {
-        let replica = self.replica.read().await;
-        let persisted = replica.snapshot_hashes().clone();
-        let fresh = replica.compute_table_hashes().await?;
+    /// compare against the persisted `snapshot_hashes`. On a mismatch the
+    /// replica *content* wins — it is what `/proxy` serves to bootstrapping
+    /// SSPs — so the persisted hashes are recomputed from it. Without this
+    /// repair, every SSP registers against stale hashes, fails its bootstrap
+    /// integrity check, and exit(2)s in a loop that survives plain restarts.
+    ///
+    /// This cannot detect replica-vs-*upstream* divergence; that remains
+    /// `POST /admin/resync` (mode `reclone`) / `spky verify --fix` territory.
+    /// Public for the integration tests.
+    pub async fn startup_integrity_check(&self) -> Result<()> {
+        let diffs = {
+            let replica = self.replica.read().await;
+            let persisted = replica.snapshot_hashes().clone();
+            let fresh = replica.compute_table_hashes().await?;
 
-        let diffs = ssp_protocol::snapshot_hash::diff_table_hashes(&persisted, &fresh);
-        if diffs.is_empty() {
-            info!(tables = persisted.len(), "Startup integrity check passed");
-            return Ok(());
-        }
+            let diffs = ssp_protocol::snapshot_hash::diff_table_hashes(&persisted, &fresh);
+            if diffs.is_empty() {
+                info!(tables = persisted.len(), "Startup integrity check passed");
+                return Ok(());
+            }
+            diffs
+        };
 
         for d in &diffs {
             error!(
@@ -465,9 +482,21 @@ impl Scheduler {
                 "Startup integrity mismatch"
             );
         }
-        error!(
-            count = diffs.len(),
-            "Replica disagrees with persisted snapshot hashes — POST /admin/resync to re-clone"
+
+        // Re-acquire as write and rehash everything from content. Runs before
+        // the status flips to Ready and before any SSP can register, so there
+        // is no concurrent reader to invalidate.
+        {
+            let mut replica = self.replica.write().await;
+            let seq = replica.snapshot_seq();
+            replica
+                .set_snapshot_state(seq, None)
+                .await
+                .context("startup integrity repair: rehash failed")?;
+        }
+        warn!(
+            repaired = diffs.len(),
+            "Persisted snapshot hashes disagreed with replica content — rehashed from content"
         );
         Ok(())
     }
@@ -475,11 +504,16 @@ impl Scheduler {
     /// Spawn a background task that periodically applies buffered events to the snapshot
     fn spawn_snapshot_updater(&self) {
         let interval_secs = self.config.snapshot_update_interval_secs;
+        // Strictly larger than the bootstrap poll task's own timeout, so a
+        // parked SSP is only evicted once its poll task is guaranteed dead.
+        let stale_bootstrap_max_age =
+            std::time::Duration::from_secs(self.config.bootstrap_timeout_secs + 60);
         let status = Arc::clone(&self.status);
         let event_buffer = Arc::clone(&self.event_buffer);
         let replica = Arc::clone(&self.replica);
         let ssp_pool = Arc::clone(&self.ssp_pool);
         let wal = Arc::clone(&self.wal);
+        let drain_lock = Arc::clone(&self.drain_lock);
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(
@@ -490,41 +524,115 @@ impl Scheduler {
 
             loop {
                 interval.tick().await;
-
-                // Check if any SSPs are bootstrapping/replaying — skip if so
-                let has_active_bootstrap = {
-                    let pool = ssp_pool.read().await;
-                    pool.has_active_bootstrap()
-                };
-
-                if has_active_bootstrap {
-                    info!("Skipping snapshot update: SSPs are bootstrapping");
-                    continue;
-                }
-
-                // Check scheduler status
-                let current_status = *status.read().await;
-                if current_status != SchedulerStatus::Ready {
-                    info!("Skipping snapshot update: scheduler status is {:?}", current_status);
-                    continue;
-                }
-
-                // Set status to SnapshotUpdating
-                *status.write().await = SchedulerStatus::SnapshotUpdating;
-
-                match drain_and_apply(&event_buffer, &replica, &wal).await {
-                    Ok(0) => {}
-                    Ok(event_count) => {
-                        info!(event_count, "Snapshot update complete");
-                    }
-                    Err(e) => {
-                        error!(error = %e, "Snapshot update failed");
-                    }
-                }
-
-                // Set status back to Ready
-                *status.write().await = SchedulerStatus::Ready;
+                snapshot_updater_tick(
+                    &status,
+                    &event_buffer,
+                    &replica,
+                    &ssp_pool,
+                    &wal,
+                    &drain_lock,
+                    stale_bootstrap_max_age,
+                )
+                .await;
             }
         });
+    }
+}
+
+/// One iteration of the periodic snapshot updater. Extracted from the spawn
+/// loop so the eviction/self-recovery/drain sequence is unit-testable.
+///
+/// Self-recovery: `SnapshotFrozen` is only ever cleared by a *successful*
+/// bootstrap poll (or its error handler). If neither ran — the scheduler
+/// restarted mid-bootstrap, or a prior updater iteration panicked and left
+/// `SnapshotUpdating` pinned — nothing else would ever set `Ready` again and
+/// the drain (and with it WAL truncation and `pending_events`) would stall
+/// forever. Since step 1 has already established there is no active
+/// bootstrap, latched `SnapshotFrozen`/`SnapshotUpdating` here is provably
+/// orphaned and safe to recover from.
+pub async fn snapshot_updater_tick(
+    status: &Arc<RwLock<SchedulerStatus>>,
+    event_buffer: &Arc<RwLock<VecDeque<BufferedEvent>>>,
+    replica: &Arc<RwLock<Replica>>,
+    ssp_pool: &Arc<RwLock<SspPool>>,
+    wal: &Arc<RwLock<EventWal>>,
+    drain_lock: &Arc<tokio::sync::Mutex<()>>,
+    stale_bootstrap_max_age: std::time::Duration,
+) {
+    // Step 1: evict SSPs parked in Bootstrapping/Replaying past the bound —
+    // their poll task is dead, and they would otherwise hold
+    // `has_active_bootstrap()` (and with it the snapshot freeze) forever.
+    {
+        let mut pool = ssp_pool.write().await;
+        for id in pool.stale_active_bootstraps(stale_bootstrap_max_age) {
+            warn!(
+                ssp_id = %id,
+                max_age_secs = stale_bootstrap_max_age.as_secs(),
+                "Evicting SSP stuck in bootstrap/replay state"
+            );
+            pool.remove(&id);
+        }
+    }
+
+    // Everything below runs under `drain_lock`. Registration freezes the
+    // status AND inserts the SSP into the pool inside the same lock, so a
+    // lock-holder here sees a consistent world: either the registration
+    // completed (active bootstrap visible → skip) or it hasn't started its
+    // critical section (safe to drain; it will capture post-drain hashes).
+    let _guard = drain_lock.lock().await;
+
+    // Step 2: never drain while an SSP holds bootstrap hashes.
+    if ssp_pool.read().await.has_active_bootstrap() {
+        info!("Skipping snapshot update: SSPs are bootstrapping");
+        return;
+    }
+
+    // Step 3: status gate with self-recovery (see doc comment). Safe under
+    // the lock: no registration can be mid-critical-section, so a latched
+    // SnapshotFrozen/SnapshotUpdating with no active bootstrap is orphaned.
+    {
+        let mut st = status.write().await;
+        match *st {
+            SchedulerStatus::Ready => {}
+            SchedulerStatus::SnapshotFrozen | SchedulerStatus::SnapshotUpdating => {
+                warn!(
+                    status = ?*st,
+                    "Snapshot status latched with no active bootstrap — self-recovering to Ready"
+                );
+            }
+            SchedulerStatus::Cloning | SchedulerStatus::Restoring => {
+                info!("Skipping snapshot update: scheduler status is {:?}", *st);
+                return;
+            }
+        }
+        *st = SchedulerStatus::SnapshotUpdating;
+    }
+
+    // Step 4: drain, in a child task so a panic can't kill the updater loop
+    // (or leave the status pinned at SnapshotUpdating).
+    let res = {
+        let (buffer, rep, wal) = (
+            Arc::clone(event_buffer),
+            Arc::clone(replica),
+            Arc::clone(wal),
+        );
+        tokio::spawn(async move { drain_and_apply(&buffer, &rep, &wal).await }).await
+    };
+    match res {
+        Ok(Ok(0)) => {}
+        Ok(Ok(event_count)) => info!(event_count, "Snapshot update complete"),
+        Ok(Err(e)) => error!(error = %e, "Snapshot update failed"),
+        Err(join_err) => {
+            error!(error = %join_err, "Snapshot update task panicked — status restored to Ready")
+        }
+    }
+
+    // Step 5: back to Ready. Still under the lock, so no registration has
+    // frozen the status since step 3 — the write can't clobber a freeze.
+    {
+        let mut st = status.write().await;
+        if *st == SchedulerStatus::SnapshotUpdating {
+            *st = SchedulerStatus::Ready;
+        }
     }
 }

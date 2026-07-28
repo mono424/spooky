@@ -267,6 +267,79 @@ async fn register_with_scheduler(
     }
 }
 
+/// Retry `register_with_scheduler` with exponential backoff, carrying the
+/// process-exit policy — only returns on success.
+///
+/// The scheduler returns 503 while `Cloning`/`Restoring` (e.g. a cold
+/// `--clean` re-clone), and may be unreachable for a moment while DNS/the
+/// container comes up — both are transient. A single attempt that gave up
+/// (the old behaviour) left the SSP a permanently-unregistered zombie: it
+/// never exited, so the supervisor's restart-on-failure policy never fired,
+/// and the heartbeat loop only runs once status==Ready. So we keep trying
+/// within a budget, then exit so the supervisor reruns the whole handshake
+/// against a (by then) Ready scheduler.
+///
+/// Exit codes: 6 = fatal rejection (4xx, retrying won't help); 5 = retry
+/// budget exhausted. Distinct from the data-bootstrap exit(2) and heartbeat
+/// exit(3)/exit(4) so the failure mode is identifiable in logs.
+async fn register_with_retry(
+    client: &reqwest::Client,
+    scheduler_url: &str,
+    ssp_id: &str,
+    listen_addr: &str,
+    advertise_addr: Option<&str>,
+    register_max_wait_secs: u64,
+    status: &Arc<RwLock<SspStatus>>,
+) -> ssp_protocol::SspRegistrationResponse {
+    let max_wait = std::time::Duration::from_secs(register_max_wait_secs);
+    let start = std::time::Instant::now();
+    let mut backoff_ms: u64 = 1000;
+    loop {
+        match register_with_scheduler(client, scheduler_url, ssp_id, listen_addr, advertise_addr)
+            .await
+        {
+            Ok(r) => {
+                info!(
+                    snapshot_seq = r.snapshot_seq,
+                    tables = r.table_hashes.len(),
+                    waited_secs = start.elapsed().as_secs(),
+                    "Successfully registered with scheduler"
+                );
+                return r;
+            }
+            Err(RegisterError::Fatal(e)) => {
+                error!(
+                    error = %e,
+                    "Scheduler rejected registration (non-retryable) — exiting for visibility"
+                );
+                *status.write().await = SspStatus::Failed;
+                std::process::exit(6);
+            }
+            Err(RegisterError::Retryable(e)) => {
+                let elapsed = start.elapsed();
+                if elapsed >= max_wait {
+                    error!(
+                        error = %e,
+                        waited_secs = elapsed.as_secs(),
+                        max_wait_secs = register_max_wait_secs,
+                        "Scheduler registration still failing after max wait — exiting for restart"
+                    );
+                    *status.write().await = SspStatus::Failed;
+                    std::process::exit(5);
+                }
+                warn!(
+                    error = %e,
+                    backoff_ms,
+                    waited_secs = elapsed.as_secs(),
+                    "Scheduler not ready for registration, retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms * 2).min(10_000);
+            }
+        }
+    }
+}
+
 // --- Bootstrap Source ---
 
 /// Abstraction for database access during bootstrap.
@@ -821,82 +894,23 @@ pub async fn run_server() -> anyhow::Result<()> {
             // regardless of mode, because the scheduler's replica is
             // records-only and won't carry DEFINE TABLE strings.
             let metadata_source = BootstrapSource::Direct(db.clone());
-            let (data_source, expected_hashes) = if let Some(ref scheduler_url) = scheduler_url {
+            let (data_source, mut expected_hashes) = if let Some(ref scheduler_url) = scheduler_url {
                 // Cluster mode: register with scheduler, then bootstrap from proxy
                 let client = reqwest::Client::new();
                 let scheduler_base = scheduler_url.trim_end_matches('/');
 
                 info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_base);
 
-                // Retry registration with exponential backoff. The scheduler
-                // returns 503 while `Cloning`/`Restoring` (e.g. a cold
-                // `--clean` re-clone), and may be unreachable for a moment
-                // while DNS/the container comes up — both are transient. A
-                // single attempt that gave up (the old behaviour) left the SSP
-                // a permanently-unregistered zombie: it never exited, so the
-                // supervisor's restart-on-failure policy never fired, and the
-                // heartbeat loop only runs once status==Ready. Now we keep
-                // trying within a budget, then exit so the supervisor reruns
-                // the whole handshake against a (by then) Ready scheduler.
-                let registration = {
-                    let max_wait = std::time::Duration::from_secs(register_max_wait_secs);
-                    let start = std::time::Instant::now();
-                    let mut backoff_ms: u64 = 1000;
-                    loop {
-                        match register_with_scheduler(
-                            &client,
-                            scheduler_url,
-                            &ssp_id,
-                            &listen_addr,
-                            advertise_addr.as_deref(),
-                        ).await {
-                            Ok(r) => {
-                                info!(
-                                    snapshot_seq = r.snapshot_seq,
-                                    tables = r.table_hashes.len(),
-                                    waited_secs = start.elapsed().as_secs(),
-                                    "Successfully registered with scheduler"
-                                );
-                                break r;
-                            }
-                            Err(RegisterError::Fatal(e)) => {
-                                error!(
-                                    error = %e,
-                                    "Scheduler rejected registration (non-retryable) — exiting for visibility"
-                                );
-                                *status.write().await = SspStatus::Failed;
-                                // exit(6): distinct from the data-bootstrap
-                                // exit(2) and heartbeat exit(3)/exit(4) so the
-                                // failure mode is identifiable in logs.
-                                std::process::exit(6);
-                            }
-                            Err(RegisterError::Retryable(e)) => {
-                                let elapsed = start.elapsed();
-                                if elapsed >= max_wait {
-                                    error!(
-                                        error = %e,
-                                        waited_secs = elapsed.as_secs(),
-                                        max_wait_secs = register_max_wait_secs,
-                                        "Scheduler registration still failing after max wait — exiting for restart"
-                                    );
-                                    *status.write().await = SspStatus::Failed;
-                                    // exit(5): exhausted the retry budget; let
-                                    // the supervisor restart us so the full
-                                    // register→bootstrap handshake reruns.
-                                    std::process::exit(5);
-                                }
-                                warn!(
-                                    error = %e,
-                                    backoff_ms,
-                                    waited_secs = elapsed.as_secs(),
-                                    "Scheduler not ready for registration, retrying"
-                                );
-                                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                                backoff_ms = (backoff_ms * 2).min(10_000);
-                            }
-                        }
-                    }
-                };
+                let registration = register_with_retry(
+                    &client,
+                    scheduler_url,
+                    &ssp_id,
+                    &listen_addr,
+                    advertise_addr.as_deref(),
+                    register_max_wait_secs,
+                    &status,
+                )
+                .await;
 
                 let proxy_url = format!("{}/proxy", scheduler_base);
                 info!("Bootstrapping from scheduler proxy at {}", proxy_url);
@@ -970,6 +984,9 @@ pub async fn run_server() -> anyhow::Result<()> {
                                     );
                                 }
                                 if attempt >= 2 {
+                                    // The retry below re-registered, so this
+                                    // mismatch is against FRESH scheduler
+                                    // hashes — a real divergence, not staleness.
                                     error!(
                                         attempts = attempt,
                                         diffs = diffs.len(),
@@ -981,14 +998,35 @@ pub async fn run_server() -> anyhow::Result<()> {
                                     // registration handshake.
                                     std::process::exit(2);
                                 }
+                                // First failure: the scheduler's hashes may
+                                // themselves be stale (snapshot drift while we
+                                // bootstrapped). The hashes captured at our
+                                // original registration can never change, so
+                                // retrying against them is guaranteed to fail
+                                // again — wipe the circuit AND re-register to
+                                // verify against the scheduler's CURRENT state.
                                 warn!(
                                     attempt,
                                     diffs = diffs.len(),
-                                    "Wiping circuit and retrying bootstrap"
+                                    "Integrity mismatch — re-registering to refetch scheduler hashes before retry"
                                 );
                                 {
                                     let mut guard = processor.write().await;
                                     *guard = Circuit::new();
+                                }
+                                if let Some(sched_url) = scheduler_url.as_deref() {
+                                    let client = reqwest::Client::new();
+                                    let registration = register_with_retry(
+                                        &client,
+                                        sched_url,
+                                        &ssp_id,
+                                        &listen_addr,
+                                        advertise_addr.as_deref(),
+                                        register_max_wait_secs,
+                                        &status,
+                                    )
+                                    .await;
+                                    expected_hashes = registration.table_hashes;
                                 }
                                 continue;
                             }

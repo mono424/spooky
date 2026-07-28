@@ -57,6 +57,8 @@ async fn main() -> Result<()> {
         event_buffer: scheduler.event_buffer.clone(),
         seq_counter: std::sync::Arc::clone(&scheduler.seq_counter),
         reclone_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        wal: scheduler.wal.clone(),
+        drain_lock: scheduler.drain_lock.clone(),
     };
     let ssp_router = scheduler::ssp_management::create_ssp_router(ssp_mgmt_state);
 

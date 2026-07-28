@@ -34,6 +34,8 @@ struct TestHarness {
     event_buffer: Arc<RwLock<VecDeque<BufferedEvent>>>,
     seq_counter: Arc<AtomicU64>,
     wal: Arc<RwLock<EventWal>>,
+    drain_lock: Arc<tokio::sync::Mutex<()>>,
+    reclone_lock: Arc<tokio::sync::Mutex<()>>,
     transport: Arc<HttpTransport>,
     query_tracker: Arc<QueryTracker>,
     job_tracker: Arc<JobTracker>,
@@ -104,6 +106,8 @@ impl TestHarness {
             event_buffer: Arc::new(RwLock::new(VecDeque::new())),
             seq_counter: Arc::new(AtomicU64::new(0)),
             wal: Arc::new(RwLock::new(wal)),
+            drain_lock: Arc::new(tokio::sync::Mutex::new(())),
+            reclone_lock: Arc::new(tokio::sync::Mutex::new(())),
             transport: Arc::new(HttpTransport::new()),
             query_tracker: Arc::new(QueryTracker::new()),
             job_tracker: Arc::new(JobTracker::new()),
@@ -122,6 +126,7 @@ impl TestHarness {
             event_buffer: Arc::clone(&self.event_buffer),
             seq_counter: Arc::clone(&self.seq_counter),
             wal: Arc::clone(&self.wal),
+            drain_lock: Arc::clone(&self.drain_lock),
             db_config: Arc::new(self.config.db.clone()),
             job_tables: Arc::new(vec![]),
         };
@@ -137,7 +142,9 @@ impl TestHarness {
             status: Arc::clone(&self.status),
             event_buffer: Arc::clone(&self.event_buffer),
             seq_counter: Arc::clone(&self.seq_counter),
-            reclone_lock: Arc::new(tokio::sync::Mutex::new(())),
+            reclone_lock: Arc::clone(&self.reclone_lock),
+            wal: Arc::clone(&self.wal),
+            drain_lock: Arc::clone(&self.drain_lock),
         };
         ssp_management::create_ssp_router(state)
     }
@@ -186,6 +193,7 @@ impl TestHarness {
                 event_buffer: Arc::clone(&self.event_buffer),
                 seq_counter: Arc::clone(&self.seq_counter),
                 wal: Arc::clone(&self.wal),
+                drain_lock: Arc::clone(&self.drain_lock),
                 db_config: Arc::new(self.config.db.clone()),
                 job_tables: Arc::new(vec![]),
             },
@@ -291,6 +299,12 @@ struct MockSsp {
 
 impl MockSsp {
     async fn start() -> Self {
+        Self::start_with_health("ready").await
+    }
+
+    /// Like `start`, but `/health` reports the given status (e.g. `"failed"`
+    /// to exercise the scheduler's bootstrap-failure path).
+    async fn start_with_health(health_status: &'static str) -> Self {
         let received = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let received_clone = Arc::clone(&received);
 
@@ -351,8 +365,8 @@ impl MockSsp {
                 )
                 .route(
                     "/health",
-                    axum::routing::get(|| async {
-                        axum::Json(json!({"status": "ready"}))
+                    axum::routing::get(move || async move {
+                        axum::Json(json!({"status": health_status}))
                     }),
                 )
         };
@@ -1214,6 +1228,7 @@ mod bootstrap_protocol_tests {
                 event_buffer: Arc::clone(&h.event_buffer),
                 seq_counter: Arc::clone(&h.seq_counter),
                 wal: Arc::clone(&h.wal),
+                drain_lock: Arc::clone(&h.drain_lock),
                 db_config: Arc::new(h.config.db.clone()),
                 job_tables: Arc::new(vec![]),
             };
@@ -1335,6 +1350,405 @@ mod bootstrap_protocol_tests {
                 path
             );
         }
+    }
+
+    #[tokio::test]
+    async fn updater_tick_recovers_latched_frozen_and_drains() {
+        // The live-incident latch: SnapshotFrozen with no active bootstrap
+        // (failed bootstrap whose error handler never ran). The tick must
+        // self-recover to Ready and drain the pinned backlog.
+        let h = TestHarness::with_status(SchedulerStatus::SnapshotFrozen).await;
+
+        for i in 0..3 {
+            let app = h.ingest_router();
+            let (status, _) = post_json(
+                app,
+                "/ingest",
+                &ingest_payload("user", "CREATE", &format!("u{}", i)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        assert_eq!(h.event_buffer.read().await.len(), 3);
+
+        scheduler::snapshot_updater_tick(
+            &h.status,
+            &h.event_buffer,
+            &h.replica,
+            &h.ssp_pool,
+            &h.wal,
+            &h.drain_lock,
+            std::time::Duration::from_secs(300),
+        )
+        .await;
+
+        assert_eq!(*h.status.read().await, SchedulerStatus::Ready);
+        assert!(h.event_buffer.read().await.is_empty(), "backlog drained");
+        let rep = h.replica.read().await;
+        assert_eq!(rep.snapshot_seq(), 3, "snapshot advanced");
+        drop(rep);
+        // WAL truncated up to the drained seq — a restart must not refill.
+        assert!(h.wal.read().await.recover().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn updater_tick_recovers_latched_updating() {
+        // A prior tick that died mid-drain pins SnapshotUpdating.
+        let h = TestHarness::with_status(SchedulerStatus::SnapshotUpdating).await;
+        scheduler::snapshot_updater_tick(
+            &h.status,
+            &h.event_buffer,
+            &h.replica,
+            &h.ssp_pool,
+            &h.wal,
+            &h.drain_lock,
+            std::time::Duration::from_secs(300),
+        )
+        .await;
+        assert_eq!(*h.status.read().await, SchedulerStatus::Ready);
+    }
+
+    #[tokio::test]
+    async fn updater_tick_noop_with_fresh_active_bootstrap() {
+        let h = TestHarness::with_status(SchedulerStatus::SnapshotFrozen).await;
+        h.add_bootstrapping_ssp("ssp-1", "http://localhost:9999").await;
+
+        let app = h.ingest_router();
+        let (status, _) =
+            post_json(app, "/ingest", &ingest_payload("user", "CREATE", "u1")).await;
+        assert_eq!(status, StatusCode::OK);
+
+        scheduler::snapshot_updater_tick(
+            &h.status,
+            &h.event_buffer,
+            &h.replica,
+            &h.ssp_pool,
+            &h.wal,
+            &h.drain_lock,
+            std::time::Duration::from_secs(300),
+        )
+        .await;
+
+        // Bootstrap in flight: no recovery, no drain.
+        assert_eq!(*h.status.read().await, SchedulerStatus::SnapshotFrozen);
+        assert_eq!(h.event_buffer.read().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn updater_tick_evicts_stale_bootstrap_then_recovers() {
+        let h = TestHarness::with_status(SchedulerStatus::SnapshotFrozen).await;
+        h.add_bootstrapping_ssp("ssp-parked", "http://localhost:9999").await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        scheduler::snapshot_updater_tick(
+            &h.status,
+            &h.event_buffer,
+            &h.replica,
+            &h.ssp_pool,
+            &h.wal,
+            &h.drain_lock,
+            std::time::Duration::ZERO, // everything parked is instantly stale
+        )
+        .await;
+
+        let pool = h.ssp_pool.read().await;
+        assert!(pool.get("ssp-parked").is_none(), "parked SSP evicted");
+        assert!(!pool.has_active_bootstrap());
+        drop(pool);
+        assert_eq!(*h.status.read().await, SchedulerStatus::Ready);
+    }
+
+    #[tokio::test]
+    async fn register_drains_pending_events_and_hands_fresh_hashes() {
+        let h = TestHarness::new().await;
+
+        for i in 0..3 {
+            let app = h.ingest_router();
+            let (status, _) = post_json(
+                app,
+                "/ingest",
+                &ingest_payload("user", "CREATE", &format!("u{}", i)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        assert_eq!(h.event_buffer.read().await.len(), 3);
+
+        let app = h.ssp_router();
+        let (status, body) = post_json(
+            app,
+            "/ssp/register",
+            &json!({"ssp_id": "ssp-1", "url": "http://localhost:9999", "version": "test"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        // The backlog was applied before hashes were captured...
+        assert!(h.event_buffer.read().await.is_empty());
+        let rep = h.replica.read().await;
+        assert_eq!(rep.snapshot_seq(), 3);
+        assert_eq!(body["snapshot_seq"].as_u64(), Some(3));
+
+        // ...so the handed-out hash matches the replica content the SSP will
+        // bootstrap from — the invariant whose violation crash-loops SSPs.
+        let fresh = rep.compute_table_hashes().await.unwrap();
+        assert_eq!(
+            body["table_hashes"]["user"].as_str(),
+            fresh.get("user").map(|s| s.as_str()),
+            "registration hash must match replica content"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_skips_drain_while_sibling_bootstraps() {
+        let h = TestHarness::new().await;
+        h.add_bootstrapping_ssp("ssp-0", "http://localhost:9990").await;
+
+        for i in 0..3 {
+            let app = h.ingest_router();
+            let (status, _) = post_json(
+                app,
+                "/ingest",
+                &ingest_payload("user", "CREATE", &format!("u{}", i)),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        let app = h.ssp_router();
+        let (status, _) = post_json(
+            app,
+            "/ssp/register",
+            &json!({"ssp_id": "ssp-1", "url": "http://localhost:9991", "version": "test"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        // Draining now would invalidate the hashes ssp-0 already holds.
+        assert_eq!(h.event_buffer.read().await.len(), 3, "backlog must survive");
+    }
+
+    #[tokio::test]
+    async fn register_bumps_registration_generation() {
+        let h = TestHarness::new().await;
+        for _ in 0..2 {
+            let app = h.ssp_router();
+            let (status, _) = post_json(
+                app,
+                "/ssp/register",
+                &json!({"ssp_id": "ssp-1", "url": "http://localhost:9999", "version": "test"}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::ACCEPTED);
+        }
+        assert_eq!(h.ssp_pool.read().await.registration_gen("ssp-1"), 2);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_failure_unfreezes_snapshot() {
+        let h = TestHarness::new().await;
+        let mock = MockSsp::start_with_health("failed").await;
+
+        let app = h.ssp_router();
+        let (status, _) = post_json(
+            app,
+            "/ssp/register",
+            &json!({"ssp_id": "ssp-fail", "url": mock.addr, "version": "test"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(*h.status.read().await, SchedulerStatus::SnapshotFrozen);
+
+        // Poll task (100ms interval) sees "failed", bails, and the error
+        // handler must remove the SSP AND unfreeze — the old code left the
+        // status latched forever here.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let unfrozen = *h.status.read().await == SchedulerStatus::Ready;
+            let removed = h.ssp_pool.read().await.get("ssp-fail").is_none();
+            if unfrozen && removed {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "bootstrap failure did not unfreeze the snapshot (status={:?})",
+                *h.status.read().await
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn admin_resync_rehash_repairs_hash_drift() {
+        let h = TestHarness::new().await;
+
+        // Baseline content + persisted hashes, then drift the content
+        // WITHOUT rehashing — exactly the stale-metadata corruption.
+        {
+            let mut rep = h.replica.write().await;
+            rep.apply(
+                "user",
+                scheduler::replica::RecordOp::Create,
+                "user:u1",
+                Some(json!({"name": "a"})),
+            )
+            .await
+            .unwrap();
+            rep.set_snapshot_state(1, None).await.unwrap();
+            rep.apply(
+                "user",
+                scheduler::replica::RecordOp::Update,
+                "user:u1",
+                Some(json!({"name": "b"})),
+            )
+            .await
+            .unwrap();
+        }
+        {
+            let rep = h.replica.read().await;
+            assert_ne!(
+                rep.snapshot_hashes(),
+                &rep.compute_table_hashes().await.unwrap(),
+                "test setup: hashes must be stale"
+            );
+        }
+
+        h.add_ready_ssp("ssp-1", "http://localhost:9999").await;
+        let app = h.ssp_router();
+        let (status, body) = post_json(app, "/admin/resync", &json!({"mode": "rehash"})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["mode"], "rehash");
+        assert_eq!(body["marked_for_resync"], 1);
+
+        let rep = h.replica.read().await;
+        assert_eq!(
+            rep.snapshot_hashes(),
+            &rep.compute_table_hashes().await.unwrap(),
+            "hashes repaired from content"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_resync_reclone_conflicts_while_running() {
+        let h = TestHarness::new().await;
+        let _guard = h.reclone_lock.lock().await; // simulate in-flight re-clone
+
+        let app = h.ssp_router();
+        let (status, _) = post_json(app, "/admin/resync", &json!({"mode": "reclone"})).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn admin_resync_rejects_bad_mode_and_cloning() {
+        let h = TestHarness::new().await;
+        let app = h.ssp_router();
+        let (status, _) = post_json(app, "/admin/resync", &json!({"mode": "nuke"})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let h = TestHarness::with_status(SchedulerStatus::Cloning).await;
+        let app = h.ssp_router();
+        let (status, _) = post_json(app, "/admin/resync", &json!({"mode": "rehash"})).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn health_reports_latched_stall_as_degraded() {
+        let h = TestHarness::with_status(SchedulerStatus::SnapshotFrozen).await;
+        h.add_ready_ssp("ssp-1", "http://localhost:9999").await;
+
+        let (status, body) = get_json(h.metrics_router(), "/health").await;
+        // Degraded, NOT 503: an orchestrator restart provably doesn't fix a
+        // latched freeze (the WAL refills), and the updater self-heals.
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "degraded");
+        assert_eq!(body["scheduler"]["status"], "frozen");
+        assert_eq!(body["scheduler"]["stalled"], true);
+
+        // A justified freeze (bootstrap in flight) is not a stall.
+        h.add_bootstrapping_ssp("ssp-2", "http://localhost:9998").await;
+        let (status, body) = get_json(h.metrics_router(), "/health").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["scheduler"]["stalled"], false);
+    }
+
+    #[tokio::test]
+    async fn pre_backup_skips_drain_during_bootstrap() {
+        use maintenance::MaintenanceHost;
+
+        let h = TestHarness::with_status(SchedulerStatus::SnapshotFrozen).await;
+        h.add_bootstrapping_ssp("ssp-1", "http://localhost:9999").await;
+
+        let app = h.ingest_router();
+        let (status, _) =
+            post_json(app, "/ingest", &ingest_payload("user", "CREATE", "u1")).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let host = scheduler::maintenance_host::SchedulerHost {
+            ingest: IngestState {
+                replica: Arc::clone(&h.replica),
+                transport: Arc::clone(&h.transport),
+                ssp_pool: Arc::clone(&h.ssp_pool),
+                status: Arc::clone(&h.status),
+                event_buffer: Arc::clone(&h.event_buffer),
+                seq_counter: Arc::clone(&h.seq_counter),
+                wal: Arc::clone(&h.wal),
+                drain_lock: Arc::clone(&h.drain_lock),
+                db_config: Arc::new(h.config.db.clone()),
+                job_tables: Arc::new(vec![]),
+            },
+        };
+        let seq = host.pre_backup().await.unwrap();
+        assert_eq!(seq, Some(0), "returns current seq without draining");
+        assert_eq!(
+            h.event_buffer.read().await.len(),
+            1,
+            "must not mutate the replica mid-bootstrap"
+        );
+    }
+
+    #[tokio::test]
+    async fn startup_integrity_check_repairs_stale_hashes() {
+        let replica_dir = TempDir::new().unwrap();
+        let wal_dir = TempDir::new().unwrap();
+        let config = SchedulerConfig {
+            replica_db_path: replica_dir.path().join("replica_db"),
+            wal_path: wal_dir.path().join("event_wal.log"),
+            scheduler_id: "test-scheduler".to_string(),
+            ..SchedulerConfig::default()
+        };
+        let sched = scheduler::Scheduler::new(config, Arc::new(HttpTransport::new()))
+            .await
+            .unwrap();
+
+        {
+            let mut rep = sched.replica.write().await;
+            rep.apply(
+                "user",
+                scheduler::replica::RecordOp::Create,
+                "user:u1",
+                Some(json!({"name": "a"})),
+            )
+            .await
+            .unwrap();
+            rep.set_snapshot_state(1, None).await.unwrap();
+            rep.apply(
+                "user",
+                scheduler::replica::RecordOp::Update,
+                "user:u1",
+                Some(json!({"name": "b"})),
+            )
+            .await
+            .unwrap();
+        }
+
+        sched.startup_integrity_check().await.unwrap();
+
+        let rep = sched.replica.read().await;
+        assert_eq!(
+            rep.snapshot_hashes(),
+            &rep.compute_table_hashes().await.unwrap(),
+            "startup check must repair, not just log"
+        );
     }
 
     #[tokio::test]

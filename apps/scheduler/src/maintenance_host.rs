@@ -20,7 +20,26 @@ impl MaintenanceHost for SchedulerHost {
     /// Drain in-memory events into the replica. This keeps the replica's
     /// snapshot_seq current (useful for SSP bootstrap) even though the
     /// backup itself exports the main DB.
+    ///
+    /// Skipped while the snapshot is frozen or an SSP bootstrap is in flight:
+    /// mutating the replica then would silently invalidate the hashes the
+    /// bootstrapping SSP was handed at registration, minting exactly the
+    /// integrity mismatch that sends SSPs into an exit(2) loop. The backup
+    /// exports the main DB either way; only `snapshot_seq` freshness is lost.
     async fn pre_backup(&self) -> Result<Option<u64>> {
+        let _drain_guard = self.ingest.drain_lock.lock().await;
+
+        let status = *self.ingest.status.read().await;
+        let active_bootstrap = self.ingest.ssp_pool.read().await.has_active_bootstrap();
+        if status != SchedulerStatus::Ready || active_bootstrap {
+            warn!(
+                ?status,
+                active_bootstrap,
+                "Skipping pre-backup drain: snapshot frozen or SSP bootstrap in flight"
+            );
+            return Ok(Some(self.ingest.replica.read().await.snapshot_seq()));
+        }
+
         let applied = crate::drain_and_apply(
             &self.ingest.event_buffer,
             &self.ingest.replica,

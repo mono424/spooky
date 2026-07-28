@@ -4,9 +4,11 @@
 //!
 //! Hashes are computed via the same `ssp_protocol::snapshot_hash` helper
 //! the scheduler and SSP use, so any divergence (count or content) shows
-//! up here. With `--fix`, on mismatch we POST `/admin/ssp/resync-all` to
-//! the scheduler so every SSP is forced to re-bootstrap from the current
-//! frozen snapshot.
+//! up here. With `--fix`, the remedy is picked by which pair disagrees:
+//! main-vs-replica divergence means the scheduler's snapshot itself is bad,
+//! so we POST `/admin/resync` (re-clone from upstream, which also flags all
+//! SSPs); replica-vs-SSP-only divergence just needs `/admin/ssp/resync-all`
+//! so every SSP re-bootstraps from the current frozen snapshot.
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
@@ -63,16 +65,34 @@ pub fn run(fix: bool) -> Result<()> {
     }
 
     if fix {
-        eprintln!(
-            "{} {} table(s) out of sync — calling /admin/ssp/resync-all",
-            PREFIX, mismatches
-        );
-        match force_resync_ssps() {
-            Ok(n) => println!(
-                "{} Flagged {} SSP(s) for forced re-bootstrap. Re-run `spky verify` after they've reconnected.",
-                PREFIX, n
-            ),
-            Err(e) => eprintln!("{} --fix failed: {:#}", PREFIX, e),
+        // Classify which pair disagrees to pick the right remedy. A bad
+        // replica can't be fixed by re-bootstrapping SSPs from it — they'd
+        // just refetch the same diverging state.
+        let main_vs_replica = !replica.is_empty() && count_pair_mismatches(&main, &replica) > 0;
+        if main_vs_replica {
+            eprintln!(
+                "{} Main DB and scheduler replica disagree — calling /admin/resync (re-clone from upstream)",
+                PREFIX
+            );
+            match force_scheduler_resync("reclone") {
+                Ok(marked) => println!(
+                    "{} Replica re-cloned from upstream; {} SSP(s) flagged for re-bootstrap. Re-run `spky verify` after they've reconnected.",
+                    PREFIX, marked
+                ),
+                Err(e) => eprintln!("{} --fix failed: {:#}", PREFIX, e),
+            }
+        } else {
+            eprintln!(
+                "{} {} table(s) out of sync — calling /admin/ssp/resync-all",
+                PREFIX, mismatches
+            );
+            match force_resync_ssps() {
+                Ok(n) => println!(
+                    "{} Flagged {} SSP(s) for forced re-bootstrap. Re-run `spky verify` after they've reconnected.",
+                    PREFIX, n
+                ),
+                Err(e) => eprintln!("{} --fix failed: {:#}", PREFIX, e),
+            }
         }
     }
 
@@ -283,6 +303,52 @@ fn force_resync_ssps() -> Result<u64> {
     let body: Value = resp
         .into_json()
         .context("Failed to parse resync-all response")?;
+    Ok(body
+        .get("marked_for_resync")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0))
+}
+
+/// Count tables where two specific sources disagree (count, hash, or one side
+/// missing the table entirely). Used by `--fix` to distinguish a bad replica
+/// (main-vs-replica) from merely stale SSPs (replica-vs-SSP).
+fn count_pair_mismatches(
+    a: &BTreeMap<String, TableStat>,
+    b: &BTreeMap<String, TableStat>,
+) -> usize {
+    let all_tables: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    all_tables
+        .into_iter()
+        .filter(|t| {
+            let (sa, sb) = (a.get(*t), b.get(*t));
+            match (sa, sb) {
+                (Some(sa), Some(sb)) => {
+                    sa.count != sb.count
+                        || matches!(
+                            (&sa.hash, &sb.hash),
+                            (Some(ha), Some(hb)) if ha != hb
+                        )
+                }
+                // Table missing on one side counts as a mismatch.
+                _ => true,
+            }
+        })
+        .count()
+}
+
+/// POST /admin/resync on the scheduler with the given mode. A `reclone` is a
+/// full upstream re-ingest and can take a while on a big DB, hence the long
+/// timeout. Returns the count of SSPs flagged for re-bootstrap.
+fn force_scheduler_resync(mode: &str) -> Result<u64> {
+    let url = format!("http://localhost:{}/admin/resync", SCHEDULER_PORT);
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(600))
+        .send_string(&format!(r#"{{"mode":"{}"}}"#, mode))
+        .map_err(|e| anyhow::anyhow!("Scheduler /admin/resync error: {}", e))?;
+    let body: Value = resp
+        .into_json()
+        .context("Failed to parse /admin/resync response")?;
     Ok(body
         .get("marked_for_resync")
         .and_then(|v| v.as_u64())

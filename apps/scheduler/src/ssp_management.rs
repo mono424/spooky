@@ -5,7 +5,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -16,6 +16,7 @@ use crate::messages::{BufferedEvent, RecordOp, RecordUpdate, SspHeartbeat};
 use crate::replica::Replica;
 use crate::router::SspPool;
 use crate::transport::{HttpTransport, SspInfo};
+use crate::wal::EventWal;
 use crate::SchedulerStatus;
 use ssp_protocol::{SspRegistration, SspRegistrationResponse};
 
@@ -34,6 +35,14 @@ pub struct SspManagementState {
     /// re-ingest the shared replica concurrently. A `try_lock` failure means a
     /// re-clone is already running; the losing task just re-bootstraps instead.
     pub reclone_lock: Arc<Mutex<()>>,
+    /// Event WAL, needed by the pre-registration drain (`drain_and_apply`
+    /// truncates it as part of advancing the snapshot).
+    pub wal: Arc<RwLock<EventWal>>,
+    /// Shared with the periodic snapshot updater and `pre_backup`: serializes
+    /// every `drain_and_apply` caller so registration never captures hashes
+    /// mid-drain. Lock order is always `drain_lock` → replica; never combine
+    /// with `reclone_lock` in one path.
+    pub drain_lock: Arc<Mutex<()>>,
 }
 
 /// Create SSP management router
@@ -42,6 +51,7 @@ pub fn create_ssp_router(state: SspManagementState) -> Router {
         .route("/ssp/register", post(handle_register))
         .route("/ssp/heartbeat", post(handle_heartbeat))
         .route("/admin/ssp/resync-all", post(handle_resync_all))
+        .route("/admin/resync", post(handle_resync))
         .with_state(state)
 }
 
@@ -57,6 +67,112 @@ async fn handle_resync_all(
     };
     info!(count, "Flagged SSPs for forced re-bootstrap");
     Json(serde_json::json!({ "marked_for_resync": count }))
+}
+
+/// Body for `POST /admin/resync`. Both fields optional; an empty (or absent)
+/// body means a full re-clone.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ResyncRequest {
+    /// `"reclone"` (default): reset the replica and re-ingest everything from
+    /// upstream SurrealDB. `"rehash"`: keep the replica content and recompute
+    /// the persisted snapshot hashes from it (repairs hash-metadata drift).
+    mode: Option<String>,
+    /// For `rehash` only: limit the recompute to these tables.
+    tables: Option<Vec<String>>,
+}
+
+/// Repair the scheduler's snapshot state without a volume wipe. This is the
+/// operator remedy the startup integrity check points at — the alternative to
+/// `spky cloud restart --clean`, which throws away the whole scheduler volume
+/// for what is usually just stale snapshot metadata.
+async fn handle_resync(
+    State(state): State<SspManagementState>,
+    body: Option<Json<ResyncRequest>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let req = body.map(|Json(b)| b).unwrap_or_default();
+    let mode = req.mode.as_deref().unwrap_or("reclone");
+
+    match *state.status.read().await {
+        SchedulerStatus::Cloning => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Scheduler is still cloning database".to_string(),
+            ));
+        }
+        SchedulerStatus::Restoring => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Scheduler is restoring from backup".to_string(),
+            ));
+        }
+        _ => {}
+    }
+
+    match mode {
+        "rehash" => {
+            let tables: Option<BTreeSet<String>> =
+                req.tables.map(|t| t.into_iter().collect());
+            let rehashed = {
+                let mut rep = state.replica.write().await;
+                let seq = rep.snapshot_seq();
+                rep.set_snapshot_state(seq, tables.as_ref())
+                    .await
+                    .map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("rehash failed: {}", e),
+                        )
+                    })?;
+                tables
+                    .as_ref()
+                    .map(|t| t.len())
+                    .unwrap_or_else(|| rep.snapshot_hashes().len())
+            };
+            // The corrected hashes may disagree with what running SSPs
+            // bootstrapped against — make them re-verify.
+            let marked = state.ssp_pool.write().await.mark_all_for_resync();
+            info!(mode, rehashed, marked, "Admin resync complete");
+            Ok(Json(serde_json::json!({
+                "mode": "rehash",
+                "recloned": false,
+                "rehashed_tables": rehashed,
+                "marked_for_resync": marked,
+            })))
+        }
+        "reclone" => {
+            match reclone_replica_from_upstream(
+                &state.config,
+                &state.replica,
+                &state.seq_counter,
+                &state.reclone_lock,
+            )
+            .await
+            {
+                Ok(true) => {
+                    let marked = state.ssp_pool.write().await.mark_all_for_resync();
+                    info!(mode, marked, "Admin resync complete");
+                    Ok(Json(serde_json::json!({
+                        "mode": "reclone",
+                        "recloned": true,
+                        "rehashed_tables": 0,
+                        "marked_for_resync": marked,
+                    })))
+                }
+                Ok(false) => Err((
+                    StatusCode::CONFLICT,
+                    "A replica re-clone is already in progress".to_string(),
+                )),
+                Err(e) => Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("reclone failed: {}", e),
+                )),
+            }
+        }
+        other => Err((
+            StatusCode::BAD_REQUEST,
+            format!("Unknown resync mode '{}' (expected \"reclone\" or \"rehash\")", other),
+        )),
+    }
 }
 
 /// Handle SSP registration — freezes snapshot, returns snapshot_seq, spawns poll task
@@ -101,17 +217,6 @@ async fn handle_register(
         }
     }
 
-    // Get snapshot_seq + hashes from replica. The hashes ride alongside the
-    // seq so the SSP can verify its bootstrap matches the frozen snapshot.
-    let (snapshot_seq, table_hashes) = {
-        let replica = state.replica.read().await;
-        (replica.snapshot_seq(), replica.snapshot_hashes().clone())
-    };
-
-    // Freeze snapshot
-    *state.status.write().await = SchedulerStatus::SnapshotFrozen;
-    info!(snapshot_seq, "Snapshot frozen for SSP bootstrap");
-
     // Create SspInfo
     let ssp_info = SspInfo {
         id: request.ssp_id.clone(),
@@ -126,13 +231,61 @@ async fn handle_register(
         env: request.env.clone(),
     };
 
-    // Add to pool, mark as bootstrapping, record snapshot_seq
-    {
+    // Under `drain_lock`: wait out any in-flight drain, freeze the snapshot,
+    // opportunistically apply the pending backlog so the SSP gets CURRENT
+    // hashes (a stale persisted snapshot is exactly what sends SSPs into the
+    // integrity-mismatch exit(2) loop), then capture seq + hashes and insert
+    // into the pool. Freezing AND inserting inside the lock is what makes
+    // every drainer's under-lock `has_active_bootstrap` check sound; it also
+    // serializes two simultaneous registrations — the second sees the first
+    // in the pool and skips its drain.
+    //
+    // Latency: registration runs under the SSP's 10s client timeout with
+    // retry/backoff. A pathological backlog may push the first attempt past
+    // that timeout — the drain still completes server-side, and the retry
+    // registers against the drained state.
+    let (snapshot_seq, table_hashes, generation) = {
+        let _drain_guard = state.drain_lock.lock().await;
+
+        *state.status.write().await = SchedulerStatus::SnapshotFrozen;
+
+        let sibling_active = state.ssp_pool.read().await.has_active_bootstrap();
+        if sibling_active {
+            // A sibling bootstrap holds hashes captured earlier; mutating the
+            // replica now would invalidate them mid-flight. This SSP still
+            // gets a self-consistent (if slightly stale) snapshot — nothing
+            // else can drain while the status stays frozen.
+            info!("Skipping pre-registration drain: sibling SSP bootstrap in flight");
+        } else {
+            match crate::drain_and_apply(&state.event_buffer, &state.replica, &state.wal).await
+            {
+                Ok(0) => {}
+                Ok(applied) => {
+                    info!(applied, "Drained pending events before handing bootstrap hashes")
+                }
+                Err(e) => {
+                    warn!(error = %e, "Pre-registration drain failed; handing out persisted hashes")
+                }
+            }
+        }
+
+        let (snapshot_seq, table_hashes) = {
+            let replica = state.replica.read().await;
+            (replica.snapshot_seq(), replica.snapshot_hashes().clone())
+        };
+
+        // Add to pool, mark as bootstrapping, record snapshot_seq, and bump
+        // the registration generation so any poll task from a previous
+        // registration of this ssp_id knows it has been superseded.
         let mut pool = state.ssp_pool.write().await;
         pool.upsert(ssp_info);
         pool.mark_bootstrapping(&request.ssp_id);
         pool.set_bootstrap_seq(&request.ssp_id, snapshot_seq);
-    }
+        let generation = pool.bump_registration_gen(&request.ssp_id);
+
+        (snapshot_seq, table_hashes, generation)
+    };
+    info!(snapshot_seq, "Snapshot frozen for SSP bootstrap");
 
     // Spawn polling + replay task
     let ssp_id = request.ssp_id.clone();
@@ -141,6 +294,8 @@ async fn handle_register(
     let transport = state.transport.clone();
     let event_buffer = state.event_buffer.clone();
     let scheduler_status = state.status.clone();
+    let status_for_err = state.status.clone();
+    let drain_lock_for_err = state.drain_lock.clone();
     let config = state.config.clone();
     let seq_counter = state.seq_counter.clone();
     let reclone_lock = state.reclone_lock.clone();
@@ -151,6 +306,7 @@ async fn handle_register(
             ssp_id.clone(),
             ssp_url,
             snapshot_seq,
+            generation,
             ssp_pool.clone(),
             transport,
             event_buffer,
@@ -163,14 +319,36 @@ async fn handle_register(
         .await
         {
             error!("Bootstrap/replay failed for SSP '{}': {}", ssp_id, e);
+
+            // Under `drain_lock` so the cleanup can't interleave with a
+            // registration's freeze+insert critical section (which could
+            // otherwise get its fresh freeze clobbered by the unfreeze below).
+            let _drain_guard = drain_lock_for_err.lock().await;
             let mut pool = ssp_pool.write().await;
+
+            // Only clean up if this registration is still the current one —
+            // a superseding re-register owns the pool entry (and the freeze)
+            // now, and removing it would tear down a live bootstrap.
+            if pool.registration_gen(&ssp_id) != generation {
+                info!(
+                    ssp_id = %ssp_id,
+                    "Skipping cleanup: SSP re-registered since this bootstrap started"
+                );
+                return;
+            }
             pool.remove(&ssp_id);
 
-            // Check if snapshot can be unfrozen
+            // Unfreeze the snapshot if no other bootstrap is active. Without
+            // this, SnapshotFrozen latches forever: the periodic updater
+            // refuses to run on a non-Ready status, the drain never happens,
+            // and pending_events pins until a volume wipe.
             if !pool.has_active_bootstrap() {
                 drop(pool);
-                // Note: we can't unfreeze here since we don't have scheduler_status
-                // The periodic snapshot updater will handle it
+                let mut status = status_for_err.write().await;
+                if *status == SchedulerStatus::SnapshotFrozen {
+                    *status = SchedulerStatus::Ready;
+                    info!(ssp_id = %ssp_id, "Snapshot unfrozen after bootstrap failure");
+                }
             }
         }
     });
@@ -252,12 +430,18 @@ async fn handle_heartbeat(
     Ok(StatusCode::OK)
 }
 
-/// Poll SSP health until ready, then replay missed events
+/// Poll SSP health until ready, then replay missed events.
+///
+/// `generation` is the registration generation captured when this task was
+/// spawned; it is re-checked at phase boundaries so a task orphaned by a
+/// re-registration of the same `ssp_id` bails out instead of mutating (or,
+/// via its error handler, removing) the newer registration's pool state.
 #[allow(clippy::too_many_arguments)]
 async fn poll_and_replay_ssp(
     ssp_id: String,
     ssp_url: String,
     snapshot_seq: u64,
+    generation: u64,
     ssp_pool: Arc<RwLock<SspPool>>,
     transport: Arc<HttpTransport>,
     event_buffer: Arc<RwLock<VecDeque<BufferedEvent>>>,
@@ -291,11 +475,20 @@ async fn poll_and_replay_ssp(
         // from the pool (e.g. the SSP container died mid-bootstrap), stop
         // polling — otherwise we burn the full `bootstrap_timeout_secs`
         // hammering an unreachable URL.
-        if ssp_pool.read().await.get(&ssp_id).is_none() {
-            anyhow::bail!(
-                "SSP '{}' removed from pool during bootstrap — aborting poll",
-                ssp_id
-            );
+        {
+            let pool = ssp_pool.read().await;
+            if pool.get(&ssp_id).is_none() {
+                anyhow::bail!(
+                    "SSP '{}' removed from pool during bootstrap — aborting poll",
+                    ssp_id
+                );
+            }
+            if pool.registration_gen(&ssp_id) != generation {
+                anyhow::bail!(
+                    "SSP '{}' bootstrap superseded by re-registration — aborting poll",
+                    ssp_id
+                );
+            }
         }
 
         tokio::time::sleep(poll_interval).await;
@@ -320,6 +513,12 @@ async fn poll_and_replay_ssp(
     // Phase 2: Mark SSP as Replaying (ingest will buffer per-SSP during replay)
     {
         let mut pool = ssp_pool.write().await;
+        if pool.registration_gen(&ssp_id) != generation {
+            anyhow::bail!(
+                "SSP '{}' bootstrap superseded by re-registration — aborting before replay",
+                ssp_id
+            );
+        }
         pool.mark_replaying(&ssp_id);
     }
 
@@ -485,6 +684,12 @@ async fn poll_and_replay_ssp(
     // or diverged SSP.
     if verified {
         let mut pool = ssp_pool.write().await;
+        if pool.registration_gen(&ssp_id) != generation {
+            anyhow::bail!(
+                "SSP '{}' bootstrap superseded by re-registration — aborting before ready",
+                ssp_id
+            );
+        }
         let remaining = pool.mark_ready(&ssp_id);
 
         // Replay any events that snuck in between last drain and mark_ready

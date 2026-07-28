@@ -2,7 +2,7 @@ use crate::config::LoadBalanceStrategy;
 use crate::messages::RecordUpdate;
 use crate::transport::SspInfo;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 /// SSP initialization state
@@ -33,6 +33,15 @@ pub struct SspPool {
     /// this counter lets the catch-up path escalate — re-clone the replica,
     /// then admit anyway — instead of looping forever. See `poll_and_replay_ssp`.
     catchup_failures: HashMap<String, u32>,
+    /// When each SSP last changed state. Lets the snapshot updater evict SSPs
+    /// parked in `Bootstrapping`/`Replaying` (which would otherwise hold
+    /// `has_active_bootstrap()` — and thus the snapshot freeze — forever).
+    state_since: HashMap<String, Instant>,
+    /// Monotonic registration generation per SSP id, bumped on every
+    /// `/ssp/register`. A `poll_and_replay_ssp` task checks its captured gen
+    /// at phase boundaries and bails when superseded by a re-registration,
+    /// so a stale poll task never removes or admits the newer registration.
+    registration_gen: HashMap<String, u64>,
     strategy: LoadBalanceStrategy,
     round_robin_index: usize,
     max_buffer_size: usize,
@@ -48,6 +57,8 @@ impl SspPool {
             ssp_snapshot_seqs: HashMap::new(),
             forced_resync: HashSet::new(),
             catchup_failures: HashMap::new(),
+            state_since: HashMap::new(),
+            registration_gen: HashMap::new(),
             strategy,
             round_robin_index: 0,
             max_buffer_size,
@@ -179,6 +190,7 @@ impl SspPool {
     /// Mark SSP as ready and return any remaining buffered messages
     pub fn mark_ready(&mut self, ssp_id: &str) -> Vec<RecordUpdate> {
         self.ssp_states.insert(ssp_id.to_string(), SspState::Ready);
+        self.state_since.insert(ssp_id.to_string(), Instant::now());
 
         // Return and clear buffered messages
         self.message_buffers
@@ -191,12 +203,50 @@ impl SspPool {
     pub fn mark_bootstrapping(&mut self, ssp_id: &str) {
         self.ssp_states
             .insert(ssp_id.to_string(), SspState::Bootstrapping);
+        self.state_since.insert(ssp_id.to_string(), Instant::now());
     }
 
     /// Mark SSP as replaying (SSP is ready, scheduler replaying missed events)
     pub fn mark_replaying(&mut self, ssp_id: &str) {
         self.ssp_states
             .insert(ssp_id.to_string(), SspState::Replaying);
+        self.state_since.insert(ssp_id.to_string(), Instant::now());
+    }
+
+    /// Bump and return the registration generation for this SSP id. Called by
+    /// `handle_register`; the returned gen is captured by the spawned poll
+    /// task and re-checked via `registration_gen` at phase boundaries.
+    pub fn bump_registration_gen(&mut self, ssp_id: &str) -> u64 {
+        let gen = self.registration_gen.entry(ssp_id.to_string()).or_insert(0);
+        *gen += 1;
+        *gen
+    }
+
+    /// Current registration generation for this SSP id (0 = never registered).
+    pub fn registration_gen(&self, ssp_id: &str) -> u64 {
+        self.registration_gen.get(ssp_id).copied().unwrap_or(0)
+    }
+
+    /// SSPs stuck in `Bootstrapping`/`Replaying` longer than `max_age` as of
+    /// `now`. Pure helper for testability; see `stale_active_bootstraps`.
+    pub fn stale_active_bootstraps_at(&self, now: Instant, max_age: Duration) -> Vec<String> {
+        self.ssp_states
+            .iter()
+            .filter(|(_, s)| matches!(s, SspState::Bootstrapping | SspState::Replaying))
+            .filter(|(id, _)| {
+                self.state_since
+                    .get(*id)
+                    .is_some_and(|since| now.duration_since(*since) > max_age)
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// SSPs parked in an active-bootstrap state past `max_age`. These hold
+    /// `has_active_bootstrap()` true (and with it the snapshot freeze), so the
+    /// snapshot updater evicts them before deciding whether to drain.
+    pub fn stale_active_bootstraps(&self, max_age: Duration) -> Vec<String> {
+        self.stale_active_bootstraps_at(Instant::now(), max_age)
     }
 
     /// Drain buffered messages for an SSP without changing its state
@@ -242,6 +292,9 @@ impl SspPool {
         self.ssp_snapshot_seqs.remove(ssp_id);
         self.forced_resync.remove(ssp_id);
         self.catchup_failures.remove(ssp_id);
+        self.state_since.remove(ssp_id);
+        // registration_gen is intentionally kept: it must stay monotonic
+        // across remove/re-register so stale poll tasks always lose.
         self.ssps.remove(ssp_id)
     }
 
@@ -256,6 +309,8 @@ impl SspPool {
         self.ssp_snapshot_seqs.clear();
         self.forced_resync.clear();
         self.catchup_failures.clear();
+        self.state_since.clear();
+        // registration_gen kept monotonic; see `remove`.
         self.round_robin_index = 0;
         count
     }
@@ -395,5 +450,67 @@ mod tests {
         p.remove("ssp-0");
         // A re-registered SSP of the same id starts a fresh streak.
         assert_eq!(p.record_catchup_failure("ssp-0"), 1);
+    }
+
+    #[test]
+    fn stale_active_bootstraps_respects_age_and_state() {
+        let mut p = pool();
+        p.mark_bootstrapping("ssp-boot");
+        p.mark_replaying("ssp-replay");
+        p.mark_bootstrapping("ssp-done");
+        let _ = p.mark_ready("ssp-done");
+
+        let now = Instant::now();
+        let bound = Duration::from_secs(180);
+
+        // Fresh: nothing is stale yet.
+        assert!(p.stale_active_bootstraps_at(now, bound).is_empty());
+
+        // Past the bound: both parked states are stale; Ready never is.
+        let later = now + bound + Duration::from_secs(1);
+        let mut stale = p.stale_active_bootstraps_at(later, bound);
+        stale.sort();
+        assert_eq!(stale, vec!["ssp-boot".to_string(), "ssp-replay".to_string()]);
+
+        // A state refresh resets the clock.
+        p.mark_replaying("ssp-boot");
+        // (ssp-boot's state_since is now ~Instant::now(); using `later` from
+        // before that stamp would underflow duration_since, so re-anchor.)
+        let re_anchor = Instant::now() + bound + Duration::from_secs(1);
+        let stale = p.stale_active_bootstraps_at(re_anchor, bound);
+        assert!(stale.contains(&"ssp-boot".to_string()));
+        assert!(p
+            .stale_active_bootstraps_at(Instant::now(), bound)
+            .iter()
+            .all(|id| id != "ssp-boot"));
+    }
+
+    #[test]
+    fn eviction_clears_active_bootstrap_latch() {
+        let mut p = pool();
+        p.mark_replaying("ssp-parked");
+        assert!(p.has_active_bootstrap());
+        for id in p.stale_active_bootstraps_at(
+            Instant::now() + Duration::from_secs(999),
+            Duration::from_secs(1),
+        ) {
+            p.remove(&id);
+        }
+        assert!(!p.has_active_bootstrap());
+    }
+
+    #[test]
+    fn registration_gen_is_monotonic_across_remove() {
+        let mut p = pool();
+        assert_eq!(p.registration_gen("ssp-0"), 0, "never registered");
+        assert_eq!(p.bump_registration_gen("ssp-0"), 1);
+        assert_eq!(p.bump_registration_gen("ssp-0"), 2);
+        assert_eq!(p.registration_gen("ssp-0"), 2);
+        // Gen survives removal so a stale poll task always loses the compare.
+        p.remove("ssp-0");
+        assert_eq!(p.registration_gen("ssp-0"), 2);
+        assert_eq!(p.bump_registration_gen("ssp-0"), 3);
+        // Independent per SSP id.
+        assert_eq!(p.bump_registration_gen("ssp-1"), 1);
     }
 }
