@@ -19,6 +19,7 @@
  *   { id, type: 'select', payload: { plan, params } } -> { id, ok, rows, relationFetches }
  *   { id, type: 'close' }
  *   { id, type: 'shutdown' }                     (owner only: close + pauseVfs + self.close)
+ *   { id, type: 'relock', payload: { workerLockName } }               (owner only)
  *   { id, type: 'add-client', payload: { clientId } } + ev.ports[0]   (owner only)
  *   { id, type: 'remove-client', payload: { clientId } }              (owner only)
  *
@@ -46,7 +47,12 @@
  * hot path; the per-statement ops remain for the write/shim paths.
  */
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
-import { openDb, type SqliteDbHandle, type SqlitePoolHandle } from './sqlite-open';
+import {
+  openDb,
+  type OpenDbOptions,
+  type SqliteDbHandle,
+  type SqlitePoolHandle,
+} from './sqlite-open';
 import { executeSelect, type SelectDb } from './sqlite-select';
 
 interface Stmt {
@@ -65,12 +71,19 @@ let pool: SqlitePoolHandle | null = null;
 
 /** Once fenced, every op is refused and the DB stays closed. Terminal. */
 let fenced = false;
-/** The per-leadership lock name currently held (null = no fencing active). */
-let heldLockName: string | null = null;
-/** Resolving this releases the held lock (the grant callback awaits it). */
-let releaseLock: (() => void) | null = null;
-/** Distinguishes our own release (close/shutdown) from a broker steal. */
-let releasingIntentionally = false;
+
+interface HeldLock {
+  name: string;
+  /** Release on purpose; the closure-local flag keeps the steal handler from
+   *  mistaking it for a takeover. Idempotent. */
+  release: () => void;
+}
+
+/** The per-leadership lock currently held (null = no fencing active). A
+ *  relock (same-leader re-promotion after a broker restart) briefly holds two
+ *  locks: the new one is installed here first, then the old one's own release
+ *  is called, so there is no window where neither is held. */
+let currentLock: HeldLock | null = null;
 
 function workerLocks(): LockManager | null {
   const nav = (globalThis as { navigator?: { locks?: LockManager } }).navigator;
@@ -78,46 +91,50 @@ function workerLocks(): LockManager | null {
 }
 
 /**
- * Acquire `name` exclusively without waiting. Resolves true when granted; the
- * lock is then held until {@link releaseHeldLock}. If the request settles
- * while we still believe we hold it, the broker stole it: fence.
+ * Acquire `name` exclusively without waiting. Resolves with a handle when
+ * granted, null when someone else holds it. If the request settles while the
+ * holder still believes it owns the lock, the broker stole it: fence.
  */
-function acquireWorkerLock(name: string): Promise<boolean> {
+function acquireWorkerLock(name: string): Promise<HeldLock | null> {
   const locks = workerLocks();
   // No Web Locks (non-browser test env): no fencing, behave as before.
-  if (!locks) return Promise.resolve(true);
-  return new Promise<boolean>((resolve) => {
+  if (!locks) return Promise.resolve({ name, release() {} });
+  return new Promise<HeldLock | null>((resolve) => {
     let granted = false;
+    let intentional = false;
+    let releaseGrant: (() => void) | null = null;
     locks
       .request(name, { mode: 'exclusive', ifAvailable: true }, (lock) => {
         if (!lock) {
-          resolve(false);
+          resolve(null);
           return;
         }
         granted = true;
-        heldLockName = name;
-        releasingIntentionally = false;
-        resolve(true);
+        resolve({
+          name,
+          release() {
+            intentional = true;
+            releaseGrant?.();
+          },
+        });
         return new Promise<void>((release) => {
-          releaseLock = release;
+          releaseGrant = release;
         });
       })
       .then(
         () => {
-          if (granted && !releasingIntentionally) void fence('worker lock stolen');
+          if (granted && !intentional) void fence('worker lock stolen');
         },
         () => {
-          if (granted && !releasingIntentionally) void fence('worker lock request failed');
+          if (granted && !intentional) void fence('worker lock request failed');
         }
       );
   });
 }
 
 function releaseHeldLock(): void {
-  releasingIntentionally = true;
-  heldLockName = null;
-  releaseLock?.();
-  releaseLock = null;
+  currentLock?.release();
+  currentLock = null;
 }
 
 /**
@@ -129,7 +146,6 @@ function releaseHeldLock(): void {
 async function fence(reason: string): Promise<void> {
   if (fenced) return;
   fenced = true;
-  heldLockName = null;
   // Deliberately console, not a logger: this must be visible in any host app
   // regardless of its configured log level.
   // oxlint-disable-next-line no-console
@@ -177,7 +193,7 @@ function noteTick(): void {
   const now = performance.now();
   const gap = now - lastTickAt;
   lastTickAt = now;
-  if (gap > FREEZE_SUSPECT_MS && heldLockName && !fenced && !thawVerification) {
+  if (gap > FREEZE_SUSPECT_MS && currentLock && !fenced && !thawVerification) {
     thawVerification = verifyLockStillHeld().finally(() => {
       thawVerification = null;
     });
@@ -187,7 +203,7 @@ setInterval(noteTick, 1000);
 
 async function verifyLockStillHeld(): Promise<void> {
   const locks = workerLocks();
-  const name = heldLockName;
+  const name = currentLock?.name;
   if (!locks || !name || typeof locks.query !== 'function') return;
   try {
     const state = await locks.query();
@@ -204,16 +220,19 @@ async function open(
   dbName: string,
   useOpfs: boolean,
   systemTables: readonly string[] = [],
-  workerLockName?: string
+  workerLockName?: string,
+  openOptions?: OpenDbOptions
 ): Promise<{ persisted: boolean; opfsError?: string }> {
   if (workerLockName) {
-    const granted = await acquireWorkerLock(workerLockName);
-    if (!granted) throw new Error('worker-lock-unavailable');
+    const handle = await acquireWorkerLock(workerLockName);
+    if (!handle) throw new Error('worker-lock-unavailable');
+    releaseHeldLock();
+    currentLock = handle;
   }
   const sqlite3: any = await sqlite3InitModule();
   // Retry/fallback policy (and the loud report when persistence is lost) lives
   // in `sqlite-open.ts` so it can be unit tested off-worker.
-  const result = await openDb(sqlite3, dbName, useOpfs);
+  const result = await openDb(sqlite3, dbName, useOpfs, openOptions ?? {});
   db = result.db;
   pool = result.pool ?? null;
   // Physically create the internal `_00_*` tables the client reads before any
@@ -311,13 +330,24 @@ async function handle(type: string, payload: any, source: 'owner' | 'client'): P
           payload.dbName,
           payload.useOpfs,
           payload.systemTables,
-          payload.workerLockName
+          payload.workerLockName,
+          payload.openOptions
         );
         // The freshly seeded system tables exist — record them so the select
         // path doesn't redundantly re-issue CREATE TABLE for each.
         for (const t of (payload.systemTables ?? []) as string[]) selectDb.knownTables.add(t);
         return result;
       }
+    case 'relock': {
+      // Same-leader re-promotion after a broker restart: the DB stays open,
+      // only the per-leadership lock name rolls forward. Acquire the new lock
+      // BEFORE releasing the old one so there is no unfenced window.
+      const handle = await acquireWorkerLock(payload.workerLockName);
+      if (!handle) throw new Error('worker-lock-unavailable');
+      releaseHeldLock();
+      currentLock = handle;
+      return {};
+    }
     case 'select':
       return executeSelect(payload.plan, payload.params ?? {}, selectDb);
     case 'exec':

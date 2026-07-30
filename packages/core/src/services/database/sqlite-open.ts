@@ -50,6 +50,14 @@ export interface OpenDbOptions {
   maxAttempts?: number;
   /** Delay before each retry; the last entry repeats. Default [250, 500]. */
   backoffMs?: number[];
+  /**
+   * Throw (`opfs-unavailable: <reason>`) instead of falling back to memory.
+   * Used by shared-tabs leader promotion: a silently-in-memory LEADER would
+   * put every tab's data in RAM, so promotion prefers failing the election
+   * (the broker retries, possibly on another tab) over degrading. The broker
+   * grants an explicit memory fallback only after repeated failed cycles.
+   */
+  disallowMemoryFallback?: boolean;
   /** Injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -57,6 +65,17 @@ export interface OpenDbOptions {
 const DEFAULT_MAX_ATTEMPTS = 3;
 /** Bounded on purpose: this runs on the boot path, before the first query. */
 const DEFAULT_BACKOFF_MS = [250, 500];
+
+/**
+ * Leader-promotion profile (~5.8s worst case). A dead leader's sync access
+ * handles release when the browser garbage-collects its worker, typically
+ * well under a second but not synchronously with the Web Lock release the
+ * election observed, so promotion retries longer than a cold boot.
+ */
+export const PROMOTION_OPEN_OPTIONS: Pick<OpenDbOptions, 'maxAttempts' | 'backoffMs'> = {
+  maxAttempts: 10,
+  backoffMs: [50, 100, 200, 400, 800, 1000],
+};
 
 /** Failures no retry can fix: the APIs aren't there at all (insecure context,
  *  or a browser without sync access handles). Fall back immediately. */
@@ -106,6 +125,9 @@ export async function openDb(
   if (!useOpfs) return { db: new sqlite3.oo1.DB(':memory:', 'c'), persisted: false };
 
   if (!sqlite3.installOpfsSAHPoolVfs) {
+    if (opts.disallowMemoryFallback) {
+      throw new Error('opfs-unavailable: sqlite-wasm build has no installOpfsSAHPoolVfs');
+    }
     return fallbackToMemory(sqlite3, dbName, 'sqlite-wasm build has no installOpfsSAHPoolVfs', 0);
   }
 
@@ -134,6 +156,9 @@ export async function openDb(
       if (attempt === maxAttempts || UNRETRYABLE.some((m) => lastError.includes(m))) break;
       await sleep(backoffMs[Math.min(attempt - 1, backoffMs.length - 1)] ?? 0);
     }
+  }
+  if (opts.disallowMemoryFallback) {
+    throw new Error(`opfs-unavailable: ${lastError} (after ${attempts} attempts)`);
   }
   return fallbackToMemory(sqlite3, dbName, lastError, attempts);
 }

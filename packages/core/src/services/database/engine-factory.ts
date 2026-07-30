@@ -16,7 +16,8 @@ import { SqliteCacheEngine } from './sqlite-cache-engine';
 export function createLocalEngine(
   choice: LocalEngineChoice | undefined,
   config: Sp00kyConfig<any>['database'],
-  logger: Logger
+  logger: Logger,
+  opts: { shared?: boolean } = {}
 ): LocalStore {
   if (choice === undefined || choice === 'surrealdb') {
     return new SurrealCacheEngine(config, logger);
@@ -25,7 +26,7 @@ export function createLocalEngine(
     // Mirror the SurrealDB engine's `store` semantics: 'memory' → in-memory
     // SQLite (transient), 'indexeddb' → OPFS-backed (durable).
     const useOpfs = (config.store ?? 'memory') !== 'memory';
-    return new SqliteCacheEngine(config, logger, { useOpfs });
+    return new SqliteCacheEngine(config, logger, { useOpfs, shared: opts.shared });
   }
   // Custom engine instance — trust it to satisfy LocalStore.
   return choice as unknown as LocalStore;

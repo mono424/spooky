@@ -290,6 +290,13 @@ export interface StorageHealth {
   fallback: boolean;
   /** Reason durable storage failed (only set while `fallback` is `true`). */
   error?: string;
+  /**
+   * Shared-tabs role, set only when `sharedTabs` is active: `'leader'` owns
+   * the OPFS worker, `'follower'` shares it over a MessagePort (its data IS
+   * durable, hence `status: 'persistent'`), `'solo'` fell back to the
+   * single-tab behavior. Absent entirely when the feature is off.
+   */
+  role?: 'leader' | 'follower' | 'solo';
 }
 
 export type QueryHash = string;

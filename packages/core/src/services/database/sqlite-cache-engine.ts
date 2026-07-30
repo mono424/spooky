@@ -18,7 +18,13 @@ import {
 } from './events/index';
 import { StaleEpochError } from './local';
 import { translateSurql, tableOf, setPath, getPath, type SqlOp } from './surql-translate';
-import { WorkerSqliteTransport, type SqliteTransport } from './sqlite-transport';
+import {
+  BrokerPortClosedError,
+  PortSqliteTransport,
+  WorkerSqliteTransport,
+  type SqliteTransport,
+} from './sqlite-transport';
+import { PROMOTION_OPEN_OPTIONS } from './sqlite-open';
 import type { EngineTx, Id, LocalStore, OrderBy, RelationFetch, Row } from './cache-engine';
 import type { EngineStorageDiagnostics } from '../../modules/devtools/storage-info';
 
@@ -109,14 +115,23 @@ export class SqliteCacheEngine implements LocalStore {
 
   readonly engineKind = 'sqlite' as const;
 
+  /** Shared-tabs mode: the engine's transport is swapped at runtime by the
+   *  TabsCoordinator (owner worker as leader, leader's port as follower). */
+  private shared: boolean;
+  /** Leaderless parking (shared mode): ops entering the opQueue await this
+   *  gate until a new role lands or the timeout rejects them. */
+  private roleGate: { promise: Promise<void>; release: () => void } | null = null;
+  private roleGateTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(
     private config: Sp00kyConfig<any>['database'],
     private logger: Logger,
-    opts: { useOpfs?: boolean; workerSelect?: boolean } = {}
+    opts: { useOpfs?: boolean; workerSelect?: boolean; shared?: boolean } = {}
   ) {
     this.useOpfs = opts.useOpfs ?? true;
     this.workerSelect = opts.workerSelect ?? config.workerSelect ?? true;
     this.workerSelectConfigured = this.workerSelect;
+    this.shared = opts.shared ?? false;
   }
 
   get epoch(): number {
@@ -225,7 +240,10 @@ export class SqliteCacheEngine implements LocalStore {
 
   private call<T = any>(type: string, payload?: unknown): Promise<T> {
     const enqueuedAt = performance.now();
-    const run = () => {
+    const run = async () => {
+      // Leaderless window (shared mode): park behind the role gate instead of
+      // failing; a new leader releases it, the timeout rejects it.
+      if (this.roleGate) await this.roleGate.promise;
       // Time spent waiting behind other ops in the queue, not doing work.
       getStats().queueWaitMs += performance.now() - enqueuedAt;
       return this.rawCall<T>(type, payload);
@@ -281,9 +299,24 @@ export class SqliteCacheEngine implements LocalStore {
     return new WorkerSqliteTransport(this.logger);
   }
 
-  private async openInternal(bucketId: string): Promise<void> {
+  private async openInternal(
+    bucketId: string,
+    extras?: {
+      workerLockName?: string;
+      openOptions?: { maxAttempts?: number; backoffMs?: number[]; disallowMemoryFallback?: boolean };
+    }
+  ): Promise<void> {
     if (!this.transport || this.transport.kind !== 'worker' || !this.transport.connected) {
       this.transport = this.createTransport();
+      if (this.transport instanceof WorkerSqliteTransport) {
+        // The worker fencing itself (leadership stolen from a frozen tab that
+        // thawed) is a leader-loss: park ops until the broker re-adopts us.
+        this.transport.onLockLost = (reason) => {
+          this.transport = null;
+          this.storeEpoch++;
+          this.openRoleGate(`worker fenced: ${reason}`);
+        };
+      }
     }
     // Seed the `_00_*` system tables as part of `open` (worker-side, one round
     // trip). The LocalMigrator DEFINEs them, but `translateSurql` lowers every
@@ -303,6 +336,8 @@ export class SqliteCacheEngine implements LocalStore {
       dbName: bucketId,
       useOpfs: this.useOpfs,
       systemTables: SYSTEM_TABLES,
+      ...(extras?.workerLockName ? { workerLockName: extras.workerLockName } : {}),
+      ...(extras?.openOptions ? { openOptions: extras.openOptions } : {}),
     });
     this.knownTables.clear();
     for (const t of SYSTEM_TABLES) this.knownTables.add(t);
@@ -319,6 +354,7 @@ export class SqliteCacheEngine implements LocalStore {
       fallback: fellBack,
     };
     if (fellBack && opfsError) health.error = opfsError;
+    if (this.shared) health.role = this.roleLabel;
     this.setStorageHealth(health);
     const stats = getStats();
     stats.persisted = persisted;
@@ -384,6 +420,187 @@ export class SqliteCacheEngine implements LocalStore {
       /* ignore */
     }
     this.transport.close('engine closed');
+    this.transport = null;
+  }
+
+  // ---- shared-tabs role modes ------------------------------------------------
+  // The TabsCoordinator drives these; solo mode never touches them. The engine
+  // object is never replaced across role changes, so `storeEpoch` stays one
+  // monotonic per-tab counter and every existing fencing consumer keeps
+  // working unchanged.
+
+  /** Which role the current transport represents, for StorageHealth. */
+  private roleLabel: 'leader' | 'follower' | 'solo' = 'solo';
+  /** True once this engine has had a usable store at least once; role changes
+   *  after that point invalidate in-flight reads and must bump the epoch. */
+  private hadStore = false;
+
+  private openRoleGate(reason: string): void {
+    if (this.roleGate) return;
+    let release!: () => void;
+    let rejectFn!: (e: Error) => void;
+    const promise = new Promise<void>((res, rej) => {
+      release = res;
+      rejectFn = rej;
+    });
+    // Swallow the timeout rejection for waiters that already resolved.
+    promise.catch(() => {});
+    this.roleGate = { promise, release };
+    this.roleGateTimer = setTimeout(() => {
+      // Nothing adopted us in time: reject the parked ops (retryable) and drop
+      // the gate so later calls fail fast with 'not connected'.
+      rejectFn(new BrokerPortClosedError(`no leader adopted this tab: ${reason}`));
+      this.roleGate = null;
+      this.roleGateTimer = null;
+    }, 20_000);
+  }
+
+  private closeRoleGate(): void {
+    if (this.roleGateTimer) clearTimeout(this.roleGateTimer);
+    this.roleGateTimer = null;
+    this.roleGate?.release();
+    this.roleGate = null;
+  }
+
+  /**
+   * Become the store owner (leader). Boot and failover share this path; a
+   * failover (a previous transport existed) bumps the epoch FIRST so every
+   * in-flight chain that captured the old epoch fences itself. `resumeHeld`
+   * keeps the live worker after a broker restart and only rolls the
+   * per-leadership lock forward.
+   */
+  async adoptOwner(
+    bucketId: string,
+    opts: {
+      workerLockName: string;
+      allowMemoryFallback: boolean;
+      resumeHeld: boolean;
+    }
+  ): Promise<StorageHealth> {
+    this.roleLabel = 'leader';
+    return this.enqueue(async () => {
+      if (
+        opts.resumeHeld &&
+        this.transport?.kind === 'worker' &&
+        this.transport.connected &&
+        this.bucketId === bucketId
+      ) {
+        await this.rawCall('relock', { workerLockName: opts.workerLockName });
+        this.closeRoleGate();
+        return this.storageHealthValue;
+      }
+      if (this.hadStore) this.storeEpoch++;
+      if (this.transport) {
+        try {
+          if (this.transport.kind === 'worker') await this.rawCall('close');
+        } catch {
+          /* ignore */
+        }
+        this.transport.close('adopting ownership');
+        this.transport = null;
+      }
+      await this.openInternal(bucketId, {
+        workerLockName: opts.workerLockName,
+        openOptions: {
+          ...PROMOTION_OPEN_OPTIONS,
+          disallowMemoryFallback: !opts.allowMemoryFallback,
+        },
+      });
+      // Leader wipe-on-pool-open: local `_00_query` rows from earlier sessions
+      // are dead (query hashes are session-salted) and this is the one moment
+      // no other tab is attached, so clearing here replaces the per-switch
+      // DELETE that solo mode does in doSwitchBucket. Followers never wipe.
+      try {
+        await this.rawCall('run', { sql: 'DELETE FROM "_00_query"' });
+      } catch {
+        /* fresh bucket: table just seeded, nothing to wipe */
+      }
+      this.hadStore = true;
+      this.closeRoleGate();
+      return this.storageHealthValue;
+    });
+  }
+
+  /** Attach to a leader's worker through `dbPort` (follower). */
+  async adoptAttached(
+    dbPort: MessagePort,
+    snapshot: { bucketId: string; storageHealth: StorageHealth },
+    onPortDead: (reason: string) => void
+  ): Promise<void> {
+    this.roleLabel = 'follower';
+    return this.enqueue(async () => {
+      if (this.hadStore) this.storeEpoch++;
+      this.transport?.close('adopting leader port');
+      this.transport = new PortSqliteTransport(dbPort, onPortDead, this.logger);
+      this.bucketId = snapshot.bucketId;
+      // The shared store exists and is seeded; mirror the owner's bookkeeping.
+      this.knownTables.clear();
+      for (const t of SYSTEM_TABLES) this.knownTables.add(t);
+      const health: StorageHealth = { ...snapshot.storageHealth, role: 'follower' };
+      this.setStorageHealth(health);
+      const stats = getStats();
+      stats.persisted = snapshot.storageHealth.status === 'persistent';
+      delete stats.opfsError;
+      this.hadStore = true;
+      this.closeRoleGate();
+    });
+  }
+
+  /** Demoted while owning the store (zombie thaw, stale promotion): tear the
+   *  worker down so its OPFS handles free up, then park until re-adopted. */
+  async releaseOwnership(): Promise<void> {
+    await this.enqueue(async () => {
+      if (this.transport) {
+        try {
+          if (this.transport.kind === 'worker') {
+            await (this.transport as WorkerSqliteTransport).shutdown();
+          }
+        } catch {
+          /* worker may already be fenced/dead */
+        }
+        this.transport.close('ownership released');
+        this.transport = null;
+      }
+      this.storeEpoch++;
+      this.openRoleGate('ownership released');
+    });
+  }
+
+  /** The leader (or its port) died. Called from the port-dead callback and the
+   *  coordinator; NOT enqueued, so in-flight ops reject immediately instead of
+   *  waiting behind whatever is stuck. */
+  onLeaderLost(reason: string): void {
+    if (this.transport?.kind === 'port') {
+      this.transport.close(reason);
+      this.transport = null;
+    }
+    this.storeEpoch++;
+    this.openRoleGate(reason);
+  }
+
+  /** Leader side: forward a follower's dbPort into the owned worker. */
+  async exposeClientPort(clientId: string, port: MessagePort): Promise<void> {
+    if (this.transport?.kind !== 'worker') {
+      throw new Error('SqliteCacheEngine: not the store owner');
+    }
+    await (this.transport as WorkerSqliteTransport).addClientPort(clientId, port);
+  }
+
+  async removeClientPort(clientId: string): Promise<void> {
+    if (this.transport?.kind !== 'worker') return;
+    await (this.transport as WorkerSqliteTransport).removeClientPort(clientId);
+  }
+
+  /** Graceful pagehide as owner: release OPFS handles NOW so the next leader
+   *  does not race the browser's worker GC. */
+  async shutdownOwnedWorker(): Promise<void> {
+    if (this.transport?.kind !== 'worker') return;
+    try {
+      await (this.transport as WorkerSqliteTransport).shutdown();
+    } catch {
+      /* ignore */
+    }
+    this.transport.close('shutdown');
     this.transport = null;
   }
 
