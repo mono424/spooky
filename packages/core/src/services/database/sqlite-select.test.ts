@@ -3,6 +3,7 @@ import { RecordId } from 'surrealdb';
 import type { QueryPlan } from '@spooky-sync/query-builder';
 import { executeSelect, type SelectDb } from './sqlite-select';
 import { SqliteCacheEngine } from './sqlite-cache-engine';
+import { stubTransport } from './sqlite-transport.fixture';
 import { stableKey } from './relation-resolver';
 import type { Row } from './cache-engine';
 
@@ -87,52 +88,18 @@ function makeEngine(opts: {
     makeLogger(),
     { useOpfs: false, workerSelect: opts.workerSelect }
   );
-  (engine as any).spawnWorker = () => {
-    const w: any = {
-      onerror: null,
-      onmessageerror: null,
-      terminate() {},
-      postMessage(msg: any) {
-        calls.push({
-          type: msg.type,
-          sql: msg.payload?.sql,
-          bind: msg.payload?.bind,
-          payload: msg.payload,
-        });
-        Promise.resolve().then(async () => {
-          let ok = true;
-          let error: string | undefined;
-          let rest: Record<string, unknown> = {};
-          try {
-            if (msg.type === 'open') rest = { persisted: false };
-            else if (msg.type === 'exec') rest = { rows: respond(msg.payload.sql, msg.payload.bind ?? []) };
-            else if (msg.type === 'run' || msg.type === 'batch' || msg.type === 'close') rest = {};
-            else if (msg.type === 'select') {
-              if (!opts.answerSelect) throw new Error(`sqlite worker: unknown message ${msg.type}`);
-              const dbCalls: { sql: string; bind?: unknown[] }[] = [];
-              rest = await executeSelect(
-                msg.payload.plan,
-                msg.payload.params ?? {},
-                makeSelectDb(FIXTURE, dbCalls)
-              );
-            } else throw new Error(`sqlite worker: unknown message ${msg.type}`);
-          } catch (e) {
-            ok = false;
-            error = e instanceof Error ? e.message : String(e);
-          }
-          (engine as any).worker &&
-            (engine as any).pending.get(msg.id) &&
-            ((): void => {
-              const p = (engine as any).pending.get(msg.id);
-              (engine as any).pending.delete(msg.id);
-              if (ok) p.resolve(rest);
-              else p.reject(new Error(error));
-            })();
-        });
-      },
-    };
-    return w;
-  };
+  stubTransport(engine, async (type, payload) => {
+    calls.push({ type, sql: payload?.sql, bind: payload?.bind, payload });
+    if (type === 'open') return { persisted: false };
+    if (type === 'exec') return { rows: respond(payload.sql, payload.bind ?? []) };
+    if (type === 'run' || type === 'batch' || type === 'close') return {};
+    if (type === 'select') {
+      if (!opts.answerSelect) throw new Error(`sqlite worker: unknown message ${type}`);
+      const dbCalls: { sql: string; bind?: unknown[] }[] = [];
+      return executeSelect(payload.plan, payload.params ?? {}, makeSelectDb(FIXTURE, dbCalls));
+    }
+    throw new Error(`sqlite worker: unknown message ${type}`);
+  });
   return { engine, calls };
 }
 

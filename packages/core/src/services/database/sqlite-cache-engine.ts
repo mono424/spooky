@@ -18,6 +18,7 @@ import {
 } from './events/index';
 import { StaleEpochError } from './local';
 import { translateSurql, tableOf, setPath, getPath, type SqlOp } from './surql-translate';
+import { WorkerSqliteTransport, type SqliteTransport } from './sqlite-transport';
 import type { EngineTx, Id, LocalStore, OrderBy, RelationFetch, Row } from './cache-engine';
 import type { EngineStorageDiagnostics } from '../../modules/devtools/storage-info';
 
@@ -83,9 +84,9 @@ export function pureWriteOpResult(op: SqlOp): unknown {
  *   oracle E2E in the browser.
  */
 export class SqliteCacheEngine implements LocalStore {
-  private worker: Worker | null = null;
-  private seq = 0;
-  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+  /** The wire to the SQLite worker: an owned dedicated Worker (solo/leader) or
+   *  a MessagePort into another tab's worker (follower). See sqlite-transport. */
+  private transport: SqliteTransport | null = null;
   private storeEpoch = 0;
   private knownTables = new Set<string>();
   private useOpfs: boolean;
@@ -215,42 +216,11 @@ export class SqliteCacheEngine implements LocalStore {
 
   // ---- worker plumbing -----------------------------------------------------
 
-  private spawnWorker(): Worker {
-    // Source references the `.ts` so the monorepo's src-bundling consumers
-    // (e.g. the example app, which aliases `@spooky-sync/core` to `src`) resolve
-    // it — Vite handles `.ts` workers. For the published package, the tsdown
-    // build rewrites this to `./sqlite-worker.js` (the top-level emitted entry;
-    // see tsdown.config.ts), which the flat `dist/index.js` resolves. The worker
-    // (+ `@sqlite.org/sqlite-wasm`) still loads lazily — only when `localEngine:
-    // 'sqlite'` is used.
-    const worker = new Worker(new URL('./sqlite-worker.ts', import.meta.url), { type: 'module' });
-    worker.onmessage = (ev: MessageEvent) => {
-      const { id, ok, error, ...rest } = ev.data ?? {};
-      const p = this.pending.get(id);
-      if (!p) return;
-      this.pending.delete(id);
-      if (ok) p.resolve(rest);
-      else p.reject(new Error(error));
-    };
-    // Surface a worker crash (wasm abort / OOM) instead of leaving every pending
-    // call hung forever — reject them all with a clear error.
-    const failAll = (msg: string) => {
-      const err = new Error(`SQLite worker crashed: ${msg}`);
-      this.logger.error(
-        { err, Category: 'sp00ky-client::SqliteCacheEngine::worker' },
-        'Worker error'
-      );
-      for (const [, p] of this.pending) p.reject(err);
-      this.pending.clear();
-    };
-    worker.onerror = (e: ErrorEvent) => failAll(e.message || 'onerror');
-    worker.onmessageerror = () => failAll('messageerror');
-    return worker;
-  }
-
   /** Serializes every worker op so reads/writes never overlap at the VFS layer
    *  (overlapping ops trip SQLITE_BUSY). Mirrors the SurrealDB engine's
-   *  single-flight query queue. */
+   *  single-flight query queue. (The worker keeps its own chain too, for
+   *  multi-client mode; this one additionally provides the queue-wait stat and
+   *  the boot/switch atomicity below.) */
   private opQueue: Promise<unknown> = Promise.resolve();
 
   private call<T = any>(type: string, payload?: unknown): Promise<T> {
@@ -270,8 +240,7 @@ export class SqliteCacheEngine implements LocalStore {
   }
 
   private rawCall<T = any>(type: string, payload?: unknown): Promise<T> {
-    if (!this.worker) throw new Error('SqliteCacheEngine: not connected');
-    const id = ++this.seq;
+    if (!this.transport) throw new Error('SqliteCacheEngine: not connected');
     // --- instrumentation: live, inspectable via `globalThis.__sqliteStats` ---
     const s = getStats();
     s.roundTrips++;
@@ -282,30 +251,24 @@ export class SqliteCacheEngine implements LocalStore {
     }
     s.inFlight++;
     s.maxInFlight = Math.max(s.maxInFlight, s.inFlight);
-    const done = () => {
-      s.inFlight--;
-    };
     const sentAt = performance.now();
-    return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: (v: T) => {
-          done();
-          // Split the round-trip: `wt` is time inside the worker's handler,
-          // the remainder is postMessage + scheduling overhead.
-          const wt = (v as { wt?: unknown } | null)?.wt;
-          if (typeof wt === 'number') {
-            s.workerMs += wt;
-            s.rpcOverheadMs += Math.max(0, performance.now() - sentAt - wt);
-          }
-          resolve(v);
-        },
-        reject: (e: unknown) => {
-          done();
-          reject(e);
-        },
-      });
-      this.worker!.postMessage({ id, type, payload });
-    });
+    return this.transport.call<T>(type, payload).then(
+      (v: T) => {
+        s.inFlight--;
+        // Split the round-trip: `wt` is time inside the worker's handler,
+        // the remainder is postMessage + scheduling overhead.
+        const wt = (v as { wt?: unknown } | null)?.wt;
+        if (typeof wt === 'number') {
+          s.workerMs += wt;
+          s.rpcOverheadMs += Math.max(0, performance.now() - sentAt - wt);
+        }
+        return v;
+      },
+      (e: unknown) => {
+        s.inFlight--;
+        throw e;
+      }
+    );
   }
 
   /**
@@ -313,8 +276,15 @@ export class SqliteCacheEngine implements LocalStore {
    * {@link call}) so it can run as the body of an already-queued opQueue entry
    * without re-queuing onto itself. Callers must run it through the opQueue.
    */
+  /** Seam for tests: swap in a fake transport instead of a real Worker. */
+  protected createTransport(): SqliteTransport {
+    return new WorkerSqliteTransport(this.logger);
+  }
+
   private async openInternal(bucketId: string): Promise<void> {
-    this.worker = this.spawnWorker();
+    if (!this.transport || this.transport.kind !== 'worker' || !this.transport.connected) {
+      this.transport = this.createTransport();
+    }
     // Seed the `_00_*` system tables as part of `open` (worker-side, one round
     // trip). The LocalMigrator DEFINEs them, but `translateSurql` lowers every
     // DEFINE to a noop on this engine (SQLite has no DDL vocabulary), so
@@ -393,28 +363,28 @@ export class SqliteCacheEngine implements LocalStore {
     // As a single entry, every other op runs fully before the close or after
     // the reopen — never against a closed DB.
     await this.enqueue(async () => {
-      if (this.worker) {
+      if (this.transport) {
         try {
           await this.rawCall('close');
         } catch {
           /* ignore */
         }
-        this.worker.terminate();
-        this.worker = null;
+        this.transport.close('bucket switch');
+        this.transport = null;
       }
       await this.openInternal(bucketId);
     });
   }
 
   async close(): Promise<void> {
-    if (!this.worker) return;
+    if (!this.transport) return;
     try {
       await this.call('close');
     } catch {
       /* ignore */
     }
-    this.worker.terminate();
-    this.worker = null;
+    this.transport.close('engine closed');
+    this.transport = null;
   }
 
   private async ensureTable(table: string): Promise<void> {

@@ -27,12 +27,22 @@ export interface SqliteDbHandle {
   close: () => void;
 }
 
+/** The slice of the OpfsSAHPoolUtil the worker needs for teardown. */
+export interface SqlitePoolHandle {
+  /** Unregisters the VFS and releases every sync access handle, leaving the
+   *  files intact, so another worker can open the pool without waiting for
+   *  this worker to be garbage collected. Throws while files are open. */
+  pauseVfs?: () => unknown;
+}
+
 export interface OpenDbResult {
   db: SqliteDbHandle;
   /** True only when the handle is backed by OPFS and survives a reload. */
   persisted: boolean;
   /** Why persistence failed. Set only when OPFS was requested and fell back. */
   opfsError?: string;
+  /** Pool util, present only for an OPFS-backed handle. */
+  pool?: SqlitePoolHandle;
 }
 
 export interface OpenDbOptions {
@@ -118,7 +128,7 @@ export async function openDb(
         // doesn't ask for a real re-init just replays the same rejection.
         ...(attempt > 1 ? { forceReinitIfPreviouslyFailed: true } : {}),
       });
-      return { db: new pool.OpfsSAHPoolDb(`/${dbName}.sqlite3`), persisted: true };
+      return { db: new pool.OpfsSAHPoolDb(`/${dbName}.sqlite3`), persisted: true, pool };
     } catch (e) {
       lastError = errMessage(e);
       if (attempt === maxAttempts || UNRETRYABLE.some((m) => lastError.includes(m))) break;

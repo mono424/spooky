@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { RecordId } from 'surrealdb';
 import { pureWriteOpResult, SqliteCacheEngine } from './sqlite-cache-engine';
+import { stubTransport } from './sqlite-transport.fixture';
 import { translateSurql } from './surql-translate';
 import type { SqlOp } from './surql-translate';
 import { surql } from '../../utils/surql';
@@ -13,42 +14,31 @@ function makeLogger(): any {
 }
 
 /**
- * A fake Worker that models the real SQLite worker's open/closed lifecycle:
- * `open` opens the DB, `close` closes it, and `exec`/`run` REJECT with
- * "sqlite: DB not open" when the DB isn't currently open — exactly the failure
- * the fix targets. Records every message `type` (across worker generations) so
- * tests can also inspect dispatch order.
+ * A fake transport handler that models the real SQLite worker's open/closed
+ * lifecycle: `open` opens the DB, `close` closes it, and `exec`/`run` REJECT
+ * with "sqlite: DB not open" when the DB isn't currently open — exactly the
+ * failure the fix targets. Records every message `type` (across transport
+ * generations) so tests can also inspect dispatch order.
  */
-class FakeWorker {
-  onmessage: ((ev: any) => void) | null = null;
-  onerror: any = null;
-  onmessageerror: any = null;
-  private dbOpen = false;
-  constructor(private log: string[]) {}
-  postMessage(msg: any) {
-    this.log.push(msg.type);
-    Promise.resolve().then(() => {
-      let ok = true;
-      let error: string | undefined;
-      let rest: Record<string, unknown> = {};
-      if (msg.type === 'open') {
-        this.dbOpen = true;
-        rest = { persisted: true };
-      } else if (msg.type === 'close') {
-        this.dbOpen = false;
-      } else if (msg.type === 'exec') {
-        if (!this.dbOpen) { ok = false; error = 'sqlite: DB not open'; }
-        else rest = { rows: [] };
-      } else if (msg.type === 'select') {
-        if (!this.dbOpen) { ok = false; error = 'sqlite: DB not open'; }
-        else rest = { rows: [], relationFetches: 0 };
-      } else if (msg.type === 'run' || msg.type === 'batch') {
-        if (!this.dbOpen) { ok = false; error = 'sqlite: DB not open'; }
-      }
-      this.onmessage?.({ data: { id: msg.id, ok, error, ...rest } });
-    });
-  }
-  terminate() {}
+function lifecycleHandler(log: string[]) {
+  let dbOpen = false;
+  return (type: string) => {
+    log.push(type);
+    if (type === 'open') {
+      dbOpen = true;
+      return { persisted: true };
+    }
+    if (type === 'close') {
+      dbOpen = false;
+      return {};
+    }
+    if (type === 'exec' || type === 'select' || type === 'run' || type === 'batch') {
+      if (!dbOpen) throw new Error('sqlite: DB not open');
+      if (type === 'exec') return { rows: [] };
+      if (type === 'select') return { rows: [], relationFetches: 0 };
+    }
+    return {};
+  };
 }
 
 // Regression: switchBucket must run close → reopen as a single serialized
@@ -60,19 +50,7 @@ describe('SqliteCacheEngine.switchBucket serialization', () => {
   it('never dispatches an op to a closed DB during a bucket switch', async () => {
     const log: string[] = [];
     const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger());
-    // Replicate the real spawnWorker's onmessage wiring (resolve/reject pending).
-    (engine as any).spawnWorker = () => {
-      const w = new FakeWorker(log);
-      w.onmessage = (ev: any) => {
-        const { id, ok, error, ...rest } = ev.data ?? {};
-        const p = (engine as any).pending.get(id);
-        if (!p) return;
-        (engine as any).pending.delete(id);
-        if (ok) p.resolve(rest);
-        else p.reject(new Error(error));
-      };
-      return w as unknown as Worker;
-    };
+    stubTransport(engine, lifecycleHandler(log));
 
     await engine.connect('anon');
     expect(log).toContain('open');
@@ -105,28 +83,10 @@ describe('SqliteCacheEngine system-table seeding', () => {
   it('passes the _00_* system tables to the worker open (fresh-bucket safe)', async () => {
     const msgs: any[] = [];
     const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger());
-    (engine as any).spawnWorker = () => {
-      const w: any = { onmessage: null, onerror: null, onmessageerror: null, terminate() {} };
-      w.postMessage = (msg: any) => {
-        msgs.push(msg);
-        Promise.resolve().then(() => {
-          const rest = msg.type === 'open' ? { persisted: true } : {};
-          w.onmessage?.({ data: { id: msg.id, ok: true, ...rest } });
-        });
-      };
-      // Wire pending resolution like the real spawnWorker.
-      const inner = w.onmessage;
-      w.onmessage = (ev: any) => {
-        const { id, ok, error, ...rest } = ev.data ?? {};
-        const p = (engine as any).pending.get(id);
-        if (!p) return;
-        (engine as any).pending.delete(id);
-        if (ok) p.resolve(rest);
-        else p.reject(new Error(error));
-        void inner;
-      };
-      return w as unknown as Worker;
-    };
+    stubTransport(engine, (type, payload) => {
+      msgs.push({ type, payload });
+      return type === 'open' ? { persisted: true } : {};
+    });
 
     await engine.connect('user:fresh');
     const open = msgs.find((m) => m.type === 'open');
@@ -154,21 +114,7 @@ describe('SqliteCacheEngine storage health', () => {
       logger,
       opts ?? {}
     );
-    (engine as any).spawnWorker = () => {
-      const w: any = { onmessage: null, onerror: null, onmessageerror: null, terminate() {} };
-      w.postMessage = (msg: any) => {
-        Promise.resolve().then(() => {
-          const rest = msg.type === 'open' ? openReply : {};
-          const { id, ok, error, ...payload } = { id: msg.id, ok: true, error: undefined, ...rest };
-          const p = (engine as any).pending.get(id);
-          if (!p) return;
-          (engine as any).pending.delete(id);
-          if (ok) p.resolve(payload);
-          else p.reject(new Error(error));
-        });
-      };
-      return w as unknown as Worker;
-    };
+    stubTransport(engine, (type) => (type === 'open' ? openReply : {}));
     return { engine, logs };
   }
 
@@ -231,24 +177,13 @@ describe('SqliteCacheEngine.getStorageDiagnostics', () => {
     const logger: any = { debug: noop, info: noop, warn: noop, error: noop, trace: noop };
     logger.child = () => logger;
     const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, logger);
-    (engine as any).spawnWorker = () => {
-      const w: any = { onmessage: null, onerror: null, onmessageerror: null, terminate() {} };
-      w.postMessage = (msg: any) => {
-        Promise.resolve().then(() => {
-          const rest =
-            msg.type === 'open'
-              ? { persisted: true }
-              : msg.type === 'exec'
-                ? { rows: execRows(msg.payload.sql) }
-                : {};
-          const p = (engine as any).pending.get(msg.id);
-          if (!p) return;
-          (engine as any).pending.delete(msg.id);
-          p.resolve(rest);
-        });
-      };
-      return w as unknown as Worker;
-    };
+    stubTransport(engine, (type, payload) =>
+      type === 'open'
+        ? { persisted: true }
+        : type === 'exec'
+          ? { rows: execRows(payload.sql) }
+          : {}
+    );
     return engine;
   }
 
