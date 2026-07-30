@@ -218,15 +218,19 @@ export class TabsCoordinator {
     private deps: {
       tabId: TabId;
       fingerprint: string;
-      brokerUrl: URL;
       hooks: CoordinatorHooks;
       logger: Logger;
+      /** Fired on pagehide while this tab leads: last-chance OPFS release. */
+      onLeaderPageHide?: () => void;
     }
   ) {
     this.fingerprint = deps.fingerprint;
     this.bucketId = 'anon';
+    // The URL is built HERE (same directory as the worker source) so the
+    // published flat bundle's rewritten './tabs-broker-worker.js' resolves at
+    // the dist top level, exactly like the sqlite worker URL does.
     this.broker = new TabBrokerClient(
-      deps.brokerUrl,
+      new URL('./tabs-broker-worker.ts', import.meta.url),
       deps.tabId,
       {
         onBecomeLeader: (msg) => this.enqueue(() => this.promote(msg)),
@@ -249,6 +253,11 @@ export class TabsCoordinator {
       },
       deps.logger
     );
+    if (typeof window !== 'undefined' && deps.onLeaderPageHide) {
+      window.addEventListener('pagehide', () => {
+        if (this.role === 'leader') deps.onLeaderPageHide?.();
+      });
+    }
   }
 
   /** Serialize role transitions; each is small but async (worker opens). */

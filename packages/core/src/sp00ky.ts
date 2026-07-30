@@ -54,6 +54,10 @@ import { ANON_USER_ID, bucketIdForUser } from './modules/ref-tables';
 import { parseParams, encodeRecordId, parseDuration } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
+import { detectSharedTabsSupport } from './services/tabs/support';
+import { TabsCoordinator, type CoordinatorHooks } from './services/tabs/coordinator';
+import { computeTabsFingerprint, hash53, type TabRole } from './services/tabs/protocol';
+import type { SqliteCacheEngine } from './services/database/sqlite-cache-engine';
 
 export class BucketHandle {
   constructor(private bucketName: string, private remote: RemoteDatabaseService) {}
@@ -158,6 +162,17 @@ export class Sp00kyClient<S extends SchemaStructure> {
   public auth: AuthService<S>;
   public streamProcessor: StreamProcessorService;
 
+  // Shared-tabs: non-null when the capability gate passed at construction.
+  // The coordinator owns role state; `sharedActive` flips false if the broker
+  // rejects/times out and this tab permanently falls back to solo.
+  private tabsCoordinator: TabsCoordinator | null = null;
+  private sharedActive = false;
+
+  /** Current shared-tabs role, or null when the feature is off/fell back. */
+  get tabRole(): TabRole | null {
+    return this.sharedActive ? this.tabsCoordinator!.role : null;
+  }
+
   get remoteClient() {
     return this.remote.getClient();
   }
@@ -236,7 +251,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // subclass of LocalDatabaseService that adds the engine-neutral verb surface
     // with zero behavior change. Alternate engines (e.g. 'sqlite') require the
     // raw-SurrealQL call-site migration before they can back `this.local`.
-    this.local = createLocalEngine(this.config.localEngine, this.config.database, logger);
+    const tabsSupport = detectSharedTabsSupport(this.config);
+    this.local = createLocalEngine(this.config.localEngine, this.config.database, logger, {
+      shared: tabsSupport.supported,
+    });
     this.remote = new RemoteDatabaseService(this.config.database, logger);
 
     if (config.persistenceClient === 'surrealdb') {
@@ -345,6 +363,86 @@ export class Sp00kyClient<S extends SchemaStructure> {
 
     // Wire up callbacks instead of events
     this.setupCallbacks();
+
+    // Shared-tabs: construct the coordinator last so its hooks can close over
+    // every module. Nothing starts until init() calls coordinator.start().
+    if (tabsSupport.supported) {
+      this.tabsCoordinator = this.buildTabsCoordinator();
+    } else if (this.config.sharedTabs) {
+      this.logger.info(
+        { reason: (tabsSupport as { reason: string }).reason, Category: 'sp00ky-client::Sp00kyClient::tabs' },
+        'sharedTabs requested but unsupported here; running solo'
+      );
+    }
+  }
+
+  /** The shared-tabs role machinery, wired to this client's modules. */
+  private buildTabsCoordinator(): TabsCoordinator {
+    const engine = this.local as SqliteCacheEngine;
+    const tabId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `tab_${Math.random().toString(36).slice(2)}`;
+    const hooks: CoordinatorHooks = {
+      adoptOwner: (bucketId, opts) =>
+        engine.adoptOwner(bucketId, {
+          workerLockName: opts.workerLockName,
+          allowMemoryFallback: opts.allowMemoryFallback,
+          resumeHeld: opts.resumeHeld,
+        }),
+      adoptAttached: (dbPort, snapshot) =>
+        engine.adoptAttached(dbPort, snapshot, (reason) => engine.onLeaderLost(reason)),
+      releaseOwnership: () => engine.releaseOwnership(),
+      onLeaderLost: (reason) => engine.onLeaderLost(reason),
+      exposeClientPort: (clientId, port) => engine.exposeClientPort(clientId, port),
+      removeClientPort: (clientId) => engine.removeClientPort(clientId),
+      becomeSyncLeader: async (hub) => {
+        this.streamProcessor.setPersistenceEnabled(true);
+        this.cache.setIngestRelay((tuples) => hub.relayIngest(tuples));
+        this.sync.setTabContext('leader', tabId);
+        this.dataModule.setTabId(tabId);
+        await this.sync.promoteToLeader(hub);
+      },
+      becomeSyncFollower: (forwarder) => {
+        this.streamProcessor.setPersistenceEnabled(false);
+        this.cache.setIngestRelay(null);
+        this.sync.setTabContext('follower', tabId);
+        this.dataModule.setTabId(tabId);
+        this.sync.demoteToFollower(forwarder);
+        // demoteToFollower installed the sync-level handler (list_ref relay,
+        // rollbacks); layer the cache-level ingest relay in front of it.
+        const inner = forwarder.onLeaderMessage;
+        forwarder.onLeaderMessage = (msg) => {
+          if (msg.type === 'ingest-relay') {
+            this.cache.applyRelayedIngest(msg.tuples);
+            return;
+          }
+          inner?.(msg);
+        };
+      },
+      becomeSyncSolo: () => {
+        this.streamProcessor.setPersistenceEnabled(true);
+        this.cache.setIngestRelay(null);
+        this.sync.setTabContext('solo', tabId);
+      },
+      currentStorageHealth: () => this.local.storageHealth ?? { status: 'unknown', fallback: false },
+    };
+    return new TabsCoordinator({
+      tabId,
+      fingerprint: computeTabsFingerprint({
+        coreVersion:
+          typeof __SP00KY_CORE_VERSION__ !== 'undefined' ? __SP00KY_CORE_VERSION__ : 'unknown',
+        schemaHash: hash53(this.config.schemaSurql),
+        endpoint: this.config.database.endpoint ?? '',
+        namespace: this.config.database.namespace,
+        database: this.config.database.database,
+      }),
+      hooks,
+      logger: this.logger,
+      onLeaderPageHide: () => {
+        void engine.shutdownOwnedWorker();
+      },
+    });
   }
 
   /**
@@ -438,7 +536,30 @@ export class Sp00kyClient<S extends SchemaStructure> {
       // Open the bucket the last session used (per-user local stores). If auth
       // resolves to a different user below, the auth callback switches buckets.
       const bootBucket = readBootBucketHint() ?? ANON_USER_ID;
-      await this.local.connect(bootBucket);
+      if (this.tabsCoordinator) {
+        // Shared-tabs: the broker assigns this tab's role; the coordinator's
+        // hooks open the store (leader) or attach to the leader's (follower).
+        // Any failure here (no SharedWorker start, election timeout, rejected
+        // fingerprint) falls back to plain solo boot: exactly the flag-off
+        // path, including the second-tab memory fallback + its warning.
+        try {
+          const role = await this.tabsCoordinator.start(bootBucket);
+          this.sharedActive = true;
+          this.logger.info(
+            { role, bootBucket, Category: 'sp00ky-client::Sp00kyClient::init' },
+            'Shared-tabs role assigned'
+          );
+        } catch (e) {
+          this.logger.warn(
+            { err: e, Category: 'sp00ky-client::Sp00kyClient::init' },
+            'Shared-tabs unavailable; booting solo'
+          );
+          this.sharedActive = false;
+          await this.local.connect(bootBucket);
+        }
+      } else {
+        await this.local.connect(bootBucket);
+      }
       this.logger.debug(
         { bootBucket, Category: 'sp00ky-client::Sp00kyClient::init' },
         'Local database connected'
@@ -638,11 +759,33 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // from the auth flip through the swap — no window for a racing query).
     const reopen = gateRelease ?? this.local.beginSwitch();
     try {
-      await this.local.switchStore(target);
-      if (this.local.usesSurqlSchema) {
-        await this.migrator.provision(this.config.schemaSurql);
+      if (this.sharedActive && this.tabsCoordinator) {
+        // Shared-tabs: a bucket switch is a namespace move. Leaving the old
+        // namespace re-elects it (if this tab led it); joining the new one
+        // assigns a fresh role, whose hooks open or attach the store. The
+        // leader wipe-on-pool-open replaces the DELETE _00_query below, and a
+        // joining follower must NOT wipe: other tabs' rows there are live.
+        try {
+          await this.tabsCoordinator.moveToBucket(target);
+        } catch (e) {
+          this.logger.warn(
+            { err: e, target, Category: 'sp00ky-client::Sp00kyClient::doSwitchBucket' },
+            'Shared-tabs bucket move failed; switching solo'
+          );
+          this.sharedActive = false;
+          this.sync.setTabContext('solo', null);
+          this.cache.setIngestRelay(null);
+          this.streamProcessor.setPersistenceEnabled(true);
+          await this.local.switchStore(target);
+          await this.local.queryUngated('DELETE _00_query;');
+        }
+      } else {
+        await this.local.switchStore(target);
+        if (this.local.usesSurqlSchema) {
+          await this.migrator.provision(this.config.schemaSurql);
+        }
+        await this.local.queryUngated('DELETE _00_query;');
       }
-      await this.local.queryUngated('DELETE _00_query;');
       this.streamProcessor.setStateKeySuffix(target);
       await this.streamProcessor.reset();
       this.streamProcessor.setPermissions(extractSelectPermissions(this.config.schemaSurql));
@@ -683,6 +826,9 @@ export class Sp00kyClient<S extends SchemaStructure> {
     await this.featureFlags.closeAll();
     await this.appReleases.closeAll();
     this.crdtManager.closeAll();
+    // Leaving the broker first hands leadership to another tab (and releases
+    // the OPFS handles via the worker shutdown) before the store closes.
+    if (this.tabsCoordinator) await this.tabsCoordinator.stop();
     await this.local.close();
     await this.remote.close();
   }
