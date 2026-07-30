@@ -18,7 +18,7 @@
   "scripts": {
     "dev": "tsdown --watch",
     "dev:example": "pnpm dev",
-    "build": "tsdown",
+    "build": "tsdown && node scripts/check-broker-bundle.mjs",
     "test": "vitest"
   },
   "repository": {

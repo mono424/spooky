@@ -144,6 +144,24 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * this engine. See `services/database/cache-engine.ts`.
    */
   localEngine?: LocalEngineChoice;
+  /**
+   * Share ONE durable local store across all tabs of this origin (default
+   * `false`). Requires `localEngine: 'sqlite'`. A SharedWorker broker elects a
+   * leader tab per bucket via Web Locks; the leader owns the OPFS SQLite
+   * worker and the sync loop, and follower tabs read/write the same store over
+   * MessagePorts, so every tab is durable instead of only the first one.
+   *
+   * Falls back to solo mode (exactly the flag-off behavior, including the
+   * later-tabs in-memory fallback reported via {@link StorageHealth}) whenever
+   * SharedWorker, Web Locks, or MessageChannel are unavailable, the engine is
+   * not sqlite, or the broker rejects the tab (mixed app versions).
+   *
+   * Failover: when the leader tab closes or freezes, a follower is promoted
+   * within seconds; queries briefly refetch and mutations are never lost once
+   * their local write resolved (the shared outbox survives in the store).
+   * Inspect via `window.__00__.getState().database.tabs` and `__sqliteStats`.
+   */
+  sharedTabs?: boolean;
   /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel). */
   otelTransmit?: PinoTransmit;
   /**

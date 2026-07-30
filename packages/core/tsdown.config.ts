@@ -53,16 +53,20 @@ const versionDefinePlugin = {
   },
 };
 
-// The SQLite worker URL is written as `./sqlite-worker.ts` in source so Vite's
-// src-bundling consumers (the example app aliases core to `src`) resolve it.
-// In the published build the worker is emitted at `dist/sqlite-worker.js`, so
-// rewrite the reference to `.js` here — otherwise the flat `dist/index.js`
-// carries a dangling `.ts` URL that a consumer's bundler can't resolve.
-const sqliteWorkerUrlPlugin = {
-  name: 'sp00ky-sqlite-worker-url',
+// Worker URLs are written as `./<name>.ts` in source so Vite's src-bundling
+// consumers (the example app aliases core to `src`) resolve them. In the
+// published build each worker is emitted at `dist/<name>.js`, so rewrite the
+// references to `.js` here — otherwise the flat `dist/index.js` carries
+// dangling `.ts` URLs that a consumer's bundler can't resolve.
+const workerUrlPlugin = {
+  name: 'sp00ky-worker-url',
   transform(code: string) {
-    if (!code.includes('sqlite-worker.ts')) return null;
-    return code.split('sqlite-worker.ts').join('sqlite-worker.js');
+    if (!code.includes('sqlite-worker.ts') && !code.includes('tabs-broker-worker.ts')) return null;
+    return code
+      .split('sqlite-worker.ts')
+      .join('sqlite-worker.js')
+      .split('tabs-broker-worker.ts')
+      .join('tabs-broker-worker.js');
   },
 };
 
@@ -76,10 +80,15 @@ export default defineConfig({
     index: 'src/index.ts',
     'otel/index': 'src/otel/index.ts',
     'sqlite-worker': 'src/services/database/sqlite-worker.ts',
+    // The shared-tabs broker MUST stay a self-contained emit (no chunk
+    // imports): bundlers cannot trace `new SharedWorker(url)` graphs, so a
+    // relative chunk import would 404 in consumers. The source keeps zero
+    // runtime imports and scripts/check-broker-bundle.mjs enforces it.
+    'tabs-broker-worker': 'src/services/tabs/tabs-broker-worker.ts',
   },
   format: ['esm'],
   dts: true,
   clean: true,
   hash: false,
-  plugins: [versionDefinePlugin, sqliteWorkerUrlPlugin],
+  plugins: [versionDefinePlugin, workerUrlPlugin],
 });

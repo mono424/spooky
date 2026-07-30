@@ -1,0 +1,233 @@
+/**
+ * Shared-tabs protocol: the message vocabulary between browser tabs, the
+ * SharedWorker broker (`tabs-broker-worker.ts`), and, once a leader exists,
+ * between follower tabs and the leader over per-follower MessagePorts.
+ *
+ * Model (adapted from Jazz's browser broker, see the shared-tabs plan):
+ * - The broker is CONTROL PLANE only. It elects one leader tab per namespace
+ *   (fingerprint + bucketId), mints the MessageChannel pairs that connect each
+ *   follower to the leader, and monitors liveness. No data flows through it.
+ * - Per follower there are TWO ports: `dbPort` (raw sqlite ops, forwarded into
+ *   the leader's dedicated worker, so reads/writes bypass the leader's main
+ *   thread) and `syncPort` (sync control RPC + ingest relay, handled by the
+ *   leader main thread).
+ * - Every broker-to-tab message carries `brokerInstanceId`; a change means the
+ *   browser restarted the SharedWorker and the tab must re-hello.
+ *
+ * The broker worker script must stay self-contained (bundlers cannot reliably
+ * trace `new SharedWorker(url)` graphs), so it does NOT import this module at
+ * runtime; it duplicates the few constants it needs and this file stays the
+ * single source of truth for tab-side code and for tests.
+ */
+import type { StorageHealth, SyncHealth } from '../../types';
+
+export const TABS_PROTOCOL_VERSION = 1;
+
+export type TabId = string;
+export type TabVisibility = 'visible' | 'hidden';
+export type TabRole = 'solo' | 'leader' | 'follower';
+
+// ---- timing constants (broker worker duplicates these; keep in sync) -------
+
+/** Broker pings every tab at this cadence. */
+export const PING_INTERVAL_MS = 5000;
+/** A tab that has not ponged for this long is presumed dead and evicted.
+ *  MUST stay above the sqlite worker's freeze-suspect threshold (10s): a
+ *  freeze shorter than that never triggers a steal, which is what makes the
+ *  worker-side thaw gate sufficient. */
+export const PONG_TIMEOUT_MS = 15_000;
+/** How long an election waits for a dead leader's Web Locks to free up before
+ *  stealing them. */
+export const FORCE_TAKEOVER_TIMEOUT_MS = 1000;
+/** A tab whose promotion failed is not re-nominated for this long. */
+export const LEADER_FAILURE_BACKOFF_MS = 1000;
+/** Follower attachment retry: initial delay, doubling per attempt, capped. */
+export const ATTACH_RETRY_INITIAL_MS = 1000;
+export const ATTACH_RETRY_MAX_MS = 30_000;
+/** After this many consecutive elections failing with opfs-unavailable, the
+ *  broker allows the next leader to open in memory (reported as degraded)
+ *  rather than leaving the namespace leaderless forever. */
+export const OPFS_FAILED_CYCLES_BEFORE_MEMORY = 3;
+
+// ---- identity ---------------------------------------------------------------
+
+export interface TabsFingerprintInput {
+  coreVersion: string;
+  /** Hash over the app schema's table names + field names. */
+  schemaHash: string;
+  endpoint: string;
+  namespace: string;
+  database: string;
+}
+
+/** Deterministic JSON: objects with sorted keys, so equal inputs always
+ *  produce equal fingerprints regardless of construction order. */
+export function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  const body = keys
+    .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`)
+    .join(',');
+  return `{${body}}`;
+}
+
+/** cyrb53: tiny, fast, good-enough 53-bit hash for identity strings. */
+export function hash53(str: string, seed = 0): string {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+export function computeTabsFingerprint(input: TabsFingerprintInput): string {
+  return hash53(stableStringify({ v: TABS_PROTOCOL_VERSION, ...input }));
+}
+
+/** Lock names. The worker lock embeds the leadershipId, so after a steal the
+ *  exact name is never re-acquired by anyone: "not held" is an unambiguous
+ *  fencing check for a thawed worker, with no clientId resolution needed. */
+export function tabLockName(fingerprint: string, bucketId: string): string {
+  return `sp00ky-tabs:${fingerprint}:${bucketId}:tab`;
+}
+export function workerLockName(fingerprint: string, bucketId: string, leadershipId: number): string {
+  return `sp00ky-tabs:${fingerprint}:${bucketId}:worker:${leadershipId}`;
+}
+
+// ---- election ---------------------------------------------------------------
+
+export interface LeaderCandidate {
+  tabId: TabId;
+  visibility: TabVisibility;
+  lastVisibleAt: number;
+}
+
+/** Visible tabs beat hidden ones; within the pool the most recently visible
+ *  wins; ties break to the lexicographically greater tabId so every observer
+ *  picks the same winner. (Duplicated in the broker worker.) */
+export function selectLeaderCandidate<C extends LeaderCandidate>(candidates: C[]): C | null {
+  if (candidates.length === 0) return null;
+  const visible = candidates.filter((c) => c.visibility === 'visible');
+  const pool = visible.length > 0 ? visible : candidates;
+  return pool.reduce((best, c) => {
+    if (c.lastVisibleAt !== best.lastVisibleAt) {
+      return c.lastVisibleAt > best.lastVisibleAt ? c : best;
+    }
+    return c.tabId > best.tabId ? c : best;
+  });
+}
+
+// ---- control plane ----------------------------------------------------------
+
+/** A leader that survived a broker restart announces what it still holds, so
+ *  the new broker instance re-promotes it instead of forcing a pool reopen. */
+export interface HeldLeadership {
+  leadershipId: number;
+  workerLockName: string;
+}
+
+export type TabToBrokerMessage =
+  | {
+      type: 'hello';
+      tabId: TabId;
+      fingerprint: string;
+      bucketId: string;
+      visibility: TabVisibility;
+      heldLeadership: HeldLeadership | null;
+    }
+  | { type: 'visibility'; tabId: TabId; bucketId: string; visibility: TabVisibility }
+  | { type: 'leader-ready'; tabId: TabId; bucketId: string; leadershipId: number }
+  | { type: 'leader-failed'; tabId: TabId; bucketId: string; leadershipId: number; reason: string }
+  | {
+      type: 'follower-port-attached';
+      tabId: TabId;
+      bucketId: string;
+      leadershipId: number;
+      followerTabId: TabId;
+    }
+  | { type: 'follower-port-closed'; tabId: TabId; bucketId: string; followerTabId: TabId }
+  | { type: 'shutdown'; tabId: TabId; bucketId: string }
+  | { type: 'pong'; tabId: TabId };
+
+export type BrokerUnsupportedReason = 'fingerprint-mismatch' | 'protocol-version';
+
+export type BrokerToTabMessage =
+  | { type: 'broker-hello'; brokerInstanceId: string }
+  | { type: 'ping'; brokerInstanceId: string }
+  | {
+      type: 'become-leader';
+      brokerInstanceId: string;
+      leadershipId: number;
+      /** True when the previous leader's locks may need stealing. */
+      forceTakeover: boolean;
+      /** True only after repeated opfs-unavailable failures: the leader may
+       *  open in memory and report degraded instead of failing again. */
+      allowMemoryFallback: boolean;
+      /** Set when the broker is re-promoting a surviving leader after its own
+       *  restart; the tab keeps its worker and just rolls the lock forward. */
+      resumeHeld: boolean;
+    }
+  | { type: 'demote'; brokerInstanceId: string; leadershipId: number }
+  | { type: 'leader-ready'; brokerInstanceId: string; leadershipId: number; leaderTabId: TabId }
+  // ev.ports = [dbPort, syncPort] on both attach messages.
+  | {
+      type: 'attach-follower-ports';
+      brokerInstanceId: string;
+      leadershipId: number;
+      followerTabId: TabId;
+    }
+  | {
+      type: 'use-follower-ports';
+      brokerInstanceId: string;
+      leadershipId: number;
+      leaderTabId: TabId;
+    }
+  | { type: 'close-follower-ports'; brokerInstanceId: string; leadershipId: number }
+  | { type: 'unsupported'; brokerInstanceId: string; reason: BrokerUnsupportedReason };
+
+// ---- data plane (syncPort) --------------------------------------------------
+
+export interface QueryRegistration {
+  hash: string;
+  surql: string;
+  params: Record<string, unknown>;
+  ttl: string;
+}
+
+export interface IngestTuple {
+  table: string;
+  op: 'create' | 'update' | 'delete';
+  id: string;
+  record?: Record<string, unknown>;
+}
+
+export type IngestSource = 'remote' | 'local-mutation' | 'rollback' | 'delete-verification';
+
+export type FollowerToLeaderMessage =
+  | { type: 'sync-hello'; tabId: TabId; registrations: QueryRegistration[] }
+  | { type: 'register-query'; reg: QueryRegistration }
+  | { type: 'heartbeat-query'; hash: string }
+  | { type: 'deregister-query'; hash: string }
+  | { type: 'mutation-enqueued'; mutationId: string; tuples: IngestTuple[] }
+  | { type: 'request-poll' }
+  | { type: 'sync-heartbeat' };
+
+export type LeaderToFollowerMessage =
+  | { type: 'db-ready'; leadershipId: number; bucketId: string; storageHealth: StorageHealth }
+  | {
+      type: 'ingest-relay';
+      tuples: IngestTuple[];
+      source: IngestSource;
+      leadershipId: number;
+      seq: number;
+    }
+  | { type: 'query-synced'; hash: string }
+  | { type: 'mutation-rolled-back'; mutationId: string; error: string }
+  | { type: 'sync-health'; health: SyncHealth }
+  | { type: 'pending-mutations'; count: number };
