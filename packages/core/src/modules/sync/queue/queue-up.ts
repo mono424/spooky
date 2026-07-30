@@ -6,7 +6,12 @@ import {
   createSyncQueueEventSystem,
   SyncQueueEventTypes,
 } from '../events/index';
-import { parseRecordIdString, extractTablePart, classifySyncError } from '../../../utils/index';
+import {
+  parseRecordIdString,
+  extractTablePart,
+  classifySyncError,
+  encodeRecordId,
+} from '../../../utils/index';
 import type { Logger } from '../../../services/logger/index';
 import type { PushEventOptions } from '../../../events/index';
 
@@ -184,49 +189,41 @@ export class UpQueue {
     return this.local.query(`DELETE $mutation_id`, { mutation_id });
   }
 
+  /**
+   * Shared-tabs: a follower committed an outbox row into the shared store and
+   * notified the leader; enqueue exactly that row. Idempotent: a replayed
+   * notify (failover) or a row already queued is a no-op, and a row that never
+   * committed simply is not found (the follower's own write promise already
+   * rejected in that case).
+   */
+  async enqueueFromDatabase(mutationId: string): Promise<void> {
+    if (this.queue.some((e) => encodeUpEventId(e) === mutationId)) return;
+    try {
+      const [records] = await this.local.query<any>(`SELECT * FROM $mutation_id`, {
+        mutation_id: parseRecordIdString(mutationId),
+      });
+      const event = Array.isArray(records) && records[0] ? rowToUpEvent(records[0], this.logger) : null;
+      if (event) this.addToQueue(event);
+    } catch (error) {
+      this.logger.error(
+        { error, mutationId, Category: 'sp00ky-client::UpQueue::enqueueFromDatabase' },
+        'Failed to load a forwarded mutation'
+      );
+    }
+  }
+
   async loadFromDatabase() {
     try {
+      // ORDER BY id: mutation ids are zero-padded-timestamp-prefixed (see
+      // modules/data/mutation-id.ts), so lexicographic id order IS chronological
+      // order. (The previous created_at was never a defined field on this
+      // table, so the old ordering was undefined.)
       const [records] = await this.local.query<any>(
-        `SELECT * FROM _00_pending_mutations ORDER BY created_at ASC`
+        `SELECT * FROM _00_pending_mutations ORDER BY id ASC`
       );
 
       this.queue = records
-        .map((r: any): UpEvent | null => {
-          switch (r.mutationType) {
-            case 'create':
-              return {
-                type: 'create',
-                mutation_id: parseRecordIdString(r.id),
-                record_id: parseRecordIdString(r.recordId),
-                data: r.data,
-                tableName: extractTablePart(r.recordId),
-              };
-            case 'update':
-              return {
-                type: 'update',
-                mutation_id: parseRecordIdString(r.id),
-                record_id: parseRecordIdString(r.recordId),
-                data: r.data,
-                beforeRecord: r.beforeRecord,
-              };
-            case 'delete':
-              return {
-                type: 'delete',
-                mutation_id: parseRecordIdString(r.id),
-                record_id: parseRecordIdString(r.recordId),
-              };
-            default:
-              this.logger.warn(
-                {
-                  mutationType: r.mutationType,
-                  record: r,
-                  Category: 'sp00ky-client::UpQueue::loadFromDatabase',
-                },
-                'Unknown mutation type'
-              );
-              return null;
-          }
-        })
+        .map((r: any): UpEvent | null => rowToUpEvent(r, this.logger))
         .filter((e: UpEvent | null): e is UpEvent => e !== null);
     } catch (error) {
       this.logger.error(
@@ -234,5 +231,44 @@ export class UpQueue {
         'Failed to load pending mutations from database'
       );
     }
+  }
+}
+
+/** The stable string id of an event's outbox row. */
+function encodeUpEventId(event: UpEvent): string {
+  return encodeRecordId(event.mutation_id);
+}
+
+/** Materialize one `_00_pending_mutations` row into an UpEvent. */
+function rowToUpEvent(r: any, logger: Logger): UpEvent | null {
+  switch (r.mutationType) {
+    case 'create':
+      return {
+        type: 'create',
+        mutation_id: parseRecordIdString(r.id),
+        record_id: parseRecordIdString(r.recordId),
+        data: r.data,
+        tableName: extractTablePart(r.recordId),
+      };
+    case 'update':
+      return {
+        type: 'update',
+        mutation_id: parseRecordIdString(r.id),
+        record_id: parseRecordIdString(r.recordId),
+        data: r.data,
+        beforeRecord: r.beforeRecord,
+      };
+    case 'delete':
+      return {
+        type: 'delete',
+        mutation_id: parseRecordIdString(r.id),
+        record_id: parseRecordIdString(r.recordId),
+      };
+    default:
+      logger.warn(
+        { mutationType: r.mutationType, record: r, Category: 'sp00ky-client::UpQueue::rowToUpEvent' },
+        'Unknown mutation type'
+      );
+      return null;
   }
 }

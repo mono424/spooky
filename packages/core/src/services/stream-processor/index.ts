@@ -85,6 +85,10 @@ export class StreamProcessorService {
   // switch — the fire-and-forget calls in `ingest`/`flushCoalescing` can land
   // late.
   private stateGeneration = 0;
+  // Shared-tabs: follower circuits are in-memory ONLY. Persisting them would
+  // stomp the leader's snapshot under the same key (the pre-existing cross-tab
+  // localStorage hazard); a promoted follower flips this back on.
+  private persistState = true;
 
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
@@ -268,8 +272,13 @@ export class StreamProcessorService {
     );
   }
 
+  /** Toggle circuit-state persistence (shared-tabs follower/leader role). */
+  setPersistenceEnabled(enabled: boolean): void {
+    this.persistState = enabled;
+  }
+
   async loadState() {
-    if (!this.processor) return;
+    if (!this.processor || !this.persistState) return;
     try {
       const result = await this.persistenceClient.get(this.stateKey());
 
@@ -360,7 +369,7 @@ export class StreamProcessorService {
   }
 
   async saveState() {
-    if (!this.processor) return;
+    if (!this.processor || !this.persistState) return;
     const generation = this.stateGeneration;
     try {
       // Assuming processor has a save_state method that returns the state string/bytes

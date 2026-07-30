@@ -18,10 +18,23 @@ export * from './types';
  * Single responsibility: Handle all local storage operations and DBSP ingestion.
  * This module acts as the bridge between data operations and persistence.
  */
+/** One ingested change, in exactly the shape `ingestMany` consumes. Shared
+ *  with the tabs protocol so a leader can relay its ingests to followers. */
+export interface CacheIngestTuple {
+  table: string;
+  op: 'CREATE' | 'UPDATE' | 'DELETE';
+  id: string;
+  record: Record<string, unknown>;
+}
+
 export class CacheModule implements StreamUpdateReceiver {
   private logger: Logger;
   private streamUpdateCallback: (update: StreamUpdate) => void;
   private versionLookups: Record<string, number> = {};
+  /** Shared-tabs leader: fan every committed ingest out to follower circuits.
+   *  Fired AFTER the local tx (the rows are already in the shared store, so a
+   *  follower only needs the circuit feed). Never set on followers. */
+  private ingestRelay: ((tuples: CacheIngestTuple[]) => void) | null = null;
 
   constructor(
     private local: LocalStore,
@@ -49,6 +62,26 @@ export class CacheModule implements StreamUpdateReceiver {
       'Stream update received'
     );
     this.streamUpdateCallback(update);
+  }
+
+  setIngestRelay(cb: ((tuples: CacheIngestTuple[]) => void) | null): void {
+    this.ingestRelay = cb;
+  }
+
+  /**
+   * Shared-tabs follower: feed relayed tuples into THIS tab's circuit only.
+   * The rows are already in the shared store (the leader wrote them), so no
+   * local write happens here; the normal chain then runs: SSP -> stream update
+   * -> DataModule debounce -> materializeRecords (re-reads via the port
+   * transport) -> this tab's subscriptions fire with this tab's hashes.
+   */
+  applyRelayedIngest(tuples: CacheIngestTuple[]): void {
+    for (const t of tuples) {
+      const rv = (t.record as { _00_rv?: number } | undefined)?._00_rv;
+      if (t.op === 'DELETE') delete this.versionLookups[t.id];
+      else if (typeof rv === 'number') this.versionLookups[t.id] = rv;
+    }
+    this.streamProcessor.ingestMany(tuples as Parameters<StreamProcessorService['ingestMany']>[0]);
   }
 
   public lookup(recordId: string): number {
@@ -146,6 +179,7 @@ export class CacheModule implements StreamUpdateReceiver {
         return { table: record.table, op: record.op, id: recordId, record: record.record };
       });
       this.streamProcessor.ingestMany(bulk);
+      this.ingestRelay?.(bulk as CacheIngestTuple[]);
 
       this.logger.debug(
         { count: records.length, Category: 'sp00ky-client::CacheModule::saveBatch' },
@@ -187,6 +221,7 @@ export class CacheModule implements StreamUpdateReceiver {
       // 2. Ingest deletion into DBSP (pass record data so predicates can be matched)
       delete this.versionLookups[id];
       this.streamProcessor.ingest(table, 'DELETE', id, recordData);
+      this.ingestRelay?.([{ table, op: 'DELETE', id, record: recordData }]);
 
       this.logger.debug(
         { table, id, Category: 'sp00ky-client::CacheModule::delete' },

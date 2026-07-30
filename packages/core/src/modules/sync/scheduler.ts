@@ -26,8 +26,10 @@ export class SyncScheduler {
     private onSyncOutcome?: (ok: boolean, error?: unknown) => void
   ) {}
 
-  async init() {
-    await this.upQueue.loadFromDatabase();
+  async init(opts: { loadOutbox?: boolean } = {}) {
+    // Shared-tabs followers skip the outbox load: the shared store's
+    // `_00_pending_mutations` is drained by exactly one tab (the leader).
+    if (opts.loadOutbox !== false) await this.upQueue.loadFromDatabase();
     this.upQueue.events.subscribe(SyncQueueEventTypes.MutationEnqueued, this.syncUp.bind(this));
     this.downQueue.events.subscribe(
       SyncQueueEventTypes.QueryItemEnqueued,

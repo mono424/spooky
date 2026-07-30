@@ -22,6 +22,9 @@ import type { CacheModule } from '../cache/index';
 import type { DataModule } from '../data/index';
 import { classifySyncError, encodeRecordId, extractIdPart, extractTablePart, surql } from '../../utils/index';
 import { ANON_USER_ID, DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
+import { mutationOwnerTabId } from '../data/mutation-id';
+import type { LeaderSyncHub, SyncForwarder } from '../../services/tabs/coordinator';
+import { parseRecordIdString } from '../../utils/index';
 
 /**
  * Tunables for `Sp00kySync` construction.
@@ -74,6 +77,15 @@ export class Sp00kySync<S extends SchemaStructure> {
   // in `RefMode.Dedicated`. Updated by `setCurrentUserId` from the auth
   // subscription in `Sp00kyClient`; null when unauthenticated.
   private currentUserId: string | null = null;
+
+  // ---- shared-tabs role state ----
+  // Followers keep their own remote WS (registration, per-query sync, poll)
+  // but must never drain the shared outbox or hold a second list_ref LIVE.
+  // The leader relays its LIVE events and routes rollbacks by mutation owner.
+  private tabRole: 'solo' | 'leader' | 'follower' = 'solo';
+  private tabId: string | null = null;
+  private hub: LeaderSyncHub | null = null;
+  private forwarder: SyncForwarder | null = null;
 
   private refMode: RefMode = DEFAULT_REF_MODE;
 
@@ -366,7 +378,7 @@ export class Sp00kySync<S extends SchemaStructure> {
   public async init() {
     if (this.isInit) throw new Error('Sp00kySync is already initialized');
     this.isInit = true;
-    await this.scheduler.init();
+    await this.scheduler.init({ loadOutbox: this.tabRole !== 'follower' });
     this.subscribeToReconnect();
     void this.scheduler.syncUp();
     void this.scheduler.syncDown();
@@ -391,6 +403,116 @@ export class Sp00kySync<S extends SchemaStructure> {
         );
       });
     }
+  }
+
+  // ---- shared-tabs roles ------------------------------------------------------
+
+  /** Set BEFORE init(): shapes what init boots (a follower loads no outbox and
+   *  never starts LIVE; its own registration/poll paths stay untouched). */
+  public setTabContext(role: 'solo' | 'leader' | 'follower', tabId: string | null): void {
+    this.tabRole = role;
+    this.tabId = tabId;
+  }
+
+  /** Leader duties: drain the shared outbox, own the single list_ref LIVE,
+   *  relay LIVE events and rollbacks to followers via `hub`. Idempotent for a
+   *  boot-time leader; a runtime promotion (failover) reloads the outbox,
+   *  which now holds EVERY tab's rows, and restarts LIVE under this session. */
+  public async promoteToLeader(hub: LeaderSyncHub): Promise<void> {
+    this.tabRole = 'leader';
+    this.hub = hub;
+    this.forwarder = null;
+    hub.onFollowerMessage = (tabId, msg) => {
+      void tabId;
+      switch (msg.type) {
+        case 'sync-hello':
+          break;
+        case 'mutation-enqueued':
+          void this.enqueueForwardedMutation(msg.mutationId);
+          break;
+        case 'request-poll':
+          this.listRefIdleStreak = 0;
+          break;
+      }
+    };
+    if (this.isInit) {
+      await this.upQueue.loadFromDatabase();
+      void this.scheduler.syncUp();
+      if (this.currentUserId || this.anonLiveEnabled) {
+        this.startListRefPoll();
+        await this.restartRefLiveQuery().catch((err) => {
+          this.logger.warn(
+            { err, Category: 'sp00ky-client::Sp00kySync::promoteToLeader' },
+            'LIVE restart failed on promotion; poll fallback covers it'
+          );
+        });
+      }
+    }
+  }
+
+  /** Follower duties: no outbox drain, no LIVE. Mutations forward to the
+   *  leader; everything else (registration, per-query sync, poll) runs
+   *  against this tab's own remote session as usual. */
+  public demoteToFollower(forwarder: SyncForwarder): void {
+    this.tabRole = 'follower';
+    this.hub = null;
+    this.forwarder = forwarder;
+    void this.killRefLiveQuery();
+    forwarder.onLeaderMessage = (msg) => {
+      switch (msg.type) {
+        case 'list-ref-change':
+          void this.applyRelayedListRefChange(msg).catch((err) => {
+            this.logger.error(
+              { err, Category: 'sp00ky-client::Sp00kySync::relay' },
+              'Relayed list_ref change failed'
+            );
+          });
+          break;
+        case 'mutation-rolled-back':
+          this.events.emit(SyncEventTypes.MutationRolledBack, {
+            eventType: msg.eventType,
+            recordId: msg.recordId,
+            error: msg.error,
+          });
+          break;
+        default:
+          // db-ready and ingest-relay are handled by the engine/cache wiring
+          // in Sp00kyClient before messages reach this handler.
+          break;
+      }
+    };
+  }
+
+  /** A forwarded outbox row from a follower: load + drain it. Idempotent. */
+  public async enqueueForwardedMutation(mutationId: string): Promise<void> {
+    if (this.tabRole !== 'leader') return;
+    await this.upQueue.enqueueFromDatabase(mutationId);
+  }
+
+  /** A relayed `_00_list_ref` LIVE event: resolve against THIS tab's queries
+   *  and run the exact same handling the LIVE subscription would have. */
+  private async applyRelayedListRefChange(msg: {
+    action: 'CREATE' | 'UPDATE' | 'DELETE';
+    queryId: string;
+    recordId: string;
+    version: number;
+    parent: boolean;
+  }): Promise<void> {
+    const queryId = parseRecordIdString(msg.queryId);
+    // Foreign query (another tab's session-salted hash): not ours, ignore.
+    if (!this.dataModule.getQueryById(queryId)) return;
+    const recordId = parseRecordIdString(msg.recordId);
+    if (msg.parent) {
+      await this.handleRemoteSubqueryChange(msg.action, queryId, recordId, msg.version);
+    } else {
+      await this.handleRemoteListRefChange(msg.action, queryId, recordId, msg.version);
+    }
+  }
+
+  /** One immediate poll cycle (failover convergence). */
+  public async forcePollRound(): Promise<void> {
+    this.listRefIdleStreak = 0;
+    await this.pollListRefForActiveQueries().catch(() => false);
   }
 
   /**
@@ -772,6 +894,9 @@ export class Sp00kySync<S extends SchemaStructure> {
   }
 
   private async startRefLiveQueries() {
+    // Shared-tabs follower: exactly one LIVE per user exists, on the leader;
+    // its events reach this tab through the relay.
+    if (this.tabRole === 'follower') return;
     const tableName = this.listRefTable();
     this.logger.debug(
       { tableName, Category: 'sp00ky-client::Sp00kySync::startRefLiveQueries' },
@@ -837,6 +962,20 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.lastLiveEventAt = Date.now();
     this.listRefIdleStreak = 0;
 
+    // Shared-tabs leader: the list_ref table is USER-scoped, so this LIVE also
+    // carries events for FOLLOWER tabs' queries (their own session-salted
+    // hashes). Relay every primary event; each follower resolves the queryId
+    // against its own DataModule and ignores foreign ones. Then continue with
+    // this tab's own handling below.
+    this.hub?.broadcast({
+      type: 'list-ref-change',
+      action,
+      queryId: encodeRecordId(queryId),
+      recordId: encodeRecordId(recordId),
+      version,
+      parent: false,
+    });
+
     // NOTE: DELETE is handled like CREATE/UPDATE below. When another window (or
     // this one) deletes a record, the server's SSP removes it from `_00_list_ref`
     // and the LIVE subscription delivers a DELETE here — `createDiffFromDbOp`
@@ -846,13 +985,17 @@ export class Sp00kySync<S extends SchemaStructure> {
     const existing = this.dataModule.getQueryById(queryId);
 
     if (!existing) {
-      this.logger.warn(
-        {
-          queryId: queryId.toString(),
-          Category: 'sp00ky-client::Sp00kySync::handleRemoteListRefChange',
-        },
-        'Received remote update for unknown local query'
-      );
+      // With a hub attached, an unknown query is the NORMAL case (it belongs
+      // to a follower tab); without one it still warrants the warning.
+      if (!this.hub) {
+        this.logger.warn(
+          {
+            queryId: queryId.toString(),
+            Category: 'sp00ky-client::Sp00kySync::handleRemoteListRefChange',
+          },
+          'Received remote update for unknown local query'
+        );
+      }
       return;
     }
 
@@ -898,6 +1041,16 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.listRefIdleStreak = 0;
 
     if (action === 'DELETE') return;
+
+    // Relay child-edge events too (see handleRemoteListRefChange).
+    this.hub?.broadcast({
+      type: 'list-ref-change',
+      action,
+      queryId: encodeRecordId(queryId),
+      recordId: encodeRecordId(childId),
+      version,
+      parent: true,
+    });
 
     const existing = this.dataModule.getQueryById(queryId);
     if (!existing) return;
@@ -1013,6 +1166,21 @@ export class Sp00kySync<S extends SchemaStructure> {
       recordId,
       error: error.message,
     });
+
+    // Shared-tabs: the store rollback above already propagated to every tab
+    // via the ingest relay; additionally deliver the EVENT to the tab that
+    // owns the mutation so its UI (toasts, subscribeToRollbacks) fires there.
+    const mutationId = encodeRecordId(event.mutation_id);
+    const owner = mutationOwnerTabId(mutationId);
+    if (this.hub && owner && this.tabId && owner !== this.tabId) {
+      this.hub.sendTo(owner, {
+        type: 'mutation-rolled-back',
+        mutationId,
+        recordId,
+        eventType: event.type,
+        error: error.message,
+      });
+    }
   }
 
   private async processDownEvent(event: DownEvent) {
@@ -1171,6 +1339,16 @@ export class Sp00kySync<S extends SchemaStructure> {
    * @param mutations Array of UpEvents (create/update/delete) to enqueue.
    */
   public async enqueueMutation(mutations: UpEvent[]) {
+    // Follower: the outbox rows are already committed in the SHARED store (the
+    // mutation tx went through the leader's worker); only the leader drains,
+    // so hand over the ids instead of queueing locally. A notify lost in a
+    // failover window is covered by the new leader's loadFromDatabase.
+    if (this.tabRole === 'follower') {
+      for (const m of mutations) {
+        this.forwarder?.mutationEnqueued(encodeRecordId(m.mutation_id));
+      }
+      return;
+    }
     this.scheduler.enqueueMutation(mutations);
   }
 

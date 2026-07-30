@@ -20,10 +20,8 @@ import { TabBrokerClient } from './broker-client';
 import {
   workerLockName,
   type FollowerToLeaderMessage,
-  type IngestSource,
   type IngestTuple,
   type LeaderToFollowerMessage,
-  type QueryRegistration,
   type TabId,
   type TabRole,
 } from './protocol';
@@ -56,8 +54,6 @@ export interface CoordinatorHooks {
   becomeSyncLeader(hub: LeaderSyncHub): Promise<void>;
   becomeSyncFollower(forwarder: SyncForwarder): void;
   becomeSyncSolo(): void;
-  /** Follower side: current live query registrations, replayed on (re)attach. */
-  collectRegistrations(): QueryRegistration[];
   /** Current storage health, for db-ready sent to late-joining followers. */
   currentStorageHealth(): StorageHealth;
 }
@@ -130,10 +126,10 @@ export class LeaderSyncHub {
   }
 
   /** Stamped ingest relay; seq lets followers detect gaps. */
-  relayIngest(tuples: IngestTuple[], source: IngestSource, exceptTabId?: TabId): void {
+  relayIngest(tuples: IngestTuple[], exceptTabId?: TabId): void {
     if (this.followers.size === 0) return;
     this.broadcast(
-      { type: 'ingest-relay', tuples, source, leadershipId: this.leadershipId, seq: ++this.seq },
+      { type: 'ingest-relay', tuples, leadershipId: this.leadershipId, seq: ++this.seq },
       exceptTabId
     );
   }
@@ -155,14 +151,14 @@ export class SyncForwarder {
 
   constructor(private tabId: TabId) {}
 
-  rebind(port: MessagePort, registrations: QueryRegistration[]): void {
+  rebind(port: MessagePort): void {
     this.unbind();
     this.port = port;
     port.onmessage = (ev: MessageEvent) => {
       this.onLeaderMessage?.(ev.data as LeaderToFollowerMessage);
     };
     port.start?.();
-    this.post({ type: 'sync-hello', tabId: this.tabId, registrations });
+    this.post({ type: 'sync-hello', tabId: this.tabId });
     const backlog = this.queued;
     this.queued = [];
     for (const msg of backlog) this.post(msg);
@@ -191,17 +187,8 @@ export class SyncForwarder {
     }
   }
 
-  registerQuery(reg: QueryRegistration): void {
-    this.post({ type: 'register-query', reg });
-  }
-  heartbeatQuery(hash: string): void {
-    this.post({ type: 'heartbeat-query', hash });
-  }
-  deregisterQuery(hash: string): void {
-    this.post({ type: 'deregister-query', hash });
-  }
-  mutationEnqueued(mutationId: string, tuples: IngestTuple[]): void {
-    this.post({ type: 'mutation-enqueued', mutationId, tuples });
+  mutationEnqueued(mutationId: string): void {
+    this.post({ type: 'mutation-enqueued', mutationId });
   }
   requestPoll(): void {
     this.post({ type: 'request-poll' });
@@ -499,7 +486,7 @@ export class TabsCoordinator {
         }
         previousHandler?.(msg);
       };
-      forwarder.rebind(syncPort, this.deps.hooks.collectRegistrations());
+      forwarder.rebind(syncPort);
     });
   }
 

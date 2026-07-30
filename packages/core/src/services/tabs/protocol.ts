@@ -19,7 +19,7 @@
  * runtime; it duplicates the few constants it needs and this file stays the
  * single source of truth for tab-side code and for tests.
  */
-import type { StorageHealth, SyncHealth } from '../../types';
+import type { StorageHealth } from '../../types';
 
 export const TABS_PROTOCOL_VERSION = 1;
 
@@ -192,42 +192,48 @@ export type BrokerToTabMessage =
   | { type: 'unsupported'; brokerInstanceId: string; reason: BrokerUnsupportedReason };
 
 // ---- data plane (syncPort) --------------------------------------------------
+// Deliberately narrow. Followers keep their OWN remote WebSocket, so they
+// register/heartbeat/deregister their queries and run the list_ref poll
+// themselves; the leader owns only what must be singular: the outbox drain
+// and the one list_ref LIVE subscription (whose events it relays).
 
-export interface QueryRegistration {
-  hash: string;
-  surql: string;
-  params: Record<string, unknown>;
-  ttl: string;
-}
-
+/** Matches `CacheIngestTuple` (modules/cache): exactly what `ingestMany`
+ *  consumes, so relayed batches feed follower circuits without reshaping. */
 export interface IngestTuple {
   table: string;
-  op: 'create' | 'update' | 'delete';
+  op: 'CREATE' | 'UPDATE' | 'DELETE';
   id: string;
-  record?: Record<string, unknown>;
+  record: Record<string, unknown>;
 }
 
-export type IngestSource = 'remote' | 'local-mutation' | 'rollback' | 'delete-verification';
-
 export type FollowerToLeaderMessage =
-  | { type: 'sync-hello'; tabId: TabId; registrations: QueryRegistration[] }
-  | { type: 'register-query'; reg: QueryRegistration }
-  | { type: 'heartbeat-query'; hash: string }
-  | { type: 'deregister-query'; hash: string }
-  | { type: 'mutation-enqueued'; mutationId: string; tuples: IngestTuple[] }
-  | { type: 'request-poll' }
-  | { type: 'sync-heartbeat' };
+  | { type: 'sync-hello'; tabId: TabId }
+  /** The follower committed an outbox row (through the shared store) and the
+   *  leader should drain it. Idempotent; a new leader's loadFromDatabase is
+   *  the backstop for a notify lost in a failover window. */
+  | { type: 'mutation-enqueued'; mutationId: string }
+  | { type: 'request-poll' };
 
 export type LeaderToFollowerMessage =
   | { type: 'db-ready'; leadershipId: number; bucketId: string; storageHealth: StorageHealth }
+  /** Every ingest the leader's CacheModule committed, so follower circuits
+   *  stay live without their own fetch. seq detects gaps. */
+  | { type: 'ingest-relay'; tuples: IngestTuple[]; leadershipId: number; seq: number }
+  /** A `_00_list_ref` LIVE event, relayed verbatim. Each follower resolves the
+   *  queryId against its own DataModule and ignores foreign queries. */
   | {
-      type: 'ingest-relay';
-      tuples: IngestTuple[];
-      source: IngestSource;
-      leadershipId: number;
-      seq: number;
+      type: 'list-ref-change';
+      action: 'CREATE' | 'UPDATE' | 'DELETE';
+      queryId: string;
+      recordId: string;
+      version: number;
+      parent: boolean;
     }
-  | { type: 'query-synced'; hash: string }
-  | { type: 'mutation-rolled-back'; mutationId: string; error: string }
-  | { type: 'sync-health'; health: SyncHealth }
-  | { type: 'pending-mutations'; count: number };
+  /** The leader's drain rolled back a mutation owned by this tab. */
+  | {
+      type: 'mutation-rolled-back';
+      mutationId: string;
+      recordId: string;
+      eventType: 'create' | 'update' | 'delete';
+      error: string;
+    };

@@ -44,6 +44,7 @@ import {
 import type { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
 import type { PushEventOptions } from '../../events/index';
 import { buildWindowMaterialization, buildWindowMaterializationPlan } from './window-query';
+import { mintMutationId } from './mutation-id';
 
 /** Push a timing sample (ms) into a rolling window, capped at the sample window. */
 function pushSample(samples: number[], ms: number): void {
@@ -68,6 +69,9 @@ function phaseStatOf(samples: number[], lastMs: number | null): PhaseStat {
  * Uses CacheModule for all storage operations.
  */
 export class DataModule<S extends SchemaStructure> {
+  /** Tab identity baked into mutation ids (shared-tabs rollback routing);
+   *  undefined in solo mode, where mutation-id falls back to a session id. */
+  private tabId: string | undefined;
   private activeQueries: Map<QueryHash, QueryState> = new Map();
   private pendingQueries: Map<QueryHash, Promise<QueryHash>> = new Map();
   private subscriptions: Map<QueryHash, Set<QueryUpdateCallback>> = new Map();
@@ -153,6 +157,12 @@ export class DataModule<S extends SchemaStructure> {
    */
   setSessionId(sessionId: string): void {
     this.sessionId = sessionId;
+  }
+
+  /** Shared-tabs: bake this tab's identity into mutation ids so a rollback of
+   *  a follower's mutation routes back to the tab that made it. */
+  setTabId(tabId: string): void {
+    this.tabId = tabId;
   }
 
   /**
@@ -1246,7 +1256,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const rid = parseRecordIdString(id);
     const params = parseParams(tableSchema.columns, data);
-    const mutationId = parseRecordIdString(`_00_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(mintMutationId(this.tabId));
 
     const dataKeys = Object.keys(params).map((key) => ({ key, variable: `data_${key}` }));
     const prefixedParams = Object.fromEntries(
@@ -1317,7 +1327,7 @@ export class DataModule<S extends SchemaStructure> {
 
     const rid = parseRecordIdString(id);
     const params = parseParams(tableSchema.columns, data);
-    const mutationId = parseRecordIdString(`_00_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(mintMutationId(this.tabId));
 
     // Note: CRDT state is pushed directly to the _00_crdt table by CrdtField.pushToRemote(),
     // NOT through the record update pipeline. This keeps the record data clean.
@@ -1404,7 +1414,7 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     const rid = parseRecordIdString(id);
-    const mutationId = parseRecordIdString(`_00_pending_mutations:${Date.now()}`);
+    const mutationId = parseRecordIdString(mintMutationId(this.tabId));
 
     // Fetch the record before deleting so DBSP can match it against query predicates
     const [beforeRecords] = await this.local.query<[Record<string, any>[]]>(
