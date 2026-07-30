@@ -31,10 +31,37 @@ export interface EngineStorageDiagnostics {
   error?: string;
 }
 
+/**
+ * Shared-tabs coordination state. Reported ONLY when `sharedTabs: true` was
+ * configured (apps that never asked for it get `null`, so the panel shows
+ * nothing). `active: false` with a `reason` is itself the useful signal: the
+ * app asked to share one store and this tab is not, so it owns or contends for
+ * the OPFS pool alone.
+ */
+export interface SharedTabsInfo {
+  active: boolean;
+  /** Why inactive: a capability gate reason, or 'fell-back' when the broker
+   *  was reachable but no role landed (election timeout, rejected tab). */
+  reason?: string;
+  role?: 'solo' | 'leader' | 'follower';
+  /** This tab's id (also the suffix of every mutation id it mints). */
+  tabId?: string;
+  /** Monotonic id of the current leadership term; embedded in the worker lock. */
+  leadershipId?: number;
+  /** Who owns the store: this tab when leader, else the leader's tab id. */
+  leaderTabId?: string | null;
+  /** Leader only: attached follower tabs. */
+  followers?: number;
+  /** Leader only: ingest batches relayed to followers so far. */
+  relayedBatches?: number;
+}
+
 export interface StorageInfo {
   at: number;
   engine: { kind: 'surrealdb' | 'sqlite' | 'custom'; store: string; bucketId: string };
   health: { status: 'unknown' | 'persistent' | 'memory'; fallback: boolean; error?: string };
+  /** Shared-tabs state, or null when the feature was never requested. */
+  tabs?: SharedTabsInfo | null;
   browser: {
     /** `navigator.storage.persisted()` — whether the origin's storage is
      *  exempt from eviction (unrelated to the OPFS pool lock). */

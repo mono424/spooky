@@ -152,15 +152,8 @@ export interface DatabaseState {
     error?: string;
     role?: 'leader' | 'follower' | 'solo';
   };
-  /** Shared-tabs role state; null when the feature is off or fell back. */
-  tabs?: {
-    role: 'solo' | 'leader' | 'follower';
-    tabId: string;
-    leadershipId: number;
-    leaderTabId: string | null;
-    followers: number | null;
-    relayedBatches: number | null;
-  } | null;
+  /** Shared-tabs state; null when the feature was never requested. */
+  tabs?: SharedTabsInfo | null;
 }
 
 // Chrome Extension Message Types
@@ -201,6 +194,20 @@ export interface OpfsEntry {
   size?: number;
 }
 
+/** Shared-tabs coordination state (sharedTabs: true). `active: false` with a
+ *  reason means the app asked to share one store but this tab is running
+ *  alone. Mirrors core's SharedTabsInfo. */
+export interface SharedTabsInfo {
+  active: boolean;
+  reason?: string;
+  role?: 'solo' | 'leader' | 'follower';
+  tabId?: string;
+  leadershipId?: number;
+  leaderTabId?: string | null;
+  followers?: number;
+  relayedBatches?: number;
+}
+
 export interface EngineStorageDiagnostics {
   engine: 'sqlite';
   bucketId: string;
@@ -216,7 +223,14 @@ export interface EngineStorageDiagnostics {
 export interface StorageInfo {
   at: number;
   engine: { kind: 'surrealdb' | 'sqlite' | 'custom'; store: string; bucketId: string };
-  health: { status: 'unknown' | 'persistent' | 'memory'; fallback: boolean; error?: string };
+  health: {
+    status: 'unknown' | 'persistent' | 'memory';
+    fallback: boolean;
+    error?: string;
+    role?: 'leader' | 'follower' | 'solo';
+  };
+  /** Shared-tabs state, or null when the feature was never requested. */
+  tabs?: SharedTabsInfo | null;
   browser: {
     persisted?: boolean;
     usage?: number;

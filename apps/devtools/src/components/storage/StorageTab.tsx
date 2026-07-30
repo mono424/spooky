@@ -33,13 +33,73 @@ export function StorageTab() {
   // Live health beats snapshot health: `state.database.storage` updates via the
   // push channel on every change; the snapshot only on refresh.
   const health = createMemo(
-    (): { status: string; fallback: boolean; error?: string } =>
+    (): { status: string; fallback: boolean; error?: string; role?: string } =>
       state.database.storage ?? storageInfo()?.health ?? { status: 'unknown', fallback: false }
   );
 
   const info = storageInfo;
   const diag = () => info()?.engineDiagnostics;
   const stats = () => info()?.sqliteStats as Record<string, any> | undefined;
+
+  // Shared-tabs: live push state beats the snapshot (same reason as health).
+  // Present only when the app configured `sharedTabs: true`.
+  const tabs = createMemo(() => state.database.tabs ?? info()?.tabs ?? null);
+  const role = () => (tabs()?.active ? tabs()!.role : undefined) ?? health().role;
+  const isLeader = () => role() === 'leader';
+  const isFollower = () => role() === 'follower';
+
+  /** What the health status means for THIS tab, given its shared-tabs role. */
+  const healthExplanation = (): string => {
+    if (health().status === 'persistent') {
+      if (isFollower()) {
+        return 'Durable: this tab shares the leader tab\'s OPFS store over a MessagePort.';
+      }
+      if (isLeader()) {
+        return 'Durable: this tab owns the OPFS worker and serves the other tabs.';
+      }
+      return 'Local store is OPFS-backed and survives reloads.';
+    }
+    if (health().status === 'memory') {
+      return 'In-memory store as configured (store: memory) — nothing persists by design.';
+    }
+    return 'This engine does not report storage health.';
+  };
+
+  /** The fallback hint must not tell you to close other tabs when sharing them
+   *  is exactly what the app enabled. */
+  const fallbackHint = (): string => {
+    if (tabs()?.active) {
+      return isLeader()
+        ? 'This tab was elected leader but could not open the OPFS pool, so every tab is now served from RAM. Usually a previous leader\'s worker has not released its file handles yet; a later election retries automatically.'
+        : 'Shared-tabs is active but this tab is not attached to a leader\'s store, so it fell back to RAM. It should recover on the next election; if it does not, reload.';
+    }
+    if (tabs() && !tabs()!.active) {
+      return 'sharedTabs was requested but this tab runs alone, so it contends for the OPFS pool with every other tab and lost. Fix the reason above (see the Tabs section) or close other tabs and reload.';
+    }
+    return 'The whole dataset sits in RAM and every local write is lost on reload. The usual cause is another tab of this app holding the OPFS pool lock — close other tabs and reload.';
+  };
+
+  /** Human wording for a capability-gate / fallback reason code. */
+  const reasonText = (reason: string | undefined): string => {
+    switch (reason) {
+      case 'flag-off':
+        return 'sharedTabs is not enabled';
+      case 'not-browser':
+        return 'not a browser context';
+      case 'no-shared-worker':
+        return 'this browser has no SharedWorker (pre-148 Chrome on Android, some WebViews)';
+      case 'no-web-locks':
+        return 'this browser has no Web Locks API';
+      case 'no-message-channel':
+        return 'this browser has no MessageChannel';
+      case 'engine-not-sqlite':
+        return 'shared-tabs requires localEngine: "sqlite"';
+      case 'fell-back':
+        return 'the broker assigned no role in time (election timeout, or a tab from a different app build was rejected)';
+      default:
+        return reason ?? 'unknown';
+    }
+  };
 
   const usagePct = createMemo(() => {
     const b = info()?.browser;
@@ -59,6 +119,19 @@ export function StorageTab() {
   const isOrphanPool = (e: OpfsEntry) => {
     const top = topLevelOf(e);
     return top.startsWith('.sp00ky-') && top !== activePoolDir();
+  };
+
+  /**
+   * A file whose size cannot be read is held by an exclusive sync access
+   * handle, i.e. someone has that pool open. In the active pool that is the
+   * expected, healthy state; say WHO holds it so a locked file does not read
+   * as a problem.
+   */
+  const lockedFileNote = (entry: OpfsEntry): string => {
+    if (topLevelOf(entry) !== activePoolDir()) return 'locked by another context';
+    if (isLeader()) return 'locked — held by this tab\'s worker (expected)';
+    if (isFollower()) return 'locked — held by the leader tab\'s worker (expected)';
+    return 'locked — a worker holds this pool open';
   };
 
   const handlePersist = async () => {
@@ -88,10 +161,7 @@ export function StorageTab() {
           <Show when={realError(health().error)}>
             <code class="storage-health-reason">{realError(health().error)}</code>
           </Show>
-          <div class="storage-health-hint">
-            The whole dataset sits in RAM and every local write is lost on reload. The usual cause
-            is another tab of this app holding the OPFS pool lock — close other tabs and reload.
-          </div>
+          <div class="storage-health-hint">{fallbackHint()}</div>
         </div>
       </Show>
       <Show when={!health().fallback}>
@@ -105,14 +175,9 @@ export function StorageTab() {
           >
             <span class="status-dot" />
             {health().status}
+            <Show when={role()}>{` · ${role()}`}</Show>
           </span>
-          <span class="muted">
-            {health().status === 'persistent'
-              ? 'Local store is OPFS-backed and survives reloads.'
-              : health().status === 'memory'
-                ? 'In-memory store as configured (store: memory) — nothing persists by design.'
-                : 'This engine does not report storage health.'}
-          </span>
+          <span class="muted">{healthExplanation()}</span>
         </div>
       </Show>
 
@@ -176,7 +241,116 @@ export function StorageTab() {
             </div>
           </div>
 
-          {/* 3. Space */}
+          {/* 3. Shared tabs — who owns this store. Only when the app asked. */}
+          <Show when={tabs()}>
+            <div class="mcp-section">
+              <h3>Shared tabs</h3>
+              <Show
+                when={tabs()!.active}
+                fallback={
+                  <div class="kv">
+                    <div class="kv-row">
+                      <span class="kv-k">Status</span>
+                      <span class="kv-v">
+                        <span class="status-pill status-initializing">
+                          <span class="status-dot" />
+                          running alone
+                        </span>
+                      </span>
+                    </div>
+                    <div class="kv-row">
+                      <span class="kv-k">Reason</span>
+                      <span class="kv-v">{reasonText(tabs()!.reason)}</span>
+                    </div>
+                    <div class="kv-row">
+                      <span class="kv-k" />
+                      <span class="kv-v muted">
+                        sharedTabs is configured, so this tab was meant to share one durable store
+                        with the others. It does not, so it competes for the OPFS pool: only one tab
+                        wins and the rest run in RAM.
+                      </span>
+                    </div>
+                  </div>
+                }
+              >
+                <div class="kv">
+                  <div class="kv-row">
+                    <span class="kv-k">Role</span>
+                    <span class="kv-v">
+                      <span
+                        class="status-pill"
+                        classList={{
+                          'status-active': isLeader(),
+                          'status-updating': isFollower(),
+                          'status-initializing': !isLeader() && !isFollower(),
+                        }}
+                      >
+                        <span class="status-dot" />
+                        {tabs()!.role}
+                      </span>
+                      <span class="muted">
+                        {isLeader()
+                          ? ' owns the OPFS worker and the sync loop (outbox drain + list_ref LIVE)'
+                          : isFollower()
+                            ? ' reads/writes the leader\'s store over a MessagePort'
+                            : ' between leaders — ops are parked until a role lands'}
+                      </span>
+                    </span>
+                  </div>
+                  <div class="kv-row">
+                    <span class="kv-k">This tab</span>
+                    <span class="kv-v mono">{tabs()!.tabId ?? '—'}</span>
+                  </div>
+                  <div class="kv-row">
+                    <span class="kv-k">Leader</span>
+                    <span class="kv-v mono">
+                      {tabs()!.leaderTabId ?? '—'}
+                      <Show when={isLeader()}>
+                        <span class="muted"> (this tab)</span>
+                      </Show>
+                    </span>
+                  </div>
+                  <div class="kv-row">
+                    <span class="kv-k">Leadership term</span>
+                    <span class="kv-v">
+                      #{tabs()!.leadershipId ?? 0}
+                      <span class="muted"> (rises on every failover; names the worker lock)</span>
+                    </span>
+                  </div>
+                  <Show when={isLeader()}>
+                    <div class="kv-row">
+                      <span class="kv-k">Followers attached</span>
+                      <span class="kv-v">{tabs()!.followers ?? 0}</span>
+                    </div>
+                    <div class="kv-row">
+                      <span class="kv-k">Ingest batches relayed</span>
+                      <span class="kv-v">
+                        {tabs()!.relayedBatches ?? 0}
+                        <span class="muted"> (fan-out that keeps follower queries live)</span>
+                      </span>
+                    </div>
+                  </Show>
+                  <Show when={stats()?.roleChanges !== undefined}>
+                    <div class="kv-row">
+                      <span class="kv-k">Role changes</span>
+                      <span class="kv-v">
+                        {stats()!.roleChanges}
+                        <span class="muted"> (this tab's promotions + attachments)</span>
+                      </span>
+                    </div>
+                  </Show>
+                  <Show when={isFollower() && stats()?.proxiedOps !== undefined}>
+                    <div class="kv-row">
+                      <span class="kv-k">Ops via leader</span>
+                      <span class="kv-v">{stats()!.proxiedOps}</span>
+                    </div>
+                  </Show>
+                </div>
+              </Show>
+            </div>
+          </Show>
+
+          {/* 4. Space */}
           <div class="mcp-section">
             <h3>Space</h3>
             <Show when={realError(info()!.browser.error)}>
@@ -240,7 +414,7 @@ export function StorageTab() {
             </div>
           </div>
 
-          {/* 4. OPFS files */}
+          {/* 5. OPFS files */}
           <div class="mcp-section">
             <h3>OPFS files</h3>
             <Show
@@ -285,7 +459,7 @@ export function StorageTab() {
                           <Show when={entry.kind === 'file'}>
                             {entry.size !== undefined
                               ? formatBytes(entry.size)
-                              : 'size unavailable — file locked'}
+                              : lockedFileNote(entry)}
                           </Show>
                         </span>
                       </div>
@@ -300,14 +474,22 @@ export function StorageTab() {
             </Show>
           </div>
 
-          {/* 5. SQLite stats */}
+          {/* 6. SQLite stats */}
           <Show when={stats()}>
             <div class="mcp-section">
               <h3>SQLite stats</h3>
               <div class="kv">
                 <div class="kv-row">
                   <span class="kv-k">Worker round-trips</span>
-                  <span class="kv-v">{stats()!.roundTrips ?? 0}</span>
+                  <span class="kv-v">
+                    {stats()!.roundTrips ?? 0}
+                    <Show when={stats()!.proxiedOps !== undefined}>
+                      <span class="muted">
+                        {' '}
+                        — {stats()!.proxiedOps} of them through the leader tab's port
+                      </span>
+                    </Show>
+                  </span>
                 </div>
                 <div class="kv-row">
                   <span class="kv-k">By op</span>
@@ -359,7 +541,7 @@ export function StorageTab() {
             </div>
           </Show>
 
-          {/* 6. Per-table rows (opt-in: COUNT(*) per table isn't free) */}
+          {/* 7. Per-table rows (opt-in: COUNT(*) per table isn't free) */}
           <div class="mcp-section">
             <h3>Table rows</h3>
             <Show
@@ -392,7 +574,7 @@ export function StorageTab() {
             </Show>
           </div>
 
-          {/* 7. Raw */}
+          {/* 8. Raw */}
           <details class="storage-raw">
             <summary>Raw snapshot</summary>
             <JsonView value={info()} />

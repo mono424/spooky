@@ -80,6 +80,16 @@ export function TableList(props: TableListProps) {
     return err && err !== 'undefined' ? err : undefined;
   };
 
+  /** ` · leader` / ` · follower of a1b2c3d4`, or nothing outside shared-tabs. */
+  const roleSuffix = () => {
+    const t = props.tabs;
+    if (!t?.active || !t.role) return '';
+    if (t.role === 'follower' && t.leaderTabId) {
+      return ` · follower of ${t.leaderTabId.slice(0, 8)}`;
+    }
+    return ` · ${t.role}`;
+  };
+
   return (
     <div class="database-tables">
       <div class="database-header">
@@ -129,18 +139,9 @@ export function TableList(props: TableListProps) {
         >
           Storage: {props.storage!.status}
           {props.storage!.fallback ? ' (fallback, not persisted)' : ''}
-        </div>
-      </Show>
-      {/* Shared-tabs: which tab owns the store this panel is looking at. */}
-      <Show when={props.tabs}>
-        <div class="database-storage" title={`tab ${props.tabs!.tabId}`}>
-          Tabs: {props.tabs!.role}
-          {props.tabs!.role === 'leader' && props.tabs!.followers !== null
-            ? ` (${props.tabs!.followers} follower${props.tabs!.followers === 1 ? '' : 's'}, ${props.tabs!.relayedBatches ?? 0} relayed)`
-            : ''}
-          {props.tabs!.role === 'follower' && props.tabs!.leaderTabId
-            ? ` of ${props.tabs!.leaderTabId.slice(0, 8)}`
-            : ''}
+          {/* Shared-tabs: whose store these tables actually live in. Details
+              (term, followers, relay counters) are in the Storage tab. */}
+          {roleSuffix()}
         </div>
       </Show>
     </div>

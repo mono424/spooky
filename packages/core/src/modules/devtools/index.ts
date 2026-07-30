@@ -22,7 +22,7 @@ import {
   parseBackendInfo,
   UNAVAILABLE,
 } from './versions';
-import { walkOpfs, type StorageInfo } from './storage-info';
+import { walkOpfs, type SharedTabsInfo, type StorageInfo } from './storage-info';
 
 // Real bundled frontend versions, injected at build time by tsdown's
 // version-define plugin (see tsdown.config.ts). The `typeof` guard keeps these
@@ -51,10 +51,11 @@ export class DevToolsService implements StreamUpdateReceiver {
   // (the on-demand GET_STATE pull) still works before the push channel turns on.
   private enabled = false;
 
-  /** Shared-tabs snapshot for the panel, wired by Sp00kyClient when active. */
-  private tabsInfoProvider: (() => Record<string, unknown> | null) | null = null;
+  /** Shared-tabs snapshot for the panel, wired by Sp00kyClient whenever the
+   *  feature was REQUESTED (so an inactive/degraded tab still reports why). */
+  private tabsInfoProvider: (() => SharedTabsInfo | null) | null = null;
 
-  setTabsInfoProvider(provider: () => Record<string, unknown> | null): void {
+  setTabsInfoProvider(provider: () => SharedTabsInfo | null): void {
     this.tabsInfoProvider = provider;
   }
 
@@ -357,6 +358,7 @@ export class DevToolsService implements StreamUpdateReceiver {
         bucketId: this.databaseService.currentBucketId,
       },
       health: this.databaseService.storageHealth ?? { status: 'unknown', fallback: false },
+      tabs: this.tabsInfoProvider?.() ?? null,
       browser: {},
       opfs: { supported: false, entries: [], totalBytes: 0, truncated: false },
     };

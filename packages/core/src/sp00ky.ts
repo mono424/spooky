@@ -368,23 +368,35 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // every module. Nothing starts until init() calls coordinator.start().
     if (tabsSupport.supported) {
       this.tabsCoordinator = this.buildTabsCoordinator();
-      this.devTools.setTabsInfoProvider(() => {
-        if (!this.sharedActive || !this.tabsCoordinator) return null;
-        const c = this.tabsCoordinator;
-        return {
-          role: c.role,
-          tabId: c.tabId,
-          leadershipId: c.leadershipId,
-          leaderTabId: c.leaderTabId,
-          followers: c.syncHub?.followerCount ?? null,
-          relayedBatches: c.syncHub?.relayedBatches ?? null,
-        };
-      });
     } else if (this.config.sharedTabs) {
       this.logger.info(
         { reason: (tabsSupport as { reason: string }).reason, Category: 'sp00ky-client::Sp00kyClient::tabs' },
         'sharedTabs requested but unsupported here; running solo'
       );
+    }
+    // Report shared-tabs state whenever the feature was REQUESTED, active or
+    // not: "asked to share one store, running alone because X" is exactly the
+    // thing you need to see in the panel. Apps that never set the flag report
+    // null and the panel shows no section at all.
+    if (this.config.sharedTabs) {
+      const unsupportedReason = tabsSupport.supported
+        ? undefined
+        : (tabsSupport as { reason: string }).reason;
+      this.devTools.setTabsInfoProvider(() => {
+        const c = this.tabsCoordinator;
+        if (!this.sharedActive || !c) {
+          return { active: false, reason: unsupportedReason ?? 'fell-back' };
+        }
+        const hub = c.syncHub;
+        return {
+          active: true,
+          role: c.role,
+          tabId: c.tabId,
+          leadershipId: c.leadershipId,
+          leaderTabId: c.role === 'leader' ? c.tabId : c.leaderTabId,
+          ...(hub ? { followers: hub.followerCount, relayedBatches: hub.relayedBatches } : {}),
+        };
+      });
     }
   }
 
