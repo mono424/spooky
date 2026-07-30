@@ -290,14 +290,18 @@ export class SqliteCacheEngine implements LocalStore {
     // (the worker also console.errors, since host apps may run pino at `fatal`)
     // and publish it so the app can warn the user.
     const fellBack = this.useOpfs && !persisted;
-    this.setStorageHealth({
+    // Omit `error` rather than setting it to `undefined`: the devtools
+    // serializer renders an undefined value as the STRING 'undefined'.
+    const health: StorageHealth = {
       status: persisted ? 'persistent' : 'memory',
       fallback: fellBack,
-      error: fellBack ? opfsError : undefined,
-    });
+    };
+    if (fellBack && opfsError) health.error = opfsError;
+    this.setStorageHealth(health);
     const stats = getStats();
     stats.persisted = persisted;
-    stats.opfsError = fellBack ? opfsError : undefined;
+    if (fellBack && opfsError) stats.opfsError = opfsError;
+    else delete stats.opfsError;
     if (fellBack) {
       this.logger.error(
         { bucketId, opfsError, Category: 'sp00ky-client::SqliteCacheEngine::connect' },

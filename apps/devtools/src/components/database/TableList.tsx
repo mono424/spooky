@@ -70,6 +70,13 @@ export function TableList(props: TableListProps) {
     props.showInternal ? props.tables : props.tables.filter((t) => !INTERNAL_RE.test(t))
   );
 
+  // The page-side serializer renders a missing value as the STRING 'undefined',
+  // so an absent reason must not turn into a tooltip.
+  const storageError = () => {
+    const err = props.storage?.error;
+    return err && err !== 'undefined' ? err : undefined;
+  };
+
   return (
     <div class="database-tables">
       <div class="database-header">
@@ -120,7 +127,7 @@ export function TableList(props: TableListProps) {
             'font-size': '11px',
             color: props.storage!.fallback ? '#f87171' : 'var(--text-muted, #888)',
           }}
-          title={props.storage!.error ?? undefined}
+          title={storageError()}
         >
           Storage: {props.storage!.status}
           {props.storage!.fallback ? ' (fallback, not persisted)' : ''}
