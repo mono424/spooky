@@ -96,6 +96,11 @@ export class DevToolsService implements StreamUpdateReceiver {
       }
     });
 
+    // Push state when the local store reports its durability (the open happens
+    // during connect, typically before a panel attaches, so this mostly matters
+    // for a later bucket switch that loses OPFS).
+    this.databaseService.subscribeToStorageHealth?.(() => this.notifyDevTools());
+
     // Fire-and-forget backend version discovery; re-push state when it lands.
     void this.refreshBackendVersions();
 
@@ -318,6 +323,9 @@ export class DevToolsService implements StreamUpdateReceiver {
           ? this.localTables
           : this.schema.tables.map((t) => t.name),
         tableData: {},
+        // Durability of the local store. `fallback: true` means persistence was
+        // requested but the dataset is actually sitting in RAM.
+        storage: this.databaseService.storageHealth ?? { status: 'unknown', fallback: false },
       },
     });
   }

@@ -8,7 +8,8 @@ import type {
   PreloadOptions,
   UpdateOptions,
   RunOptions,
-  SyncHealth} from './types';
+  SyncHealth,
+  StorageHealth} from './types';
 import {
   LocalMigrator,
   RemoteDatabaseService,
@@ -106,6 +107,13 @@ export class BucketHandle {
  */
 const LAST_BUCKET_KEY = 'sp00ky:last_bucket';
 
+/** Reported for engines that don't track local-store durability. Frozen so a
+ *  subscriber can't mutate the shared snapshot. */
+const UNKNOWN_STORAGE_HEALTH: StorageHealth = Object.freeze({
+  status: 'unknown',
+  fallback: false,
+});
+
 function readBootBucketHint(): string | null {
   try {
     return typeof localStorage !== 'undefined' ? localStorage.getItem(LAST_BUCKET_KEY) : null;
@@ -186,6 +194,25 @@ export class Sp00kyClient<S extends SchemaStructure> {
    */
   subscribeToSyncHealth(cb: (health: SyncHealth) => void): () => void {
     return this.sync.subscribeToSyncHealth(cb);
+  }
+
+  /** Durability of the local cache. See {@link StorageHealth}. `'unknown'` for
+   *  engines that don't report it. */
+  get storageHealth(): StorageHealth {
+    return this.local.storageHealth ?? UNKNOWN_STORAGE_HEALTH;
+  }
+
+  /**
+   * Observe local-store durability. Fires immediately with the current snapshot
+   * and again on every change (at most once per bucket open in practice).
+   * Returns an unsubscribe.
+   */
+  subscribeToStorageHealth(cb: (health: StorageHealth) => void): () => void {
+    if (this.local.subscribeToStorageHealth) {
+      return this.local.subscribeToStorageHealth(cb);
+    }
+    cb(UNKNOWN_STORAGE_HEALTH);
+    return () => {};
   }
 
   constructor(private config: Sp00kyConfig<S>) {

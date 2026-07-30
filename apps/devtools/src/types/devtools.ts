@@ -144,6 +144,13 @@ export interface DatabaseState {
   remoteTables?: string[];
   tableData: Record<string, Record<string, unknown>[]>;
   schema?: Record<string, string[]>; // table -> column names
+  /** Durability of the local store. `fallback: true` means persistence was
+   *  requested but the dataset is actually only in RAM. */
+  storage?: {
+    status: 'unknown' | 'persistent' | 'memory';
+    fallback: boolean;
+    error?: string;
+  };
 }
 
 // Chrome Extension Message Types

@@ -135,6 +135,93 @@ describe('SqliteCacheEngine system-table seeding', () => {
   });
 });
 
+// The worker's `persisted`/`opfsError` reply used to die in a `logger.info`
+// line, so a host app running pino at `fatal` (whitepawn does) could not tell a
+// disk-backed store from a full-RAM one. It now lands on the engine as
+// observable state the app can render.
+describe('SqliteCacheEngine storage health', () => {
+  /** Engine wired to a worker whose `open` replies with `openReply`. */
+  function makeEngine(openReply: Record<string, unknown>, opts?: { useOpfs?: boolean }) {
+    const logs: { level: string; msg: string; meta: any }[] = [];
+    const logger: any = {};
+    for (const level of ['debug', 'info', 'warn', 'error', 'trace']) {
+      logger[level] = (meta: any, msg: string) => logs.push({ level, msg, meta });
+    }
+    logger.child = () => logger;
+
+    const engine = new SqliteCacheEngine(
+      { namespace: 'n', database: 'd' } as any,
+      logger,
+      opts ?? {}
+    );
+    (engine as any).spawnWorker = () => {
+      const w: any = { onmessage: null, onerror: null, onmessageerror: null, terminate() {} };
+      w.postMessage = (msg: any) => {
+        Promise.resolve().then(() => {
+          const rest = msg.type === 'open' ? openReply : {};
+          const { id, ok, error, ...payload } = { id: msg.id, ok: true, error: undefined, ...rest };
+          const p = (engine as any).pending.get(id);
+          if (!p) return;
+          (engine as any).pending.delete(id);
+          if (ok) p.resolve(payload);
+          else p.reject(new Error(error));
+        });
+      };
+      return w as unknown as Worker;
+    };
+    return { engine, logs };
+  }
+
+  it('publishes a persistent store and logs no error', async () => {
+    const { engine, logs } = makeEngine({ persisted: true });
+    await engine.connect('user:abc');
+
+    expect(engine.storageHealth).toEqual({
+      status: 'persistent',
+      fallback: false,
+      error: undefined,
+    });
+    expect(logs.some((l) => l.level === 'error')).toBe(false);
+  });
+
+  it('publishes the fallback, its reason, and an error log when OPFS is lost', async () => {
+    const { engine, logs } = makeEngine({ persisted: false, opfsError: 'NoModificationAllowedError: locked' });
+    await engine.connect('user:abc');
+
+    expect(engine.storageHealth).toEqual({
+      status: 'memory',
+      fallback: true,
+      error: 'NoModificationAllowedError: locked',
+    });
+    const err = logs.find((l) => l.level === 'error');
+    expect(err?.msg).toContain('IN MEMORY');
+    expect(err?.meta.opfsError).toBe('NoModificationAllowedError: locked');
+    // Inspectable from the console without any logging configured.
+    expect((globalThis as any).__sqliteStats.persisted).toBe(false);
+  });
+
+  // A subscriber almost always attaches AFTER connect() (components mount
+  // later), so an immediate fire is the only way it learns about a fallback.
+  it('fires a late subscriber with the current snapshot', async () => {
+    const { engine } = makeEngine({ persisted: false, opfsError: 'boom' });
+    await engine.connect('user:abc');
+
+    const seen: any[] = [];
+    const unsub = engine.subscribeToStorageHealth((h) => seen.push(h));
+    expect(seen).toEqual([{ status: 'memory', fallback: true, error: 'boom' }]);
+    unsub();
+  });
+
+  // `store: 'memory'` asked for RAM, so it is not a fallback and must not warn.
+  it('does not flag a configured in-memory store as a fallback', async () => {
+    const { engine, logs } = makeEngine({ persisted: false }, { useOpfs: false });
+    await engine.connect('user:abc');
+
+    expect(engine.storageHealth).toEqual({ status: 'memory', fallback: false, error: undefined });
+    expect(logs.some((l) => l.level === 'error')).toBe(false);
+  });
+});
+
 // `pureWriteOpResult` is the single source of truth for what a pure-write op
 // contributes to a query's per-statement results. The batched fast path in
 // `query()` and the per-op `execOp` path BOTH route through it, so a caller that

@@ -1,7 +1,7 @@
 import type { QueryPlan, RelationPlan, WhereNode } from '@spooky-sync/query-builder';
 import type { SealedQuery } from '../../utils/surql';
 import type { DatabaseEventSystem } from './events/index';
-import type { Sp00kyConfig } from '../../types';
+import type { Sp00kyConfig, StorageHealth } from '../../types';
 
 /**
  * A materialized row. Keys are field names; values are already decoded to the
@@ -121,6 +121,15 @@ export interface LocalStore extends LocalCacheEngine {
   getClient(): unknown;
   getConfig(): Sp00kyConfig<any>['database'];
   readonly currentBucketId: string;
+  /**
+   * Durability of this engine's local store. OPTIONAL: engines that don't
+   * report it (SurrealDB, custom engines) are treated as `'unknown'` by the
+   * client facade, so adding this needs no change on their side.
+   */
+  readonly storageHealth?: StorageHealth;
+  /** Fires immediately with the current snapshot, then on every change.
+   *  Returns an unsubscribe function. */
+  subscribeToStorageHealth?(cb: (health: StorageHealth) => void): () => void;
 }
 
 /** Selected local cache backend. Mirrors the `persistenceClient` config pattern. */

@@ -7,6 +7,8 @@ interface TableListProps {
   /** When false, `_00_*` internal sync tables are hidden. */
   showInternal: boolean;
   onToggleInternal: (value: boolean) => void;
+  /** Durability of the local store, when the engine reports it. */
+  storage?: { status: string; fallback: boolean; error?: string };
 }
 
 /** Internal sync/bookkeeping tables the app doesn't normally care about. */
@@ -106,6 +108,24 @@ export function TableList(props: TableListProps) {
           </For>
         </Show>
       </div>
+      {/* Durability of the local store. A store that fell back to memory holds
+          the whole dataset in RAM and loses local writes on reload, which is
+          otherwise invisible from the outside. */}
+      <Show when={props.storage && props.storage.status !== 'unknown'}>
+        <div
+          class="database-storage"
+          style={{
+            padding: '6px 10px',
+            'border-top': '1px solid var(--border-color, #2a2a2a)',
+            'font-size': '11px',
+            color: props.storage!.fallback ? '#f87171' : 'var(--text-muted, #888)',
+          }}
+          title={props.storage!.error ?? undefined}
+        >
+          Storage: {props.storage!.status}
+          {props.storage!.fallback ? ' (fallback, not persisted)' : ''}
+        </div>
+      </Show>
     </div>
   );
 }

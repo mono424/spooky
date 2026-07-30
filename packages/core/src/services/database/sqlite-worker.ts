@@ -5,11 +5,12 @@
  * is also what the OPFS VFS requires — file access must happen off the main
  * thread. Persistence uses the **OPFS SAHPool VFS**: durable, and (unlike the
  * classic OPFS VFS) it does NOT require COOP/COEP cross-origin isolation
- * headers, so host apps embedding the client need no server changes. Falls back
- * to an in-memory DB when OPFS is unavailable.
+ * headers, so host apps embedding the client need no server changes. When OPFS
+ * is unavailable it retries, then falls back to an in-memory DB and REPORTS the
+ * loss of durability (see `sqlite-open.ts`) instead of degrading silently.
  *
  * Message protocol (request/response keyed by `id`):
- *   { id, type: 'open',   payload: { dbName, useOpfs } }
+ *   { id, type: 'open',   payload: { dbName, useOpfs } } -> { id, ok, persisted, opfsError? }
  *   { id, type: 'exec',   payload: { sql, bind } }  -> { id, ok, rows }
  *   { id, type: 'run',    payload: { sql, bind } }  -> { id, ok }
  *   { id, type: 'batch',  payload: [{ sql, bind }] } (atomic BEGIN/COMMIT)
@@ -22,6 +23,7 @@
  * hot path; the per-statement ops remain for the write/shim paths.
  */
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
+import { openDb, type SqliteDbHandle } from './sqlite-open';
 import { executeSelect, type SelectDb } from './sqlite-select';
 
 interface Stmt {
@@ -29,28 +31,18 @@ interface Stmt {
   bind?: unknown[];
 }
 
-let db: {
-  exec: (opts: { sql: string; bind?: unknown[]; rowMode?: string; returnValue?: string }) => unknown;
-  close: () => void;
-} | null = null;
+let db: SqliteDbHandle | null = null;
 
 async function open(
   dbName: string,
   useOpfs: boolean,
   systemTables: readonly string[] = []
-): Promise<{ persisted: boolean }> {
+): Promise<{ persisted: boolean; opfsError?: string }> {
   const sqlite3: any = await sqlite3InitModule();
-  let persisted = false;
-  if (useOpfs && sqlite3.installOpfsSAHPoolVfs) {
-    try {
-      const pool = await sqlite3.installOpfsSAHPoolVfs({ name: `sp00ky-${dbName}` });
-      db = new pool.OpfsSAHPoolDb(`/${dbName}.sqlite3`);
-      persisted = true;
-    } catch {
-      // fall through to in-memory
-    }
-  }
-  if (!db) db = new sqlite3.oo1.DB(':memory:', 'c');
+  // Retry/fallback policy (and the loud report when persistence is lost) lives
+  // in `sqlite-open.ts` so it can be unit tested off-worker.
+  const { db: handle, persisted, opfsError } = await openDb(sqlite3, dbName, useOpfs);
+  db = handle;
   // Physically create the internal `_00_*` tables the client reads before any
   // write (DEFINE is a noop on this engine, so the migrator can't). Prevents
   // "no such table: _00_query" on a fresh bucket right after signup.
@@ -66,7 +58,7 @@ async function open(
   } catch {
     /* pragma best-effort */
   }
-  return { persisted };
+  return { persisted, opfsError };
 }
 
 function exec(sql: string, bind?: unknown[]): unknown[] {

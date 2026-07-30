@@ -49,6 +49,7 @@ export function DatabaseTab() {
         tables={tables()}
         showInternal={showInternal()}
         onToggleInternal={setShowInternal}
+        storage={source() === 'local' ? state.database.storage : undefined}
       />
       <TableView
         filter={filter()}

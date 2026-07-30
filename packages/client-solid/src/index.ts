@@ -7,6 +7,7 @@ import {
   type UpdateOptions,
   type RunOptions,
   type SyncHealth,
+  type StorageHealth,
   type PreloadOptions,
   type PreloadRefresh,
 } from '@spooky-sync/core';
@@ -46,6 +47,8 @@ export { createPreload } from './lib/create-preload';
 export type { PreloadOptions, PreloadRefresh } from '@spooky-sync/core';
 export { useSyncStatus, type UseSyncStatus } from './lib/use-sync-status';
 export type { SyncHealth, SyncHealthStatus, SyncHealthConfig } from '@spooky-sync/core';
+export { useStorageStatus, type UseStorageStatus } from './lib/use-storage-status';
+export type { StorageHealth, StorageHealthStatus } from '@spooky-sync/core';
 export { useCrdtField } from './lib/use-crdt-field';
 export { useFeatureFlag, type UseFeatureFlag } from './lib/use-feature-flag';
 export {
@@ -324,6 +327,22 @@ export class SyncedDb<S extends SchemaStructure> {
   subscribeToSyncHealth(cb: (health: SyncHealth) => void): () => void {
     if (!this.sp00ky) throw new Error('SyncedDb not initialized');
     return this.sp00ky.subscribeToSyncHealth(cb);
+  }
+
+  /** Current local-store durability snapshot. See {@link useStorageStatus}. */
+  get storageHealth(): StorageHealth {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.storageHealth;
+  }
+
+  /**
+   * Observe local-store durability. Fires immediately with the current snapshot
+   * and again on change. Prefer the `useStorageStatus` hook in components; this
+   * is the imperative escape hatch.
+   */
+  subscribeToStorageHealth(cb: (health: StorageHealth) => void): () => void {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.subscribeToStorageHealth(cb);
   }
 
   bucket<B extends BucketNames<S>>(name: B): BucketHandle {

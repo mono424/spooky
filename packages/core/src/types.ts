@@ -247,6 +247,33 @@ export interface SyncHealth {
   everConnected: boolean;
 }
 
+export type StorageHealthStatus = 'unknown' | 'persistent' | 'memory';
+
+/**
+ * Durability of the LOCAL cache, delivered to `subscribeToStorageHealth`
+ * subscribers. Separate from {@link SyncHealth}: that one is about reaching the
+ * server, this one is about whether the local store survives a reload.
+ *
+ * Under `localEngine: 'sqlite'` the durable store is the OPFS SAHPool VFS,
+ * which only one client per bucket can hold open. When it can't be opened (a
+ * second tab of the app already has it, an insecure context, a full pool) the
+ * engine keeps working against an in-memory DB, which holds the whole dataset
+ * in RAM and loses local writes on reload. `fallback` marks exactly that case,
+ * so a UI can warn about it.
+ */
+export interface StorageHealth {
+  /** `'unknown'` until the local cache has opened, or for engines that don't report. */
+  status: StorageHealthStatus;
+  /**
+   * `true` only when durable storage was REQUESTED and could not be opened.
+   * Stays `false` for a configured-in-memory store (`store: 'memory'`), which
+   * is a choice rather than a failure, so a UI can key off this alone.
+   */
+  fallback: boolean;
+  /** Reason durable storage failed (only set while `fallback` is `true`). */
+  error?: string;
+}
+
 export type QueryHash = string;
 
 // Flat array format: [[record-id, version], [record-id, version], ...]

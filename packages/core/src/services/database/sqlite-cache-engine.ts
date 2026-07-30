@@ -8,7 +8,7 @@ import {
   project,
 } from './sqlite-plan-sql';
 import type { Logger } from '../logger/index';
-import type { Sp00kyConfig } from '../../types';
+import type { Sp00kyConfig, StorageHealth } from '../../types';
 import type { SealedQuery } from '../../utils/surql';
 import { resolveRelations, stableKey } from './relation-resolver';
 import {
@@ -94,6 +94,11 @@ export class SqliteCacheEngine implements LocalStore {
   private workerSelect: boolean;
   private events: DatabaseEventSystem = createDatabaseEventSystem();
   private bucketId = 'anon';
+  /** Durability of the local store, set on every open. A plain Set of callbacks
+   *  rather than a `DatabaseEventSystem` event: this changes at most once per
+   *  open, and the typed event map is about query traffic. */
+  private storageHealthValue: StorageHealth = { status: 'unknown', fallback: false };
+  private storageHealthSubs = new Set<(health: StorageHealth) => void>();
   /** Schemaless — tables are created lazily on first write; no migrator. */
   readonly usesSurqlSchema = false;
 
@@ -112,6 +117,26 @@ export class SqliteCacheEngine implements LocalStore {
 
   get currentBucketId(): string {
     return this.bucketId;
+  }
+
+  get storageHealth(): StorageHealth {
+    return this.storageHealthValue;
+  }
+
+  /** Fires immediately with the current snapshot (the store opens during
+   *  `connect()`, before app components mount, so a late subscriber must still
+   *  learn a fallback happened), then on every change. */
+  subscribeToStorageHealth(cb: (health: StorageHealth) => void): () => void {
+    cb(this.storageHealthValue);
+    this.storageHealthSubs.add(cb);
+    return () => {
+      this.storageHealthSubs.delete(cb);
+    };
+  }
+
+  private setStorageHealth(health: StorageHealth): void {
+    this.storageHealthValue = health;
+    for (const cb of this.storageHealthSubs) cb(health);
   }
 
   getConfig(): Sp00kyConfig<any>['database'] {
@@ -247,7 +272,12 @@ export class SqliteCacheEngine implements LocalStore {
     // "no such table: _00_query" and the client wedged on "Loading database".
     // Creating them inside `open` guarantees any access order is safe without
     // adding ops to the engine's queue.
-    const { persisted } = await this.rawCall<{ persisted: boolean }>('open', {
+    // `opfsError` is absent from a worker bundle older than this field, which
+    // just reads as "no reason given" rather than breaking the open.
+    const { persisted, opfsError } = await this.rawCall<{
+      persisted: boolean;
+      opfsError?: string;
+    }>('open', {
       dbName: bucketId,
       useOpfs: this.useOpfs,
       systemTables: SYSTEM_TABLES,
@@ -255,10 +285,30 @@ export class SqliteCacheEngine implements LocalStore {
     this.knownTables.clear();
     for (const t of SYSTEM_TABLES) this.knownTables.add(t);
     this.bucketId = bucketId;
-    this.logger.info(
-      { bucketId, persisted, Category: 'sp00ky-client::SqliteCacheEngine::connect' },
-      persisted ? 'SQLite OPFS store opened' : 'SQLite in-memory store opened (no OPFS)'
-    );
+    // Durability was requested but could not be had: the store is in RAM, so it
+    // loses local writes on reload and can OOM a wasm-heavy renderer. Report it
+    // (the worker also console.errors, since host apps may run pino at `fatal`)
+    // and publish it so the app can warn the user.
+    const fellBack = this.useOpfs && !persisted;
+    this.setStorageHealth({
+      status: persisted ? 'persistent' : 'memory',
+      fallback: fellBack,
+      error: fellBack ? opfsError : undefined,
+    });
+    const stats = getStats();
+    stats.persisted = persisted;
+    stats.opfsError = fellBack ? opfsError : undefined;
+    if (fellBack) {
+      this.logger.error(
+        { bucketId, opfsError, Category: 'sp00ky-client::SqliteCacheEngine::connect' },
+        'SQLite OPFS persistence failed; store is IN MEMORY and will not survive reload'
+      );
+    } else {
+      this.logger.info(
+        { bucketId, persisted, Category: 'sp00ky-client::SqliteCacheEngine::connect' },
+        persisted ? 'SQLite OPFS store opened' : 'SQLite in-memory store opened (as configured)'
+      );
+    }
   }
 
   /** Enqueue `fn` as a single serialized opQueue entry (mirrors {@link call}'s
@@ -743,6 +793,12 @@ interface SqliteStats {
   bytesParsed: number;
   /** Relation-resolver fan-out fetches (one worker round-trip each). */
   relationFetches: number;
+  /** Whether the open store is OPFS-backed. `false` here with an `opfsError`
+   *  means the whole dataset is sitting in RAM. Optional so it stays absent
+   *  until the first open (and is skipped by the backfill loop below). */
+  persisted?: boolean;
+  /** Why OPFS persistence failed, when it did. */
+  opfsError?: string;
 }
 
 const EMPTY_STATS: SqliteStats = {
