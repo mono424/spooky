@@ -150,7 +150,17 @@ export interface DatabaseState {
     status: 'unknown' | 'persistent' | 'memory';
     fallback: boolean;
     error?: string;
+    role?: 'leader' | 'follower' | 'solo';
   };
+  /** Shared-tabs role state; null when the feature is off or fell back. */
+  tabs?: {
+    role: 'solo' | 'leader' | 'follower';
+    tabId: string;
+    leadershipId: number;
+    leaderTabId: string | null;
+    followers: number | null;
+    relayedBatches: number | null;
+  } | null;
 }
 
 // Chrome Extension Message Types

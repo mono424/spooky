@@ -229,6 +229,128 @@ describe('SqliteCacheEngine.getStorageDiagnostics', () => {
   });
 });
 
+// Shared-tabs engine role modes: the engine object survives every role change
+// (one monotonic epoch per tab), followers speak the same protocol over a
+// MessagePort, and the leaderless window parks ops instead of failing the UI.
+describe('SqliteCacheEngine role modes', () => {
+  function makeSharedEngine() {
+    const log: string[] = [];
+    const engine = new SqliteCacheEngine(
+      { namespace: 'n', database: 'd' } as any,
+      makeLogger(),
+      { shared: true, useOpfs: true }
+    );
+    stubTransport(engine, lifecycleHandler(log));
+    return { engine, log };
+  }
+
+  /** A fake follower dbPort: replies like the worker over postMessage. */
+  function fakeLeaderPort() {
+    const port: any = {
+      onmessage: null as null | ((ev: { data: any }) => void),
+      onmessageerror: null,
+      started: false,
+      closed: false,
+      start() {
+        this.started = true;
+      },
+      close() {
+        this.closed = true;
+      },
+      postMessage(msg: any) {
+        queueMicrotask(() => {
+          const rest =
+            msg.type === 'exec'
+              ? { rows: [] }
+              : msg.type === 'select'
+                ? { rows: [], relationFetches: 0 }
+                : {};
+          port.onmessage?.({ data: { id: msg.id, ok: true, wt: 0, ...rest } });
+        });
+      },
+    };
+    return port;
+  }
+
+  it('adoptOwner opens under the worker lock and wipes stale _00_query rows', async () => {
+    const { engine, log } = makeSharedEngine();
+    const health = await engine.adoptOwner('anon', {
+      workerLockName: 'sp00ky-tabs:fp:anon:worker:1',
+      allowMemoryFallback: false,
+      resumeHeld: false,
+    });
+    expect(health.status).toBe('persistent');
+    expect(engine.storageHealth.role).toBe('leader');
+    expect(log[0]).toBe('open');
+    expect(log).toContain('run'); // the DELETE _00_query wipe
+    expect(engine.currentBucketId).toBe('anon');
+  });
+
+  it('adoptAttached serves reads over the leader port and reports follower role', async () => {
+    const engine = new SqliteCacheEngine(
+      { namespace: 'n', database: 'd' } as any,
+      makeLogger(),
+      { shared: true }
+    );
+    const port = fakeLeaderPort();
+    await engine.adoptAttached(
+      port,
+      { bucketId: 'anon', storageHealth: { status: 'persistent', fallback: false } },
+      () => {}
+    );
+    expect(port.started).toBe(true);
+    expect(engine.storageHealth).toMatchObject({ status: 'persistent', role: 'follower' });
+    await expect(engine.getById('game', 'game:1')).resolves.toBeNull();
+    expect((globalThis as any).__sqliteStats.proxiedOps).toBeGreaterThan(0);
+  });
+
+  it('parks ops through a leader loss and releases them on promotion', async () => {
+    const { engine } = makeSharedEngine();
+    const port = fakeLeaderPort();
+    await engine.adoptAttached(
+      port,
+      { bucketId: 'anon', storageHealth: { status: 'persistent', fallback: false } },
+      () => {}
+    );
+    const epochBefore = engine.epoch;
+    engine.onLeaderLost('leader tab closed');
+    expect(engine.epoch).toBe(epochBefore + 1);
+
+    // Issued during the leaderless window: must not reject immediately.
+    const read = engine.getById('_00_query', 'h1');
+    let settled = false;
+    void read.finally(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBe(false);
+
+    await engine.adoptOwner('anon', {
+      workerLockName: 'sp00ky-tabs:fp:anon:worker:2',
+      allowMemoryFallback: false,
+      resumeHeld: false,
+    });
+    await expect(read).resolves.toBeNull();
+    expect(engine.storageHealth.role).toBe('leader');
+  });
+
+  it('bumps the epoch on promotion after having had a store (fences in-flight chains)', async () => {
+    const { engine } = makeSharedEngine();
+    await engine.adoptOwner('anon', {
+      workerLockName: 'sp00ky-tabs:fp:anon:worker:1',
+      allowMemoryFallback: false,
+      resumeHeld: false,
+    });
+    const before = engine.epoch;
+    await engine.adoptOwner('anon', {
+      workerLockName: 'sp00ky-tabs:fp:anon:worker:3',
+      allowMemoryFallback: false,
+      resumeHeld: false,
+    });
+    expect(engine.epoch).toBeGreaterThan(before);
+  });
+});
+
 // `pureWriteOpResult` is the single source of truth for what a pure-write op
 // contributes to a query's per-statement results. The batched fast path in
 // `query()` and the per-op `execOp` path BOTH route through it, so a caller that

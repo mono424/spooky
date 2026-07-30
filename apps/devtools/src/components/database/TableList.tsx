@@ -10,6 +10,8 @@ interface TableListProps {
   onToggleInternal: (value: boolean) => void;
   /** Durability of the local store, when the engine reports it. */
   storage?: DatabaseState['storage'];
+  /** Shared-tabs role state, when the feature is active. */
+  tabs?: DatabaseState['tabs'];
 }
 
 /** Internal sync/bookkeeping tables the app doesn't normally care about. */
@@ -127,6 +129,18 @@ export function TableList(props: TableListProps) {
         >
           Storage: {props.storage!.status}
           {props.storage!.fallback ? ' (fallback, not persisted)' : ''}
+        </div>
+      </Show>
+      {/* Shared-tabs: which tab owns the store this panel is looking at. */}
+      <Show when={props.tabs}>
+        <div class="database-storage" title={`tab ${props.tabs!.tabId}`}>
+          Tabs: {props.tabs!.role}
+          {props.tabs!.role === 'leader' && props.tabs!.followers !== null
+            ? ` (${props.tabs!.followers} follower${props.tabs!.followers === 1 ? '' : 's'}, ${props.tabs!.relayedBatches ?? 0} relayed)`
+            : ''}
+          {props.tabs!.role === 'follower' && props.tabs!.leaderTabId
+            ? ` of ${props.tabs!.leaderTabId.slice(0, 8)}`
+            : ''}
         </div>
       </Show>
     </div>

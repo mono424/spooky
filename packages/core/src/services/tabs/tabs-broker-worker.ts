@@ -68,6 +68,10 @@ interface Namespace {
   electing: boolean;
   /** Pending follower attach state: followerTabId -> retry bookkeeping. */
   attachRetry: Map<string, { count: number; timer: ReturnType<typeof setTimeout> | null }>;
+  /** Aborts the queued Web Lock request watching the current leader's tab
+   *  lock (granted = the leader tab died; locks release instantly on death,
+   *  unlike the pong timeout). */
+  tabLockMonitor: AbortController | null;
 }
 
 const brokerInstanceId =
@@ -111,6 +115,7 @@ function getNamespace(fingerprint: string, bucketId: string): Namespace {
       opfsFailedCycles: 0,
       electing: false,
       attachRetry: new Map(),
+      tabLockMonitor: null,
     };
     namespaces.set(key, ns);
   }
@@ -160,6 +165,8 @@ function clearLeader(
   const leader = ns.leader;
   if (!leader) return null;
   ns.leader = null;
+  ns.tabLockMonitor?.abort();
+  ns.tabLockMonitor = null;
   const tab = ns.tabs.get(leader.tabId);
   const workerLock = tab?.heldLeadership?.workerLockName ?? null;
   if (tab && opts.demote) {
@@ -179,6 +186,30 @@ function clearLeader(
   for (const [, retry] of ns.attachRetry) if (retry.timer) clearTimeout(retry.timer);
   ns.attachRetry.clear();
   return { tabId: leader.tabId, leadershipId: leader.leadershipId, workerLock };
+}
+
+/**
+ * Fast crash detection: queue a Web Lock request on the leader's tab lock.
+ * Locks release the instant their holder's tab dies, so being GRANTED means
+ * the leader is gone; release immediately (return from the callback) and
+ * re-elect. The leadershipId guard drops stale grants after a normal handoff.
+ */
+function startTabLockMonitor(ns: Namespace, leadershipId: number): void {
+  const locks = (navigator as { locks?: LockManager }).locks;
+  if (!locks) return;
+  ns.tabLockMonitor?.abort();
+  const controller = new AbortController();
+  ns.tabLockMonitor = controller;
+  const name = `sp00ky-tabs:${ns.fingerprint}:${ns.bucketId}:tab`;
+  locks
+    .request(name, { mode: 'exclusive', signal: controller.signal }, () => {
+      if (ns.leader?.leadershipId !== leadershipId) return;
+      const previous = clearLeader(ns, { demote: true, removeTab: true });
+      electIfNeeded(ns, previous);
+    })
+    .catch(() => {
+      /* aborted (normal handoff) or Web Locks hiccup; pong timeout covers it */
+    });
 }
 
 /** Probe whether a lock name is free by acquiring-and-releasing it. */
@@ -336,15 +367,24 @@ function stopPingTimerIfIdle(): void {
   }
 }
 
-function removeTab(ns: Namespace, tabId: string, opts: { notifyLeader: boolean }): void {
+function removeTab(
+  ns: Namespace,
+  tabId: string,
+  opts: { notifyLeader: boolean; closePort?: boolean }
+): void {
   const tab = ns.tabs.get(tabId);
   if (!tab) return;
   ns.tabs.delete(tabId);
   portTab.delete(tab.port);
-  try {
-    tab.port.close();
-  } catch {
-    /* ignore */
+  // A re-hello (bucket switch, reconnect) re-homes the tab on the SAME port;
+  // closing it would sever the still-connected tab. Only a real departure
+  // (shutdown, eviction) closes.
+  if (opts.closePort !== false) {
+    try {
+      tab.port.close();
+    } catch {
+      /* ignore */
+    }
   }
   const retry = ns.attachRetry.get(tabId);
   if (retry?.timer) clearTimeout(retry.timer);
@@ -361,10 +401,15 @@ function removeTab(ns: Namespace, tabId: string, opts: { notifyLeader: boolean }
   }
 }
 
-function evictTab(ns: Namespace, tabId: string, reason: string): void {
+function evictTab(
+  ns: Namespace,
+  tabId: string,
+  reason: string,
+  opts: { closePort?: boolean } = {}
+): void {
   const wasLeader = ns.leader?.tabId === tabId;
   const previous = wasLeader ? clearLeader(ns, { demote: true, removeTab: false }) : null;
-  removeTab(ns, tabId, { notifyLeader: !wasLeader });
+  removeTab(ns, tabId, { notifyLeader: !wasLeader, closePort: opts.closePort });
   void reason;
   if (wasLeader) electIfNeeded(ns, previous);
   stopPingTimerIfIdle();
@@ -387,7 +432,7 @@ function handleTabMessage(port: MessagePort, msg: TabToBrokerMessage, ports: rea
     // the tab led its old namespace that namespace needs a new leader now,
     // not after a 15s pong eviction.
     for (const other of [...namespaces.values()]) {
-      if (other.tabs.has(msg.tabId)) evictTab(other, msg.tabId, 'rehello');
+      if (other.tabs.has(msg.tabId)) evictTab(other, msg.tabId, 'rehello', { closePort: false });
     }
     const tab: BrokerTab = {
       port,
@@ -444,6 +489,7 @@ function handleTabMessage(port: MessagePort, msg: TabToBrokerMessage, ports: rea
       }
       ns.leader.ready = true;
       ns.opfsFailedCycles = 0;
+      startTabLockMonitor(ns, msg.leadershipId);
       const tab = ns.tabs.get(msg.tabId);
       if (tab) {
         // The leader now holds the per-leadership worker lock; remember it so
@@ -499,9 +545,9 @@ function handleTabMessage(port: MessagePort, msg: TabToBrokerMessage, ports: rea
   }
 }
 
-(self as unknown as SharedWorkerGlobalScope).onconnect = (event: MessageEvent) => {
-  const port = event.ports[0];
-  if (!port) return;
+/** Attach a connecting tab's port. Exported for the node test harness, which
+ *  drives the broker with fake MessagePort pairs instead of a SharedWorker. */
+export function handleConnect(port: MessagePort): void {
   port.onmessage = (ev: MessageEvent) => {
     handleTabMessage(port, ev.data as TabToBrokerMessage, (ev.ports ?? []) as MessagePort[]);
   };
@@ -510,4 +556,26 @@ function handleTabMessage(port: MessagePort, msg: TabToBrokerMessage, ports: rea
     if (entry) evictTab(entry.ns, entry.tabId, 'messageerror');
   };
   port.start?.();
-};
+}
+
+/** Test-only: wipe module state so each test starts with a fresh broker. */
+export function __resetBrokerForTests(): void {
+  if (pingTimer) clearInterval(pingTimer);
+  pingTimer = null;
+  for (const ns of namespaces.values()) {
+    for (const [, retry] of ns.attachRetry) if (retry.timer) clearTimeout(retry.timer);
+  }
+  namespaces.clear();
+  portTab.clear();
+  canonicalFingerprint = null;
+  nextLeadershipId = 0;
+}
+
+// `self` only exists in a real worker scope; the node test harness imports
+// this module and calls handleConnect directly.
+if (typeof self !== 'undefined') {
+  (self as unknown as SharedWorkerGlobalScope).onconnect = (event: MessageEvent) => {
+    const port = event.ports[0];
+    if (port) handleConnect(port);
+  };
+}

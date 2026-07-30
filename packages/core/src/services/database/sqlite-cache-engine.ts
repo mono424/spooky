@@ -269,6 +269,7 @@ export class SqliteCacheEngine implements LocalStore {
     }
     s.inFlight++;
     s.maxInFlight = Math.max(s.maxInFlight, s.inFlight);
+    if (this.transport.kind === 'port') s.proxiedOps = (s.proxiedOps ?? 0) + 1;
     const sentAt = performance.now();
     return this.transport.call<T>(type, payload).then(
       (v: T) => {
@@ -435,6 +436,25 @@ export class SqliteCacheEngine implements LocalStore {
    *  after that point invalidate in-flight reads and must bump the epoch. */
   private hadStore = false;
 
+  /**
+   * Role transitions run on their OWN chain, never on the opQueue: parked ops
+   * sit INSIDE opQueue entries waiting for the role gate, so a transition
+   * queued behind them could never run to release them (deadlock). Transitions
+   * are safe off-queue because in-flight ops on a dead transport were already
+   * rejected, parked ops only resume after the transition completes, and the
+   * worker serializes everything worker-side anyway.
+   */
+  private transitionChain: Promise<unknown> = Promise.resolve();
+
+  private chainTransition<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.transitionChain.then(fn, fn);
+    this.transitionChain = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
   private openRoleGate(reason: string): void {
     if (this.roleGate) return;
     let release!: () => void;
@@ -478,7 +498,7 @@ export class SqliteCacheEngine implements LocalStore {
     }
   ): Promise<StorageHealth> {
     this.roleLabel = 'leader';
-    return this.enqueue(async () => {
+    return this.chainTransition(async () => {
       if (
         opts.resumeHeld &&
         this.transport?.kind === 'worker' &&
@@ -515,6 +535,7 @@ export class SqliteCacheEngine implements LocalStore {
       } catch {
         /* fresh bucket: table just seeded, nothing to wipe */
       }
+      getStats().roleChanges = (getStats().roleChanges ?? 0) + 1;
       this.hadStore = true;
       this.closeRoleGate();
       return this.storageHealthValue;
@@ -528,7 +549,7 @@ export class SqliteCacheEngine implements LocalStore {
     onPortDead: (reason: string) => void
   ): Promise<void> {
     this.roleLabel = 'follower';
-    return this.enqueue(async () => {
+    return this.chainTransition(async () => {
       if (this.hadStore) this.storeEpoch++;
       this.transport?.close('adopting leader port');
       this.transport = new PortSqliteTransport(dbPort, onPortDead, this.logger);
@@ -540,6 +561,7 @@ export class SqliteCacheEngine implements LocalStore {
       this.setStorageHealth(health);
       const stats = getStats();
       stats.persisted = snapshot.storageHealth.status === 'persistent';
+      stats.roleChanges = (stats.roleChanges ?? 0) + 1;
       delete stats.opfsError;
       this.hadStore = true;
       this.closeRoleGate();
@@ -549,7 +571,7 @@ export class SqliteCacheEngine implements LocalStore {
   /** Demoted while owning the store (zombie thaw, stale promotion): tear the
    *  worker down so its OPFS handles free up, then park until re-adopted. */
   async releaseOwnership(): Promise<void> {
-    await this.enqueue(async () => {
+    await this.chainTransition(async () => {
       if (this.transport) {
         try {
           if (this.transport.kind === 'worker') {
@@ -1042,6 +1064,10 @@ interface SqliteStats {
   persisted?: boolean;
   /** Why OPFS persistence failed, when it did. */
   opfsError?: string;
+  /** Shared-tabs follower: ops that crossed the leader's MessagePort. */
+  proxiedOps?: number;
+  /** Times this tab's engine changed hands (promotions + attachments). */
+  roleChanges?: number;
 }
 
 const EMPTY_STATS: SqliteStats = {

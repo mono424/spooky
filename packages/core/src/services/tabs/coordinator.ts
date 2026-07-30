@@ -17,7 +17,9 @@
 import type { Logger } from '../logger/index';
 import type { StorageHealth } from '../../types';
 import { TabBrokerClient } from './broker-client';
+import { acquireLeaderTabLock, type LeaderLockHandle } from './leader-locks';
 import {
+  tabLockName,
   workerLockName,
   type FollowerToLeaderMessage,
   type IngestTuple,
@@ -136,6 +138,10 @@ export class LeaderSyncHub {
 
   get followerCount(): number {
     return this.followers.size;
+  }
+
+  get relayedBatches(): number {
+    return this.seq;
   }
 }
 
@@ -376,6 +382,24 @@ export class TabsCoordinator {
     try {
       if (previousRole === 'follower') this.teardownFollower('promoted');
       this.leadershipId = msg.leadershipId;
+      // The tab lock is the broker's CRASH detector: it queues a request on
+      // this name, and being granted means this tab died (locks release on tab
+      // death instantly, unlike the 15s pong timeout). Steal only when the
+      // broker said the previous holder is a frozen zombie.
+      const lock = await acquireLeaderTabLock(tabLockName(this.fingerprint, this.bucketId), {
+        steal: msg.forceTakeover,
+      });
+      if (!lock) throw new Error('leader tab lock unavailable');
+      this.tabLock?.release();
+      this.tabLock = lock;
+      lock.onLost(() => {
+        // Stolen from under us (we were presumed dead): resign.
+        this.enqueue(async () => {
+          if (this.leadershipId !== msg.leadershipId || this.role !== 'leader') return;
+          await this.teardownLeader();
+          this.deps.hooks.onLeaderLost('tab lock stolen');
+        });
+      });
       const health = await this.deps.hooks.adoptOwner(this.bucketId, {
         workerLockName: workerLockName(this.fingerprint, this.bucketId, msg.leadershipId),
         allowMemoryFallback: msg.allowMemoryFallback,
@@ -418,10 +442,14 @@ export class TabsCoordinator {
     // for whatever comes next.
   }
 
+  private tabLock: LeaderLockHandle | null = null;
+
   private async teardownLeader(): Promise<void> {
     this.hub?.detachAll();
     this.hub = null;
     await this.deps.hooks.releaseOwnership();
+    this.tabLock?.release();
+    this.tabLock = null;
   }
 
   private teardownFollower(reason: string): void {
@@ -524,6 +552,9 @@ export class TabsCoordinator {
   }
   get syncForwarder(): SyncForwarder | null {
     return this.forwarder;
+  }
+  get tabId(): TabId {
+    return this.deps.tabId;
   }
 
   async stop(): Promise<void> {

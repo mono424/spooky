@@ -1,0 +1,192 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { handleConnect, __resetBrokerForTests } from './tabs-broker-worker';
+import { installBrokerGlobals } from './fake-ports.fixture';
+import { TabsCoordinator, type CoordinatorHooks, type LeaderSyncHub, type SyncForwarder } from './coordinator';
+import type { StorageHealth } from '../../types';
+import type { LeaderToFollowerMessage } from './protocol';
+
+function makeLogger(): any {
+  const noop = () => {};
+  const l: any = { debug: noop, info: noop, warn: noop, error: noop, trace: noop };
+  l.child = () => l;
+  return l;
+}
+
+interface HookLog {
+  adoptOwner: { bucketId: string; workerLockName: string; resumeHeld: boolean }[];
+  adoptAttached: { bucketId: string; storageHealth: StorageHealth }[];
+  released: number;
+  leaderLost: string[];
+  exposedPorts: string[];
+  hub: LeaderSyncHub | null;
+  forwarder: SyncForwarder | null;
+}
+
+function makeHooks(): { hooks: CoordinatorHooks; log: HookLog } {
+  const log: HookLog = {
+    adoptOwner: [],
+    adoptAttached: [],
+    released: 0,
+    leaderLost: [],
+    exposedPorts: [],
+    hub: null,
+    forwarder: null,
+  };
+  const hooks: CoordinatorHooks = {
+    async adoptOwner(bucketId, opts) {
+      log.adoptOwner.push({ bucketId, workerLockName: opts.workerLockName, resumeHeld: opts.resumeHeld });
+      return { status: 'persistent', fallback: false, role: 'leader' };
+    },
+    async adoptAttached(_dbPort, snapshot) {
+      log.adoptAttached.push({ bucketId: snapshot.bucketId, storageHealth: snapshot.storageHealth });
+    },
+    async releaseOwnership() {
+      log.released++;
+    },
+    onLeaderLost(reason) {
+      log.leaderLost.push(reason);
+    },
+    async exposeClientPort(clientId) {
+      log.exposedPorts.push(clientId);
+    },
+    async removeClientPort() {},
+    async becomeSyncLeader(hub) {
+      log.hub = hub;
+    },
+    becomeSyncFollower(forwarder) {
+      log.forwarder = forwarder;
+    },
+    becomeSyncSolo() {},
+    currentStorageHealth: () => ({ status: 'persistent', fallback: false, role: 'leader' }),
+  };
+  return { hooks, log };
+}
+
+function makeCoordinator(tabId: string) {
+  const { hooks, log } = makeHooks();
+  const coordinator = new TabsCoordinator({
+    tabId,
+    fingerprint: 'fp-coord-test',
+    hooks,
+    logger: makeLogger(),
+  });
+  return { coordinator, log };
+}
+
+let restoreGlobals: () => void;
+beforeEach(() => {
+  __resetBrokerForTests();
+  restoreGlobals = installBrokerGlobals(handleConnect);
+});
+afterEach(() => {
+  restoreGlobals();
+  __resetBrokerForTests();
+});
+
+// End-to-end role assignment: two real coordinators, the real broker module,
+// fake SharedWorker/MessageChannel plumbing (node has no SharedWorker).
+describe('TabsCoordinator integration', () => {
+  it('boots the first tab as leader with a per-leadership worker lock name', async () => {
+    const { coordinator, log } = makeCoordinator('tab-1');
+    const role = await coordinator.start('anon');
+    expect(role).toBe('leader');
+    expect(log.adoptOwner).toHaveLength(1);
+    expect(log.adoptOwner[0].bucketId).toBe('anon');
+    expect(log.adoptOwner[0].workerLockName).toMatch(/^sp00ky-tabs:fp-coord-test:anon:worker:\d+$/);
+    expect(log.hub).not.toBeNull();
+    await coordinator.stop();
+  });
+
+  it('attaches the second tab as follower with the leader-reported snapshot', async () => {
+    const a = makeCoordinator('tab-1');
+    await a.coordinator.start('anon');
+    const b = makeCoordinator('tab-2');
+    const role = await b.coordinator.start('anon');
+
+    expect(role).toBe('follower');
+    // Leader forwarded the follower's db port into its worker...
+    expect(a.log.exposedPorts).toEqual(['tab-2']);
+    // ...and the follower adopted the leader's store snapshot.
+    expect(b.log.adoptAttached).toHaveLength(1);
+    expect(b.log.adoptAttached[0].bucketId).toBe('anon');
+    expect(b.log.adoptAttached[0].storageHealth.status).toBe('persistent');
+    expect(b.log.forwarder).not.toBeNull();
+    await b.coordinator.stop();
+    await a.coordinator.stop();
+  });
+
+  it('relays hub messages to the follower forwarder (ingest fan-out)', async () => {
+    const a = makeCoordinator('tab-1');
+    await a.coordinator.start('anon');
+    const b = makeCoordinator('tab-2');
+    await b.coordinator.start('anon');
+
+    const seen: LeaderToFollowerMessage[] = [];
+    b.log.forwarder!.onLeaderMessage = (msg) => seen.push(msg);
+    a.log.hub!.relayIngest([{ table: 'game', op: 'CREATE', id: 'game:1', record: { id: 'game:1' } }]);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const relay = seen.filter((m) => m.type === 'ingest-relay');
+    expect(relay).toHaveLength(1);
+    expect((relay[0] as { seq: number }).seq).toBe(1);
+    await b.coordinator.stop();
+    await a.coordinator.stop();
+  });
+
+  it('forwards follower messages to the leader hub (mutation notify)', async () => {
+    const a = makeCoordinator('tab-1');
+    await a.coordinator.start('anon');
+    const b = makeCoordinator('tab-2');
+    await b.coordinator.start('anon');
+
+    const seen: { tabId: string; msg: unknown }[] = [];
+    a.log.hub!.onFollowerMessage = (tabId, msg) => seen.push({ tabId, msg });
+    b.log.forwarder!.mutationEnqueued('_00_pending_mutations:0000000000123_0001_tab2');
+    await new Promise((r) => setTimeout(r, 20));
+
+    const notify = seen.filter((s) => (s.msg as { type: string }).type === 'mutation-enqueued');
+    expect(notify).toHaveLength(1);
+    expect(notify[0].tabId).toBe('tab-2');
+    await b.coordinator.stop();
+    await a.coordinator.stop();
+  });
+
+  it('promotes the follower when the leader stops (failover)', async () => {
+    const a = makeCoordinator('tab-1');
+    await a.coordinator.start('anon');
+    const b = makeCoordinator('tab-2');
+    await b.coordinator.start('anon');
+
+    const roles: string[] = [];
+    b.coordinator.onRoleChange((r) => roles.push(r));
+    await a.coordinator.stop();
+    // Election + promotion are async hops across the fake ports.
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(roles).toContain('leader');
+    expect(b.log.adoptOwner).toHaveLength(1);
+    // The new leadership got a HIGHER id, so a fresh worker lock name.
+    expect(b.log.adoptOwner[0].workerLockName).not.toBe(a.log.adoptOwner[0].workerLockName);
+    expect(b.log.hub).not.toBeNull();
+    await b.coordinator.stop();
+  });
+
+  it('moves buckets by leaving and rejoining: old namespace re-elects', async () => {
+    const a = makeCoordinator('tab-1');
+    await a.coordinator.start('anon');
+    const b = makeCoordinator('tab-2');
+    await b.coordinator.start('anon');
+
+    const rolesB: string[] = [];
+    b.coordinator.onRoleChange((r) => rolesB.push(r));
+    const newRole = await a.coordinator.moveToBucket('user1');
+
+    expect(newRole).toBe('leader');
+    expect(a.log.adoptOwner.map((o) => o.bucketId)).toEqual(['anon', 'user1']);
+    expect(a.log.released).toBeGreaterThan(0);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(rolesB).toContain('leader');
+    await b.coordinator.stop();
+    await a.coordinator.stop();
+  });
+});

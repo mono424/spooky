@@ -51,6 +51,13 @@ export class DevToolsService implements StreamUpdateReceiver {
   // (the on-demand GET_STATE pull) still works before the push channel turns on.
   private enabled = false;
 
+  /** Shared-tabs snapshot for the panel, wired by Sp00kyClient when active. */
+  private tabsInfoProvider: (() => Record<string, unknown> | null) | null = null;
+
+  setTabsInfoProvider(provider: () => Record<string, unknown> | null): void {
+    this.tabsInfoProvider = provider;
+  }
+
   // Full local table list (incl. internal `_00_*`), enumerated from the local DB
   // via our own reliable `service.query` — the DevTools panel's page-eval query
   // bridge is unreliable under load, so the panel relies on this instead.
@@ -327,6 +334,8 @@ export class DevToolsService implements StreamUpdateReceiver {
         // Durability of the local store. `fallback: true` means persistence was
         // requested but the dataset is actually sitting in RAM.
         storage: this.databaseService.storageHealth ?? { status: 'unknown', fallback: false },
+        // Shared-tabs role state (null when the feature is off / fell back).
+        tabs: this.tabsInfoProvider?.() ?? null,
       },
     });
   }
