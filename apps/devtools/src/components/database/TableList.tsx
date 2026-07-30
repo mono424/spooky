@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from 'solid-js';
 import { useDevTools } from '../../context/DevToolsContext';
+import type { DatabaseState } from '../../types/devtools';
 
 interface TableListProps {
   /** Tables for the currently-selected source (local or remote). */
@@ -8,7 +9,7 @@ interface TableListProps {
   showInternal: boolean;
   onToggleInternal: (value: boolean) => void;
   /** Durability of the local store, when the engine reports it. */
-  storage?: { status: string; fallback: boolean; error?: string };
+  storage?: DatabaseState['storage'];
 }
 
 /** Internal sync/bookkeeping tables the app doesn't normally care about. */
@@ -121,12 +122,7 @@ export function TableList(props: TableListProps) {
       <Show when={props.storage && props.storage.status !== 'unknown'}>
         <div
           class="database-storage"
-          style={{
-            padding: '6px 10px',
-            'border-top': '1px solid var(--border-color, #2a2a2a)',
-            'font-size': '11px',
-            color: props.storage!.fallback ? '#f87171' : 'var(--text-muted, #888)',
-          }}
+          classList={{ fallback: props.storage!.fallback }}
           title={storageError()}
         >
           Storage: {props.storage!.status}

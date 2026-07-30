@@ -109,7 +109,10 @@ export default defineConfig({
     target: 'esnext',
   },
   optimizeDeps: {
-    exclude: ['@surrealdb/wasm'],
+    // @sqlite.org/sqlite-wasm: esbuild pre-bundling breaks the module's own
+    // `sqlite3.wasm` URL lookup in dev (the fetch returns index.html and wasm
+    // instantiation dies on "expected magic word"). Serve it raw.
+    exclude: ['@surrealdb/wasm', '@sqlite.org/sqlite-wasm'],
     esbuildOptions: {
       target: 'esnext',
     },

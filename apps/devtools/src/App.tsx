@@ -6,6 +6,7 @@ import { EventsTab } from './components/events/EventsTab';
 import { QueriesTab } from './components/queries/QueriesTab';
 import { TimingTab } from './components/timing/TimingTab';
 import { DatabaseTab } from './components/database/DatabaseTab';
+import { StorageTab } from './components/storage/StorageTab';
 import { AuthTab } from './components/auth/AuthTab';
 import { VersionsTab } from './components/versions/VersionsTab';
 import { McpTab } from './components/mcp/McpTab';
@@ -40,6 +41,12 @@ function AppContent() {
         <div class="tab-content" classList={{ active: activeTab() === 'database' }}>
           <Show when={activeTab() === 'database'}>
             <DatabaseTab />
+          </Show>
+        </div>
+
+        <div class="tab-content" classList={{ active: activeTab() === 'storage' }}>
+          <Show when={activeTab() === 'storage'}>
+            <StorageTab />
           </Show>
         </div>
 

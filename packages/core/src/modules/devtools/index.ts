@@ -22,6 +22,7 @@ import {
   parseBackendInfo,
   UNAVAILABLE,
 } from './versions';
+import { walkOpfs, type StorageInfo } from './storage-info';
 
 // Real bundled frontend versions, injected at build time by tsdown's
 // version-define plugin (see tsdown.config.ts). The `typeof` guard keeps these
@@ -330,6 +331,72 @@ export class DevToolsService implements StreamUpdateReceiver {
     });
   }
 
+  /**
+   * Full storage diagnostics for the DevTools Storage tab. Every section is
+   * gathered independently and failures land in that section's `error` field,
+   * so one broken source (a mid-switch worker, a browser without OPFS) never
+   * blanks the whole panel.
+   */
+  public async getStorageInfo(opts?: { tableCounts?: boolean }): Promise<StorageInfo> {
+    const nav = typeof navigator !== 'undefined' ? navigator : undefined;
+
+    const info: StorageInfo = {
+      at: Date.now(),
+      engine: {
+        kind: this.databaseService.engineKind ?? 'custom',
+        store: this.databaseService.getConfig()?.store ?? 'memory',
+        bucketId: this.databaseService.currentBucketId,
+      },
+      health: this.databaseService.storageHealth ?? { status: 'unknown', fallback: false },
+      browser: {},
+      opfs: { supported: false, entries: [], totalBytes: 0, truncated: false },
+    };
+
+    try {
+      if (nav?.storage?.estimate) {
+        const est = await nav.storage.estimate();
+        info.browser.usage = est.usage;
+        info.browser.quota = est.quota;
+        // Chrome-only per-storage-system breakdown; absent elsewhere.
+        const details = (est as any).usageDetails;
+        if (details && typeof details === 'object') info.browser.usageDetails = details;
+      }
+      if (nav?.storage?.persisted) {
+        info.browser.persisted = await nav.storage.persisted();
+      }
+    } catch (e) {
+      info.browser.error = e instanceof Error ? e.message : String(e);
+    }
+
+    info.opfs = await walkOpfs();
+
+    const stats = (globalThis as any).__sqliteStats;
+    if (stats && typeof stats === 'object') {
+      info.sqliteStats = { ...stats, byType: { ...(stats.byType ?? {}) } };
+    }
+
+    try {
+      info.engineDiagnostics = await this.databaseService.getStorageDiagnostics?.(opts);
+    } catch (e) {
+      this.logger.warn(
+        { err: e, Category: 'sp00ky-client::DevToolsService::getStorageInfo' },
+        'Engine storage diagnostics failed'
+      );
+    }
+
+    return this.serializeForDevTools(info);
+  }
+
+  /** Ask the browser to exempt this origin's storage from eviction. */
+  public async requestPersistentStorage(): Promise<{ granted: boolean }> {
+    try {
+      const granted = (await navigator.storage?.persist?.()) ?? false;
+      return { granted };
+    } catch {
+      return { granted: false };
+    }
+  }
+
   private notifyDevTools() {
     // No consumer attached → no getState() serialization, no postMessage broadcast.
     if (!this.enabled) return;
@@ -383,6 +450,10 @@ export class DevToolsService implements StreamUpdateReceiver {
       const result: Record<string, any> = {};
       for (const key in data) {
         if (Object.prototype.hasOwnProperty.call(data, key)) {
+          // Skip absent optional fields: recursing them would emit the STRING
+          // 'undefined' (the top-level mapping below), which panels then have
+          // to filter back out (see 3d84fe8a).
+          if (data[key] === undefined) continue;
           result[key] = this.serializeForDevTools(data[key], seen);
         }
       }
@@ -402,6 +473,8 @@ export class DevToolsService implements StreamUpdateReceiver {
           this.notifyDevTools();
         },
         refreshVersions: () => this.refreshBackendVersions(),
+        getStorageInfo: (opts?: { tableCounts?: boolean }) => this.getStorageInfo(opts),
+        requestPersistentStorage: () => this.requestPersistentStorage(),
         getTableData: async (tableName: string) => {
           try {
             // Returns the first statement result as T.

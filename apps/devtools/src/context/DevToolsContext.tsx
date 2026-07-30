@@ -13,6 +13,7 @@ import {
   type TabType,
   type ChromeMessage,
   type QueryMark,
+  type StorageInfo,
 } from '../types/devtools';
 import { useChromeConnection } from '../hooks/useChromeConnection';
 import { useRunInHostPage } from '../hooks/useRunInHostPage';
@@ -48,6 +49,13 @@ interface DevToolsContextValue {
   runQuery?: (query: string, target: 'local' | 'remote') => Promise<any>;
   fetchSchema?: () => Promise<void>;
   fetchTables?: (target?: 'local' | 'remote') => Promise<void>;
+
+  // Storage tab
+  storageInfo: () => StorageInfo | null;
+  storageInfoError: () => string | null;
+  isFetchingStorage: () => boolean;
+  fetchStorageInfo: (opts?: { tableCounts?: boolean }) => Promise<void>;
+  requestPersistentStorage: () => Promise<boolean>;
 }
 
 /** Union of two table-name lists, preserving `a`'s order then appending new `b`. */
@@ -90,6 +98,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const [selectedQueryHash, setSelectedQueryHash] = createSignal<number | null>(null);
   const [selectedTable, setSelectedTable] = createSignal<string | null>(null);
   const [isSp00kyAvailable, setIsSp00kyAvailable] = createSignal(false);
+  // Storage tab: on-demand diagnostics snapshot (the heavyweight OPFS walk +
+  // quota estimate lives behind an explicit fetch, not the push channel).
+  const [storageInfo, setStorageInfo] = createSignal<StorageInfo | null>(null);
+  const [storageInfoError, setStorageInfoError] = createSignal<string | null>(null);
+  const [isFetchingStorage, setIsFetchingStorage] = createSignal(false);
   const [mcpStatus, setMcpStatus] = createSignal<McpStatus>({ enabled: false, connected: false, port: 9315 });
 
   // Custom hooks
@@ -122,6 +135,30 @@ export const DevToolsProvider: ParentComponent = (props) => {
     string,
     { resolve: (data: any) => void; reject: (err: string) => void }
   >();
+
+  /** Settle a requestId-correlated response (query or storage op). */
+  function settlePending(msg: {
+    type: string;
+    requestId?: string;
+    success?: boolean;
+    data?: any;
+    error?: string;
+  }) {
+    console.log('[DevTools] RAW RESPONSE:', msg);
+    if (msg.requestId && pendingQueries.has(msg.requestId)) {
+      // oxlint-disable-next-line no-non-null-assertion -- guarded by .has() check above
+      const { resolve, reject } = pendingQueries.get(msg.requestId)!;
+      pendingQueries.delete(msg.requestId);
+      if (msg.success) {
+        resolve(msg.data);
+      } else {
+        console.error('[DevTools] Rejecting with error:', msg.error);
+        reject(msg.error || 'Unknown error from response (msg.error was falsy)');
+      }
+    } else {
+      console.warn('[DevTools] Response for unknown/expired requestId:', msg.requestId);
+    }
+  }
 
   /**
    * Handle messages from background script
@@ -164,26 +201,8 @@ export const DevToolsProvider: ParentComponent = (props) => {
         break;
 
       case 'SP00KY_QUERY_RESPONSE':
-        const msg = message as any;
-        console.log('[DevTools] RAW QUERY RESPONSE:', msg);
-
-        if (msg.requestId && pendingQueries.has(msg.requestId)) {
-          // oxlint-disable-next-line no-non-null-assertion -- guarded by .has() check above
-          const { resolve, reject } = pendingQueries.get(msg.requestId)!;
-          pendingQueries.delete(msg.requestId);
-
-          if (msg.success) {
-            resolve(msg.data);
-          } else {
-            console.error('[DevTools] Rejecting with error:', msg.error);
-            reject(msg.error || 'Unknown error from query response (msg.error was falsy)');
-          }
-        } else {
-          console.warn(
-            '[DevTools] Received query response for unknown/expired requestId:',
-            msg.requestId
-          );
-        }
+      case 'SP00KY_STORAGE_INFO_RESPONSE':
+        settlePending(message as any);
         break;
 
       case 'MCP_STATUS':
@@ -250,6 +269,13 @@ export const DevToolsProvider: ParentComponent = (props) => {
     if (frontendState.database?.tables) {
       const incoming = frontendState.database.tables;
       setState('database', 'tables', (prev) => unionTables(incoming, prev));
+    }
+
+    // Local-store durability (pushed by core on every health change). Without
+    // this copy the Database tab's Storage line and the Storage tab's live
+    // banner never see it.
+    if (frontendState.database?.storage) {
+      setState('database', 'storage', frontendState.database.storage);
     }
 
     // Update component versions
@@ -337,6 +363,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
     const currentTable = selectedTable();
     if (currentTable) {
       fetchTableData(currentTable);
+    }
+    // Storage snapshot is on-demand; the global Refresh re-fetches it only for
+    // the tab that shows it.
+    if (activeTab() === 'storage') {
+      void fetchStorageInfo();
     }
   }
 
@@ -501,6 +532,79 @@ export const DevToolsProvider: ParentComponent = (props) => {
   };
 
   /**
+   * Dispatch a storage op into the page (same eval → CustomEvent → postMessage
+   * round-trip as runQuery) and await the correlated response. 15s timeout:
+   * the OPFS walk can be slow on large origins.
+   */
+  const storageOpRequest = (op: 'info' | 'persist', options?: { tableCounts?: boolean }) => {
+    return new Promise<any>((resolve, reject) => {
+      const requestId = Math.random().toString(36).substring(7);
+
+      const timeoutId = setTimeout(() => {
+        if (pendingQueries.has(requestId)) {
+          pendingQueries.delete(requestId);
+          reject('Storage request timed out (15s)');
+        }
+      }, 15000);
+
+      pendingQueries.set(requestId, {
+        resolve: (data) => {
+          clearTimeout(timeoutId);
+          resolve(data);
+        },
+        reject: (err) => {
+          clearTimeout(timeoutId);
+          reject(err || 'Undefined error passed to pendingQueries.reject');
+        },
+      });
+
+      hostPage.storageOp(
+        op,
+        requestId,
+        options,
+        (result) => {
+          if (result && !result.success) {
+            clearTimeout(timeoutId);
+            pendingQueries.delete(requestId);
+            reject(result.error || 'Failed to dispatch storage event');
+          }
+        },
+        (err) => {
+          clearTimeout(timeoutId);
+          pendingQueries.delete(requestId);
+          reject(err instanceof Error ? err.message : String(err));
+        }
+      );
+    });
+  };
+
+  const fetchStorageInfo = async (opts?: { tableCounts?: boolean }) => {
+    if (isFetchingStorage()) return;
+    setIsFetchingStorage(true);
+    try {
+      const data = await storageOpRequest('info', opts);
+      setStorageInfo(data as StorageInfo);
+      setStorageInfoError(null);
+    } catch (e) {
+      setStorageInfoError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsFetchingStorage(false);
+    }
+  };
+
+  const requestPersistentStorage = async (): Promise<boolean> => {
+    try {
+      const result = await storageOpRequest('persist');
+      // `persisted` flips in the estimate/persisted section — re-snapshot.
+      void fetchStorageInfo();
+      return !!result?.granted;
+    } catch (e) {
+      setStorageInfoError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  };
+
+  /**
    * Cheap: fetch just the table list via a single `INFO FOR DB`. Safe to call
    * often (Refresh, Database tab open, "show internal" toggle) — guarded so
    * overlapping calls don't pile up on the query channel.
@@ -646,6 +750,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
     runQuery: runQuery as any, // Cast to match interface if needed
     fetchSchema,
     fetchTables,
+    storageInfo,
+    storageInfoError,
+    isFetchingStorage,
+    fetchStorageInfo,
+    requestPersistentStorage,
   };
 
   return <DevToolsContext.Provider value={contextValue}>{props.children}</DevToolsContext.Provider>;

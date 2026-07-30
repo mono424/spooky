@@ -171,7 +171,59 @@ export interface Sp00kyTableDataResponse {
 
 // UI State Types
 
-export type TabType = 'events' | 'queries' | 'database' | 'auth' | 'mcp' | 'versions' | 'timing';
+export type TabType =
+  | 'events'
+  | 'queries'
+  | 'database'
+  | 'storage'
+  | 'auth'
+  | 'mcp'
+  | 'versions'
+  | 'timing';
+
+// Storage tab types — mirrored from packages/core/src/modules/devtools/storage-info.ts
+// (the extension deliberately doesn't import core types).
+
+export interface OpfsEntry {
+  path: string;
+  kind: 'file' | 'directory';
+  /** Absent when the file is locked by an exclusive access handle (live SAHPool). */
+  size?: number;
+}
+
+export interface EngineStorageDiagnostics {
+  engine: 'sqlite';
+  bucketId: string;
+  useOpfs: boolean;
+  workerSelectConfigured: boolean;
+  workerSelectEffective: boolean;
+  dbSizeBytes?: number;
+  freelistBytes?: number;
+  tableCounts?: { table: string; rows: number }[];
+  error?: string;
+}
+
+export interface StorageInfo {
+  at: number;
+  engine: { kind: 'surrealdb' | 'sqlite' | 'custom'; store: string; bucketId: string };
+  health: { status: 'unknown' | 'persistent' | 'memory'; fallback: boolean; error?: string };
+  browser: {
+    persisted?: boolean;
+    usage?: number;
+    quota?: number;
+    usageDetails?: Record<string, number>;
+    error?: string;
+  };
+  opfs: {
+    supported: boolean;
+    entries: OpfsEntry[];
+    totalBytes: number;
+    truncated: boolean;
+    error?: string;
+  };
+  sqliteStats?: Record<string, unknown>;
+  engineDiagnostics?: EngineStorageDiagnostics;
+}
 
 // Shared default so adapters/stores can fall back when versions are absent.
 export const DEFAULT_VERSIONS: VersionsState = {

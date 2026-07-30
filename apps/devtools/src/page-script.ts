@@ -101,6 +101,44 @@
     }
   });
 
+  // Storage diagnostics + persist request (Storage tab). One listener with an
+  // `op` discriminator instead of two copy-paste blocks.
+  window.addEventListener('SP00KY_STORAGE_OP', async (event: any) => {
+    const { requestId, op, options } = event.detail;
+    const sp00ky = (window as any).__00__;
+
+    const respond = (payload: { success: boolean; data?: any; error?: string }) => {
+      window.postMessage(
+        {
+          type: 'SP00KY_STORAGE_INFO_RESPONSE',
+          source: 'sp00ky-devtools-page',
+          requestId,
+          ...payload,
+        },
+        '*'
+      );
+    };
+
+    const method = op === 'persist' ? sp00ky?.requestPersistentStorage : sp00ky?.getStorageInfo;
+    if (!method) {
+      respond({
+        success: false,
+        error:
+          op === 'persist'
+            ? 'requestPersistentStorage not supported by this core version'
+            : 'getStorageInfo not supported by this core version',
+      });
+      return;
+    }
+
+    try {
+      const data = op === 'persist' ? await sp00ky.requestPersistentStorage() : await sp00ky.getStorageInfo(options);
+      respond({ success: true, data });
+    } catch (err: any) {
+      respond({ success: false, error: err?.message || String(err) });
+    }
+  });
+
   // Try immediately, then fast retries, then long-tail fallback
   if (!checkForSp00ky()) {
     // Fast retries for normal case

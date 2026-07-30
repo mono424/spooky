@@ -2,6 +2,7 @@ import type { QueryPlan, RelationPlan, WhereNode } from '@spooky-sync/query-buil
 import type { SealedQuery } from '../../utils/surql';
 import type { DatabaseEventSystem } from './events/index';
 import type { Sp00kyConfig, StorageHealth } from '../../types';
+import type { EngineStorageDiagnostics } from '../../modules/devtools/storage-info';
 
 /**
  * A materialized row. Keys are field names; values are already decoded to the
@@ -121,6 +122,13 @@ export interface LocalStore extends LocalCacheEngine {
   getClient(): unknown;
   getConfig(): Sp00kyConfig<any>['database'];
   readonly currentBucketId: string;
+  /** Which built-in backend this is. OPTIONAL: absent (custom engines) is
+   *  reported as `'custom'` by DevTools. More robust than `instanceof` for
+   *  engines constructed outside this package. */
+  readonly engineKind?: 'surrealdb' | 'sqlite';
+  /** Engine-specific storage numbers for DevTools (DB file size, per-table
+   *  row counts). OPTIONAL: only engines with something to report implement it. */
+  getStorageDiagnostics?(opts?: { tableCounts?: boolean }): Promise<EngineStorageDiagnostics>;
   /**
    * Durability of this engine's local store. OPTIONAL: engines that don't
    * report it (SurrealDB, custom engines) are treated as `'unknown'` by the

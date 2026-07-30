@@ -192,11 +192,45 @@ export function useRunInHostPage() {
     );
   };
 
+  /**
+   * Storage diagnostics / persist request. Like `runQuery`, eval only
+   * DISPATCHES the event; page-script.ts awaits the async work and posts a
+   * SP00KY_STORAGE_INFO_RESPONSE correlated by requestId.
+   */
+  const storageOp = (
+    op: 'info' | 'persist',
+    requestId: string,
+    options: { tableCounts?: boolean } | undefined,
+    onSuccess: (result: { success: boolean; error?: string }) => void,
+    onError?: (error: any) => void
+  ): void => {
+    // No user strings involved: op is a literal, options is a plain flag object.
+    run(
+      `(function() {
+        try {
+            window.dispatchEvent(new CustomEvent('SP00KY_STORAGE_OP', {
+                detail: {
+                    requestId: '${requestId}',
+                    op: '${op}',
+                    options: ${JSON.stringify(options ?? null)}
+                }
+            }));
+            return { success: true, started: true };
+        } catch (error) {
+            var msg = error instanceof Error ? error.message : String(error);
+            return { success: false, error: msg || 'Unknown caught error in eval dispatch' };
+        }
+      })()`,
+      { onSuccess, onError }
+    );
+  };
+
   return {
     run,
     getSp00kyState,
     getTableData,
     runQuery,
+    storageOp,
     updateTableRow,
     deleteTableRow,
     clearHistory,

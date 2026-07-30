@@ -19,6 +19,7 @@ import {
 import { StaleEpochError } from './local';
 import { translateSurql, tableOf, setPath, getPath, type SqlOp } from './surql-translate';
 import type { EngineTx, Id, LocalStore, OrderBy, RelationFetch, Row } from './cache-engine';
+import type { EngineStorageDiagnostics } from '../../modules/devtools/storage-info';
 
 /**
  * The statement result a pure-write op contributes to a query's results array.
@@ -92,6 +93,9 @@ export class SqliteCacheEngine implements LocalStore {
    *  Flipped off at runtime if the worker script predates the `select` op
    *  (stale cached bundle) — degrade to the legacy multi-hop path, don't break. */
   private workerSelect: boolean;
+  /** What `workerSelect` was at construction, so DevTools can tell a runtime
+   *  downgrade (configured true, effective false) from a configured-off. */
+  private workerSelectConfigured: boolean;
   private events: DatabaseEventSystem = createDatabaseEventSystem();
   private bucketId = 'anon';
   /** Durability of the local store, set on every open. A plain Set of callbacks
@@ -102,6 +106,8 @@ export class SqliteCacheEngine implements LocalStore {
   /** Schemaless — tables are created lazily on first write; no migrator. */
   readonly usesSurqlSchema = false;
 
+  readonly engineKind = 'sqlite' as const;
+
   constructor(
     private config: Sp00kyConfig<any>['database'],
     private logger: Logger,
@@ -109,6 +115,7 @@ export class SqliteCacheEngine implements LocalStore {
   ) {
     this.useOpfs = opts.useOpfs ?? true;
     this.workerSelect = opts.workerSelect ?? config.workerSelect ?? true;
+    this.workerSelectConfigured = this.workerSelect;
   }
 
   get epoch(): number {
@@ -141,6 +148,51 @@ export class SqliteCacheEngine implements LocalStore {
 
   getConfig(): Sp00kyConfig<any>['database'] {
     return this.config;
+  }
+
+  /**
+   * Storage numbers for the DevTools Storage tab. Uses {@link call} so the
+   * reads serialize with regular traffic (no SQLITE_BUSY). Never throws — the
+   * worker may be mid bucket-switch; a failure lands in `error` instead.
+   */
+  async getStorageDiagnostics(opts?: { tableCounts?: boolean }): Promise<EngineStorageDiagnostics> {
+    const diag: EngineStorageDiagnostics = {
+      engine: 'sqlite',
+      bucketId: this.bucketId,
+      useOpfs: this.useOpfs,
+      workerSelectConfigured: this.workerSelectConfigured,
+      workerSelectEffective: this.workerSelect,
+    };
+    try {
+      const { rows } = await this.call<{ rows: { bytes: number; freelist: number }[] }>('exec', {
+        sql:
+          'SELECT (SELECT * FROM pragma_page_count()) * (SELECT * FROM pragma_page_size()) AS bytes, ' +
+          '(SELECT * FROM pragma_freelist_count()) * (SELECT * FROM pragma_page_size()) AS freelist',
+      });
+      diag.dbSizeBytes = rows?.[0]?.bytes;
+      diag.freelistBytes = rows?.[0]?.freelist;
+      if (opts?.tableCounts) {
+        const { rows: tables } = await this.call<{ rows: { name: string }[] }>('exec', {
+          sql: "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+        });
+        const names = (tables ?? []).map((r) => r.name);
+        if (names.length) {
+          // Names come from sqlite_master itself; double-quoting is enough.
+          const sql = names
+            .map((n) => `SELECT '${n.replace(/'/g, "''")}' AS t, COUNT(*) AS n FROM "${n.replace(/"/g, '""')}"`)
+            .join(' UNION ALL ');
+          const { rows: counts } = await this.call<{ rows: { t: string; n: number }[] }>('exec', {
+            sql,
+          });
+          diag.tableCounts = (counts ?? []).map((r) => ({ table: r.t, rows: r.n }));
+        } else {
+          diag.tableCounts = [];
+        }
+      }
+    } catch (e) {
+      diag.error = e instanceof Error ? e.message : String(e);
+    }
+    return diag;
   }
 
   getEvents(): DatabaseEventSystem {

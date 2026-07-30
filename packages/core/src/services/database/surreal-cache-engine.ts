@@ -31,6 +31,8 @@ export class SurrealCacheEngine extends LocalDatabaseService implements LocalCac
   /** SurrealDB needs its SurrealQL schema provisioned locally. */
   readonly usesSurqlSchema = true;
 
+  readonly engineKind = 'surrealdb' as const;
+
   /** {@link LocalCacheEngine} alias for {@link LocalDatabaseService.switchStore}. */
   switchBucket(bucketId: string): Promise<void> {
     return this.switchStore(bucketId);

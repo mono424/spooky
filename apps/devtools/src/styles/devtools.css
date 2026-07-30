@@ -2517,3 +2517,167 @@ body {
 .tt-meta.tt-err {
   color: var(--sys-color-error);
 }
+
+/* ============================================================
+   Storage tab — engine identity, persistence health, quota,
+   OPFS listing, SQLite stats. Reuses the .mcp-* shell and .kv rows.
+   ============================================================ */
+
+/* Small utilities (first global use; keep in sync with .kv-v.mono). */
+.muted {
+  color: var(--sys-color-on-surface-subtle);
+}
+.mono {
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: var(--sys-typescale-monospace-size);
+}
+
+.storage-refresh-btn,
+.storage-persist-btn {
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  color: var(--sys-color-on-surface);
+  background: var(--sys-color-state-hover);
+  border: 1px solid var(--sys-color-divider);
+  border-radius: var(--sys-radius-sm);
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.storage-refresh-btn:hover,
+.storage-persist-btn:hover {
+  background: var(--sys-color-state-focus, var(--sys-color-state-hover));
+}
+.storage-refresh-btn:disabled,
+.storage-persist-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Health banner: loud only for a genuine fallback (persistence requested,
+   dataset actually in RAM). */
+.storage-health-banner.error {
+  margin: var(--sys-spacing-2) 0 var(--sys-spacing-3);
+  padding: var(--sys-spacing-3);
+  border: 1px solid var(--sys-color-error);
+  border-left-width: 4px;
+  border-radius: var(--sys-radius-sm);
+  background: color-mix(in srgb, var(--sys-color-error) 10%, transparent);
+}
+.storage-health-title {
+  color: var(--sys-color-error);
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: var(--sys-spacing-1);
+}
+.storage-health-reason {
+  display: block;
+  font-family: var(--sys-typescale-monospace-font);
+  font-size: var(--sys-typescale-monospace-size);
+  color: var(--sys-color-on-surface);
+  margin-bottom: var(--sys-spacing-1);
+  word-break: break-word;
+}
+.storage-health-hint {
+  font-size: 11px;
+  color: var(--sys-color-on-surface-subtle);
+}
+.storage-health-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sys-spacing-2);
+  margin: var(--sys-spacing-2) 0 var(--sys-spacing-3);
+  font-size: 11px;
+}
+
+.storage-error-text {
+  color: var(--sys-color-error);
+  font-size: 11px;
+  margin-bottom: var(--sys-spacing-1);
+  word-break: break-word;
+}
+
+/* Quota usage bar */
+.storage-usage-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sys-color-state-hover);
+  overflow: hidden;
+  margin: var(--sys-spacing-1) 0 var(--sys-spacing-2);
+}
+.storage-usage-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--sys-color-primary);
+  min-width: 2px;
+}
+
+/* OPFS file listing */
+.storage-file-list {
+  border: 1px solid var(--sys-color-divider);
+  border-radius: var(--sys-radius-sm);
+  overflow: hidden;
+}
+.storage-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sys-spacing-2);
+  padding: 3px 8px;
+  font-size: 11px;
+  border-top: 1px solid var(--sys-color-divider);
+}
+.storage-file-row:first-child {
+  border-top: none;
+}
+.storage-file-row:hover {
+  background: var(--sys-color-state-hover);
+}
+.storage-file-row.dir {
+  color: var(--sys-color-on-surface);
+  font-weight: 500;
+}
+.storage-file-row.nested .storage-file-path {
+  padding-left: var(--sys-spacing-3);
+}
+.storage-file-row.orphan .storage-file-path {
+  color: var(--sys-color-warning, var(--sys-color-on-surface-subtle));
+}
+.storage-file-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.storage-file-meta {
+  flex: none;
+  color: var(--sys-color-on-surface-subtle);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sys-spacing-1);
+}
+.storage-file-total {
+  margin-top: var(--sys-spacing-1);
+  font-size: 11px;
+}
+
+/* Raw snapshot */
+.storage-raw {
+  margin-top: var(--sys-spacing-3);
+}
+.storage-raw summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--sys-color-on-surface-subtle);
+}
+
+/* Database tab: the compact Storage line under the table list (moved out of
+   inline styles; see StorageTab for the full picture). */
+.database-storage {
+  padding: 6px 10px;
+  border-top: 1px solid var(--sys-color-divider);
+  font-size: 11px;
+  color: var(--sys-color-on-surface-subtle);
+}
+.database-storage.fallback {
+  color: var(--sys-color-error);
+}

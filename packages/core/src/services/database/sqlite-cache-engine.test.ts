@@ -222,6 +222,78 @@ describe('SqliteCacheEngine storage health', () => {
   });
 });
 
+// Storage numbers for the DevTools Storage tab: DB size via the pragmas, row
+// counts on demand, and the configured-vs-effective workerSelect split. Errors
+// must land in `error` (the worker may be mid bucket-switch), never throw.
+describe('SqliteCacheEngine.getStorageDiagnostics', () => {
+  function makeEngine(execRows: (sql: string) => unknown[]) {
+    const noop = () => {};
+    const logger: any = { debug: noop, info: noop, warn: noop, error: noop, trace: noop };
+    logger.child = () => logger;
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, logger);
+    (engine as any).spawnWorker = () => {
+      const w: any = { onmessage: null, onerror: null, onmessageerror: null, terminate() {} };
+      w.postMessage = (msg: any) => {
+        Promise.resolve().then(() => {
+          const rest =
+            msg.type === 'open'
+              ? { persisted: true }
+              : msg.type === 'exec'
+                ? { rows: execRows(msg.payload.sql) }
+                : {};
+          const p = (engine as any).pending.get(msg.id);
+          if (!p) return;
+          (engine as any).pending.delete(msg.id);
+          p.resolve(rest);
+        });
+      };
+      return w as unknown as Worker;
+    };
+    return engine;
+  }
+
+  it('reports size, freelist, and per-table counts', async () => {
+    const engine = makeEngine((sql) => {
+      if (sql.includes('pragma_page_count')) return [{ bytes: 40960, freelist: 4096 }];
+      if (sql.includes('sqlite_master')) return [{ name: '_00_query' }, { name: 'game' }];
+      if (sql.includes('COUNT(*)'))
+        return [
+          { t: '_00_query', n: 3 },
+          { t: 'game', n: 12 },
+        ];
+      return [];
+    });
+    await engine.connect('user:abc');
+
+    const diag = await engine.getStorageDiagnostics({ tableCounts: true });
+    expect(diag.engine).toBe('sqlite');
+    expect(diag.bucketId).toBe('user:abc');
+    expect(diag.dbSizeBytes).toBe(40960);
+    expect(diag.freelistBytes).toBe(4096);
+    expect(diag.tableCounts).toEqual([
+      { table: '_00_query', rows: 3 },
+      { table: 'game', rows: 12 },
+    ]);
+    // Default config: workerSelect on, never downgraded.
+    expect(diag.workerSelectConfigured).toBe(true);
+    expect(diag.workerSelectEffective).toBe(true);
+  });
+
+  it('skips table counts unless asked and never throws on a dead worker', async () => {
+    const engine = makeEngine(() => [{ bytes: 8192, freelist: 0 }]);
+    await engine.connect('anon');
+
+    const diag = await engine.getStorageDiagnostics();
+    expect(diag.tableCounts).toBeUndefined();
+
+    // No worker at all → the failure lands in `error`, not as a throw.
+    const cold = makeEngine(() => []);
+    const coldDiag = await cold.getStorageDiagnostics();
+    expect(coldDiag.error).toContain('not connected');
+    expect(coldDiag.bucketId).toBe('anon');
+  });
+});
+
 // `pureWriteOpResult` is the single source of truth for what a pure-write op
 // contributes to a query's per-statement results. The batched fast path in
 // `query()` and the per-op `execOp` path BOTH route through it, so a caller that
