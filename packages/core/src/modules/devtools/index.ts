@@ -51,6 +51,18 @@ export class DevToolsService implements StreamUpdateReceiver {
   // (the on-demand GET_STATE pull) still works before the push channel turns on.
   private enabled = false;
 
+  // A state push serializes EVERY active query's full record set (see
+  // `getActiveQueries`) and postMessage clones it again, so its cost scales with
+  // the whole client dataset — and it is triggered per event, including one per
+  // local DB query (`DATABASE_LOCAL_QUERY` → `logEvent`). Unthrottled, a single
+  // page load's few hundred local queries turn a handful of MB of rows into GBs
+  // of short-lived large-object garbage and OOM the renderer (V8
+  // "young object promotion failed"). Coalesce instead: push immediately when
+  // idle, then at most once per window, always serializing the LATEST state.
+  private static readonly NOTIFY_MIN_INTERVAL_MS = 250;
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastNotifyAt = 0;
+
   /** Shared-tabs snapshot for the panel, wired by Sp00kyClient whenever the
    *  feature was REQUESTED (so an inactive/degraded tab still reports why). */
   private tabsInfoProvider: (() => SharedTabsInfo | null) | null = null;
@@ -408,19 +420,42 @@ export class DevToolsService implements StreamUpdateReceiver {
     }
   }
 
+  /**
+   * Request a state push. Coalesced (see {@link NOTIFY_MIN_INTERVAL_MS}): the
+   * first call after an idle period pushes straight away so the panel stays
+   * responsive, and any calls during the window collapse into ONE trailing push
+   * that serializes the state as of the flush, not as of the request. Callers
+   * stay fire-and-forget.
+   */
   private notifyDevTools() {
     // No consumer attached → no getState() serialization, no postMessage broadcast.
     if (!this.enabled) return;
-    if (typeof window !== 'undefined') {
-      window.postMessage(
-        {
-          type: 'SP00KY_STATE_CHANGED',
-          source: 'sp00ky-devtools-page',
-          state: this.getState(),
-        },
-        '*'
-      );
+    if (typeof window === 'undefined') return;
+    // A trailing push is already queued; it will carry this change too.
+    if (this.notifyTimer !== null) return;
+
+    const waited = Date.now() - this.lastNotifyAt;
+    if (waited >= DevToolsService.NOTIFY_MIN_INTERVAL_MS) {
+      this.flushNotify();
+      return;
     }
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      // Still gated on `enabled`: the panel may have disconnected while queued.
+      if (this.enabled) this.flushNotify();
+    }, DevToolsService.NOTIFY_MIN_INTERVAL_MS - waited);
+  }
+
+  private flushNotify() {
+    this.lastNotifyAt = Date.now();
+    window.postMessage(
+      {
+        type: 'SP00KY_STATE_CHANGED',
+        source: 'sp00ky-devtools-page',
+        state: this.getState(),
+      },
+      '*'
+    );
   }
 
   private serializeForDevTools(data: any, seen = new WeakSet<object>()): any {
