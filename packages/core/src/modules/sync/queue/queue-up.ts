@@ -1,4 +1,4 @@
-import type { RecordId } from 'surrealdb';
+import { RecordId } from 'surrealdb';
 import type { LocalStore } from '../../../services/database/index';
 import type { SyncQueueEventSystem } from '../events/index';
 import { createSyncQueueEventSystem, SyncQueueEventTypes } from '../events/index';
@@ -100,7 +100,7 @@ export class UpQueue {
     );
     try {
       await this.local.query(`DELETE $mutation_id`, {
-        mutation_id: parseRecordIdString(mutationId),
+        mutation_id: parseStoredRecordId(mutationId),
       });
     } catch (error) {
       this.logger.error(
@@ -319,6 +319,25 @@ function encodeUpEventId(event: UpEvent): string {
   return encodeRecordId(event.mutation_id);
 }
 
+/**
+ * Parse a record id READ BACK FROM THE STORE, stripping SurrealDB's `⟨⟩`
+ * escaping.
+ *
+ * Outbox ids contain `_` and `-`, so the store hands them back in escaped
+ * display form (`_00_pending_mutations:⟨1785…_0005_c960…⟩`). `parseRecordIdString`
+ * keeps that verbatim, and re-encoding then escapes the brackets AGAIN, so a
+ * `DELETE $mutation_id` built from a stored id targets
+ * `_00_pending_mutations:⟨⟨1785…\⟩⟩` and matches nothing. Every mutation
+ * replayed from the store was therefore un-deletable: its row survived a
+ * SUCCESSFUL push and got re-sent on the next boot.
+ */
+function parseStoredRecordId(id: string): RecordId<string> {
+  const [table, ...rest] = id.split(':');
+  let raw = rest.join(':');
+  if (raw.startsWith('⟨') && raw.endsWith('⟩')) raw = raw.slice(1, -1);
+  return new RecordId(table, raw);
+}
+
 /** Materialize one `_00_pending_mutations` row into an UpEvent. */
 function rowToUpEvent(r: any, logger: Logger): UpEvent | null {
   switch (r.mutationType) {
@@ -331,7 +350,7 @@ function rowToUpEvent(r: any, logger: Logger): UpEvent | null {
       if (r.data === undefined || r.data === null) return null;
       return {
         type: 'create',
-        mutation_id: parseRecordIdString(r.id),
+        mutation_id: parseStoredRecordId(r.id),
         record_id: parseRecordIdString(r.recordId),
         data: r.data,
         tableName: extractTablePart(r.recordId),
@@ -339,7 +358,7 @@ function rowToUpEvent(r: any, logger: Logger): UpEvent | null {
     case 'update':
       return {
         type: 'update',
-        mutation_id: parseRecordIdString(r.id),
+        mutation_id: parseStoredRecordId(r.id),
         record_id: parseRecordIdString(r.recordId),
         data: r.data,
         beforeRecord: r.beforeRecord,
@@ -347,7 +366,7 @@ function rowToUpEvent(r: any, logger: Logger): UpEvent | null {
     case 'delete':
       return {
         type: 'delete',
-        mutation_id: parseRecordIdString(r.id),
+        mutation_id: parseStoredRecordId(r.id),
         record_id: parseRecordIdString(r.recordId),
       };
     default:

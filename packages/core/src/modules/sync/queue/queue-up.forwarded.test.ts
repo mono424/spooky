@@ -114,6 +114,33 @@ describe('UpQueue.enqueueFromDatabase', () => {
     expect(stmt).toContain('data = $data');
   });
 
+  it('deletes the row using the STORED id, not its escaped display form', async () => {
+    // Outbox ids contain `_` and `-`, so the store returns them escaped:
+    // `_00_pending_mutations:⟨1785…_0005_c960…⟩`. Parsing that verbatim and
+    // re-encoding escapes the brackets AGAIN, so the DELETE targeted
+    // `⟨⟨…\⟩⟩` and matched nothing: a mutation replayed from the store could
+    // never have its row removed, even after a SUCCESSFUL push, so it was
+    // re-sent on every boot.
+    const storedId = '_00_pending_mutations:⟨1785540216679_0005_c960958c-d6ed⟩';
+    const deletes: any[] = [];
+    const query = vi.fn(async (sql: string, vars?: Record<string, unknown>) => {
+      if (sql.startsWith('DELETE')) {
+        deletes.push(vars?.mutation_id);
+        return [[]];
+      }
+      return [[{ id: storedId, mutationType: 'create', recordId: 'comment:c1' }]];
+    });
+    const queue = new UpQueue({ query } as any, makeLogger(), () => {});
+
+    await queue.enqueueFromDatabase(storedId);
+
+    expect(deletes).toHaveLength(1);
+    const rid: any = deletes[0];
+    expect(String(rid.table)).toBe('_00_pending_mutations');
+    expect(rid.id).toBe('1785540216679_0005_c960958c-d6ed');
+    expect(String(rid.id)).not.toContain('⟨');
+  });
+
   it('a push timeout classifies as network, so it retries instead of rolling back', () => {
     const err = new Error('Mutation push timed out after 30000ms (create)');
     expect(classifySyncError(err)).toBe('network');
