@@ -1,11 +1,7 @@
 import type { RecordId } from 'surrealdb';
 import type { LocalStore } from '../../../services/database/index';
-import type {
-  SyncQueueEventSystem} from '../events/index';
-import {
-  createSyncQueueEventSystem,
-  SyncQueueEventTypes,
-} from '../events/index';
+import type { SyncQueueEventSystem } from '../events/index';
+import { createSyncQueueEventSystem, SyncQueueEventTypes } from '../events/index';
 import {
   parseRecordIdString,
   extractTablePart,
@@ -50,7 +46,10 @@ export class UpQueue {
   private queue: UpEvent[] = [];
   private _events: SyncQueueEventSystem;
   private logger: Logger;
-  private debouncedMutations: Map<string, { timer: any; firstBeforeRecord?: Record<string, unknown> }>;
+  private debouncedMutations: Map<
+    string,
+    { timer: any; firstBeforeRecord?: Record<string, unknown> }
+  >;
 
   get events(): SyncQueueEventSystem {
     return this._events;
@@ -199,10 +198,19 @@ export class UpQueue {
   async enqueueFromDatabase(mutationId: string): Promise<void> {
     if (this.queue.some((e) => encodeUpEventId(e) === mutationId)) return;
     try {
-      const [records] = await this.local.query<any>(`SELECT * FROM $mutation_id`, {
-        mutation_id: parseRecordIdString(mutationId),
+      // ARRAY param, matching SyncEngine's `SELECT * FROM $idsToFetch`. A bare
+      // `FROM $singleRecordId` looks fine against SurrealDB but the SQLite
+      // engine lowers any `FROM $param` to `selectByIds` and calls `.map` on
+      // the param (surql-translate.ts, SqliteCacheEngine.selectByIds), so a
+      // single RecordId threw. The throw landed in the catch below, which logs
+      // at `error` — invisible to an app running `logLevel: 'fatal'` — so every
+      // forwarded mutation was silently dropped: the follower's optimistic
+      // write stuck locally, was never pushed, and the next down-sync reverted it.
+      const [records] = await this.local.query<any>(`SELECT * FROM $mutation_ids`, {
+        mutation_ids: [parseRecordIdString(mutationId)],
       });
-      const event = Array.isArray(records) && records[0] ? rowToUpEvent(records[0], this.logger) : null;
+      const event =
+        Array.isArray(records) && records[0] ? rowToUpEvent(records[0], this.logger) : null;
       if (event) this.addToQueue(event);
     } catch (error) {
       this.logger.error(
@@ -266,7 +274,11 @@ function rowToUpEvent(r: any, logger: Logger): UpEvent | null {
       };
     default:
       logger.warn(
-        { mutationType: r.mutationType, record: r, Category: 'sp00ky-client::UpQueue::rowToUpEvent' },
+        {
+          mutationType: r.mutationType,
+          record: r,
+          Category: 'sp00ky-client::UpQueue::rowToUpEvent',
+        },
         'Unknown mutation type'
       );
       return null;
