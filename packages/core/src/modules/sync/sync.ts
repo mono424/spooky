@@ -1,8 +1,13 @@
 import type { LocalStore, RemoteDatabaseService } from '../../services/database/index';
-import type { RecordVersionArray, RecordVersionDiff, SyncHealth, SyncHealthStatus } from '../../types';
+import type {
+  RecordVersionArray,
+  RecordVersionDiff,
+  SyncHealth,
+  SyncHealthStatus,
+} from '../../types';
 import { createSyncEventSystem, SyncEventTypes, SyncQueueEventTypes } from './events/index';
 import type { Logger } from '../../services/logger/index';
-import type { DownEvent, UpEvent} from './queue/index';
+import type { DownEvent, UpEvent } from './queue/index';
 import { DownQueue, UpQueue } from './queue/index';
 import type { RecordId, Uuid } from 'surrealdb';
 import {
@@ -20,7 +25,13 @@ import { SyncScheduler } from './scheduler';
 import type { SchemaStructure } from '@spooky-sync/query-builder';
 import type { CacheModule } from '../cache/index';
 import type { DataModule } from '../data/index';
-import { classifySyncError, encodeRecordId, extractIdPart, extractTablePart, surql } from '../../utils/index';
+import {
+  classifySyncError,
+  encodeRecordId,
+  extractIdPart,
+  extractTablePart,
+  surql,
+} from '../../utils/index';
 import { ANON_USER_ID, DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
 import { mutationOwnerTabId } from '../data/mutation-id';
 import type { LeaderSyncHub, SyncForwarder } from '../../services/tabs/coordinator';
@@ -49,6 +60,12 @@ export interface Sp00kySyncOptions {
    * Defaults to `3`.
    */
   degradeAfterConsecutiveFailures?: number;
+  /**
+   * Max time a single mutation push may take before it is treated as a network
+   * failure and retried. Guards against an RPC that never settles wedging the
+   * up-queue for the session. Defaults to 30000; `0` disables the timeout.
+   */
+  pushTimeoutMs?: number;
 }
 
 /**
@@ -162,13 +179,11 @@ export class Sp00kySync<S extends SchemaStructure> {
   }
 
   subscribeToPendingMutations(cb: (count: number) => void): () => void {
-    const id1 = this.upQueue.events.subscribe(
-      SyncQueueEventTypes.MutationEnqueued,
-      (event) => cb(event.payload.queueSize)
+    const id1 = this.upQueue.events.subscribe(SyncQueueEventTypes.MutationEnqueued, (event) =>
+      cb(event.payload.queueSize)
     );
-    const id2 = this.upQueue.events.subscribe(
-      SyncQueueEventTypes.MutationDequeued,
-      (event) => cb(event.payload.queueSize)
+    const id2 = this.upQueue.events.subscribe(SyncQueueEventTypes.MutationDequeued, (event) =>
+      cb(event.payload.queueSize)
     );
     return () => {
       this.upQueue.events.unsubscribe(id1);
@@ -180,6 +195,8 @@ export class Sp00kySync<S extends SchemaStructure> {
   // `0` disables degraded reporting (config `syncHealth: false`). Resolved
   // from config in Sp00kyClient and passed through the constructor options.
   private readonly degradeAfterFailures: number;
+  /** Per-push RPC deadline; see {@link withPushTimeout}. */
+  private readonly pushTimeoutMs: number;
   private consecutiveSyncFailures = 0;
   private syncHealthStatus: SyncHealthStatus = 'healthy';
   private lastSyncErrorKind: 'network' | 'application' | undefined;
@@ -297,7 +314,11 @@ export class Sp00kySync<S extends SchemaStructure> {
       if (this.syncHealthStatus !== 'degraded') return;
       this.selfHealAttempts++;
       this.logger.debug(
-        { attempt: this.selfHealAttempts, delayMs: delay, Category: 'sp00ky-client::Sp00kySync::selfHeal' },
+        {
+          attempt: this.selfHealAttempts,
+          delayMs: delay,
+          Category: 'sp00ky-client::Sp00kySync::selfHeal',
+        },
         'Self-heal: re-driving sync while degraded'
       );
       try {
@@ -353,7 +374,9 @@ export class Sp00kySync<S extends SchemaStructure> {
     options?: Sp00kySyncOptions
   ) {
     this.logger = logger.child({ service: 'Sp00kySync' });
-    this.upQueue = new UpQueue(this.local, this.logger);
+    this.upQueue = new UpQueue(this.local, this.logger, (dropped) =>
+      this.onMutationDropped(dropped)
+    );
     this.downQueue = new DownQueue(this.local, this.logger);
     this.syncEngine = new SyncEngine(this.remote, this.cache, this.schema, this.logger);
     this.scheduler = new SyncScheduler(
@@ -368,6 +391,7 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.refSyncIntervalMs = resolveListRefPollInterval(options?.refSyncIntervalMs);
     this.anonLiveEnabled = options?.anonymousLiveQueries ?? false;
     this.degradeAfterFailures = Math.max(0, options?.degradeAfterConsecutiveFailures ?? 3);
+    this.pushTimeoutMs = Math.max(0, options?.pushTimeoutMs ?? 30_000);
   }
 
   /**
@@ -481,6 +505,33 @@ export class Sp00kySync<S extends SchemaStructure> {
           break;
       }
     };
+  }
+
+  /**
+   * A pending mutation was discarded because it can never be sent.
+   *
+   * This is a lost write, so it must not stay invisible. Every failure in this
+   * chain used to be a `logger.error` an app running `logLevel: 'fatal'` never
+   * shows, which is how an outbox could sit undrained for hours with the UI
+   * reporting nothing. Surfaces as a rollback event (the mutation will never
+   * apply, which is what a subscriber needs to know) and degrades sync health.
+   */
+  private onMutationDropped(dropped: {
+    mutationId: string;
+    recordId?: string;
+    mutationType?: string;
+    reason: string;
+  }): void {
+    this.logger.error(
+      { ...dropped, Category: 'sp00ky-client::Sp00kySync::onMutationDropped' },
+      'Dropped a pending mutation that can never be sent'
+    );
+    this.recordSyncOutcome(false, new Error(`dropped mutation: ${dropped.reason}`));
+    this.events.emit(SyncEventTypes.MutationRolledBack, {
+      eventType: (dropped.mutationType as 'create' | 'update' | 'delete') ?? 'update',
+      recordId: dropped.recordId ?? dropped.mutationId,
+      error: `dropped: ${dropped.reason}`,
+    });
   }
 
   /** A forwarded outbox row from a follower: load + drain it. Idempotent. */
@@ -709,7 +760,11 @@ export class Sp00kySync<S extends SchemaStructure> {
           reached = true;
         }
         this.logger.debug(
-          { err: (err as Error)?.message ?? err, hash, Category: 'sp00ky-client::Sp00kySync::pollListRefForActiveQueries' },
+          {
+            err: (err as Error)?.message ?? err,
+            hash,
+            Category: 'sp00ky-client::Sp00kySync::pollListRefForActiveQueries',
+          },
           'Per-query list_ref poll failed'
         );
       }
@@ -742,10 +797,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       { in: queryState.config.id }
     );
     if (!Array.isArray(items)) return false;
-    const fresh: RecordVersionArray = items.map((item) => [
-      encodeRecordId(item.out),
-      item.version,
-    ]);
+    const fresh: RecordVersionArray = items.map((item) => [encodeRecordId(item.out), item.version]);
     // Capture which ids LEFT the query's window (present in the cached
     // remoteArray, absent from `fresh`) BEFORE we overwrite remoteArray — these
     // are cross-window deletes (or rows that scrolled out). They drive the
@@ -780,7 +832,11 @@ export class Sp00kySync<S extends SchemaStructure> {
       await this.syncQuery(queryHash);
     } catch (err) {
       this.logger.info(
-        { err: (err as Error)?.message ?? err, queryHash, Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery' },
+        {
+          err: (err as Error)?.message ?? err,
+          queryHash,
+          Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery',
+        },
         'syncQuery failed during poll'
       );
     }
@@ -789,7 +845,11 @@ export class Sp00kySync<S extends SchemaStructure> {
     // poll too (idempotent — no-op when nothing changed).
     await this.syncSubqueryChildren(queryHash).catch((err) => {
       this.logger.info(
-        { err: (err as Error)?.message ?? err, queryHash, Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery' },
+        {
+          err: (err as Error)?.message ?? err,
+          queryHash,
+          Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery',
+        },
         'Subquery child sync failed during poll'
       );
     });
@@ -803,7 +863,11 @@ export class Sp00kySync<S extends SchemaStructure> {
         await this.dataModule.notifyQuerySynced(queryHash);
       } catch (err) {
         this.logger.info(
-          { err: (err as Error)?.message ?? err, queryHash, Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery' },
+          {
+            err: (err as Error)?.message ?? err,
+            queryHash,
+            Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery',
+          },
           'notifyQuerySynced failed during poll-removal re-render'
         );
       }
@@ -833,7 +897,11 @@ export class Sp00kySync<S extends SchemaStructure> {
 
   private async killRefLiveQuery(): Promise<void> {
     if (this.liveQueryUnsubscribe) {
-      try { this.liveQueryUnsubscribe(); } catch { /* ignore */ }
+      try {
+        this.liveQueryUnsubscribe();
+      } catch {
+        /* ignore */
+      }
       this.liveQueryUnsubscribe = null;
     }
     if (this.currentLiveQueryUuid !== null) {
@@ -903,9 +971,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       'Starting ref live queries'
     );
 
-    const [queryUuid] = await this.remote.query<[Uuid]>(
-      `LIVE SELECT * FROM ${tableName}`
-    );
+    const [queryUuid] = await this.remote.query<[Uuid]>(`LIVE SELECT * FROM ${tableName}`);
     this.currentLiveQueryUuid = queryUuid;
 
     const live = await this.remote.getClient().liveOf(queryUuid);
@@ -1077,6 +1143,37 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.scheduler.enqueueDownEvent(event);
   }
 
+  /**
+   * Bound a mutation push so it always settles.
+   *
+   * `SyncScheduler.syncUp` early-returns while `isSyncingUp` is true, and that
+   * flag only clears in the `finally` of the drain loop. A push whose RPC never
+   * settles (socket dropped mid-flight, response lost) therefore wedges the
+   * up-queue for the rest of the session: no retry, no error, no further
+   * mutation ever sent. A timeout turns that into an ordinary network failure,
+   * which `UpQueue.next` re-queues for the next trigger. The message deliberately
+   * contains "timed out" so `classifySyncError` treats it as `network` and
+   * retries rather than rolling the mutation back.
+   */
+  private withPushTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+    if (!(this.pushTimeoutMs > 0)) return promise;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Mutation push timed out after ${this.pushTimeoutMs}ms (${label})`));
+      }, this.pushTimeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        }
+      );
+    });
+  }
+
   private async processUpEvent(event: UpEvent) {
     this.logger.debug(
       { event, Category: 'sp00ky-client::Sp00kySync::processUpEvent' },
@@ -1089,22 +1186,31 @@ export class Sp00kySync<S extends SchemaStructure> {
           dataKeys.map(({ key, variable }) => [variable, event.data[key]])
         );
         const query = surql.seal(surql.createSet('id', dataKeys));
-        await this.remote.query(query, {
-          id: event.record_id,
-          ...prefixedParams,
-        });
+        await this.withPushTimeout(
+          this.remote.query(query, {
+            id: event.record_id,
+            ...prefixedParams,
+          }),
+          'create'
+        );
         break;
       }
       case 'update':
-        await this.remote.query(`UPDATE $id MERGE $data`, {
-          id: event.record_id,
-          data: event.data,
-        });
+        await this.withPushTimeout(
+          this.remote.query(`UPDATE $id MERGE $data`, {
+            id: event.record_id,
+            data: event.data,
+          }),
+          'update'
+        );
         break;
       case 'delete':
-        await this.remote.query(`DELETE $id`, {
-          id: event.record_id,
-        });
+        await this.withPushTimeout(
+          this.remote.query(`DELETE $id`, {
+            id: event.record_id,
+          }),
+          'delete'
+        );
         break;
       default:
         this.logger.error(
@@ -1118,9 +1224,7 @@ export class Sp00kySync<S extends SchemaStructure> {
   private async handleRollback(event: UpEvent, error: Error): Promise<void> {
     const recordId = encodeRecordId(event.record_id);
     const tableName =
-      event.type === 'create' && event.tableName
-        ? event.tableName
-        : extractTablePart(recordId);
+      event.type === 'create' && event.tableName ? event.tableName : extractTablePart(recordId);
 
     this.logger.warn(
       {
@@ -1448,7 +1552,11 @@ export class Sp00kySync<S extends SchemaStructure> {
     // empty. Best-effort: never fail registration over it.
     await this.syncSubqueryChildren(queryHash).catch((err) => {
       this.logger.info(
-        { err: (err as Error)?.message ?? err, queryHash, Category: 'sp00ky-client::Sp00kySync::createRemoteQuery' },
+        {
+          err: (err as Error)?.message ?? err,
+          queryHash,
+          Category: 'sp00ky-client::Sp00kySync::createRemoteQuery',
+        },
         'Subquery child sync failed during registration; poll will retry'
       );
     });

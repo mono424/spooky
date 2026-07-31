@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { UpQueue } from './queue-up';
 import { translateSurql } from '../../../services/database/surql-translate';
+import { surql, classifySyncError } from '../../../utils/index';
 
 function makeLogger(): any {
   const noop = () => {};
@@ -57,6 +58,67 @@ describe('UpQueue.enqueueFromDatabase', () => {
   // single RecordId where the engine's `selectByIds` lowering expects an array,
   // so it threw, the surrounding catch swallowed it at `error` level, and every
   // follower mutation was silently never pushed. Drive the real translator.
+  it('discards a create with no payload instead of queueing a guaranteed failure', async () => {
+    // `processUpEvent` does `Object.keys(event.data)`, so this row can never be
+    // sent. Queued, it sat at the HEAD and blocked every later mutation for the
+    // whole app: `next()` re-queues on failure, so the backlog never drained.
+    const dropped: any[] = [];
+    const rows: Record<string, unknown[]> = {
+      [ROW.id]: [{ id: ROW.id, mutationType: 'create', recordId: 'comment:c1' }],
+    };
+    const query = vi.fn(async (sql: string, vars?: Record<string, unknown>) => {
+      if (sql.startsWith('DELETE')) return [[]];
+      const ids = (vars?.mutation_ids as unknown[]) ?? [];
+      return [rows[String(ids[0] ?? '')] ?? []];
+    });
+    const queue = new UpQueue({ query } as any, makeLogger(), (d) => dropped.push(d));
+
+    await queue.enqueueFromDatabase(ROW.id);
+
+    expect(queue.size).toBe(0);
+    expect(dropped).toHaveLength(1);
+    // And the row is deleted, so it cannot re-poison the next boot.
+    expect(query.mock.calls.some(([sql]) => String(sql).startsWith('DELETE'))).toBe(true);
+  });
+
+  it('loadFromDatabase drains the replayable rows even when one is unsendable', async () => {
+    const dropped: any[] = [];
+    const query = vi.fn(async (sql: string) => {
+      if (sql.startsWith('DELETE')) return [[]];
+      return [
+        [
+          { id: '_00_pending_mutations:a', mutationType: 'create', recordId: 'comment:c1' },
+          {
+            id: '_00_pending_mutations:b',
+            mutationType: 'update',
+            recordId: 'game:g1',
+            data: { title: 'x' },
+          },
+        ],
+      ];
+    });
+    const queue = new UpQueue({ query } as any, makeLogger(), (d) => dropped.push(d));
+
+    await queue.loadFromDatabase();
+
+    // The good row still loads; the poison one is dropped and reported.
+    expect(queue.size).toBe(1);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0].mutationId).toBe('_00_pending_mutations:a');
+  });
+
+  it('persists the payload for a create, so it can be replayed at all', () => {
+    // The create branch used to accept `dataVar` and ignore it, so the outbox
+    // row was the ONLY copy of a pending create and it carried no data.
+    const stmt = surql.createMutation('create', 'mid', 'id', 'data');
+    expect(stmt).toContain('data = $data');
+  });
+
+  it('a push timeout classifies as network, so it retries instead of rolling back', () => {
+    const err = new Error('Mutation push timed out after 30000ms (create)');
+    expect(classifySyncError(err)).toBe('network');
+  });
+
   it('emits a statement the SQLite engine can actually translate', async () => {
     const { queue, query } = makeQueue({ [ROW.id]: [ROW] });
     await queue.enqueueFromDatabase(ROW.id);

@@ -42,6 +42,19 @@ export type UpEvent = CreateEvent | UpdateEvent | DeleteEvent;
 
 export type RollbackCallback = (event: UpEvent, error: Error) => Promise<void>;
 
+/**
+ * A pending mutation that can never be sent, so it was discarded instead of
+ * being retried forever at the head of the queue.
+ */
+export type DroppedMutation = {
+  mutationId: string;
+  recordId?: string;
+  mutationType?: string;
+  reason: string;
+};
+
+export type DroppedCallback = (dropped: DroppedMutation) => void;
+
 export class UpQueue {
   private queue: UpEvent[] = [];
   private _events: SyncQueueEventSystem;
@@ -57,11 +70,50 @@ export class UpQueue {
 
   constructor(
     private local: LocalStore,
-    logger: Logger
+    logger: Logger,
+    private onDropped?: DroppedCallback
   ) {
     this._events = createSyncQueueEventSystem();
     this.logger = logger.child({ service: 'UpQueue' });
     this.debouncedMutations = new Map();
+  }
+
+  /**
+   * Discard an outbox row that can never be replayed and report it.
+   *
+   * Silently skipping such a row leaves it in the store to be re-read on every
+   * boot; leaving it QUEUED is worse, since `next()` re-queues it on failure and
+   * one unsendable row then blocks every later mutation for the whole app. A
+   * lost write must also be loud: this is the only signal a caller gets.
+   */
+  private async discardUnreplayable(row: any, reason: string): Promise<void> {
+    const mutationId = typeof row?.id === 'string' ? row.id : encodeRecordId(row?.id);
+    this.logger.error(
+      {
+        mutationId,
+        recordId: row?.recordId,
+        mutationType: row?.mutationType,
+        reason,
+        Category: 'sp00ky-client::UpQueue::discardUnreplayable',
+      },
+      'Discarding an unsendable pending mutation'
+    );
+    try {
+      await this.local.query(`DELETE $mutation_id`, {
+        mutation_id: parseRecordIdString(mutationId),
+      });
+    } catch (error) {
+      this.logger.error(
+        { error, mutationId, Category: 'sp00ky-client::UpQueue::discardUnreplayable' },
+        'Failed to delete an unsendable pending mutation'
+      );
+    }
+    this.onDropped?.({
+      mutationId,
+      recordId: row?.recordId,
+      mutationType: row?.mutationType,
+      reason,
+    });
   }
 
   get size(): number {
@@ -209,14 +261,23 @@ export class UpQueue {
       const [records] = await this.local.query<any>(`SELECT * FROM $mutation_ids`, {
         mutation_ids: [parseRecordIdString(mutationId)],
       });
-      const event =
-        Array.isArray(records) && records[0] ? rowToUpEvent(records[0], this.logger) : null;
-      if (event) this.addToQueue(event);
+      const row = Array.isArray(records) ? records[0] : undefined;
+      if (!row) return;
+      const event = rowToUpEvent(row, this.logger);
+      if (event) {
+        this.addToQueue(event);
+        return;
+      }
+      await this.discardUnreplayable(row, 'forwarded mutation is not replayable');
     } catch (error) {
       this.logger.error(
         { error, mutationId, Category: 'sp00ky-client::UpQueue::enqueueFromDatabase' },
         'Failed to load a forwarded mutation'
       );
+      this.onDropped?.({
+        mutationId,
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -230,9 +291,20 @@ export class UpQueue {
         `SELECT * FROM _00_pending_mutations ORDER BY id ASC`
       );
 
-      this.queue = records
-        .map((r: any): UpEvent | null => rowToUpEvent(r, this.logger))
-        .filter((e: UpEvent | null): e is UpEvent => e !== null);
+      const loaded: UpEvent[] = [];
+      const unreplayable: any[] = [];
+      for (const row of records as any[]) {
+        const event = rowToUpEvent(row, this.logger);
+        if (event) loaded.push(event);
+        else unreplayable.push(row);
+      }
+      this.queue = loaded;
+      // Drop them AFTER the queue is populated: one unsendable row must not
+      // stop the rest of the backlog from draining, and leaving it in the store
+      // would just re-poison the next boot.
+      for (const row of unreplayable) {
+        await this.discardUnreplayable(row, 'pending mutation is not replayable');
+      }
     } catch (error) {
       this.logger.error(
         { error, Category: 'sp00ky-client::UpQueue::loadFromDatabase' },
@@ -251,6 +323,12 @@ function encodeUpEventId(event: UpEvent): string {
 function rowToUpEvent(r: any, logger: Logger): UpEvent | null {
   switch (r.mutationType) {
     case 'create':
+      // `processUpEvent` does `Object.keys(event.data)`, so a create with no
+      // payload throws before it reaches the network and can never succeed.
+      // Rows written before the create branch of `surql.createMutation`
+      // persisted `data` are exactly that, so refuse them here instead of
+      // queueing a guaranteed failure.
+      if (r.data === undefined || r.data === null) return null;
       return {
         type: 'create',
         mutation_id: parseRecordIdString(r.id),

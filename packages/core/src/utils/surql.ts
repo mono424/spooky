@@ -91,17 +91,9 @@ export const surql: SurqlHelper = {
     returnValues: ({ field: string; alias: string } | string)[]
   ) {
     return `SELECT ${returnValues
-      .map((rv) =>
-        typeof rv === 'string'
-          ? rv
-          : `${rv.field} as ${rv.alias}`
-      )
+      .map((rv) => (typeof rv === 'string' ? rv : `${rv.field} as ${rv.alias}`))
       .join(',')} FROM ${table} WHERE ${whereVar
-      .map((wv) =>
-        typeof wv === 'string'
-          ? `${wv} = $${wv}`
-          : `${wv.field} = $${wv.variable}`
-      )
+      .map((wv) => (typeof wv === 'string' ? `${wv} = $${wv}` : `${wv.field} = $${wv.variable}`))
       .join(' AND ')}`;
   },
 
@@ -172,7 +164,18 @@ export const surql: SurqlHelper = {
   ) {
     switch (t) {
       case 'create':
-        return `CREATE ONLY $${mutationIdVar} SET mutationType = 'create', recordId = $${recordIdVar}`;
+        // `data` is REQUIRED here, not decorative. The outbox row is the only
+        // copy of a pending create once the in-memory UpEvent is gone (reload,
+        // or a shared-tabs follower whose row is replayed by the leader). This
+        // used to drop `dataVar` on the floor, so every replayed create arrived
+        // with `data: undefined` and `processUpEvent` threw on
+        // `Object.keys(event.data)` before it ever reached the network: the
+        // create was unsendable AND it sat at the head of the queue blocking
+        // every later mutation. The payload was simply never persisted, so
+        // those creates were unrecoverable.
+        return dataVar
+          ? `CREATE ONLY $${mutationIdVar} SET mutationType = 'create', recordId = $${recordIdVar}, data = $${dataVar}`
+          : `CREATE ONLY $${mutationIdVar} SET mutationType = 'create', recordId = $${recordIdVar}`;
       case 'update': {
         let stmt = `CREATE ONLY $${mutationIdVar} SET mutationType = 'update', recordId = $${recordIdVar}, data = $${dataVar}`;
         if (beforeRecordVar) {
