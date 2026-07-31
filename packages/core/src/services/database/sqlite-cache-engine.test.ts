@@ -131,7 +131,10 @@ describe('SqliteCacheEngine storage health', () => {
   });
 
   it('publishes the fallback, its reason, and an error log when OPFS is lost', async () => {
-    const { engine, logs } = makeEngine({ persisted: false, opfsError: 'NoModificationAllowedError: locked' });
+    const { engine, logs } = makeEngine({
+      persisted: false,
+      opfsError: 'NoModificationAllowedError: locked',
+    });
     await engine.connect('user:abc');
 
     expect(engine.storageHealth).toEqual({
@@ -178,11 +181,7 @@ describe('SqliteCacheEngine.getStorageDiagnostics', () => {
     logger.child = () => logger;
     const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, logger);
     stubTransport(engine, (type, payload) =>
-      type === 'open'
-        ? { persisted: true }
-        : type === 'exec'
-          ? { rows: execRows(payload.sql) }
-          : {}
+      type === 'open' ? { persisted: true } : type === 'exec' ? { rows: execRows(payload.sql) } : {}
     );
     return engine;
   }
@@ -235,11 +234,10 @@ describe('SqliteCacheEngine.getStorageDiagnostics', () => {
 describe('SqliteCacheEngine role modes', () => {
   function makeSharedEngine() {
     const log: string[] = [];
-    const engine = new SqliteCacheEngine(
-      { namespace: 'n', database: 'd' } as any,
-      makeLogger(),
-      { shared: true, useOpfs: true }
-    );
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger(), {
+      shared: true,
+      useOpfs: true,
+    });
     stubTransport(engine, lifecycleHandler(log));
     return { engine, log };
   }
@@ -287,11 +285,9 @@ describe('SqliteCacheEngine role modes', () => {
   });
 
   it('adoptAttached serves reads over the leader port and reports follower role', async () => {
-    const engine = new SqliteCacheEngine(
-      { namespace: 'n', database: 'd' } as any,
-      makeLogger(),
-      { shared: true }
-    );
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger(), {
+      shared: true,
+    });
     const port = fakeLeaderPort();
     await engine.adoptAttached(
       port,
@@ -427,5 +423,42 @@ describe('create() tx result shaping (fast path parity)', () => {
 
     expect(created.id).toBe('connection:CONN_abc');
     expect(created.provider).toBe('chesscom');
+  });
+
+  // The outbox row is the ONLY copy of a pending create once the in-memory
+  // UpEvent is gone (reload, or a shared-tabs follower whose row the leader
+  // replays). It must carry the payload: `processUpEvent` does
+  // `Object.keys(event.data)`, so a row written with `data` unbound produces a
+  // create that can never be sent AND blocks every later mutation behind it.
+  //
+  // Note the vars: the RECORD is written from per-key `data_<field>` vars, so
+  // it is easy to emit `data = $data` and never bind `data` at the call site.
+  // That is exactly the bug this asserts against.
+  it('the outbox row carries the whole payload, not just the record id', () => {
+    const payload = { provider: 'chesscom', username: 'hikaru' };
+    const vars = {
+      id: new RecordId('connection', 'CONN_abc'),
+      mid: new RecordId('_00_pending_mutations', '1'),
+      data: payload,
+      data_provider: 'chesscom',
+      data_username: 'hikaru',
+    };
+
+    const sealed = surql.seal(
+      surql.tx([
+        surql.createSet('id', [
+          { key: 'provider', variable: 'data_provider' },
+          { key: 'username', variable: 'data_username' },
+        ]),
+        surql.createMutation('create', 'mid', 'id', 'data'),
+      ]),
+      { resultIndex: 0 }
+    );
+
+    const { ops } = translateSurql(sealed.sql, vars);
+    const outboxRow = pureWriteOpResult(ops[1]) as Record<string, unknown>;
+
+    expect(outboxRow.mutationType).toBe('create');
+    expect(outboxRow.data).toEqual(payload);
   });
 });

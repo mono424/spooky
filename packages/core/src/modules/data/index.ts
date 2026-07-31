@@ -27,7 +27,8 @@ import type {
   QueryTimings,
   PhaseStat,
   RegistrationTimings,
-  RunOptions} from '../../types';
+  RunOptions,
+} from '../../types';
 import { MATERIALIZATION_SAMPLE_WINDOW } from '../../types';
 import {
   parseRecordIdString,
@@ -228,7 +229,15 @@ export class DataModule<S extends SchemaStructure> {
     );
 
     // Create the query and track the pending promise
-    const promise = this.createAndRegisterQuery<T>(hash, recordId, surqlString, params, ttl, tableName, plan);
+    const promise = this.createAndRegisterQuery<T>(
+      hash,
+      recordId,
+      surqlString,
+      params,
+      ttl,
+      tableName,
+      plan
+    );
     this.pendingQueries.set(hash, promise);
     try {
       await promise;
@@ -641,7 +650,7 @@ export class DataModule<S extends SchemaStructure> {
       const idx = Math.min(sorted.length - 1, Math.floor(q * sorted.length));
       return sorted[idx]!;
     };
-    return { p55: pick(0.55), p90: pick(0.90), p99: pick(0.99) };
+    return { p55: pick(0.55), p90: pick(0.9), p99: pick(0.99) };
   }
 
   /** Record a per-phase timing sample (ms) on a query's rolling window. */
@@ -836,10 +845,7 @@ export class DataModule<S extends SchemaStructure> {
    * Shared by `applyHydration` (live registration) and `persistSnapshot`
    * (preload).
    */
-  private async buildAndSaveCacheBatch(
-    tableName: string,
-    rows: RecordWithId[]
-  ): Promise<void> {
+  private async buildAndSaveCacheBatch(tableName: string, rows: RecordWithId[]): Promise<void> {
     const tableSchema = this.schema.tables.find((t) => t.name === tableName);
     const batch: CacheRecord[] = rows.map((record) => ({
       table: tableName,
@@ -882,9 +888,7 @@ export class DataModule<S extends SchemaStructure> {
    * data also clears the marker — a stale marker can't claim "warm" when the
    * rows are gone. Any read error is treated as cold.
    */
-  async getPreloadMarker(
-    hash: string
-  ): Promise<{ fetchedAt: number; rowCount: number } | null> {
+  async getPreloadMarker(hash: string): Promise<{ fetchedAt: number; rowCount: number } | null> {
     try {
       // Pass a real RecordId: a bare string id hits the SurrealDB engine's
       // `FROM ONLY $__id` as a plain string, which "selects" the string itself
@@ -1274,6 +1278,12 @@ export class DataModule<S extends SchemaStructure> {
       this.local.execute(query, {
         id: rid,
         mid: mutationId,
+        // The record itself is written with per-key `data_<field>` vars
+        // (`createSet`), but the OUTBOX row needs the whole payload in one
+        // `data` field so the mutation can be replayed later. Without this the
+        // row is written with `data` unbound: the create becomes unsendable and
+        // blocks the queue behind it.
+        data: params,
         ...prefixedParams,
       })
     );
@@ -1485,9 +1495,7 @@ export class DataModule<S extends SchemaStructure> {
     const id = encodeRecordId(recordId);
 
     try {
-      await withRetry(this.logger, () =>
-        this.local.query('DELETE $id', { id: recordId })
-      );
+      await withRetry(this.logger, () => this.local.query('DELETE $id', { id: recordId }));
       await this.cache.delete(tableName, id, true);
       this.removeRecordFromQueries(recordId);
 
@@ -1765,9 +1773,7 @@ export class DataModule<S extends SchemaStructure> {
         ? (configRecord as any).updateCount
         : 0;
     const persistedErrorCount =
-      typeof (configRecord as any)?.errorCount === 'number'
-        ? (configRecord as any).errorCount
-        : 0;
+      typeof (configRecord as any)?.errorCount === 'number' ? (configRecord as any).errorCount : 0;
 
     return {
       config,
