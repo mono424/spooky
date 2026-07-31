@@ -44,4 +44,9 @@ export interface WasmProcessor {
   // build degrades gracefully instead of throwing.
   load_state?(state: string): void;
   save_state?(): string;
+  // wasm-bindgen destructor. Releases the circuit (store + every view cache)
+  // inside wasm linear memory. Without it the bytes only come back when V8
+  // happens to GC the JS wrapper, which it has no reason to hurry since it
+  // cannot see how much wasm memory the wrapper is holding.
+  free?(): void;
 }

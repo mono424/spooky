@@ -57,12 +57,15 @@ export {
   type UseAppReleaseOptions,
 } from './lib/use-app-release';
 export { useFileUpload, type FileUploadResult } from './lib/use-file-upload';
-export { useDownloadFile, type UseDownloadFileOptions, type UseDownloadFileResult } from './lib/use-download-file';
+export {
+  useDownloadFile,
+  type UseDownloadFileOptions,
+  type UseDownloadFileResult,
+} from './lib/use-download-file';
 export { Sp00kyProvider, type Sp00kyProviderProps } from './lib/Sp00kyProvider';
 export { useDb } from './lib/context';
 
 // export { AuthEventTypes } from "@spooky-sync/core"; // TODO: Verify if AuthEventTypes exists in core
-
 
 // Re-export query builder types for convenience
 export type {
@@ -147,6 +150,19 @@ export class SyncedDb<S extends SchemaStructure> {
   }
 
   /**
+   * Tear down the client: leaves the tabs broker, closes the local store and
+   * remote socket, and frees the wasm circuit. Without this a remounted provider
+   * (or an HMR reload) strands a whole client, and the abandoned wasm heaps stay
+   * resident because V8 cannot see how much wasm memory a dropped wrapper holds.
+   */
+  async close(): Promise<void> {
+    const instance = this.sp00ky;
+    this.sp00ky = null;
+    this._initialized = false;
+    if (instance) await instance.close();
+  }
+
+  /**
    * Create a new record in the database
    */
   async create(id: string, payload: Record<string, unknown>): Promise<void> {
@@ -225,14 +241,11 @@ export class SyncedDb<S extends SchemaStructure> {
   /**
    * Run a backend operation
    */
-  public async run<
-    B extends BackendNames<S>,
-    R extends BackendRoutes<S, B>,
-  >(
+  public async run<B extends BackendNames<S>, R extends BackendRoutes<S, B>>(
     backend: B,
     path: R,
     payload: RoutePayload<S, B, R>,
-    options?: RunOptions,
+    options?: RunOptions
   ): Promise<void> {
     if (!this.sp00ky) throw new Error('SyncedDb not initialized');
     await this.sp00ky.run(backend, path, payload, options);

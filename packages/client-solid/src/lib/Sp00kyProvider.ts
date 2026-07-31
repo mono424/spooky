@@ -1,5 +1,12 @@
-import type { JSX} from 'solid-js';
-import { createSignal, onMount, createComponent, createMemo, mergeProps } from 'solid-js';
+import type { JSX } from 'solid-js';
+import {
+  createSignal,
+  onMount,
+  onCleanup,
+  createComponent,
+  createMemo,
+  mergeProps,
+} from 'solid-js';
 import type { SchemaStructure } from '@spooky/query-builder';
 import type { SyncedDbConfig } from '../types';
 import { SyncedDb } from '../index';
@@ -34,10 +41,29 @@ export function Sp00kyProvider<S extends SchemaStructure>(
 
   const [db, setDb] = createSignal<SyncedDb<S> | undefined>(undefined);
 
+  // Set once the provider is disposed. `onMount` is async, so a remount (or a
+  // fast unmount) can land mid-init; without this the abandoned instance keeps
+  // its SharedWorker leadership, its OPFS worker and its wasm circuit alive for
+  // the life of the page.
+  let disposed = false;
+  let live: SyncedDb<S> | undefined;
+
+  onCleanup(() => {
+    disposed = true;
+    const instance = live;
+    live = undefined;
+    void instance?.close();
+  });
+
   onMount(async () => {
     try {
       const instance = new SyncedDb<S>(merged.config);
+      live = instance;
       await instance.init();
+      if (disposed) {
+        await instance.close();
+        return;
+      }
       // Gate first-load UI on prewarmed data. Best-effort: never let a preload
       // failure keep the app stuck on the fallback.
       if (merged.preload) {

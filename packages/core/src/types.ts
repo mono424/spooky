@@ -162,6 +162,29 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * Inspect via `window.__00__.getState().database.tabs` and `__sqliteStats`.
    */
   sharedTabs?: boolean;
+  /**
+   * Persist the in-browser SSP circuit (store + view caches) as a snapshot so a
+   * reload can restore it instead of re-materializing. Default `false`, and
+   * that default is deliberate.
+   *
+   * The circuit is DERIVED state: the durable local store (OPFS SQLite) is the
+   * source of truth, and every first paint already reads row bodies from it
+   * (`DataManager.createNewQuery` / `materializeRecords`) using the circuit only
+   * for row identity and ordering. A snapshot buys nothing on reload while
+   * costing a full deep clone of every row of every ingested table plus a JSON
+   * encode of the result, `Circuit::save` in the Rust core, mirroring the
+   * server's rule in `ssp-node`: *never per-ingest*.
+   *
+   * When enabled, snapshots are written on a checkpoint interval
+   * ({@link circuitCheckpointMs}) and on `pagehide`, never per ingest or per
+   * query registration. Enable only for a workload that has measured a win.
+   */
+  persistCircuit?: boolean;
+  /**
+   * Checkpoint interval in milliseconds for {@link persistCircuit}. Defaults to
+   * 30000. Ignored when `persistCircuit` is off.
+   */
+  circuitCheckpointMs?: number;
   /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel). */
   otelTransmit?: PinoTransmit;
   /**

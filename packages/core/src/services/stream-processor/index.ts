@@ -57,6 +57,21 @@ export interface StreamUpdateReceiver {
   onStreamUpdate(update: StreamUpdate): void;
 }
 
+/**
+ * Read a circuit snapshot out of the pre-`persistCircuit` persisted shape
+ * (`[[{ state }]]`, a raw SurrealDB result). Returns null for anything else.
+ */
+function extractLegacyState(result: unknown): string | null {
+  if (
+    Array.isArray(result) &&
+    Array.isArray(result[0]) &&
+    typeof result[0][0]?.state === 'string'
+  ) {
+    return result[0][0].state;
+  }
+  return null;
+}
+
 export class StreamProcessorService {
   private logger: Logger;
   private processor: WasmProcessor | undefined;
@@ -89,6 +104,32 @@ export class StreamProcessorService {
   // stomp the leader's snapshot under the same key (the pre-existing cross-tab
   // localStorage hazard); a promoted follower flips this back on.
   private persistState = true;
+  // Snapshot persistence is OPT-IN and off by default (`persistCircuit`).
+  //
+  // `Circuit::save` deep-clones the WHOLE store (every row of every ingested
+  // table, full bodies) plus every view cache and JSON-encodes the result. It
+  // used to run from `ingest`, `flushCoalescing`, `registerQueryPlan` and
+  // `unregisterQueryPlan`, i.e. once per sync batch AND once per query
+  // register/unregister. On a 3.7k-game collection whose list registers and
+  // drops one windowed query per 50 rows scrolled, that measured 220 whole-store
+  // serializations and ~1 GB of transient JSON for a single scroll, 5.5x the
+  // wall time of the same ingests without it, and it doubled the wasm heap
+  // high-water mark (wasm32 dlmalloc never returns pages, so the peak is
+  // permanent). It also ran the encode a second time in
+  // `LocalStoragePersistenceClient.set` and wrote it synchronously on the main
+  // thread. All of it was dead weight: `loadState`'s shape check could never
+  // match what either shipped persistence client returns, so the browser never
+  // restored a snapshot, and first paint comes from the local SQLite store
+  // anyway.
+  //
+  // When enabled, we mark the circuit dirty and let a checkpoint timer (plus a
+  // `pagehide` flush) do at most one snapshot per interval, mirroring
+  // `ssp-node`'s "NEVER per-ingest" rule.
+  private persistCircuit = false;
+  private checkpointMs = 30_000;
+  private checkpointTimer: ReturnType<typeof setInterval> | null = null;
+  private snapshotDirty = false;
+  private pagehideHandler: (() => void) | null = null;
 
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
@@ -201,10 +242,7 @@ export class StreamProcessorService {
     if (buffered.length > 0) {
       this.dispatchUpdates(buffered);
     }
-    // The processor state after the last ingest is cumulative, so a single
-    // snapshot covers the whole batch. Kept fire-and-forget like the per-ingest
-    // call it replaces.
-    this.saveState();
+    this.markSnapshotDirty();
   }
 
   /**
@@ -265,32 +303,120 @@ export class StreamProcessorService {
     this.stateGeneration++;
     this.batching = false;
     this.batchBuffer.clear();
+    this.snapshotDirty = false;
+    const previous = this.processor;
     this.processor = new Sp00kyProcessor() as unknown as WasmProcessor;
+    this.freeProcessor(previous);
     this.logger.info(
       { Category: 'sp00ky-client::StreamProcessorService::reset' },
       'Stream processor reset (fresh circuit)'
     );
   }
 
+  /**
+   * Release the wasm circuit and stop checkpointing. Call when the client is
+   * torn down; a recreated client (provider remount, HMR) would otherwise stack
+   * one full circuit per instance.
+   */
+  dispose(): void {
+    this.stopCheckpoints();
+    const previous = this.processor;
+    this.processor = undefined;
+    this.isInitialized = false;
+    this.batching = false;
+    this.batchBuffer.clear();
+    this.receivers = [];
+    this.freeProcessor(previous);
+  }
+
+  /**
+   * Explicitly run the wasm-bindgen destructor. Guarded: stale wasm builds may
+   * not expose `free`, and a double free must not take the app down.
+   */
+  private freeProcessor(processor: WasmProcessor | undefined): void {
+    if (!processor || typeof processor.free !== 'function') return;
+    try {
+      processor.free();
+    } catch (e) {
+      this.logger.debug(
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::freeProcessor' },
+        'Failed to free previous wasm circuit'
+      );
+    }
+  }
+
   /** Toggle circuit-state persistence (shared-tabs follower/leader role). */
   setPersistenceEnabled(enabled: boolean): void {
     this.persistState = enabled;
+    if (!enabled) this.stopCheckpoints();
+  }
+
+  /**
+   * Opt into snapshot persistence (`persistCircuit`). Off by default: see the
+   * `persistCircuit` field comment for why per-ingest snapshots were removed.
+   * Must be called before `init()` for a snapshot to be restored at boot.
+   */
+  configureCircuitPersistence(enabled: boolean, checkpointMs?: number): void {
+    this.persistCircuit = enabled;
+    if (checkpointMs && checkpointMs > 0) this.checkpointMs = checkpointMs;
+    if (!enabled) this.stopCheckpoints();
+  }
+
+  /**
+   * Record that the circuit changed. Cheap and O(1), the expensive snapshot is
+   * deferred to the checkpoint timer, and skipped entirely when
+   * `persistCircuit` is off (the default).
+   */
+  private markSnapshotDirty(): void {
+    if (!this.persistCircuit || !this.persistState) return;
+    this.snapshotDirty = true;
+    this.startCheckpoints();
+  }
+
+  private startCheckpoints(): void {
+    if (this.checkpointTimer) return;
+    this.checkpointTimer = setInterval(() => {
+      if (!this.snapshotDirty) return;
+      this.snapshotDirty = false;
+      void this.saveState();
+    }, this.checkpointMs);
+    // Node/test environments have no `window`; the interval alone is enough there.
+    if (typeof window !== 'undefined' && !this.pagehideHandler) {
+      this.pagehideHandler = () => {
+        if (!this.snapshotDirty) return;
+        this.snapshotDirty = false;
+        void this.saveState();
+      };
+      window.addEventListener('pagehide', this.pagehideHandler);
+    }
+  }
+
+  /** Stop checkpointing and drop the `pagehide` listener. */
+  stopCheckpoints(): void {
+    if (this.checkpointTimer) {
+      clearInterval(this.checkpointTimer);
+      this.checkpointTimer = null;
+    }
+    if (this.pagehideHandler && typeof window !== 'undefined') {
+      window.removeEventListener('pagehide', this.pagehideHandler);
+    }
+    this.pagehideHandler = null;
+    this.snapshotDirty = false;
   }
 
   async loadState() {
-    if (!this.processor || !this.persistState) return;
+    if (!this.processor || !this.persistState || !this.persistCircuit) return;
     try {
       const result = await this.persistenceClient.get(this.stateKey());
 
-      // Check if we have a valid result from the query
-      if (
-        Array.isArray(result) &&
-        result.length > 0 &&
-        Array.isArray(result[0]) &&
-        result[0].length > 0 &&
-        result[0][0]?.state
-      ) {
-        const state = result[0][0].state;
+      // `save_state` returns a JSON string and every PersistenceClient round-trips
+      // it as one: localStorage via JSON.parse(getItem(...)), surrealdb via
+      // `_00_kv:<key>.val`. This used to test for a raw SurrealDB result shape
+      // (`result[0][0].state`), which no shipped client can ever produce, so the
+      // browser wrote a snapshot on every ingest and never restored one. The legacy
+      // shape is still accepted so an old persisted row still loads.
+      const state = typeof result === 'string' ? result : extractLegacyState(result);
+      if (state) {
         this.logger.info(
           {
             stateLength: state.length,
@@ -369,7 +495,7 @@ export class StreamProcessorService {
   }
 
   async saveState() {
-    if (!this.processor || !this.persistState) return;
+    if (!this.processor || !this.persistState || !this.persistCircuit) return;
     const generation = this.stateGeneration;
     try {
       // Assuming processor has a save_state method that returns the state string/bytes
@@ -454,10 +580,10 @@ export class StreamProcessorService {
         // Direct handler call instead of event
         this.notifyUpdates(updates);
       }
-      // While batching (inside `ingestMany`), `flushCoalescing` persists once
-      // for the whole batch — skip the redundant per-record snapshot here.
+      // While batching (inside `ingestMany`), `flushCoalescing` marks dirty once
+      // for the whole batch, skip the redundant per-record mark here.
       if (!this.batching) {
-        this.saveState();
+        this.markSnapshotDirty();
       }
       return rawUpdates;
     } catch (e) {
@@ -534,7 +660,7 @@ export class StreamProcessorService {
           snapshotMs: initialUpdate.timing_snapshot_ms ?? 0,
         },
       };
-      this.saveState();
+      this.markSnapshotDirty();
       this.logger.debug(
         {
           queryHash: queryPlan.queryHash,
@@ -561,7 +687,7 @@ export class StreamProcessorService {
     if (!this.processor) return;
     try {
       this.processor.unregister_view(queryHash);
-      this.saveState();
+      this.markSnapshotDirty();
     } catch (e) {
       this.logger.error(
         { error: e, Category: 'sp00ky-client::StreamProcessorService::unregisterQueryPlan' },

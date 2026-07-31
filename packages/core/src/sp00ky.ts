@@ -9,12 +9,9 @@ import type {
   UpdateOptions,
   RunOptions,
   SyncHealth,
-  StorageHealth} from './types';
-import {
-  LocalMigrator,
-  RemoteDatabaseService,
-  createLocalEngine,
-} from './services/database/index';
+  StorageHealth,
+} from './types';
+import { LocalMigrator, RemoteDatabaseService, createLocalEngine } from './services/database/index';
 import type { LocalStore } from './services/database/index';
 import { StaleEpochError } from './services/database/index';
 import type { UpEvent } from './modules/sync/index';
@@ -30,10 +27,9 @@ import type {
   BucketNames,
   BackendNames,
   BackendRoutes,
-  RoutePayload} from '@spooky-sync/query-builder';
-import {
-  QueryBuilder
+  RoutePayload,
 } from '@spooky-sync/query-builder';
+import { QueryBuilder } from '@spooky-sync/query-builder';
 
 import { DevToolsService } from './modules/devtools/index';
 import { createLogger } from './services/logger/index';
@@ -60,14 +56,19 @@ import { computeTabsFingerprint, hash53, type TabRole } from './services/tabs/pr
 import type { SqliteCacheEngine } from './services/database/sqlite-cache-engine';
 
 export class BucketHandle {
-  constructor(private bucketName: string, private remote: RemoteDatabaseService) {}
+  constructor(
+    private bucketName: string,
+    private remote: RemoteDatabaseService
+  ) {}
 
   async put(path: string, content: string | Uint8Array | Blob): Promise<void> {
     await this.remote.query(`RETURN f"${this.bucketName}:/${path}".put($content);`, { content });
   }
 
   async get(path: string): Promise<unknown> {
-    const [result] = await this.remote.query<[unknown]>(`RETURN f"${this.bucketName}:/${path}".get();`);
+    const [result] = await this.remote.query<[unknown]>(
+      `RETURN f"${this.bucketName}:/${path}".get();`
+    );
     return result;
   }
 
@@ -76,26 +77,36 @@ export class BucketHandle {
   }
 
   async exists(path: string): Promise<boolean> {
-    const [result] = await this.remote.query<[boolean]>(`RETURN f"${this.bucketName}:/${path}".exists();`);
+    const [result] = await this.remote.query<[boolean]>(
+      `RETURN f"${this.bucketName}:/${path}".exists();`
+    );
     return result;
   }
 
   async head(path: string): Promise<Record<string, unknown>> {
-    const [result] = await this.remote.query<[Record<string, unknown>]>(`RETURN f"${this.bucketName}:/${path}".head();`);
+    const [result] = await this.remote.query<[Record<string, unknown>]>(
+      `RETURN f"${this.bucketName}:/${path}".head();`
+    );
     return result;
   }
 
   async copy(sourcePath: string, targetPath: string): Promise<void> {
-    await this.remote.query(`RETURN f"${this.bucketName}:/${sourcePath}".copy($target);`, { target: targetPath });
+    await this.remote.query(`RETURN f"${this.bucketName}:/${sourcePath}".copy($target);`, {
+      target: targetPath,
+    });
   }
 
   async rename(sourcePath: string, targetPath: string): Promise<void> {
-    await this.remote.query(`RETURN f"${this.bucketName}:/${sourcePath}".rename($target);`, { target: targetPath });
+    await this.remote.query(`RETURN f"${this.bucketName}:/${sourcePath}".rename($target);`, {
+      target: targetPath,
+    });
   }
 
   async list(prefix?: string): Promise<string[]> {
     const p = prefix ?? '';
-    const [result] = await this.remote.query<[string[]]>(`RETURN f"${this.bucketName}:/${p}".list();`);
+    const [result] = await this.remote.query<[string[]]>(
+      `RETURN f"${this.bucketName}:/${p}".list();`
+    );
     return result;
   }
 }
@@ -273,6 +284,12 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.persistenceClient,
       logger
     );
+    // Circuit snapshots are opt-in and checkpointed, never per-ingest. See
+    // `persistCircuit` in types.ts for the measurements behind that default.
+    this.streamProcessor.configureCircuitPersistence(
+      config.persistCircuit ?? false,
+      config.circuitCheckpointMs
+    );
     this.migrator = new LocalMigrator(this.local, logger);
 
     this.cache = new CacheModule(
@@ -295,7 +312,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.local,
       this.remote,
       logger,
-      config.crdtDebounceMs ?? 500,
+      config.crdtDebounceMs ?? 500
     );
 
     this.dataModule = new DataModule(
@@ -325,7 +342,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
         degradeAfterConsecutiveFailures:
           this.config.syncHealth === false
             ? 0
-            : this.config.syncHealth?.degradeAfterConsecutiveFailures ?? 3,
+            : (this.config.syncHealth?.degradeAfterConsecutiveFailures ?? 3),
       }
     );
 
@@ -370,7 +387,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.tabsCoordinator = this.buildTabsCoordinator();
     } else if (this.config.sharedTabs) {
       this.logger.info(
-        { reason: (tabsSupport as { reason: string }).reason, Category: 'sp00ky-client::Sp00kyClient::tabs' },
+        {
+          reason: (tabsSupport as { reason: string }).reason,
+          Category: 'sp00ky-client::Sp00kyClient::tabs',
+        },
         'sharedTabs requested but unsupported here; running solo'
       );
     }
@@ -449,7 +469,8 @@ export class Sp00kyClient<S extends SchemaStructure> {
         this.cache.setIngestRelay(null);
         this.sync.setTabContext('solo', tabId);
       },
-      currentStorageHealth: () => this.local.storageHealth ?? { status: 'unknown', fallback: false },
+      currentStorageHealth: () =>
+        this.local.storageHealth ?? { status: 'unknown', fallback: false },
     };
     return new TabsCoordinator({
       tabId,
@@ -527,9 +548,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
         for (const row of records) {
           const id = row?.id;
           const table =
-            id && typeof id === 'object' && id.table !== undefined
-              ? String(id.table)
-              : undefined;
+            id && typeof id === 'object' && id.table !== undefined ? String(id.table) : undefined;
           if (!table) continue;
           this.crdtManager.applyRow(table, row);
         }
@@ -606,9 +625,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
       await this.streamProcessor.init();
       // Seed table `select` permissions from the schema before any query is
       // registered — otherwise the SSP default-denies every non-`_00_` table.
-      this.streamProcessor.setPermissions(
-        extractSelectPermissions(this.config.schemaSurql)
-      );
+      this.streamProcessor.setPermissions(extractSelectPermissions(this.config.schemaSurql));
       this.logger.debug(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
         'StreamProcessor initialized'
@@ -770,7 +787,11 @@ export class Sp00kyClient<S extends SchemaStructure> {
    */
   private async doSwitchBucket(target: string, gateRelease?: (() => void) | null): Promise<void> {
     this.logger.info(
-      { target, from: this.local.currentBucketId, Category: 'sp00ky-client::Sp00kyClient::doSwitchBucket' },
+      {
+        target,
+        from: this.local.currentBucketId,
+        Category: 'sp00ky-client::Sp00kyClient::doSwitchBucket',
+      },
       'Switching local bucket'
     );
 
@@ -855,6 +876,11 @@ export class Sp00kyClient<S extends SchemaStructure> {
     if (this.tabsCoordinator) await this.tabsCoordinator.stop();
     await this.local.close();
     await this.remote.close();
+    // Free the wasm circuit explicitly. V8 cannot see wasm-internal bytes, so
+    // relying on the wasm-bindgen FinalizationRegistry leaves the whole store
+    // resident until a GC that may never come, and a client that is recreated
+    // (provider remount, HMR) would stack circuits.
+    this.streamProcessor.dispose();
   }
 
   /**
@@ -895,7 +921,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
     table: string,
     recordId: string,
     field: string,
-    fallbackText?: string,
+    fallbackText?: string
   ): Promise<CrdtField> {
     return this.crdtManager.open(table, recordId, field, fallbackText);
   }
@@ -1149,10 +1175,12 @@ export class Sp00kyClient<S extends SchemaStructure> {
     this.dataModule.recordFrontendTiming(queryHash, ms);
   }
 
-  run<
-    B extends BackendNames<S>,
-    R extends BackendRoutes<S, B>,
-  >(backend: B, path: R, payload: RoutePayload<S, B, R>, options?: RunOptions) {
+  run<B extends BackendNames<S>, R extends BackendRoutes<S, B>>(
+    backend: B,
+    path: R,
+    payload: RoutePayload<S, B, R>,
+    options?: RunOptions
+  ) {
     return this.dataModule.run(backend, path, payload, options);
   }
 
