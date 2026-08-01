@@ -41,24 +41,26 @@ export function Sp00kyProvider<S extends SchemaStructure>(
 
   const [db, setDb] = createSignal<SyncedDb<S> | undefined>(undefined);
 
-  // Set once the provider is disposed. `onMount` is async, so a remount (or a
-  // fast unmount) can land mid-init; without this the abandoned instance keeps
-  // its SharedWorker leadership, its OPFS worker and its wasm circuit alive for
-  // the life of the page.
+  // `onMount` is async, so a dispose can land mid-init. Only that narrow race is
+  // handled here: an instance whose init finished AFTER the provider was already
+  // gone is closed, because nothing will ever reference it.
+  //
+  // A live, mounted client is deliberately NOT closed on cleanup. Doing that
+  // nulls `SyncedDb.sp00ky`, so every later `create`/`update`/`delete` throws
+  // "SyncedDb not initialized" while reads keep rendering from state that is
+  // already subscribed — i.e. mutations die silently and the app looks fine. In
+  // a host app the provider wraps the whole tree and only unmounts with the
+  // page, where the browser reclaims the worker anyway, so the leak this was
+  // meant to fix is worth far less than that risk.
   let disposed = false;
-  let live: SyncedDb<S> | undefined;
 
   onCleanup(() => {
     disposed = true;
-    const instance = live;
-    live = undefined;
-    void instance?.close();
   });
 
   onMount(async () => {
     try {
       const instance = new SyncedDb<S>(merged.config);
-      live = instance;
       await instance.init();
       if (disposed) {
         await instance.close();
