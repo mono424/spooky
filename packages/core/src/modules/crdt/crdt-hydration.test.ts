@@ -76,6 +76,10 @@ function makeRemote(handlers: {
           subscribe: () => () => {},
         }),
       }) as any,
+    // CrdtManager watches transport events so it can re-issue table LIVEs after
+    // a reconnect. These tests never drop the socket, so a no-op is enough.
+    getStatus: () => 'connected' as const,
+    subscribeConnection: vi.fn().mockReturnValue(() => {}),
   } satisfies Partial<RemoteDatabaseService> as unknown as RemoteDatabaseService;
   return remote;
 }

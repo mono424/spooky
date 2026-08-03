@@ -1,5 +1,10 @@
-import type { LocalStore, RemoteDatabaseService } from '../../services/database/index';
 import type {
+  ConnectionSupervisor,
+  LocalStore,
+  RemoteDatabaseService,
+} from '../../services/database/index';
+import type {
+  ConnectionState,
   RecordVersionArray,
   RecordVersionDiff,
   SyncHealth,
@@ -11,6 +16,7 @@ import type { DownEvent, UpEvent } from './queue/index';
 import { DownQueue, UpQueue } from './queue/index';
 import type { RecordId, Uuid } from 'surrealdb';
 import {
+  applyRecordVersionDiff,
   ArraySyncer,
   buildListRefSelect,
   buildSubqueryListRefSelect,
@@ -31,6 +37,7 @@ import {
   extractIdPart,
   extractTablePart,
   surql,
+  withTimeout,
 } from '../../utils/index';
 import { ANON_USER_ID, DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
 import { mutationOwnerTabId } from '../data/mutation-id';
@@ -66,6 +73,13 @@ export interface Sp00kySyncOptions {
    * up-queue for the session. Defaults to 30000; `0` disables the timeout.
    */
   pushTimeoutMs?: number;
+  /**
+   * Transport supervisor. Sync reads its state to report `connection` in
+   * {@link SyncHealth} so a UI can show "reconnecting…" the instant the socket
+   * drops, without waiting for the degrade threshold. Optional: omitted in
+   * tests, where `connection` then reports `connected`.
+   */
+  connectionSupervisor?: ConnectionSupervisor;
 }
 
 /**
@@ -87,7 +101,12 @@ export class Sp00kySync<S extends SchemaStructure> {
     return this.syncEngine.events;
   }
   private scheduler: SyncScheduler;
-  private wasDisconnected: boolean = false;
+  /**
+   * Set by any event that means the socket we registered on is gone, so the
+   * next `connected` knows it must re-subscribe rather than treat itself as the
+   * initial connect. See {@link subscribeToReconnect}.
+   */
+  private needsResubscribe: boolean = false;
   public events = createSyncEventSystem();
 
   // Auth identity that drives per-user `_00_list_ref_user_<id>` routing
@@ -216,6 +235,18 @@ export class Sp00kySync<S extends SchemaStructure> {
   private static readonly SELF_HEAL_BASE_MS = 2_000;
   private static readonly SELF_HEAL_MAX_MS = 30_000;
 
+  /**
+   * Transport supervisor, when one was supplied. Sync only reads state from it;
+   * it never drives reconnects itself.
+   */
+  private readonly connectionSupervisor?: ConnectionSupervisor;
+  /**
+   * Mirror of the supervisor's state. Defaults to `connected` so a client
+   * constructed without a supervisor (tests, embedders) reports the same health
+   * shape it always has rather than a permanent false "disconnected".
+   */
+  private connectionState: ConnectionState = 'connected';
+
   /** Current sync-health snapshot. */
   get syncHealth(): SyncHealth {
     return {
@@ -224,6 +255,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       kind: this.syncHealthStatus === 'degraded' ? this.lastSyncErrorKind : undefined,
       error: this.syncHealthStatus === 'degraded' ? this.lastSyncErrorMessage : undefined,
       everConnected: this.hasSyncedOnce,
+      connection: this.connectionState,
     };
   }
 
@@ -242,6 +274,25 @@ export class Sp00kySync<S extends SchemaStructure> {
 
   private emitSyncHealth(): void {
     this.events.emit(SyncEventTypes.SyncHealthChanged, this.syncHealth);
+  }
+
+  /**
+   * Mirror the supervisor's transport state into {@link SyncHealth} and emit on
+   * every change, so a UI can react to a dropped socket immediately instead of
+   * waiting for `degradeAfterFailures` failed rounds. `status` is untouched:
+   * a brief reconnect is not a degradation.
+   *
+   * No explicit unsubscribe: the supervisor is owned by the same client and
+   * drops all subscribers in its own `dispose()`, which `Sp00kyClient.close()`
+   * calls first.
+   */
+  private subscribeToConnectionState(): void {
+    if (!this.connectionSupervisor) return;
+    this.connectionSupervisor.subscribe((state) => {
+      if (this.connectionState === state) return;
+      this.connectionState = state;
+      this.emitSyncHealth();
+    });
   }
 
   /**
@@ -392,6 +443,7 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.anonLiveEnabled = options?.anonymousLiveQueries ?? false;
     this.degradeAfterFailures = Math.max(0, options?.degradeAfterConsecutiveFailures ?? 3);
     this.pushTimeoutMs = Math.max(0, options?.pushTimeoutMs ?? 30_000);
+    this.connectionSupervisor = options?.connectionSupervisor;
   }
 
   /**
@@ -404,6 +456,7 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.isInit = true;
     await this.scheduler.init({ loadOutbox: this.tabRole !== 'follower' });
     this.subscribeToReconnect();
+    this.subscribeToConnectionState();
     void this.scheduler.syncUp();
     void this.scheduler.syncDown();
     // No initial LIVE subscription — wait for `setCurrentUserId` to fire
@@ -905,13 +958,20 @@ export class Sp00kySync<S extends SchemaStructure> {
       this.liveQueryUnsubscribe = null;
     }
     if (this.currentLiveQueryUuid !== null) {
-      try {
-        await this.remote.query('KILL $u', { u: this.currentLiveQueryUuid });
-      } catch (err) {
-        this.logger.debug(
-          { err, Category: 'sp00ky-client::Sp00kySync::killRefLiveQuery' },
-          'Prior LIVE KILL failed; continuing'
-        );
+      // A LIVE subscription is scoped to its WebSocket session, so after a
+      // reconnect the server-side one is already gone and there is nothing to
+      // KILL. Sending it anyway either fails (no connection) or races the fresh
+      // socket's readiness while holding up the restart behind it. Local
+      // bookkeeping is cleared either way.
+      if (this.remote.getStatus() === 'connected') {
+        try {
+          await this.remote.query('KILL $u', { u: this.currentLiveQueryUuid });
+        } catch (err) {
+          this.logger.debug(
+            { err, Category: 'sp00ky-client::Sp00kySync::killRefLiveQuery' },
+            'Prior LIVE KILL failed; continuing'
+          );
+        }
       }
       this.currentLiveQueryUuid = null;
     }
@@ -922,21 +982,58 @@ export class Sp00kySync<S extends SchemaStructure> {
     await this.startRefLiveQueries();
   }
 
-  // Only the connect that follows a prior disconnect counts as a
-  // reconnect; the initial connect after init() must not trigger a
-  // refetch storm.
+  /**
+   * Drop local LIVE bookkeeping without issuing a `KILL`.
+   *
+   * Called when the socket dies. The server-side subscription is scoped to that
+   * WebSocket session and died with it, so there is nothing left to kill — and
+   * by the time the reconnect handler runs, the client reports `connected`
+   * again, which would otherwise send a `KILL` for a stale uuid on the *new*
+   * session and hold up the restart queued behind it.
+   */
+  private invalidateRefLiveQuery(): void {
+    if (this.liveQueryUnsubscribe) {
+      try {
+        this.liveQueryUnsubscribe();
+      } catch {
+        /* ignore */
+      }
+      this.liveQueryUnsubscribe = null;
+    }
+    this.currentLiveQueryUuid = null;
+  }
+
+  // Only the connect that follows a prior drop counts as a reconnect; the
+  // initial connect after init() must not trigger a refetch storm.
+  //
+  // Both drop events have to be watched. The SDK publishes `disconnected` ONLY
+  // when it has given up entirely (attempts exhausted, or the engine
+  // terminated); an ordinary recovered drop goes `error` -> `reconnecting` ->
+  // `connected` and never touches `disconnected`. Listening for `disconnected`
+  // alone therefore misses every successful reconnect — the exact case this
+  // handler exists for — and leaves the dead server-side LIVE in place with the
+  // poll as the only sync path.
   private subscribeToReconnect() {
     const client = this.remote.getClient();
     client.subscribe('disconnected', () => {
-      this.wasDisconnected = true;
+      this.needsResubscribe = true;
+      this.invalidateRefLiveQuery();
       this.logger.info(
         { Category: 'sp00ky-client::Sp00kySync::onDisconnect' },
         'Remote disconnected'
       );
     });
+    client.subscribe('reconnecting', () => {
+      this.needsResubscribe = true;
+      this.invalidateRefLiveQuery();
+      this.logger.info(
+        { Category: 'sp00ky-client::Sp00kySync::onReconnecting' },
+        'Remote socket dropped; awaiting reconnect'
+      );
+    });
     client.subscribe('connected', () => {
-      if (!this.wasDisconnected) return;
-      this.wasDisconnected = false;
+      if (!this.needsResubscribe) return;
+      this.needsResubscribe = false;
       this.logger.info(
         { Category: 'sp00ky-client::Sp00kySync::onReconnect' },
         'Remote reconnected, refetching active queries'
@@ -1082,7 +1179,29 @@ export class Sp00kySync<S extends SchemaStructure> {
     // `config.id` is `_00_query:<hash>`, so its id-part IS the query hash
     // (a SHA-256 over query content + sessionId) — the key DataModule uses.
     const hash = extractIdPart(existing.config.id);
+
+    // Apply the event to `remoteArray` — the authoritative membership rows are
+    // now rendered FROM. Only registration and the poll used to write it, so a
+    // LIVE removal left the departed id in the list (in memory and persisted)
+    // until the next poll tick, which is up to 5s of showing a deleted row. This
+    // also persists the durable `_00_window` mirror, so the removal survives a
+    // reload with no network.
+    if (existing.config.membershipKnown && (diff.removed.length || diff.added.length)) {
+      const next = applyRecordVersionDiff(existing.config.remoteArray ?? [], diff);
+      if (!recordVersionArraysEqual(next, existing.config.remoteArray ?? [])) {
+        await this.dataModule.updateQueryRemoteArray(hash, next);
+      }
+    }
+
     await this.runSyncForQuery(hash, diff);
+
+    // A removal-only diff sets `fetching` false in `runSyncForQuery`, so it gets
+    // no `flushPendingStreamUpdate`/`endFetching` re-render — and a removal needs
+    // no record fetch to trigger one either. Force it, mirroring what the poll
+    // path already does for its own removals (`refetchListRefForQuery`).
+    if (diff.removed.length > 0 && diff.added.length === 0 && diff.updated.length === 0) {
+      await this.dataModule.notifyQuerySynced(hash);
+    }
   }
 
   /**
@@ -1156,22 +1275,11 @@ export class Sp00kySync<S extends SchemaStructure> {
    * retries rather than rolling the mutation back.
    */
   private withPushTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
-    if (!(this.pushTimeoutMs > 0)) return promise;
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Mutation push timed out after ${this.pushTimeoutMs}ms (${label})`));
-      }, this.pushTimeoutMs);
-      promise.then(
-        (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        (err) => {
-          clearTimeout(timer);
-          reject(err);
-        }
-      );
-    });
+    return withTimeout(
+      promise,
+      this.pushTimeoutMs,
+      `Mutation push timed out after ${this.pushTimeoutMs}ms (${label})`
+    );
   }
 
   private async processUpEvent(event: UpEvent) {
@@ -1424,18 +1532,10 @@ export class Sp00kySync<S extends SchemaStructure> {
    * would otherwise resurrect a just-deleted record.
    */
   private async getPendingDeleteIds(): Promise<Set<string>> {
-    try {
-      const [rows] = await this.local.query<[{ recordId: RecordId<string> }[]]>(
-        "SELECT recordId FROM _00_pending_mutations WHERE mutationType = 'delete'"
-      );
-      return new Set((rows ?? []).map((r) => encodeRecordId(r.recordId)));
-    } catch (err) {
-      this.logger.warn(
-        { err, Category: 'sp00ky-client::Sp00kySync::getPendingDeleteIds' },
-        'Failed to read pending deletes; sync may briefly resurrect a just-deleted record'
-      );
-      return new Set();
-    }
+    // Single implementation, shared with the render path: `materializeRecords`
+    // subtracts the same set so a row whose DELETE is still in the outbox is
+    // neither re-fetched here nor rendered there.
+    return (await this.dataModule.getPendingRecordIds()).deletes;
   }
 
   /**

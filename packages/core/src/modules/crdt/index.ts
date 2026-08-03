@@ -33,8 +33,19 @@ export class CrdtManager {
   private fields = new Map<string, CrdtField>();
   // One LIVE subscription per parent table (e.g. "thread" → uuid).
   private liveByTable = new Map<string, Uuid>();
-  // Coalesces concurrent first-time subscribes for the same table.
-  private pendingLive = new Map<string, Promise<void>>();
+  // Coalesces concurrent first-time subscribes for the same table. Stamped with
+  // the connection generation it started under, so a restart after a drop can
+  // tell a reusable in-flight attempt from a doomed one.
+  private pendingLive = new Map<string, { promise: Promise<void>; generation: number }>();
+  // Tables whose LIVE died with a dropped socket, awaiting the next `connected`
+  // to be re-subscribed. Held separately because `liveByTable` is cleared on the
+  // drop (those uuids belong to a session that no longer exists).
+  private staleTables = new Set<string>();
+  // Bumped on every socket drop. A LIVE registration that started under an
+  // older generation is discarded rather than recorded, so a drop landing
+  // mid-registration can't leave a uuid from a dead session in `liveByTable`.
+  private connectionGeneration = 0;
+  private connectionUnsubscribes: Array<() => void> = [];
   private logger: Logger;
   // SurrealDB session id, used as the per-session key inside `_00_cursor`.
   private sessionId: string = '';
@@ -47,6 +58,66 @@ export class CrdtManager {
     private debounceMs: number = 500,
   ) {
     this.logger = logger.child({ service: 'CrdtManager' });
+    this.subscribeToReconnect();
+  }
+
+  /**
+   * Re-establish table LIVEs after a socket drop.
+   *
+   * A LIVE subscription lives and dies with its WebSocket session, and
+   * `ensureTableSubscription` is memoized on `liveByTable` — so without this,
+   * the first reconnect leaves CRDT realtime permanently dead: the map still
+   * holds a uuid for a subscription the server has forgotten, so every later
+   * `open()` short-circuits and no LIVE is ever re-issued.
+   *
+   * Both drop events matter: the SDK publishes `reconnecting` (not
+   * `disconnected`) when it intends to recover on its own, and `disconnected`
+   * only once it has given up.
+   */
+  private subscribeToReconnect(): void {
+    const onDrop = () => {
+      this.connectionGeneration++;
+      for (const table of this.liveByTable.keys()) this.staleTables.add(table);
+      // In-flight registrations count too: they'd otherwise complete against
+      // the dead session and be silently dropped by the generation guard.
+      for (const table of this.pendingLive.keys()) this.staleTables.add(table);
+      // No KILL: the server-side subscriptions are already gone, and these
+      // uuids would resolve against the new session.
+      this.liveByTable.clear();
+    };
+    this.connectionUnsubscribes.push(
+      this.remote.subscribeConnection('reconnecting', onDrop),
+      this.remote.subscribeConnection('disconnected', onDrop),
+      this.remote.subscribeConnection('connected', () => {
+        const tables = Array.from(this.staleTables);
+        this.staleTables.clear();
+        for (const table of tables) {
+          // Only resurrect tables that still have an open field — a drop can
+          // outlive the editor that needed the feed.
+          if (!this.hasOpenFieldFor(table)) continue;
+          void this.ensureTableSubscription(table);
+        }
+      })
+    );
+  }
+
+  /** Stop observing transport events. Separate from {@link closeAll}, which also
+   *  runs on a bucket switch where the manager keeps being used. */
+  dispose(): void {
+    for (const off of this.connectionUnsubscribes) {
+      try {
+        off();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.connectionUnsubscribes = [];
+    this.staleTables.clear();
+  }
+
+  private hasOpenFieldFor(table: string): boolean {
+    const prefix = `${table}:`;
+    return Array.from(this.fields.keys()).some((k) => k.startsWith(prefix));
   }
 
   /** Set the session id that scopes this client's cursor entries. Must be
@@ -139,10 +210,10 @@ export class CrdtManager {
     }
 
     // If no fields on this table remain open, tear down the table-wide LIVE.
-    const tablePrefix = `${table}:`;
-    const stillOpen = Array.from(this.fields.keys()).some((k) => k.startsWith(tablePrefix));
-    if (!stillOpen) {
+    if (!this.hasOpenFieldFor(table)) {
       this.killTableSubscription(table);
+      // Also drop any pending post-reconnect restart for it.
+      this.staleTables.delete(table);
     }
 
     this.logger.debug(
@@ -164,6 +235,9 @@ export class CrdtManager {
     for (const table of Array.from(this.liveByTable.keys())) {
       this.killTableSubscription(table);
     }
+    // Nothing is open any more, so nothing should be resurrected on the next
+    // reconnect; `open()` will re-subscribe on demand.
+    this.staleTables.clear();
   }
 
   /** Ensure a single `LIVE SELECT * FROM <table>` is running, shared across
@@ -171,8 +245,26 @@ export class CrdtManager {
   private async ensureTableSubscription(table: string): Promise<void> {
     if (this.liveByTable.has(table)) return;
 
+    // Registering a LIVE takes two round-trips, so a socket drop can land
+    // mid-flight. The generation stamp is what keeps that honest: a registration
+    // that started before the drop must never record its uuid, because this
+    // method short-circuits on `liveByTable` and that stale entry (pointing at a
+    // session the server has forgotten) would block every future restart.
+    const generation = this.connectionGeneration;
+
     const pending = this.pendingLive.get(table);
-    if (pending) return pending;
+    if (pending) {
+      if (pending.generation === generation) return pending.promise;
+      // A registration from before the drop is still settling. It will discard
+      // itself; wait it out, then register fresh on the new socket.
+      await pending.promise.catch(() => {});
+      if (this.liveByTable.has(table)) return;
+      if (generation !== this.connectionGeneration) return;
+      // Another caller may have won the race to re-register during that await;
+      // join it rather than opening a second LIVE on the same table.
+      const successor = this.pendingLive.get(table);
+      if (successor && successor.generation === generation) return successor.promise;
+    }
 
     const start = (async () => {
       try {
@@ -180,12 +272,22 @@ export class CrdtManager {
           `LIVE SELECT * FROM ${table}`,
         );
 
+        if (generation !== this.connectionGeneration) {
+          this.logger.debug(
+            { table, Category: 'sp00ky-client::CrdtManager::ensureTableSubscription' },
+            'Socket dropped while registering LIVE; discarding it'
+          );
+          return;
+        }
+
         const subscription = await this.remote.getClient().liveOf(uuid);
         subscription.subscribe((message) => {
           if (message.action === 'KILLED') return;
           if (message.action !== 'CREATE' && message.action !== 'UPDATE') return;
           this.dispatchRow(table, message.value as Record<string, unknown>);
         });
+
+        if (generation !== this.connectionGeneration) return;
 
         this.liveByTable.set(table, uuid);
         this.logger.info(
@@ -200,7 +302,7 @@ export class CrdtManager {
       }
     })();
 
-    this.pendingLive.set(table, start);
+    this.pendingLive.set(table, { promise: start, generation });
     try {
       await start;
     } finally {

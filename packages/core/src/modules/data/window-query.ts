@@ -38,6 +38,58 @@ export function buildWindowMaterializationPlan(
   ids: unknown[]
 ): QueryPlan | null {
   if (plan.offset === undefined || plan.offset <= 0) return null;
+  return buildIdSetPlan(plan, ids);
+}
+
+/**
+ * Raw-SurrealQL counterpart of {@link buildIdSetPlan}, for queries that arrived
+ * without a plan. Same rewrite as {@link buildWindowMaterialization} without the
+ * offset guard: keep the projection and top-level `ORDER BY`, replace the source
+ * with the bound id-set.
+ */
+export function buildIdSetSurql(
+  surql: string,
+  idsParam = '__win'
+): { query: string } | null {
+  const kw = scanTopLevelClauses(surql);
+  if (kw.fromIndex === null) return null;
+  return { query: renderIdSetSelect(surql, kw, idsParam) };
+}
+
+/** Shared body of the two id-set surql rewrites: keep the projection and the
+ *  top-level `ORDER BY`, replace the source with the bound id-set. */
+function renderIdSetSelect(surql: string, kw: TopLevelClauses, idsParam: string): string {
+  const selectClause = surql.slice(0, kw.fromIndex!).trimEnd(); // "SELECT <projection>"
+
+  let orderBy = '';
+  const orderByIndex = kw.orderByIndex;
+  if (orderByIndex !== null) {
+    const ends = [kw.limitIndex, kw.startIndex, kw.semicolonIndex, surql.length].filter(
+      (n): n is number => n !== null && n > orderByIndex
+    );
+    orderBy = ' ' + surql.slice(orderByIndex, Math.min(...ends)).trim();
+  }
+
+  return `${selectClause} FROM $${idsParam}${orderBy}`;
+}
+
+/**
+ * Restrict any plan's base rows to an explicit id-set, regardless of offset.
+ *
+ * Same rewrite as {@link buildWindowMaterializationPlan} without the offset
+ * guard, for rendering a query from its authoritative membership list rather
+ * than by re-running its predicate.
+ *
+ * `where` is dropped deliberately: the id-set already IS the answer to the
+ * predicate as the server evaluated it, and re-applying the `WHERE` locally is
+ * exactly the bug — a row that left the window keeps its (stale, never
+ * re-fetched) local body, so it keeps matching and keeps rendering.
+ * `limit`/`offset` go for the same reason: both are already baked into which ids
+ * are in the set, so the set itself is the bound. (Both engines ignore them on
+ * the `ids` path regardless — only `select` and `orderBy` are honored there.)
+ * `orderBy` is kept so display order stays deterministic.
+ */
+export function buildIdSetPlan(plan: QueryPlan, ids: unknown[]): QueryPlan {
   return {
     ...plan,
     ids,
@@ -54,19 +106,7 @@ export function buildWindowMaterialization(
   const kw = scanTopLevelClauses(surql);
   if (kw.startValue === null || kw.startValue <= 0) return null;
   if (kw.fromIndex === null) return null;
-
-  const selectClause = surql.slice(0, kw.fromIndex).trimEnd(); // "SELECT <projection>"
-
-  let orderBy = '';
-  if (kw.orderByIndex !== null) {
-    const ends = [kw.limitIndex, kw.startIndex, kw.semicolonIndex, surql.length].filter(
-      (n): n is number => n !== null && n > kw.orderByIndex!
-    );
-    const end = Math.min(...ends);
-    orderBy = ' ' + surql.slice(kw.orderByIndex, end).trim();
-  }
-
-  return { query: `${selectClause} FROM $${idsParam}${orderBy}` };
+  return { query: renderIdSetSelect(surql, kw, idsParam) };
 }
 
 interface TopLevelClauses {

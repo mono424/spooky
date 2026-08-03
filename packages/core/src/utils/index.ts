@@ -199,3 +199,41 @@ export async function withRetry<T>(
   }
   throw lastError;
 }
+
+/**
+ * Reject after `timeoutMs` if `promise` hasn't settled.
+ *
+ * Exists because a WebSocket RPC has no deadline of its own: the SurrealDB SDK
+ * parks each call in a pending map and only rejects it when the socket reports
+ * a close. On a half-open socket (peer gone, no `close` event, `readyState`
+ * still OPEN) the call never settles at all, which wedges anything serialized
+ * behind it.
+ *
+ * `message` MUST contain "timed out" so `classifySyncError` treats the
+ * rejection as `network` — that's what makes the sync queues retry the
+ * operation instead of rolling the mutation back as an application error.
+ *
+ * Non-positive `timeoutMs` returns `promise` unchanged. The underlying promise
+ * is NOT cancelled (nothing can cancel an in-flight RPC); its eventual
+ * settlement is absorbed, so attach no expectations to it after a timeout.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  if (!(timeoutMs > 0)) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}

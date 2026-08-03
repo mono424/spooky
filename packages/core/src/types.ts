@@ -124,6 +124,22 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
      * multi-hop path (escape hatch while the worker-side path beds in).
      */
     workerSelect?: boolean;
+    /**
+     * WebSocket reconnect + liveness tuning. All fields optional; the defaults
+     * keep the connection alive indefinitely without configuration. See
+     * {@link ReconnectConfig}.
+     */
+    reconnect?: ReconnectConfig;
+    /**
+     * Deadline (ms) for every remote RPC. Remote queries are serialized through
+     * a single promise chain, so one call that never settles (half-open socket:
+     * the WebSocket looks open, the peer is gone, no `close` event fires) would
+     * otherwise wedge ALL later remote traffic behind it — including the sync
+     * poll's own health probe, leaving health pinned at `healthy` with no
+     * banner and no self-heal. The deadline turns that into an ordinary network
+     * failure the queue retries. `0` disables. Defaults to `60_000`.
+     */
+    queryTimeoutMs?: number;
   };
   /** The schema definition. */
   schema: S;
@@ -254,6 +270,15 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * (or `degradeAfterConsecutiveFailures: 0`) to never report degraded.
    */
   syncHealth?: SyncHealthConfig | false;
+  /**
+   * Deadline (ms) for a single outgoing mutation push. Tighter than
+   * {@link Sp00kyConfig.database.queryTimeoutMs} because the up-queue drains
+   * one mutation at a time behind an `isSyncingUp` flag: a push that never
+   * settles stops every later mutation for the session, with no retry and no
+   * error. On expiry the push is treated as a network failure and re-queued.
+   * `0` disables. Defaults to `30_000`.
+   */
+  pushTimeoutMs?: number;
 }
 
 /** Tunables for sync-health reporting. See {@link Sp00kyConfig.syncHealth}. */
@@ -266,6 +291,55 @@ export interface SyncHealthConfig {
    */
   degradeAfterConsecutiveFailures?: number;
 }
+
+/**
+ * Tunables for WebSocket reconnect and liveness detection. See
+ * {@link Sp00kyConfig.database.reconnect}.
+ *
+ * Two independent mechanisms cooperate here. The SurrealDB SDK reconnects on
+ * its own after a socket `close` (`attempts` / `retryDelayMax`), and a
+ * supervisor above it re-opens the connection from scratch whenever the SDK
+ * gives up or its post-reconnect handshake fails — the SDK terminates the
+ * engine permanently in that case, so a supervisor is required, not optional.
+ * The heartbeat covers the third case: a socket that never closes at all.
+ */
+export interface ReconnectConfig {
+  /**
+   * SDK reconnect attempts after a socket close. `-1` retries forever.
+   * Defaults to `-1` (the SDK's own default is `5`, which caps recovery at a
+   * ~62s outage and then gives up for the life of the page).
+   */
+  attempts?: number;
+  /** Cap on the SDK's exponential backoff delay. Defaults to `15_000`. */
+  retryDelayMax?: number;
+  /**
+   * Cadence of the application-level liveness probe (`RETURN true`) that
+   * detects a half-open socket the transport never reports as closed.
+   * `0` disables the heartbeat. Defaults to `20_000`.
+   */
+  heartbeatIntervalMs?: number;
+  /**
+   * Deadline for a heartbeat response. Exceeding it means the socket is dead
+   * regardless of what its `readyState` claims, so the connection is torn down
+   * and rebuilt. Defaults to `10_000`.
+   */
+  heartbeatTimeoutMs?: number;
+  /**
+   * Cap on the supervisor's own backoff between `connect()` retries once the
+   * SDK has given up. Defaults to `15_000`.
+   */
+  superviseRetryDelayMaxMs?: number;
+}
+
+/**
+ * Transport-level connection state, independent of {@link SyncHealthStatus}.
+ *
+ * These answer different questions: `connection` is about the socket,
+ * `status` is about whether sync rounds are succeeding. A `connected` socket
+ * can still be `degraded` (server erroring), and a `reconnecting` socket is
+ * usually still `healthy` for the first few seconds.
+ */
+export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
 export type SyncHealthStatus = 'healthy' | 'degraded';
 
@@ -286,6 +360,13 @@ export interface SyncHealth {
    * a working session. Never resets back to `false` once set.
    */
   everConnected: boolean;
+  /**
+   * Live transport state of the remote WebSocket. Distinct from `status`: this
+   * one flips the instant the socket drops, whereas `status` only degrades
+   * after a sustained run of failed sync rounds. Use it to show "reconnecting…"
+   * immediately without waiting for the degrade threshold.
+   */
+  connection: ConnectionState;
 }
 
 export type StorageHealthStatus = 'unknown' | 'persistent' | 'memory';
@@ -370,6 +451,24 @@ export interface QueryConfig {
    * `rowCount` / `localArray`.
    */
   subqueryRemoteArray?: RecordVersionArray;
+  /**
+   * Whether authoritative membership (`remoteArray`) has ever been established
+   * for this query — either fetched from `_00_list_ref` this session, or read
+   * back from the durable `_00_window` row on a cold start.
+   *
+   * Tri-state matters: "known and empty" must render an empty list, while
+   * "never established" has to fall back to a predicate scan of the local store
+   * so a query first run on this device still paints offline. A
+   * `remoteArray.length === 0` check cannot tell those apart.
+   */
+  membershipKnown?: boolean;
+  /**
+   * Key of this query's durable `_00_window` membership row: a hash of
+   * `{surql, params}` WITHOUT the `session::id()` salt that `id` carries, so it
+   * survives a reload (which mints a new session id) and a bucket switch.
+   * In-memory only.
+   */
+  membershipKey?: string;
   /** Time-To-Live for this query. */
   ttl: QueryTimeToLive;
   /** Timestamp when the query was last accessed/active. */

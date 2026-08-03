@@ -1,0 +1,297 @@
+import { describe, it, expect, vi } from 'vitest';
+import { RecordId } from 'surrealdb';
+import { DataModule } from './index';
+import type { QueryPlan } from '@spooky-sync/query-builder';
+import type { QueryState, RecordVersionArray } from '../../types';
+
+/**
+ * A query's rows are its MEMBERSHIP — the id-set the server put in
+ * `_00_list_ref` — not "every locally cached body that matches the WHERE".
+ *
+ * Those two disagree whenever a row leaves a query's window while still existing
+ * upstream: `SyncEngine.handleRemovedRecords` keeps the local body and never
+ * re-fetches it, so a predicate re-scan finds that stale body still matching and
+ * keeps rendering the row. That is the "removed item comes back" bug, and it was
+ * permanent offline because membership used to live only on the session-salted
+ * `_00_query` row (wiped on reload) while bodies were durable.
+ */
+
+const noop = () => {};
+
+function makeLogger(): any {
+  const logger: any = { debug: noop, info: noop, warn: noop, error: noop, trace: noop };
+  logger.child = () => logger;
+  return logger;
+}
+
+const schema = { tables: [{ name: 'thread', columns: {} }] } as any;
+
+const plan: QueryPlan = { table: 'thread', where: [['done', '=', false]] } as any;
+
+function makeQueryState(
+  hash: string,
+  opts: {
+    remoteArray?: RecordVersionArray;
+    localArray?: RecordVersionArray;
+    membershipKnown?: boolean;
+    membershipKey?: string;
+    withPlan?: boolean;
+  } = {}
+): QueryState {
+  return {
+    config: {
+      id: new RecordId('_00_query', hash),
+      surql: 'SELECT * FROM thread WHERE done = false;',
+      plan: opts.withPlan === false ? undefined : plan,
+      params: {},
+      localArray: opts.localArray ?? [],
+      remoteArray: opts.remoteArray ?? [],
+      membershipKnown: opts.membershipKnown,
+      membershipKey: opts.membershipKey,
+      ttl: '10m',
+      lastActiveAt: new Date(),
+      tableName: 'thread',
+    },
+    records: [],
+    ttlTimer: null,
+    ttlDurationMs: 0,
+    updateCount: 0,
+    lastUpdatedAt: null,
+    materializationSamples: [],
+    lastIngestLatencyMs: null,
+    errorCount: 0,
+    status: 'idle',
+    phaseSamples: {},
+    phaseLast: {},
+    registrationTimings: { parseMs: null, planMs: null, snapshotMs: null, wallMs: null },
+  };
+}
+
+/**
+ * Local store holding three thread bodies, ALL of which match the query's
+ * predicate. `select` mimics the real engines: when `plan.ids` is set it returns
+ * exactly those ids (the membership path); otherwise it returns everything (the
+ * predicate-scan path).
+ */
+function makeLocal(pendingRows: Array<{ recordId: RecordId; mutationType: string }> = []) {
+  const bodies = new Map(
+    ['a', 'b', 'c'].map((k) => [`thread:${k}`, { id: new RecordId('thread', k), title: k }])
+  );
+  const windowRows = new Map<string, { ids: RecordVersionArray }>();
+  const local: any = {
+    epoch: 1,
+    bodies,
+    windowRows,
+    select: vi.fn(async (p: QueryPlan) => {
+      if (p.ids) {
+        return (p.ids as RecordId[])
+          .map((id) => bodies.get(id.toString()))
+          .filter((r): r is NonNullable<typeof r> => r !== undefined);
+      }
+      return Array.from(bodies.values());
+    }),
+    query: vi.fn(async (sql: string, vars?: any) => {
+      if (sql.includes('_00_pending_mutations')) return [pendingRows];
+      // `createNewQuery` reads the `_00_query` row, then CREATEs it when absent.
+      // A reload always takes the absent path: the id is session-salted.
+      if (sql.includes('FROM ONLY')) return [null];
+      if (sql.startsWith('CREATE')) return [{ id: vars.id, ...vars.data }];
+      if (sql.startsWith('UPDATE')) return [null];
+      return [Array.from(bodies.values())];
+    }),
+    getById: vi.fn(async (_table: string, id: RecordId) => windowRows.get(String(id.id)) ?? null),
+    upsert: vi.fn(async (_t: string, id: RecordId, data: any) => {
+      windowRows.set(String(id.id), data);
+    }),
+  };
+  return local;
+}
+
+function setup(
+  stateOpts: Parameters<typeof makeQueryState>[1] = {},
+  pendingRows: Array<{ recordId: RecordId; mutationType: string }> = []
+) {
+  const hash = 'h1';
+  const local = makeLocal(pendingRows);
+  const dm = new DataModule({ saveBatch: async () => {} } as any, local, schema, makeLogger(), 100);
+  const state = makeQueryState(hash, stateOpts);
+  (dm as any).activeQueries.set(hash, state);
+  return { dm, state, local, hash };
+}
+
+const ids = (rows: Array<Record<string, any>>) => rows.map((r) => String(r.id));
+const materialize = (dm: DataModule<any>, state: QueryState, ssp?: RecordVersionArray) =>
+  (dm as any).materializeRecords(state, ssp) as Promise<Record<string, any>[]>;
+
+describe('membership-authoritative rendering', () => {
+  it('hides a locally cached body that is absent from membership', async () => {
+    // `thread:c` still matches the predicate and its body is still cached, but
+    // the server dropped it from the window. It must not render.
+    const { dm, state } = setup({
+      membershipKnown: true,
+      remoteArray: [
+        ['thread:a', 1],
+        ['thread:b', 1],
+      ],
+    });
+
+    expect(ids(await materialize(dm, state))).toEqual(['thread:a', 'thread:b']);
+  });
+
+  it('renders an empty list when membership is known and empty', async () => {
+    const { dm, state } = setup({ membershipKnown: true, remoteArray: [] });
+    expect(await materialize(dm, state)).toEqual([]);
+  });
+
+  it('falls back to the predicate scan when membership was never established', async () => {
+    // A query first run on this device: there is nothing authoritative to render
+    // from, so an offline first paint must still show the cached bodies.
+    const { dm, state, local } = setup({ membershipKnown: false });
+    expect(ids(await materialize(dm, state))).toEqual(['thread:a', 'thread:b', 'thread:c']);
+    expect(local.select).toHaveBeenCalledWith(
+      expect.objectContaining({ where: plan.where }),
+      expect.anything()
+    );
+  });
+
+  it('drops where/limit/offset and keeps orderBy on the membership path', async () => {
+    const { dm, state, local } = setup({ membershipKnown: true, remoteArray: [['thread:a', 1]] });
+    state.config.plan = { ...plan, limit: 50, offset: 0, orderBy: [['title', 'asc']] } as any;
+
+    await materialize(dm, state);
+
+    const passed = local.select.mock.calls.at(-1)![0] as QueryPlan;
+    expect(passed.where).toBeUndefined();
+    expect(passed.limit).toBeUndefined();
+    expect(passed.offset).toBeUndefined();
+    expect(passed.orderBy).toEqual([['title', 'asc']]);
+  });
+
+  describe('optimistic writes', () => {
+    it('renders a pending create the server has not acknowledged yet', async () => {
+      // Not in remoteArray, but the SSP (fed every local write) says it matches.
+      const { dm, state } = setup(
+        {
+          membershipKnown: true,
+          remoteArray: [['thread:a', 1]],
+          localArray: [
+            ['thread:a', 1],
+            ['thread:c', 1],
+          ],
+        },
+        [{ recordId: new RecordId('thread', 'c'), mutationType: 'create' }]
+      );
+
+      expect(ids(await materialize(dm, state))).toEqual(['thread:a', 'thread:c']);
+    });
+
+    it('hides a pending update that moved a row OUT of the window', async () => {
+      // Pending write, but the SSP no longer lists it: the local body stopped
+      // matching. Unioning pending ids blindly would wrongly re-admit it.
+      const { dm, state } = setup(
+        {
+          membershipKnown: true,
+          remoteArray: [['thread:a', 1]],
+          localArray: [['thread:a', 1]],
+        },
+        [{ recordId: new RecordId('thread', 'c'), mutationType: 'update' }]
+      );
+
+      expect(ids(await materialize(dm, state))).toEqual(['thread:a']);
+    });
+
+    it('hides a row the server still lists while our DELETE is queued', async () => {
+      const { dm, state } = setup(
+        {
+          membershipKnown: true,
+          remoteArray: [
+            ['thread:a', 1],
+            ['thread:b', 1],
+          ],
+        },
+        [{ recordId: new RecordId('thread', 'b'), mutationType: 'delete' }]
+      );
+
+      expect(ids(await materialize(dm, state))).toEqual(['thread:a']);
+    });
+
+    it('prefers the fresher sspArray over the persisted localArray', async () => {
+      const { dm, state } = setup(
+        { membershipKnown: true, remoteArray: [['thread:a', 1]], localArray: [] },
+        [{ recordId: new RecordId('thread', 'c'), mutationType: 'create' }]
+      );
+
+      const rows = await materialize(dm, state, [
+        ['thread:a', 1],
+        ['thread:c', 1],
+      ]);
+      expect(ids(rows)).toEqual(['thread:a', 'thread:c']);
+    });
+  });
+
+  describe('durability across a reload', () => {
+    it('updateQueryRemoteArray latches membership and writes _00_window', async () => {
+      const { dm, state, local, hash } = setup({ membershipKey: 'stable-key' });
+
+      await dm.updateQueryRemoteArray(hash, [['thread:a', 1]]);
+
+      expect(state.config.membershipKnown).toBe(true);
+      expect(local.windowRows.get('stable-key')).toMatchObject({ ids: [['thread:a', 1]] });
+    });
+
+    it('seeds membership from _00_window under a different session salt', async () => {
+      // The reload case: `_00_query` is keyed by a `session::id()`-salted hash, so
+      // a reload always lands on a fresh row with empty arrays. Only the durable
+      // row, keyed session-independently, can carry the removal across.
+      const { dm, local } = setup({ membershipKey: 'stable-key' });
+      local.windowRows.set('stable-key', { ids: [['thread:a', 1]] });
+
+      const fresh = await (dm as any).createNewQuery({
+        recordId: new RecordId('_00_query', 'a-totally-different-salted-hash'),
+        surql: 'SELECT * FROM thread WHERE done = false;',
+        params: {},
+        ttl: '10m',
+        tableName: 'thread',
+        plan,
+        membershipKey: 'stable-key',
+      });
+
+      expect(fresh.config.membershipKnown).toBe(true);
+      expect(fresh.config.remoteArray).toEqual([['thread:a', 1]]);
+      // `thread:b`/`thread:c` bodies are still cached and still match, but are
+      // not in the persisted list — the reported bug, offline.
+      expect(ids(fresh.records)).toEqual(['thread:a']);
+    });
+
+    it('stays scan-based when no durable row exists', async () => {
+      const { dm } = setup({ membershipKey: 'never-written' });
+
+      const fresh = await (dm as any).createNewQuery({
+        recordId: new RecordId('_00_query', 'h-cold'),
+        surql: 'SELECT * FROM thread WHERE done = false;',
+        params: {},
+        ttl: '10m',
+        tableName: 'thread',
+        plan,
+        membershipKey: 'never-written',
+      });
+
+      expect(fresh.config.membershipKnown).toBeFalsy();
+      expect(ids(fresh.records)).toEqual(['thread:a', 'thread:b', 'thread:c']);
+    });
+
+    it('derives the membership key without the session salt', async () => {
+      const { dm } = setup();
+      const key = () => (dm as any).calculateMembershipKey({ surql: 'X', params: {} });
+
+      const before = await key();
+      dm.setSessionId('session-two');
+      expect(await key()).toBe(before);
+
+      // ...whereas the `_00_query` hash intentionally moves with the session.
+      const salted = await (dm as any).calculateHash({ surql: 'X', params: {} });
+      dm.setSessionId('session-three');
+      expect(await (dm as any).calculateHash({ surql: 'X', params: {} })).not.toBe(salted);
+    });
+  });
+});

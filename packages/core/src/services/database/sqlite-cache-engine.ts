@@ -53,6 +53,7 @@ const SYSTEM_TABLES = [
   '_00_stream_processor_state',
   '_00_query',
   '_00_preload',
+  '_00_window',
   '_00_schema',
   '_00_pending_mutations',
   // Server-written, synced-down meta tables (see meta_tables_client.surql).

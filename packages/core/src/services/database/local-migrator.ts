@@ -46,6 +46,7 @@ export class LocalMigrator {
       DEFINE TABLE IF NOT EXISTS _00_stream_processor_state SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
       DEFINE TABLE IF NOT EXISTS _00_query SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
       DEFINE TABLE IF NOT EXISTS _00_preload SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
+      DEFINE TABLE IF NOT EXISTS _00_window SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
       DEFINE TABLE IF NOT EXISTS _00_schema SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
       DEFINE TABLE IF NOT EXISTS _00_pending_mutations SCHEMALESS PERMISSIONS FOR select, create, update, delete WHERE true;
     `;

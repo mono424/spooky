@@ -1,18 +1,45 @@
 import type {
-  Diagnostic} from 'surrealdb';
+  Diagnostic,
+  SurrealEvents} from 'surrealdb';
 import {
   applyDiagnostics,
   createRemoteEngines,
   Surreal,
 } from 'surrealdb';
-import type { Sp00kyConfig } from '../../types';
+import type { ConnectionState, ReconnectConfig, Sp00kyConfig } from '../../types';
 import type { Logger } from '../logger/index';
 import { AbstractDatabaseService } from './database';
 import { createDatabaseEventSystem, DatabaseEventTypes } from './events/index';
 
+/** Defaults for {@link ReconnectConfig}. See that type for the rationale. */
+export const RECONNECT_DEFAULTS = {
+  attempts: -1,
+  retryDelayMax: 15_000,
+  heartbeatIntervalMs: 20_000,
+  heartbeatTimeoutMs: 10_000,
+  superviseRetryDelayMaxMs: 15_000,
+} as const;
+
+/** Fill in {@link RECONNECT_DEFAULTS} for every field the caller omitted. */
+export function resolveReconnectConfig(
+  input?: ReconnectConfig
+): Required<ReconnectConfig> {
+  return { ...RECONNECT_DEFAULTS, ...input };
+}
+
+/** Transport events the SDK publishes, mapped 1:1 to {@link ConnectionState}. */
+export type RemoteConnectionEvent = ConnectionState | 'error';
+
 export class RemoteDatabaseService extends AbstractDatabaseService {
   private config: Sp00kyConfig<any>['database'];
   protected eventType = DatabaseEventTypes.RemoteQuery;
+  private readonly reconnectConfig: Required<ReconnectConfig>;
+  /**
+   * In-flight `connect()`, so concurrent callers (boot + supervisor revive +
+   * an `online` event landing at the same moment) share one attempt instead of
+   * racing two sockets. Cleared on settle, so a later call always reconnects.
+   */
+  private connecting: Promise<void> | null = null;
 
   constructor(config: Sp00kyConfig<any>['database'], logger: Logger) {
     const events = createDatabaseEventSystem();
@@ -41,13 +68,68 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
       events
     );
     this.config = config;
+    this.reconnectConfig = resolveReconnectConfig(config.reconnect);
+    this.queryTimeoutMs = Math.max(0, config.queryTimeoutMs ?? 60_000);
   }
 
   getConfig(): Sp00kyConfig<any>['database'] {
     return this.config;
   }
 
+  /** Resolved reconnect tunables; the supervisor reads its own knobs here. */
+  getReconnectConfig(): Required<ReconnectConfig> {
+    return this.reconnectConfig;
+  }
+
+  /** Current transport state as reported by the SDK. */
+  getStatus(): ConnectionState {
+    return this.client.status as ConnectionState;
+  }
+
+  /**
+   * Observe transport events. Thin passthrough so callers (the supervisor,
+   * sync, CRDT) don't have to reach through `getClient()`.
+   */
+  subscribeConnection<K extends RemoteConnectionEvent>(
+    event: K,
+    cb: (...payload: SurrealEvents[K]) => void
+  ): () => void {
+    return this.client.subscribe(event, cb);
+  }
+
+  /**
+   * Tear the socket down on purpose. Used by the heartbeat watchdog when a
+   * socket stops answering but never closes: `close()` makes the SDK publish
+   * `disconnected`, which is what drives the supervisor's revive loop.
+   */
+  async forceClose(): Promise<void> {
+    try {
+      await this.client.close();
+    } catch (err) {
+      this.logger.debug(
+        { err, Category: 'sp00ky-client::RemoteDatabaseService::forceClose' },
+        'forceClose failed; treating the socket as gone anyway'
+      );
+    }
+  }
+
+  /**
+   * Open (or re-open) the remote connection.
+   *
+   * Safe to call repeatedly: concurrent calls share the in-flight attempt, and
+   * a call after a `disconnected` builds a fresh socket. `use()` and
+   * `authenticate()` are re-applied here for the cold path; the SDK also
+   * replays them itself on its own internal reconnects.
+   */
   async connect(): Promise<void> {
+    if (this.connecting) return this.connecting;
+    this.connecting = this.doConnect().finally(() => {
+      this.connecting = null;
+    });
+    return this.connecting;
+  }
+
+  private async doConnect(): Promise<void> {
     const { endpoint, token, namespace, database } = this.getConfig();
     if (endpoint) {
       this.logger.info(
@@ -60,7 +142,21 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
         'Connecting to remote database'
       );
       try {
-        await this.client.connect(endpoint);
+        // Without explicit options the SDK caps itself at 5 attempts (~62s of
+        // outage) and then gives up permanently — nothing would re-open the
+        // socket after that. `attempts: -1` keeps it trying; the supervisor
+        // still covers the case where the SDK terminates the engine because its
+        // post-reconnect handshake threw.
+        await this.client.connect(endpoint, {
+          reconnect: {
+            enabled: true,
+            attempts: this.reconnectConfig.attempts,
+            retryDelay: 1_000,
+            retryDelayMax: this.reconnectConfig.retryDelayMax,
+            retryDelayMultiplier: 2,
+            retryDelayJitter: 0.1,
+          },
+        });
         await this.client.use({
           namespace,
           database,

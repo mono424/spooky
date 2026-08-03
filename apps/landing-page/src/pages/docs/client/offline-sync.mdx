@@ -27,13 +27,56 @@ successful round.
 | `isDegraded()` | Sustained failures. Something is wrong. |
 | `everConnected()` | At least one sync round has succeeded this session. |
 | `isOffline()` | **Degraded after having connected.** This is the one to drive a banner off. It stays `false` during initial connect, so a cold start doesn't flash "offline". |
-| `health()` | The full snapshot: `consecutiveFailures`, `kind` (`network` or `application`), `error`. |
+| `connection()` | Transport state: `'connecting'`, `'connected'`, `'reconnecting'`, `'disconnected'`. |
+| `isReconnecting()` | The socket is being re-established. |
+| `health()` | The full snapshot: `consecutiveFailures`, `kind` (`network` or `application`), `error`, `connection`. |
 
 Tune the threshold in your client config:
 
 <CodeBlock code={healthConfigCode} lang="typescript" />
 
 Pass `syncHealth: false` to never report degraded at all.
+
+## Connection vs. health
+
+These answer different questions and it's worth keeping them apart:
+
+- `connection()` is about the **socket**. It flips the moment the WebSocket drops.
+- `status()` is about whether **sync rounds are succeeding**. It only degrades after a sustained run
+  of failures.
+
+A short reconnect is usually `reconnecting` **and** still `healthy` — writes queue locally and push
+once the socket is back, so there's nothing to alarm the user about. Use `isReconnecting()` for a
+quiet spinner and `isOffline()` for the actual "we can't reach the server" banner.
+
+## Reconnect
+
+The client keeps the connection alive for as long as the page lives. Three things cooperate:
+
+1. The SurrealDB SDK retries after a socket close, on exponential backoff. Sp00ky configures this to
+   retry **indefinitely** rather than the SDK's default of five attempts (which gives up after
+   roughly a minute of downtime and never tries again).
+2. A supervisor re-opens the connection from scratch if the SDK stops trying at all.
+3. A heartbeat probes the server on an interval. This is what catches a **half-open** socket: the
+   peer is gone (laptop slept, wifi switched, NAT timed out) but no close event ever arrives, so
+   nothing else would notice. If a probe goes unanswered the socket is torn down and rebuilt.
+
+Coming back online or un-hiding the tab also triggers an immediate probe instead of waiting out a
+backoff.
+
+After any reconnect, active queries re-register and live subscriptions are re-issued — a live
+subscription is scoped to its WebSocket session, so it does not survive the drop.
+
+The defaults need no configuration, but they're tunable:
+
+<CodeBlock code={reconnectConfigCode} lang="typescript" />
+
+<Note>
+  `queryTimeoutMs` matters more than it looks. Remote queries are serialized, so a single request
+  that never settles would otherwise block every later one — including the health probe, leaving the
+  client wedged while still reporting `healthy`. The deadline turns that into an ordinary network
+  failure that gets retried.
+</Note>
 
 <Note>
   Individual failures are always swallowed and retried. They never throw into your app. Sync health
@@ -137,6 +180,20 @@ function ConnectionBanner() {
 export const healthConfigCode = `const dbConfig: SyncedDbConfig<typeof schema> = {
   // …
   syncHealth: { degradeAfterConsecutiveFailures: 5 },
+};`;
+
+export const reconnectConfigCode = `const dbConfig: SyncedDbConfig<typeof schema> = {
+  database: {
+    // …
+    reconnect: {
+      attempts: -1,                 // -1 = retry forever (the default)
+      retryDelayMax: 15_000,        // cap on the backoff between attempts
+      heartbeatIntervalMs: 20_000,  // liveness probe cadence; 0 disables
+      heartbeatTimeoutMs: 10_000,   // unanswered for this long = socket is dead
+    },
+    queryTimeoutMs: 60_000,         // deadline on every remote query; 0 disables
+  },
+  pushTimeoutMs: 30_000,            // deadline on a single outgoing mutation
 };`;
 
 export const pendingCode = `const [pending, setPending] = createSignal(db.pendingMutationCount);

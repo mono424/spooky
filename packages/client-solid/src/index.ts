@@ -46,7 +46,13 @@ export { useQuery } from './lib/use-query';
 export { createPreload } from './lib/create-preload';
 export type { PreloadOptions, PreloadRefresh } from '@spooky-sync/core';
 export { useSyncStatus, type UseSyncStatus } from './lib/use-sync-status';
-export type { SyncHealth, SyncHealthStatus, SyncHealthConfig } from '@spooky-sync/core';
+export type {
+  SyncHealth,
+  SyncHealthStatus,
+  SyncHealthConfig,
+  ConnectionState,
+  ReconnectConfig,
+} from '@spooky-sync/core';
 export { useStorageStatus, type UseStorageStatus } from './lib/use-storage-status';
 export type { StorageHealth, StorageHealthStatus } from '@spooky-sync/core';
 export { useCrdtField } from './lib/use-crdt-field';

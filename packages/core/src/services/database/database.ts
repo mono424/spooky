@@ -4,11 +4,19 @@ import type {
   DatabaseEventSystem,
   DatabaseEventTypes} from './events/index';
 import type { SealedQuery } from '../../utils/surql';
+import { withTimeout } from '../../utils/index';
 
 export abstract class AbstractDatabaseService {
   protected client: Surreal;
   protected logger: Logger;
   protected events: DatabaseEventSystem;
+  /**
+   * Per-query deadline in ms; `0` disables. Only the remote service sets this
+   * (see `RemoteDatabaseService`) — a local query can be legitimately slow and
+   * has its own retry ladders, and there is no half-open-socket failure mode
+   * for an in-process engine.
+   */
+  protected queryTimeoutMs = 0;
   protected abstract eventType:
     | typeof DatabaseEventTypes.LocalQuery
     | typeof DatabaseEventTypes.RemoteQuery;
@@ -37,6 +45,11 @@ export abstract class AbstractDatabaseService {
 
   /**
    * Execute a query with serialized execution to prevent WASM transaction issues.
+   *
+   * Serialization means every query waits on the previous one, so a call that
+   * never settles blocks the whole chain forever. {@link queryTimeoutMs} bounds
+   * each link: on expiry this promise rejects and the chain moves on, even
+   * though the underlying RPC is still parked in the SDK's pending map.
    */
   async query<T extends unknown[]>(query: string, vars?: Record<string, unknown>): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -52,7 +65,14 @@ export abstract class AbstractDatabaseService {
             const pending = this.client.query(query, vars);
             // In SurrealDB 2.0, .query() collects results by default.
             // We cast to T directly as proper typing depends on the caller knowing the return structure.
-            const result = (await pending) as unknown as T;
+            // "timed out" in the message is load-bearing: `classifySyncError`
+            // keys off it to classify this as `network` so the sync queues
+            // retry rather than rolling the mutation back.
+            const result = (await withTimeout(
+              pending as unknown as Promise<T>,
+              this.queryTimeoutMs,
+              `Remote query timed out after ${this.queryTimeoutMs}ms`
+            )) as T;
             const duration = performance.now() - startTime;
 
             // Emit query event

@@ -11,7 +11,12 @@ import type {
   SyncHealth,
   StorageHealth,
 } from './types';
-import { LocalMigrator, RemoteDatabaseService, createLocalEngine } from './services/database/index';
+import {
+  ConnectionSupervisor,
+  LocalMigrator,
+  RemoteDatabaseService,
+  createLocalEngine,
+} from './services/database/index';
 import type { LocalStore } from './services/database/index';
 import { StaleEpochError } from './services/database/index';
 import type { UpEvent } from './modules/sync/index';
@@ -148,6 +153,7 @@ function writeBootBucketHint(bucketId: string): void {
 export class Sp00kyClient<S extends SchemaStructure> {
   private local: LocalStore;
   private remote: RemoteDatabaseService;
+  private connectionSupervisor: ConnectionSupervisor;
   private persistenceClient: PersistenceClient;
 
   private migrator: LocalMigrator;
@@ -267,6 +273,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
       shared: tabsSupport.supported,
     });
     this.remote = new RemoteDatabaseService(this.config.database, logger);
+    // Owns socket liveness for the life of the client: re-opens the connection
+    // when the SDK's own reconnect gives up, and heartbeats to catch a socket
+    // that died without ever firing a `close` event.
+    this.connectionSupervisor = new ConnectionSupervisor(this.remote, logger);
 
     if (config.persistenceClient === 'surrealdb') {
       this.persistenceClient = new SurrealDBPersistenceClient(this.local, logger);
@@ -343,6 +353,9 @@ export class Sp00kyClient<S extends SchemaStructure> {
           this.config.syncHealth === false
             ? 0
             : (this.config.syncHealth?.degradeAfterConsecutiveFailures ?? 3),
+        pushTimeoutMs: this.config.pushTimeoutMs,
+        // Read-only: sync mirrors the transport state into `SyncHealth`.
+        connectionSupervisor: this.connectionSupervisor,
       }
     );
 
@@ -616,6 +629,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
       }
 
       await this.remote.connect();
+      // Start supervising only after the first connect succeeds, so a boot-time
+      // failure surfaces as a thrown init() rather than being silently absorbed
+      // into a background retry loop.
+      this.connectionSupervisor.start();
       this.logger.debug(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
         'Remote database connected'
@@ -638,6 +655,16 @@ export class Sp00kyClient<S extends SchemaStructure> {
       // for the same user don't collide on shared `_00_query` rows. The same
       // session id is the `session_id` key in `_00_cursor` rows, so the
       // CrdtManager needs it too.
+      //
+      // Deliberately NOT refreshed on reconnect, even though `session::id()`
+      // does change with every WebSocket session. The salt keys `_00_query`
+      // rows and local cache entries, so rotating it would invalidate every
+      // query hash and force a full re-register plus a cache-key migration on
+      // each blip. Those rows stay valid because the TTL heartbeat keeps them
+      // alive, not because the session that created them is still open — so a
+      // stable salt across reconnects is the correct behavior. Auth flips are
+      // the one case that must rotate it (below): a sign-in is a different
+      // principal, not the same session on a new socket.
       const sessionId = await this.fetchSessionId();
       await this.dataModule.init(sessionId);
       this.crdtManager.setSessionId(sessionId);
@@ -868,9 +895,13 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   async close() {
+    // Before anything else: a live supervisor would read the intentional
+    // `remote.close()` below as a failure and immediately reconnect.
+    this.connectionSupervisor.dispose();
     await this.featureFlags.closeAll();
     await this.appReleases.closeAll();
     this.crdtManager.closeAll();
+    this.crdtManager.dispose();
     // Leaving the broker first hands leadership to another tab (and releases
     // the OPFS handles via the worker shutdown) before the store closes.
     if (this.tabsCoordinator) await this.tabsCoordinator.stop();

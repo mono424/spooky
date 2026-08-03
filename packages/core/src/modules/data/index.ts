@@ -44,7 +44,12 @@ import {
 } from '../../utils/index';
 import type { CreateEvent, DeleteEvent, UpdateEvent } from '../sync/index';
 import type { PushEventOptions } from '../../events/index';
-import { buildWindowMaterialization, buildWindowMaterializationPlan } from './window-query';
+import {
+  buildIdSetPlan,
+  buildIdSetSurql,
+  buildWindowMaterialization,
+  buildWindowMaterializationPlan,
+} from './window-query';
 import { mintMutationId } from './mutation-id';
 
 /** Push a timing sample (ms) into a rolling window, capped at the sample window. */
@@ -236,7 +241,8 @@ export class DataModule<S extends SchemaStructure> {
       params,
       ttl,
       tableName,
-      plan
+      plan,
+      await this.calculateMembershipKey({ surql: surqlString, params })
     );
     this.pendingQueries.set(hash, promise);
     try {
@@ -442,52 +448,142 @@ export class DataModule<S extends SchemaStructure> {
     await this.processStreamUpdate(pending);
   }
 
-  // Materialize a query's result rows from the local DB. For a windowed query
-  // (`LIMIT n START m`, m>0) the original surql is NOT re-run — re-applying
-  // `START m` against the shared local store would skip the window's own rows
-  // (sparse windowing) and return nothing. Instead we select the window's
-  // record id-set directly, preferring the server's `list_ref` (`remoteArray`,
-  // authoritative) over the in-browser SSP's view (`sspArray`), and re-apply
-  // the original ORDER BY for stable order.
+  /**
+   * Materialize a query's result rows from the local store.
+   *
+   * A query's rows are its MEMBERSHIP — the id-set the server put in
+   * `_00_list_ref` (`remoteArray`) — not "every local body that matches the
+   * WHERE". Those two disagree, and the disagreement was the bug: when a row
+   * leaves a query's window but still exists upstream, `handleRemovedRecords`
+   * keeps its local body and never re-fetches it, so a predicate re-scan finds
+   * that stale body still matching and keeps rendering the row. Selecting the
+   * id-set directly is also the only correct thing for a windowed query, where
+   * re-applying `START m` against the shared local store skips the window's own
+   * rows entirely (sparse windowing) and returns nothing.
+   *
+   * The rendered set is:
+   *
+   *     (membership ∪ (pendingWrites ∩ localArray)) − pendingDeletes
+   *
+   * The middle term keeps optimistic writes visible without re-admitting stale
+   * rows. Every local write is fed to the SSP (`cache.saveBatch` →
+   * `ingestMany`), so `localArray` answers "does this row match the predicate
+   * per LOCAL truth". A pending write that moves a row into the window is in
+   * `localArray` and shows; one that moves a row out is absent and does not; a
+   * stale body the server dropped has no pending write at all, so it stays out.
+   * `pendingDeletes` covers the reverse lag — the server still lists a row whose
+   * DELETE is sitting in our outbox.
+   *
+   * Falls back to the predicate scan only when membership has never been
+   * established (a query first run on this device), so an offline first paint
+   * still shows something.
+   */
   private async materializeRecords(
     queryState: QueryState,
     sspArray?: Array<[string, number]>
   ): Promise<Record<string, any>[]> {
     const t0 = performance.now();
-    const plan = queryState.config.plan;
-    const windowMat = buildWindowMaterialization(queryState.config.surql);
-    let records: Record<string, any>[];
-    if (windowMat) {
-      const win =
-        (queryState.config.remoteArray?.length && queryState.config.remoteArray) ||
-        (sspArray?.length && sspArray) ||
-        queryState.config.localArray ||
-        [];
-      const winIds = win.map(([id]) => parseRecordIdString(id));
-      if (plan) {
-        // Engine-neutral window materialization: select exactly the id-set,
-        // keeping ORDER BY + relations. Works on any local engine.
-        const winPlan = buildWindowMaterializationPlan(plan, winIds) ?? { ...plan, ids: winIds };
-        records = await this.local.select(winPlan, queryState.config.params);
-      } else {
-        const [rows] = await this.local.query<[Record<string, any>[]]>(windowMat.query, {
-          ...queryState.config.params,
-          __win: winIds,
-        });
-        records = rows || [];
-      }
-    } else if (plan) {
-      records = await this.local.select(plan, queryState.config.params);
-    } else {
-      const [rows] = await this.local.query<[Record<string, any>[]]>(
-        queryState.config.surql,
-        queryState.config.params
-      );
-      records = rows || [];
-    }
+    const records = await this.materializeFromConfig(queryState.config, sspArray);
     // Local SurrealDB record-fetch time → DevTools "localFetch" phase.
     this.recordPhase(queryState, 'localFetch', performance.now() - t0);
     return records;
+  }
+
+  /**
+   * The materialization itself, without the DevTools timing wrapper. Split out so
+   * cold-start seeding can use it before a `QueryState` exists.
+   */
+  private async materializeFromConfig(
+    config: QueryConfig,
+    sspArray?: Array<[string, number]>
+  ): Promise<Record<string, any>[]> {
+    const plan = config.plan;
+    const membership = this.resolveMembership(config, sspArray);
+    let records: Record<string, any>[];
+
+    if (membership) {
+      const ids = await this.buildRenderIds(config, membership, sspArray);
+      if (plan) {
+        records = await this.local.select(buildIdSetPlan(plan, ids), config.params);
+      } else {
+        const idSetSurql = buildIdSetSurql(config.surql);
+        if (idSetSurql) {
+          const [rows] = await this.local.query<[Record<string, any>[]]>(idSetSurql.query, {
+            ...config.params,
+            __win: ids,
+          });
+          records = rows || [];
+        } else {
+          // Unparseable shape (no top-level FROM): the predicate scan is the
+          // only option left. Rare — the query-builder always supplies a plan.
+          const [rows] = await this.local.query<[Record<string, any>[]]>(
+            config.surql,
+            config.params
+          );
+          records = rows || [];
+        }
+      }
+    } else if (plan) {
+      records = await this.local.select(plan, config.params);
+    } else {
+      const [rows] = await this.local.query<[Record<string, any>[]]>(config.surql, config.params);
+      records = rows || [];
+    }
+    return records;
+  }
+
+  /**
+   * The authoritative membership list to render from, or `null` when membership
+   * has never been established and the caller must fall back to a scan.
+   *
+   * A windowed query has no usable fallback — re-running its `START m` locally
+   * returns the wrong rows — so it renders from whatever id-set is on hand
+   * (SSP's included) rather than degrading to a scan. That is the pre-existing
+   * behavior for windows and is preserved.
+   */
+  private resolveMembership(
+    config: QueryConfig,
+    sspArray?: Array<[string, number]>
+  ): RecordVersionArray | null {
+    if (config.membershipKnown) return config.remoteArray ?? [];
+    if (buildWindowMaterialization(config.surql) !== null) {
+      return (
+        (config.remoteArray?.length && config.remoteArray) ||
+        (sspArray?.length && sspArray) ||
+        config.localArray ||
+        []
+      );
+    }
+    return null;
+  }
+
+  /** Apply the pending-write union and pending-delete subtraction, and map to
+   *  RecordIds for the engines' id-set path. */
+  private async buildRenderIds(
+    config: QueryConfig,
+    membership: RecordVersionArray,
+    sspArray?: Array<[string, number]>
+  ): Promise<unknown[]> {
+    const { writes, deletes } = await this.getPendingRecordIds();
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    for (const [id] of membership) {
+      if (deletes.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      ordered.push(id);
+    }
+    if (writes.size > 0) {
+      // Only pending writes the SSP agrees currently match this query — see the
+      // formula in `materializeRecords`. `sspArray` is the fresher signal when a
+      // stream update triggered this pass; `localArray` is the persisted one.
+      const localView = (sspArray?.length && sspArray) || config.localArray || [];
+      for (const [id] of localView) {
+        if (!writes.has(id) || deletes.has(id) || seen.has(id)) continue;
+        seen.add(id);
+        ordered.push(id);
+      }
+    }
+    return ordered.map((id) => parseRecordIdString(id));
   }
 
   private async processStreamUpdate(update: StreamUpdate): Promise<void> {
@@ -823,11 +919,16 @@ export class DataModule<S extends SchemaStructure> {
     if (epoch !== this.local.epoch) return;
 
     // Prime remoteArray from the hydrated id+version pairs: `materializeRecords`
-    // prefers it for windowed queries (correct window) and it feeds the version
-    // dedup. Registration later overwrites it with the authoritative `_00_list_ref`.
+    // renders from it and it feeds the version dedup. Registration later
+    // overwrites it with the authoritative `_00_list_ref`.
     queryState.config.remoteArray = rows.map(
       (r) => [encodeRecordId(r.id), (r._00_rv as number) || 1] as [string, number]
     );
+    // These rows ARE the server's answer to this query, so membership is now
+    // known and rendering can stop falling back to a predicate scan. The durable
+    // `_00_window` mirror is deliberately left to `updateQueryRemoteArray` (the
+    // single write point) — the registration that follows lands there anyway.
+    queryState.config.membershipKnown = true;
 
     queryState.records = await this.materializeRecords(queryState);
     const subscribers = this.subscriptions.get(hash);
@@ -915,6 +1016,88 @@ export class DataModule<S extends SchemaStructure> {
       { fetchedAt: Date.now(), rowCount },
       'replace'
     );
+  }
+
+  // ---- Durable membership (`_00_window`) ---------------------------------
+  //
+  // A query's authoritative membership is the id-set the server put in
+  // `_00_list_ref` — `config.remoteArray`. It is persisted on the `_00_query`
+  // row, but that row's id is salted with `session::id()`, which is new on every
+  // page load (and `''` offline), and `doSwitchBucket` wipes the table outright.
+  // So membership never survived a reload: the first paint fell back to a
+  // predicate scan over whatever bodies were still cached, which re-included
+  // rows the server had already dropped from the window.
+  //
+  // `_00_window` fixes that: same data, keyed by a session-independent hash, in
+  // a table nothing wipes. Mirrors the durable `_00_preload` marker above.
+
+  /**
+   * Read the durable membership row, or `null` if this query has never had
+   * authoritative membership on this device. Any read error is treated as
+   * "unknown" so a broken row degrades to the predicate scan rather than
+   * rendering an empty list.
+   */
+  async getWindowMembership(key: string): Promise<RecordVersionArray | null> {
+    try {
+      const row = await this.local.getById('_00_window', new RecordId('_00_window', key));
+      if (!row || typeof row !== 'object') return null;
+      const ids = (row as any).ids;
+      return Array.isArray(ids) ? (ids as RecordVersionArray) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Persist the durable membership row. Best-effort: callers must not fail a
+   *  sync round because the mirror write failed. */
+  async writeWindowMembership(key: string, ids: RecordVersionArray): Promise<void> {
+    try {
+      await this.local.upsert(
+        '_00_window',
+        new RecordId('_00_window', key),
+        { ids, updatedAt: Date.now() },
+        'replace'
+      );
+    } catch (err) {
+      this.logger.debug(
+        { err, key, Category: 'sp00ky-client::DataModule::writeWindowMembership' },
+        'Failed to persist window membership; it will be re-derived on next register'
+      );
+    }
+  }
+
+  /**
+   * Record ids with a mutation still in the outbox, split by direction.
+   *
+   * Both halves feed {@link materializeRecords}: `writes` keeps optimistic
+   * creates/updates visible before the server has acknowledged them, and
+   * `deletes` suppresses rows the server still lists because our DELETE hasn't
+   * been processed yet. Reading `_00_pending_mutations` (rather than tracking
+   * ids in memory) is what makes both survive a reload.
+   *
+   * On failure returns empty sets: membership alone then decides, which can
+   * briefly hide an optimistic write but never resurrects a deleted row.
+   */
+  async getPendingRecordIds(): Promise<{ writes: Set<string>; deletes: Set<string> }> {
+    const writes = new Set<string>();
+    const deletes = new Set<string>();
+    try {
+      const [rows] = await this.local.query<
+        [{ recordId: RecordId<string>; mutationType: string }[]]
+      >('SELECT recordId, mutationType FROM _00_pending_mutations');
+      for (const row of rows ?? []) {
+        if (!row?.recordId) continue;
+        const id = encodeRecordId(row.recordId);
+        if (row.mutationType === 'delete') deletes.add(id);
+        else writes.add(id);
+      }
+    } catch (err) {
+      this.logger.warn(
+        { err, Category: 'sp00ky-client::DataModule::getPendingRecordIds' },
+        'Failed to read pending mutations; optimistic writes may be briefly hidden'
+      );
+    }
+    return { writes, deletes };
   }
 
   /** True while ≥1 live subscriber is watching this query (refcount guard). */
@@ -1017,6 +1200,13 @@ export class DataModule<S extends SchemaStructure> {
     }
     const epoch = this.local.epoch;
     queryState.config.remoteArray = remoteArray;
+    // The single point where authoritative membership arrives (registration and
+    // the `_00_list_ref` poll both land here), so it is where "we now know the
+    // membership" is latched and where the durable mirror is written.
+    queryState.config.membershipKnown = true;
+    if (queryState.config.membershipKey) {
+      await this.writeWindowMembership(queryState.config.membershipKey, remoteArray);
+    }
     try {
       await this.local.query(
         surql.seal(surql.updateSet('id', ['remoteArray'])),
@@ -1074,6 +1264,18 @@ export class DataModule<S extends SchemaStructure> {
       config.localArray = [];
       config.remoteArray = [];
       config.subqueryRemoteArray = undefined;
+      // Membership belongs to the bucket we just left. Re-seed from the NEW
+      // bucket's durable row if it has one (a returning user), otherwise mark it
+      // unknown so the first paint falls back to a scan instead of rendering an
+      // empty list until the server answers.
+      config.membershipKnown = false;
+      if (config.membershipKey) {
+        const durable = await this.getWindowMembership(config.membershipKey);
+        if (durable) {
+          config.remoteArray = durable;
+          config.membershipKnown = true;
+        }
+      }
       queryState.hydrated = false;
       queryState.syncNotified = false;
       queryState.records = [];
@@ -1593,7 +1795,8 @@ export class DataModule<S extends SchemaStructure> {
     params: Record<string, any>,
     ttl: QueryTimeToLive,
     tableName: T,
-    plan?: QueryPlan
+    plan?: QueryPlan,
+    membershipKey?: string
   ): Promise<QueryHash> {
     const queryState = await this.createNewQuery<T>({
       recordId,
@@ -1602,6 +1805,7 @@ export class DataModule<S extends SchemaStructure> {
       ttl,
       tableName,
       plan,
+      membershipKey,
     });
 
     const t0 = performance.now();
@@ -1685,6 +1889,7 @@ export class DataModule<S extends SchemaStructure> {
     ttl,
     tableName,
     plan,
+    membershipKey,
   }: {
     recordId: RecordId;
     surql: string;
@@ -1692,6 +1897,7 @@ export class DataModule<S extends SchemaStructure> {
     ttl: QueryTimeToLive;
     tableName: T;
     plan?: QueryPlan;
+    membershipKey?: string;
   }): Promise<QueryState> {
     // `_00_*` meta tables (feature flags, app releases) are framework-owned:
     // they exist in the client db schema by construction but are never part of
@@ -1742,7 +1948,22 @@ export class DataModule<S extends SchemaStructure> {
       // engines materialize via `select(plan)` instead of parsing `surql`.
       plan,
       params: parseParams(tableSchema.columns, configRecord.params),
+      membershipKey,
     };
+
+    // The `_00_query` row we just read is session-salted, so on a reload it is
+    // always a fresh row with empty arrays. Recover the last authoritative
+    // membership from the durable `_00_window` row instead — this is what stops a
+    // removed row reappearing after a reload, and it works with no network.
+    if (membershipKey && !config.remoteArray?.length) {
+      const durable = await this.getWindowMembership(membershipKey);
+      if (durable) {
+        config.remoteArray = durable;
+        config.membershipKnown = true;
+      }
+    } else if (config.remoteArray?.length) {
+      config.membershipKnown = true;
+    }
 
     let records: Record<string, any>[] = [];
     // Windowed (`START n`) queries: do NOT seed from the raw surql here. Running
@@ -1750,7 +1971,21 @@ export class DataModule<S extends SchemaStructure> {
     // skips m rows on every window open — AND returns the wrong rows for sparse
     // windows (the reason `buildWindowMaterialization` exists). Those windows are
     // seeded from the SSP `localArray` in `createAndRegisterQuery` instead.
-    if (buildWindowMaterialization(surqlString) === null) {
+    //
+    // With known membership the same reasoning applies to EVERY query, windowed
+    // or not: the predicate scan below would re-admit rows the server has already
+    // dropped from the window (their bodies are still cached and still match the
+    // WHERE). Seed from membership instead.
+    if (config.membershipKnown) {
+      try {
+        records = await this.materializeFromConfig(config);
+      } catch (err) {
+        this.logger.warn(
+          { err, Category: 'sp00ky-client::DataModule::createNewQuery' },
+          'Failed to seed records from durable membership'
+        );
+      }
+    } else if (buildWindowMaterialization(surqlString) === null) {
       try {
         // Prefer the engine-neutral plan (required for non-SurrealQL engines);
         // fall back to running the raw surql on the SurrealDB engine.
@@ -1800,7 +2035,24 @@ export class DataModule<S extends SchemaStructure> {
     // sessionId is part of the hash so the same logical query from two
     // sessions (e.g. two browser tabs of the same user) lands on different
     // `_00_query` rows and doesn't fight over a shared one.
-    const content = JSON.stringify({ ...data, sessionId: this.sessionId });
+    return this.sha256(JSON.stringify({ ...data, sessionId: this.sessionId }));
+  }
+
+  /**
+   * Session-independent counterpart of {@link calculateHash}: the key for a
+   * query's durable `_00_window` membership row.
+   *
+   * Deliberately the SAME inputs minus the `session::id()` salt, so the two keys
+   * can never drift apart. The salt is right for `_00_query` (two tabs must not
+   * fight over one row) and wrong for membership, which has to be recognizable
+   * after a reload — a reload mints a new session id, and offline the salt is
+   * `''`, so a salted key can never match what the previous session wrote.
+   */
+  private async calculateMembershipKey(data: any): Promise<string> {
+    return this.sha256(JSON.stringify(data));
+  }
+
+  private async sha256(content: string): Promise<string> {
     const msgBuffer = new TextEncoder().encode(content);
     const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));

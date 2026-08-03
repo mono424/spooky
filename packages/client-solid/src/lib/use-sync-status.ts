@@ -1,6 +1,6 @@
 import { createSignal, onCleanup, type Accessor } from 'solid-js';
 import { useDb } from './context';
-import type { SyncHealth, SyncHealthStatus } from '@spooky-sync/core';
+import type { ConnectionState, SyncHealth, SyncHealthStatus } from '@spooky-sync/core';
 
 export interface UseSyncStatus {
   /** Full health snapshot; updates reactively on every transition. */
@@ -19,6 +19,18 @@ export interface UseSyncStatus {
    * app has actually connected once.
    */
   isOffline: Accessor<boolean>;
+  /**
+   * Transport state of the remote WebSocket. Flips the instant the socket
+   * drops, unlike `status`, which only degrades after a sustained run of failed
+   * sync rounds — so this is what to drive a "reconnecting…" affordance off.
+   */
+  connection: Accessor<ConnectionState>;
+  /**
+   * `true` while the connection is being re-established. Usually still
+   * `isHealthy()`: a short reconnect is invisible to sync, and writes made
+   * during it are queued locally and pushed once the socket is back.
+   */
+  isReconnecting: Accessor<boolean>;
 }
 
 /**
@@ -46,5 +58,7 @@ export function useSyncStatus(): UseSyncStatus {
     isDegraded: () => health().status === 'degraded',
     everConnected: () => health().everConnected,
     isOffline: () => health().status === 'degraded' && health().everConnected,
+    connection: () => health().connection,
+    isReconnecting: () => health().connection === 'reconnecting',
   };
 }

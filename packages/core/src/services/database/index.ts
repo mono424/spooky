@@ -1,6 +1,7 @@
 export * from './database';
 export * from './local';
 export * from './remote';
+export * from './connection-supervisor';
 export * from './local-migrator';
 export * from './events/index';
 export * from './cache-engine';
