@@ -59,15 +59,33 @@ import { detectSharedTabsSupport } from './services/tabs/support';
 import { TabsCoordinator, type CoordinatorHooks } from './services/tabs/coordinator';
 import { computeTabsFingerprint, hash53, type TabRole } from './services/tabs/protocol';
 import type { SqliteCacheEngine } from './services/database/sqlite-cache-engine';
+import type { BlobCache, BlobReadOptions, BlobUrlLease } from './services/blobs/index';
+import { MemoryBlobStore, createBlobCache, resolveBlobBudget } from './services/blobs/index';
+
+/** Coerce whatever the `.get()` RPC hands back into a Blob. */
+export function bucketContentToBlob(content: unknown): Blob | null {
+  if (content == null) return null;
+  if (content instanceof Blob) return content;
+  if (typeof content === 'string') return new Blob([content]);
+  if (content instanceof ArrayBuffer) return new Blob([content]);
+  // Uint8Array and friends. The cast sidesteps `ArrayBufferLike` vs
+  // `ArrayBuffer` (SharedArrayBuffer) in lib.dom's BlobPart.
+  if (ArrayBuffer.isView(content)) return new Blob([content as unknown as BlobPart]);
+  return null;
+}
 
 export class BucketHandle {
   constructor(
     private bucketName: string,
-    private remote: RemoteDatabaseService
+    private remote: RemoteDatabaseService,
+    /** Absent on the raw handle the cache itself reads through. */
+    private blobs?: BlobCache | null
   ) {}
 
   async put(path: string, content: string | Uint8Array | Blob): Promise<void> {
     await this.remote.query(`RETURN f"${this.bucketName}:/${path}".put($content);`, { content });
+    // A path can be overwritten, so anything cached under it is now wrong.
+    await this.blobs?.invalidate({ bucket: this.bucketName, path });
   }
 
   async get(path: string): Promise<unknown> {
@@ -77,8 +95,48 @@ export class BucketHandle {
     return result;
   }
 
+  /**
+   * Read through the local blob cache: OPFS first, the bucket second. Unlike
+   * {@link get} this survives a reload and works offline. Returns null when the
+   * file exists in neither place.
+   */
+  async read(path: string, options?: BlobReadOptions): Promise<Blob | null> {
+    if (!this.blobs) return bucketContentToBlob(await this.get(path));
+    return this.blobs.read({ bucket: this.bucketName, path }, options);
+  }
+
+  /**
+   * A refcounted object URL for `path`, suitable for `<img src>`. The caller
+   * MUST call `release()` when the URL goes off screen. Returns null when the
+   * file does not exist, or when object URLs are unavailable (non-browser).
+   */
+  async url(path: string, options?: BlobReadOptions): Promise<BlobUrlLease | null> {
+    if (!this.blobs) return null;
+    return this.blobs.acquireUrl({ bucket: this.bucketName, path }, options);
+  }
+
+  /** Exempt `path` from pressure eviction. Pinned bytes never expire. */
+  pin(path: string): void {
+    this.blobs?.setPinned({ bucket: this.bucketName, path }, true);
+  }
+
+  unpin(path: string): void {
+    this.blobs?.setPinned({ bucket: this.bucketName, path }, false);
+  }
+
+  /** Drop `path` from the local cache without touching the remote file. */
+  async evict(path: string): Promise<void> {
+    await this.blobs?.invalidate({ bucket: this.bucketName, path });
+  }
+
+  /** Warm the cache for offline use. Already-cached paths are skipped. */
+  async prefetch(paths: string[]): Promise<void> {
+    await this.blobs?.prefetch(paths.map((path) => ({ bucket: this.bucketName, path })));
+  }
+
   async delete(path: string): Promise<void> {
     await this.remote.query(`RETURN f"${this.bucketName}:/${path}".delete();`);
+    await this.blobs?.invalidate({ bucket: this.bucketName, path });
   }
 
   async exists(path: string): Promise<boolean> {
@@ -153,6 +211,7 @@ function writeBootBucketHint(bucketId: string): void {
 export class Sp00kyClient<S extends SchemaStructure> {
   private local: LocalStore;
   private remote: RemoteDatabaseService;
+  private blobs: BlobCache;
   private connectionSupervisor: ConnectionSupervisor;
   private persistenceClient: PersistenceClient;
 
@@ -277,6 +336,24 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // when the SDK's own reconnect gives up, and heartbeats to catch a socket
     // that died without ever firing a `close` event.
     this.connectionSupervisor = new ConnectionSupervisor(this.remote, logger);
+
+    // Durable cache for bucket file bytes. Reads go through a raw (uncached)
+    // handle so the cache's own L2 fetch can't recurse back into itself. The
+    // namespace is provisional: `init()` rebinds it to the boot bucket and
+    // reconciles against what is actually on disk.
+    this.blobs = createBlobCache({
+      local: this.local,
+      namespace: ANON_USER_ID,
+      logger,
+      fetchRemote: async (key) =>
+        bucketContentToBlob(await this.rawBucket(key.bucket).get(key.path)),
+      headRemote: (key) => this.rawBucket(key.bucket).head(key.path),
+      maxBytes: this.config.blobCache?.maxBytes,
+      // Opting out keeps the in-tab dedupe and object-URL refcounting that
+      // existed before this cache, and persists nothing.
+      store:
+        this.config.blobCache?.enabled === false ? new MemoryBlobStore(ANON_USER_ID) : undefined,
+    });
 
     if (config.persistenceClient === 'surrealdb') {
       this.persistenceClient = new SurrealDBPersistenceClient(this.local, logger);
@@ -431,6 +508,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
         };
       });
     }
+    this.devTools.setBlobInfoProvider(() => this.blobs.stats());
   }
 
   /** The shared-tabs role machinery, wired to this client's modules. */
@@ -628,6 +706,20 @@ export class Sp00kyClient<S extends SchemaStructure> {
         this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Schema provisioned');
       }
 
+      // After the store is open (the manifest lives in it) and after
+      // provisioning (`_00_blob` has to exist), before any query can ask for a
+      // file. Best-effort: a cold blob cache is a slow first paint, not a
+      // broken client.
+      try {
+        this.blobs.setMaxBytes(await resolveBlobBudget(this.config.blobCache?.maxBytes));
+        await this.blobs.start(bootBucket);
+      } catch (e) {
+        this.logger.warn(
+          { err: e, Category: 'sp00ky-client::Sp00kyClient::init' },
+          'Blob cache failed to start; bucket files will not be cached locally'
+        );
+      }
+
       await this.remote.connect();
       // Start supervising only after the first connect succeeds, so a boot-time
       // failure surfaces as a thrown init() rather than being silently absorbed
@@ -822,6 +914,8 @@ export class Sp00kyClient<S extends SchemaStructure> {
       'Switching local bucket'
     );
 
+    const leavingBucket = this.local.currentBucketId;
+
     await this.sync.prepareBucketSwitch();
     this.dataModule.quiesce();
     this.crdtManager.closeAll({ flush: false });
@@ -857,6 +951,24 @@ export class Sp00kyClient<S extends SchemaStructure> {
           await this.migrator.provision(this.config.schemaSurql);
         }
         await this.local.queryUngated('DELETE _00_query;');
+      }
+      // Cached bytes are namespaced per local bucket, so the switch is a
+      // repoint, not a wipe: signing back in finds the cache warm. Apps that
+      // want the signed-out user's files gone opt in with `clearOnSignOut`.
+      try {
+        if (
+          this.config.blobCache?.clearOnSignOut &&
+          target === ANON_USER_ID &&
+          leavingBucket !== ANON_USER_ID
+        ) {
+          await this.blobs.clear();
+        }
+        await this.blobs.setNamespace(target);
+      } catch (e) {
+        this.logger.warn(
+          { err: e, target, Category: 'sp00ky-client::Sp00kyClient::doSwitchBucket' },
+          'Blob cache bucket switch failed'
+        );
       }
       this.streamProcessor.setStateKeySuffix(target);
       await this.streamProcessor.reset();
@@ -902,6 +1014,9 @@ export class Sp00kyClient<S extends SchemaStructure> {
     await this.appReleases.closeAll();
     this.crdtManager.closeAll();
     this.crdtManager.dispose();
+    // Flush the blob manifest while the local store is still open — the flush
+    // writes `_00_blob` rows through it — and revoke every object URL.
+    await this.blobs.close().catch(() => {});
     // Leaving the broker first hands leadership to another tab (and releases
     // the OPFS handles via the worker shutdown) before the store closes.
     if (this.tabsCoordinator) await this.tabsCoordinator.stop();
@@ -1216,7 +1331,18 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   bucket<B extends BucketNames<S>>(name: B): BucketHandle {
-    return new BucketHandle(name, this.remote);
+    return new BucketHandle(name, this.remote, this.blobs);
+  }
+
+  /** Cache-free handle. The blob cache reads the remote through this, so a
+   *  cache miss can't loop back into the cache. */
+  private rawBucket(name: string): BucketHandle {
+    return new BucketHandle(name, this.remote, null);
+  }
+
+  /** Blob cache counters for DevTools. */
+  getBlobCacheStats() {
+    return this.blobs.stats();
   }
 
   create(id: string, data: Record<string, unknown>) {

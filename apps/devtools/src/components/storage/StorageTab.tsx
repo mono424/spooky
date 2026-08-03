@@ -107,6 +107,13 @@ export function StorageTab() {
     return Math.min(100, (b.usage / b.quota) * 100);
   });
 
+  const blobs = () => info()?.blobs;
+  const blobBudgetPct = createMemo(() => {
+    const b = blobs();
+    if (!b?.budgetBytes) return null;
+    return Math.min(100, (b.totalBytes / b.budgetBytes) * 100);
+  });
+
   const workerSelectDowngraded = () =>
     !!diag() && diag()!.workerSelectConfigured && !diag()!.workerSelectEffective;
 
@@ -414,7 +421,73 @@ export function StorageTab() {
             </div>
           </div>
 
-          {/* 5. OPFS files */}
+          {/* 5. Bucket file cache */}
+          <Show when={blobs()}>
+            <div class="mcp-section">
+              <h3>Bucket file cache</h3>
+              <Show when={!blobs()!.persistent}>
+                <div class="storage-error-text">
+                  Not persisting — running in tab memory only. Cached files will not survive a
+                  reload (OPFS unwritable, or the storage quota was exhausted).
+                </div>
+              </Show>
+              <Show when={blobs()!.persistPaused}>
+                <div class="storage-error-text">
+                  Over budget with nothing evictable: every remaining entry is pinned or on
+                  screen. New files are not being cached. Raise <code>blobCache.maxBytes</code>{' '}
+                  or unpin something.
+                </div>
+              </Show>
+              <Show when={blobBudgetPct() !== null}>
+                <div
+                  class="storage-usage-bar"
+                  title={`${blobBudgetPct()!.toFixed(1)}% of the blob cache budget`}
+                >
+                  <div class="storage-usage-fill" style={{ width: `${blobBudgetPct()}%` }} />
+                </div>
+              </Show>
+              <div class="kv">
+                <div class="kv-row">
+                  <span class="kv-k">Cached files</span>
+                  <span class="kv-v">
+                    {blobs()!.entries} — {formatBytes(blobs()!.totalBytes)} of{' '}
+                    {formatBytes(blobs()!.budgetBytes)} budget
+                    {blobBudgetPct() !== null ? ` (${blobBudgetPct()!.toFixed(1)}%)` : ''}
+                  </span>
+                </div>
+                <Show when={blobs()!.pinnedBytes > 0}>
+                  <div class="kv-row">
+                    <span class="kv-k">Pinned</span>
+                    <span class="kv-v">
+                      {formatBytes(blobs()!.pinnedBytes)} (never evicted under pressure)
+                    </span>
+                  </div>
+                </Show>
+                <div class="kv-row">
+                  <span class="kv-k">Hits / misses</span>
+                  <span class="kv-v">
+                    {blobs()!.hits} / {blobs()!.misses}
+                  </span>
+                </div>
+                <Show when={blobs()!.evictedEntries > 0}>
+                  <div class="kv-row">
+                    <span class="kv-k">Evicted this session</span>
+                    <span class="kv-v">
+                      {blobs()!.evictedEntries} files — {formatBytes(blobs()!.evictedBytes)}
+                    </span>
+                  </div>
+                </Show>
+                <div class="kv-row">
+                  <span class="kv-k">Reconciled at boot</span>
+                  <span class="kv-v">
+                    {blobs()!.reconciledEntries} files found on disk
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Show>
+
+          {/* 6. OPFS files */}
           <div class="mcp-section">
             <h3>OPFS files</h3>
             <Show

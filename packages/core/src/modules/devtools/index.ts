@@ -22,7 +22,7 @@ import {
   parseBackendInfo,
   UNAVAILABLE,
 } from './versions';
-import { walkOpfs, type SharedTabsInfo, type StorageInfo } from './storage-info';
+import { walkOpfs, type BlobCacheInfo, type SharedTabsInfo, type StorageInfo } from './storage-info';
 
 // Real bundled frontend versions, injected at build time by tsdown's
 // version-define plugin (see tsdown.config.ts). The `typeof` guard keeps these
@@ -69,6 +69,13 @@ export class DevToolsService implements StreamUpdateReceiver {
 
   setTabsInfoProvider(provider: () => SharedTabsInfo | null): void {
     this.tabsInfoProvider = provider;
+  }
+
+  /** Blob cache counters for the panel, wired by Sp00kyClient. */
+  private blobInfoProvider: (() => BlobCacheInfo) | null = null;
+
+  setBlobInfoProvider(provider: () => BlobCacheInfo): void {
+    this.blobInfoProvider = provider;
   }
 
   // Full local table list (incl. internal `_00_*`), enumerated from the local DB
@@ -392,6 +399,15 @@ export class DevToolsService implements StreamUpdateReceiver {
     }
 
     info.opfs = await walkOpfs();
+
+    try {
+      info.blobs = this.blobInfoProvider?.();
+    } catch (e) {
+      this.logger.warn(
+        { err: e, Category: 'sp00ky-client::DevToolsService::getStorageInfo' },
+        'Blob cache diagnostics failed'
+      );
+    }
 
     const stats = (globalThis as any).__sqliteStats;
     if (stats && typeof stats === 'object') {

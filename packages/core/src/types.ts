@@ -161,6 +161,32 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    */
   localEngine?: LocalEngineChoice;
   /**
+   * Durable cache for bucket file bytes, in OPFS. Enabled by default wherever
+   * OPFS is writable; elsewhere the cache degrades to per-tab memory, which is
+   * how bucket reads behaved before it existed.
+   *
+   * Nothing in this cache expires on a timer — an image whose row is still in
+   * the local store has to stay available offline. Bytes are only dropped when
+   * the app invalidates the path (`bucket.put`/`bucket.delete`), when boot
+   * reconcile finds no file behind a row, or when the cache is over budget, in
+   * which case the least-recently-used unpinned entries go first. See
+   * `services/blobs/blob-cache.ts`.
+   */
+  blobCache?: {
+    /** Default `true`. `false` restores per-tab, non-persistent caching. */
+    enabled?: boolean;
+    /** Byte budget. Defaults to `min(512 MB, quota × 0.25)` from
+     *  `navigator.storage.estimate()`. */
+    maxBytes?: number;
+    /**
+     * Delete the signed-out user's cached bytes on `signOut()`. Default
+     * `false`, matching the local store: cached files are namespaced per local
+     * bucket, so signing back in is warm and no user can read another's cache.
+     * Turn on for shared devices.
+     */
+    clearOnSignOut?: boolean;
+  };
+  /**
    * Share ONE durable local store across all tabs of this origin (default
    * `false`). Requires `localEngine: 'sqlite'`. A SharedWorker broker elects a
    * leader tab per bucket via Web Locks; the leader owns the OPFS SQLite

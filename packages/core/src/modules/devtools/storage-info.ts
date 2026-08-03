@@ -79,9 +79,34 @@ export interface StorageInfo {
     truncated: boolean;
     error?: string;
   };
+  /**
+   * Bucket-file cache counters. `evicted*` is cumulative for this tab's
+   * session, so a number that climbs while `totalBytes` sits at the budget is
+   * the signal that `blobCache.maxBytes` is too small for the working set.
+   */
+  blobs?: BlobCacheInfo;
   /** Snapshot of `globalThis.__sqliteStats` (SQLite engine only). */
   sqliteStats?: Record<string, unknown>;
   engineDiagnostics?: EngineStorageDiagnostics;
+}
+
+export interface BlobCacheInfo {
+  entries: number;
+  totalBytes: number;
+  budgetBytes: number;
+  pinnedBytes: number;
+  evictedEntries: number;
+  evictedBytes: number;
+  /** Manifest rows rebuilt from disk at the last reconcile. */
+  reconciledEntries: number;
+  hits: number;
+  misses: number;
+  /** False when OPFS is unwritable or the quota was exhausted — the cache is
+   *  running in per-tab memory and nothing survives a reload. */
+  persistent: boolean;
+  /** Over budget with only pinned or on-screen entries left: new files are no
+   *  longer written rather than pinned ones being discarded. */
+  persistPaused: boolean;
 }
 
 /**

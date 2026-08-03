@@ -64,11 +64,18 @@ Reactively download a file from a bucket. Re-fetches when the path changes.
 ### Signatures
 
 ```typescript
+interface UseDownloadFileOptions {
+  cache?: boolean;                    // default true — false disables every layer
+  persist?: boolean;                  // default true — keep bytes in OPFS
+  pin?: boolean;                      // exempt from pressure eviction
+  revalidate?: 'never' | 'head';      // default 'never' (paths are immutable)
+}
+
 // Context-based
 useDownloadFile<S>(
   bucketName: BucketNames<S>,
   path: Accessor<string | null | undefined>,
-  options?: { cache?: boolean },
+  options?: UseDownloadFileOptions,
 ): UseDownloadFileResult;
 
 // Explicit db
@@ -76,7 +83,7 @@ useDownloadFile<S>(
   db: SyncedDb<S>,
   bucketName: BucketNames<S>,
   path: Accessor<string | null | undefined>,
-  options?: { cache?: boolean },
+  options?: UseDownloadFileOptions,
 ): UseDownloadFileResult;
 ```
 
@@ -87,13 +94,35 @@ interface UseDownloadFileResult {
   url: Accessor<string | null>;     // Object URL for the file
   isLoading: Accessor<boolean>;
   error: Accessor<Error | null>;
-  refetch: () => void;              // Force re-download (evicts cache)
+  refetch: () => void;              // Force re-download, bypassing every layer
 }
 ```
 
 ### Caching
 
-By default, downloads are cached by `bucket:path` key with reference counting. Object URLs are revoked when no component references them. Set `cache: false` to disable.
+Three layers, checked in order:
+
+1. **Object URLs**, refcounted per `bucket:path` and shared between components. Revoked once the last holder releases and the entry ages out of a 32-entry hot window.
+2. **OPFS**, under `sp00ky-blobs/<bucketId>/<bucket>/<path>`. Survives reload, works offline, and is namespaced per signed-in user.
+3. **The bucket**, over the sync WebSocket.
+
+Nothing expires on a timer — an image whose row is still cached locally has to stay viewable offline. Bytes are dropped only when the app invalidates the path (`bucket.put`/`bucket.delete` do this automatically), when boot reconcile finds no file behind a row, or when the cache exceeds its byte budget, in which case the least-recently-used unpinned entries that nothing is rendering go first.
+
+Configure with `blobCache: { enabled, maxBytes, clearOnSignOut }` on the client. The budget defaults to `min(512 MB, quota × 0.25)`. Inspect live numbers in the DevTools Storage tab under "Bucket file cache".
+
+`persist: false` keeps the in-tab sharing but writes nothing durable. `cache: false` gives each hook instance a private URL fetched fresh and revoked on unmount.
+
+A bucket path is treated as immutable, which is how paths are normally written (`crypto.randomUUID() + ext`). If your app overwrites a path in place from another device, pass `revalidate: 'head'` — it spends a remote `head()` to compare sizes before trusting the cached copy, and keeps the cached copy when that call fails so going offline never blanks an image.
+
+### Pinning and prefetching
+
+```tsx
+const bucket = db.bucket('avatars');
+await bucket.prefetch(paths);   // warm the cache for offline use
+bucket.pin('logo.png');         // never evicted under pressure
+bucket.unpin('logo.png');
+await bucket.evict('old.png');  // drop locally, leave the remote file alone
+```
 
 ### Example
 

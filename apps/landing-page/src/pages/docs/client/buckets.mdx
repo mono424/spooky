@@ -260,9 +260,35 @@ When enabled (via the `pathPrefixAuth` option in the CLI), file paths are automa
   Per-user path isolation is enforced at the database level. The path prefix is applied transparently. Your application code uses simple paths.
 </Note>
 
+## Local Caching
+
+Bucket reads go through a durable client-side cache. Bytes land in OPFS under `sp00ky-blobs/<bucketId>/<bucket>/<path>`, so a file downloaded once survives a reload, paints instantly on the next visit, and is available offline. The cache is namespaced per signed-in user and is on by default wherever OPFS is writable; elsewhere it degrades to per-tab memory.
+
+Nothing expires on a timer. A file is dropped only when the app invalidates its path (`put()` and `delete()` do this for you), when boot reconcile finds no file behind a manifest row, or when the cache exceeds its byte budget — in which case the least-recently-used unpinned entries that nothing is currently rendering go first.
+
+<CodeBlock
+  code={`const client = new Sp00kyClient({
+  // ...
+  blobCache: {
+    enabled: true,          // default
+    maxBytes: 256 * 1024 * 1024,  // default: min(512 MB, quota × 0.25)
+    clearOnSignOut: false,  // default — cached files are per-user namespaced
+  },
+});
+
+const bucket = client.bucket('profile_pictures');
+await bucket.prefetch(paths);   // warm for offline use
+bucket.pin('logo.png');         // never evicted under pressure
+await bucket.evict('old.png');  // drop locally, leave the remote file alone`}
+  lang="typescript"
+/>
+
+<Note>
+  Live counters — cached bytes, budget, hits/misses, evictions — are in the DevTools Storage tab under "Bucket file cache".
+</Note>
+
 ## Current Limitations
 
 - **Memory backend only**: Files are stored in memory and not persisted across restarts. Additional storage backends (S3, filesystem, etc.) are planned.
 - **No streaming**: Files are uploaded and downloaded as complete blobs. No chunked upload or progress tracking yet.
 - **No transactions**: Bucket operations do not participate in database transactions.
-- **Unbounded cache**: The `useDownloadFile` cache has no maximum size limit.

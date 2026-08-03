@@ -14,5 +14,12 @@ export {
   type AppReleaseOptions,
   type AppReleaseSnapshot,
 } from './modules/app-release/index';
+export type {
+  BlobCacheStats,
+  BlobEntry,
+  BlobKey,
+  BlobReadOptions,
+  BlobUrlLease,
+} from './services/blobs/index';
 export { semverGt } from './utils/semver';
 export { fileToUint8Array, textToHtml } from './utils/index';

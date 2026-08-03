@@ -1,10 +1,31 @@
 import { createSignal, createEffect, onCleanup, type Accessor } from 'solid-js';
 import type { SchemaStructure, BucketNames } from '@spooky-sync/query-builder';
+import type { BlobUrlLease } from '@spooky-sync/core';
 import type { SyncedDb } from '../index';
 import { useDb } from './context';
 
 export interface UseDownloadFileOptions {
+  /**
+   * Master switch, default `true`. `false` gives every hook instance its own
+   * private object URL fetched fresh from the bucket and revoked on unmount —
+   * no sharing, no persistence, no reuse.
+   */
   cache?: boolean;
+  /**
+   * Keep the bytes in OPFS so they survive a reload and are available offline.
+   * Default `true`. Turn off for one-shot or sensitive files; the in-tab object
+   * URL is still shared between components rendering the same path.
+   */
+  persist?: boolean;
+  /** Exempt this file from pressure eviction. Pinned bytes never expire. */
+  pin?: boolean;
+  /**
+   * `'never'` (default) treats a bucket path as immutable, which is how paths
+   * are written (`crypto.randomUUID() + ext`). `'head'` spends a remote `head()`
+   * to compare sizes before trusting the cached copy — for paths the app
+   * overwrites in place.
+   */
+  revalidate?: 'never' | 'head';
 }
 
 export interface UseDownloadFileResult {
@@ -12,28 +33,6 @@ export interface UseDownloadFileResult {
   isLoading: Accessor<boolean>;
   error: Accessor<Error | null>;
   refetch: () => void;
-}
-
-interface CacheEntry {
-  url: string;
-  refCount: number;
-}
-
-const downloadCache = new Map<string, CacheEntry>();
-const inflightRequests = new Map<string, Promise<string | null>>();
-
-function cacheKey(bucket: string, path: string): string {
-  return `${bucket}:${path}`;
-}
-
-function releaseEntry(key: string): void {
-  const entry = downloadCache.get(key);
-  if (!entry) return;
-  entry.refCount--;
-  if (entry.refCount <= 0) {
-    URL.revokeObjectURL(entry.url);
-    downloadCache.delete(key);
-  }
 }
 
 export function useDownloadFile<S extends SchemaStructure>(
@@ -76,68 +75,19 @@ export function useDownloadFile<S extends SchemaStructure>(
   const [isLoading, setIsLoading] = createSignal(false);
   const [error, setError] = createSignal<Error | null>(null);
 
-  let currentKey: string | null = null;
+  // Exactly one of these is held at a time: a refcounted lease on the shared
+  // cache entry, or a private URL this instance minted and must revoke itself.
+  let lease: BlobUrlLease | null = null;
   let privateUrl: string | null = null;
+
   const [refetchSignal, setRefetchSignal] = createSignal(0);
-  const refetchTrigger = () => setRefetchSignal((n) => n + 1);
+  /** Consumed by the next effect run, so `refetch()` bypasses every layer once. */
+  let reloadOnce = false;
 
-  async function doDownload(key: string, filePath: string): Promise<string | null> {
-    if (useCache) {
-      // Check cache
-      const cached = downloadCache.get(key);
-      if (cached) {
-        cached.refCount++;
-        currentKey = key;
-        return cached.url;
-      }
-
-      // Check inflight
-      const inflight = inflightRequests.get(key);
-      if (inflight) {
-        const result = await inflight;
-        if (result) {
-          const entry = downloadCache.get(key);
-          if (entry) {
-            entry.refCount++;
-            currentKey = key;
-          }
-        }
-        return result;
-      }
-
-      // Start new download
-      const promise = (async () => {
-        const content = await db.bucket(bucketName).get(filePath);
-        if (!content) return null;
-        const objectUrl = URL.createObjectURL(new Blob([content as BlobPart]));
-        downloadCache.set(key, { url: objectUrl, refCount: 1 });
-        return objectUrl;
-      })();
-
-      inflightRequests.set(key, promise);
-      try {
-        const result = await promise;
-        currentKey = key;
-        return result;
-      } finally {
-        inflightRequests.delete(key);
-      }
-    } else {
-      // No caching — private URL per instance
-      const content = await db.bucket(bucketName).get(filePath);
-      if (!content) return null;
-      const objectUrl = URL.createObjectURL(new Blob([content as BlobPart]));
-      privateUrl = objectUrl;
-      return objectUrl;
-    }
-  }
-
-  function releaseCurrentEntry() {
-    if (useCache && currentKey) {
-      releaseEntry(currentKey);
-      currentKey = null;
-    }
-    if (!useCache && privateUrl) {
+  function releaseCurrent() {
+    lease?.release();
+    lease = null;
+    if (privateUrl) {
       URL.revokeObjectURL(privateUrl);
       privateUrl = null;
     }
@@ -148,8 +98,7 @@ export function useDownloadFile<S extends SchemaStructure>(
     // Subscribe to refetch signal so effect re-runs
     refetchSignal();
 
-    // Release previous entry
-    releaseCurrentEntry();
+    releaseCurrent();
 
     if (!filePath) {
       setUrl(null);
@@ -158,26 +107,41 @@ export function useDownloadFile<S extends SchemaStructure>(
       return;
     }
 
-    const key = cacheKey(bucketName as string, filePath);
-
-    // Synchronous cache hit
-    if (useCache) {
-      const cached = downloadCache.get(key);
-      if (cached) {
-        cached.refCount++;
-        currentKey = key;
-        setUrl(cached.url);
-        setIsLoading(false);
-        setError(null);
-        return;
-      }
-    }
+    const reload = reloadOnce;
+    reloadOnce = false;
 
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
-    doDownload(key, filePath).then(
+    const bucket = db.bucket(bucketName);
+    const resolve = useCache
+      ? bucket
+          .url(filePath, {
+            persist: options.persist !== false,
+            pin: options.pin,
+            revalidate: options.revalidate,
+            reload,
+          })
+          .then((acquired) => {
+            if (!acquired) return null;
+            if (cancelled) {
+              // Unmounted or the path changed mid-flight — hand the reference
+              // straight back, or the entry never drops to zero and its object
+              // URL leaks for the life of the tab.
+              acquired.release();
+              return null;
+            }
+            lease = acquired;
+            return acquired.url;
+          })
+      : bucket.read(filePath, { persist: false, reload: true }).then((blob) => {
+          if (!blob || cancelled) return null;
+          privateUrl = URL.createObjectURL(blob);
+          return privateUrl;
+        });
+
+    resolve.then(
       (result) => {
         if (!cancelled) {
           setUrl(result);
@@ -199,20 +163,12 @@ export function useDownloadFile<S extends SchemaStructure>(
   });
 
   onCleanup(() => {
-    releaseCurrentEntry();
+    releaseCurrent();
   });
 
   const refetch = () => {
-    // Evict current entry from cache before re-triggering
-    if (useCache && currentKey) {
-      const entry = downloadCache.get(currentKey);
-      if (entry) {
-        URL.revokeObjectURL(entry.url);
-        downloadCache.delete(currentKey);
-      }
-      currentKey = null;
-    }
-    refetchTrigger();
+    reloadOnce = true;
+    setRefetchSignal((n) => n + 1);
   };
 
   return { url, isLoading, error, refetch };

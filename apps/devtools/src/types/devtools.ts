@@ -245,8 +245,24 @@ export interface StorageInfo {
     truncated: boolean;
     error?: string;
   };
+  blobs?: BlobCacheInfo;
   sqliteStats?: Record<string, unknown>;
   engineDiagnostics?: EngineStorageDiagnostics;
+}
+
+/** Mirror of the core `BlobCacheInfo` — bucket-file cache counters. */
+export interface BlobCacheInfo {
+  entries: number;
+  totalBytes: number;
+  budgetBytes: number;
+  pinnedBytes: number;
+  evictedEntries: number;
+  evictedBytes: number;
+  reconciledEntries: number;
+  hits: number;
+  misses: number;
+  persistent: boolean;
+  persistPaused: boolean;
 }
 
 // Shared default so adapters/stores can fall back when versions are absent.

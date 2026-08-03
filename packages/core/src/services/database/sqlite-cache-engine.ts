@@ -56,6 +56,10 @@ const SYSTEM_TABLES = [
   '_00_window',
   '_00_schema',
   '_00_pending_mutations',
+  // Blob cache manifest. Read before its first write on every boot (reconcile
+  // asks for the ids it found in OPFS), so it has to exist up front like the
+  // rest — otherwise the very first reconcile throws and the cache runs cold.
+  '_00_blob',
   // Server-written, synced-down meta tables (see meta_tables_client.surql).
   // DEFINE is a noop on this engine, so without seeding them here their synced
   // rows have no local table to land in: feature flags silently fall back to

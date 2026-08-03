@@ -45,7 +45,7 @@ export const dbConfig: SyncedDbConfig<typeof schema> = {
 - **`useQuery(() => db.query(...).build())`** — reactive query. Returns `{ data, status, error, ... }` accessors. The factory function is tracked, so passing reactive params (signals) re-runs the query.
 - **`createPreload(() => db.query(...).build(), options?)`** — reactive, fire-and-forget prewarm (same overloads/`enabled` as `useQuery`, plus `refresh`/`staleTime`). Warms a query the user is likely to open next (e.g. a list row's detail) into the local cache. For blocking first-load, use the `Sp00kyProvider` `preload` prop instead.
 - **`useCrdtField(table, () => recordId, field, () => valueAccessor)`** — wires a CRDT text field to a Loro doc. Pair with `db.update(table, id, { [field]: newValue }, { debounced: true })` so rapid keystrokes don't flood the queue. *All four arguments take accessor functions where reactive — that's deliberate, for SolidJS tracking.*
-- **`useFileUpload()`** / **`useDownloadFile()`** — bucket helpers; the upload result includes the storage path you write into a record column.
+- **`useFileUpload()`** / **`useDownloadFile()`** — bucket helpers; the upload result includes the storage path you write into a record column. `useDownloadFile` reads through the durable OPFS blob cache (options `{ cache, persist, pin, revalidate }`), so images survive a reload and paint offline; `refetch()` bypasses every layer.
 
 ## Re-exports for convenience
 
