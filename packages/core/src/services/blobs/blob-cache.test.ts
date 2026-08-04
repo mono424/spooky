@@ -304,6 +304,24 @@ describe('BlobCache namespaces', () => {
     expect(fetchRemote).toHaveBeenCalledTimes(2);
   });
 
+  it('a read issued before start() finishes waits for the reconcile', async () => {
+    // Boot fires start() without awaiting it (the OPFS walk must not delay the
+    // WebSocket connect). A read landing mid-walk must still see the rebuilt
+    // manifest rather than refetching a file that is already on disk.
+    const { cache, manifest, local, fetchRemote } = setup();
+    await cache.read(KEY);
+    await cache.flush();
+    local.rows.clear();
+    manifest.reset();
+
+    const starting = cache.start('user-1');
+    const readDuringStart = cache.read(KEY);
+    await Promise.all([starting, readDuringStart]);
+
+    expect(await readDuringStart).not.toBeNull();
+    expect(fetchRemote).toHaveBeenCalledTimes(1);
+  });
+
   it('clear() drops the current namespace', async () => {
     const { cache, store } = setup();
     await cache.read(KEY);

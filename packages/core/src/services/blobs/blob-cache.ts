@@ -127,6 +127,14 @@ export class BlobCache {
     void this.manifest.flush();
   };
 
+  /**
+   * Resolves once the manifest has been reconciled against disk. Reads await
+   * it, so `start()` does NOT have to be awaited on the boot path — blocking
+   * boot on an OPFS directory walk delayed the WebSocket connect (and with it
+   * the connection supervisor) for no benefit.
+   */
+  private ready: Promise<void> = Promise.resolve();
+
   private hits = 0;
   private misses = 0;
   private evictedEntries = 0;
@@ -167,6 +175,10 @@ export class BlobCache {
    * Returns null when the file does not exist remotely and is not cached.
    */
   async read(key: BlobKey, options: BlobReadOptions = {}): Promise<Blob | null> {
+    // Boot fires `start()` without awaiting it; a read that lands first must
+    // not race the reconcile, or it would refetch a file already on disk and
+    // then overwrite the row reconcile is about to rebuild.
+    await this.ready;
     const id = blobKeyId(key);
     const persist = options.persist !== false && !this.persistDisabled;
 
@@ -514,7 +526,12 @@ export class BlobCache {
    *  it lands on is the one the store was constructed with. */
   async start(namespace: string): Promise<void> {
     this.store.setNamespace(namespace);
-    await this.reconcile();
+    // Publish the in-flight reconcile so reads issued before it finishes queue
+    // behind it instead of racing it. Swallow here: `reconcile()` already logs,
+    // and an unhandled rejection on a fire-and-forget boot call must not
+    // surface as a global error.
+    this.ready = this.reconcile().catch(() => {});
+    await this.ready;
   }
 
   /** Repoint at another local bucket. The bytes of the old one stay on disk so
@@ -527,7 +544,8 @@ export class BlobCache {
     this.manifest.reset();
     this.store.setNamespace(namespace);
     this.persistPaused = false;
-    await this.reconcile();
+    this.ready = this.reconcile().catch(() => {});
+    await this.ready;
   }
 
   setMaxBytes(maxBytes: number): void {

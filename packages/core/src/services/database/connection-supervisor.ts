@@ -40,9 +40,13 @@ export class ConnectionSupervisor {
 
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatInFlight = false;
+  /** Consecutive failed probes. See {@link FAILURES_BEFORE_TEARDOWN}. */
+  private heartbeatFailures = 0;
 
   private reviveTimer: ReturnType<typeof setTimeout> | null = null;
   private reviveAttempts = 0;
+  /** Timestamp of the last wake-triggered probe, for rate limiting. */
+  private lastWakeProbeAt = 0;
   private reviving = false;
   /**
    * Set while the browser reports itself offline. Retrying a socket against a
@@ -53,6 +57,23 @@ export class ConnectionSupervisor {
   private teardown: Array<() => void> = [];
 
   private static readonly REVIVE_BASE_MS = 1_000;
+  /**
+   * How many consecutive heartbeat failures it takes to tear the socket down.
+   *
+   * The probe rides the same serialized queue as every other RPC (deliberately
+   * — see {@link beat}), which means it cannot distinguish a WEDGED queue from
+   * a merely BUSY one. A single slow window (a large sync burst, one heavy
+   * app query) used to be enough to force-close a perfectly healthy socket,
+   * and the resulting reconnect re-registered every active query about a
+   * second later. That self-inflicted teardown manufactured the very reconnect
+   * storms this class exists to survive. A genuinely dead socket still fails
+   * every probe, so it is torn down one interval later than before.
+   */
+  private static readonly FAILURES_BEFORE_TEARDOWN = 2;
+  /** Retry delay after an inconclusive (first) heartbeat failure. */
+  private static readonly HEARTBEAT_RETRY_MS = 5_000;
+  /** Floor between probes triggered by wake events (tab focus, pageshow). */
+  private static readonly WAKE_PROBE_MIN_INTERVAL_MS = 10_000;
 
   constructor(
     private readonly remote: RemoteDatabaseService,
@@ -264,12 +285,40 @@ export class ConnectionSupervisor {
         this.config.heartbeatTimeoutMs,
         `Heartbeat timed out after ${this.config.heartbeatTimeoutMs}ms`
       );
+      this.heartbeatFailures = 0;
       this.startHeartbeat();
     } catch (err) {
+      this.heartbeatFailures++;
+      if (this.heartbeatFailures < ConnectionSupervisor.FAILURES_BEFORE_TEARDOWN) {
+        // Inconclusive: the probe shares a queue with ordinary traffic, so this
+        // may just be a busy window rather than a dead socket. Re-probe soon
+        // instead of tearing down a connection that is probably fine.
+        this.logger.debug(
+          {
+            err,
+            failures: this.heartbeatFailures,
+            Category: 'sp00ky-client::ConnectionSupervisor::heartbeat',
+          },
+          'Heartbeat failed; re-probing before tearing the socket down'
+        );
+        this.stopHeartbeat();
+        if (!this.disposed && !this.suspended) {
+          this.heartbeatTimer = setTimeout(
+            () => void this.beat(),
+            Math.min(ConnectionSupervisor.HEARTBEAT_RETRY_MS, this.config.heartbeatIntervalMs)
+          );
+        }
+        return;
+      }
       this.logger.warn(
-        { err, Category: 'sp00ky-client::ConnectionSupervisor::heartbeat' },
-        'Heartbeat failed; tearing the socket down to force a reconnect'
+        {
+          err,
+          failures: this.heartbeatFailures,
+          Category: 'sp00ky-client::ConnectionSupervisor::heartbeat',
+        },
+        'Heartbeat failed repeatedly; tearing the socket down to force a reconnect'
       );
+      this.heartbeatFailures = 0;
       // Force the `close` the transport never delivered. The resulting
       // `disconnected` event drives the revive loop.
       await this.remote.forceClose();
@@ -332,6 +381,21 @@ export class ConnectionSupervisor {
    */
   private wake(reason: string): void {
     if (this.disposed || this.suspended) return;
+    // `visibilitychange` fires on every alt-tab, every window minimise and every
+    // focus change. Probing a connected socket each time meant an ordinary
+    // afternoon of tab-switching issued a steady stream of extra RPCs, each of
+    // which could trip the heartbeat teardown above. A healthy socket does not
+    // become unhealthy because the user looked away for four seconds, so probes
+    // from wake triggers are rate-limited; a genuinely dead socket is still
+    // caught by the regular heartbeat.
+    const now = Date.now();
+    if (
+      this.remote.getStatus() === 'connected' &&
+      now - this.lastWakeProbeAt < ConnectionSupervisor.WAKE_PROBE_MIN_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.lastWakeProbeAt = now;
     this.logger.debug(
       { reason, state: this.state, Category: 'sp00ky-client::ConnectionSupervisor::wake' },
       'Wake trigger; probing the connection'

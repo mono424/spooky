@@ -142,12 +142,46 @@ describe('ConnectionSupervisor', () => {
     expect(remote.query).toHaveBeenCalledWith('RETURN true');
     expect(remote.forceClose).not.toHaveBeenCalled();
 
+    // One failure is inconclusive — the probe shares a queue with ordinary
+    // traffic, so it re-probes rather than tearing down a possibly-fine socket.
     await vi.advanceTimersByTimeAsync(CONFIG.heartbeatTimeoutMs);
+    expect(remote.forceClose).not.toHaveBeenCalled();
+
+    // The second consecutive failure is the one that tears it down.
+    await vi.advanceTimersByTimeAsync(5_000 + CONFIG.heartbeatTimeoutMs);
     expect(remote.forceClose).toHaveBeenCalledTimes(1);
 
     // The forced close published `disconnected`, so the revive loop takes over.
     await vi.advanceTimersByTimeAsync(1_000);
     expect(remote.connect).toHaveBeenCalled();
+
+    sup.dispose();
+  });
+
+  it('does not tear down a healthy socket after a single slow probe', async () => {
+    // The regression this guards: the heartbeat rides the same serialized queue
+    // as every other RPC, so one busy window (a big sync burst) used to
+    // force-close a working connection — and the reconnect then re-registered
+    // every active query about a second later.
+    const { remote, emit } = makeRemote();
+    let calls = 0;
+    remote.query.mockImplementation(() => {
+      calls++;
+      // First probe hangs past its deadline, the next answers normally.
+      return calls === 1 ? new Promise(() => {}) : Promise.resolve(true);
+    });
+
+    const sup = makeSupervisor(remote);
+    emit('connected');
+    sup.start();
+
+    await vi.advanceTimersByTimeAsync(CONFIG.heartbeatIntervalMs + CONFIG.heartbeatTimeoutMs);
+    expect(remote.forceClose).not.toHaveBeenCalled();
+
+    // The retry succeeds, so the socket survives and heartbeating continues.
+    await vi.advanceTimersByTimeAsync(5_000 + CONFIG.heartbeatIntervalMs * 2);
+    expect(remote.forceClose).not.toHaveBeenCalled();
+    expect(sup.connection).toBe('connected');
 
     sup.dispose();
   });

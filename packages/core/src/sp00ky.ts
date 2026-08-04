@@ -706,20 +706,6 @@ export class Sp00kyClient<S extends SchemaStructure> {
         this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Schema provisioned');
       }
 
-      // After the store is open (the manifest lives in it) and after
-      // provisioning (`_00_blob` has to exist), before any query can ask for a
-      // file. Best-effort: a cold blob cache is a slow first paint, not a
-      // broken client.
-      try {
-        this.blobs.setMaxBytes(await resolveBlobBudget(this.config.blobCache?.maxBytes));
-        await this.blobs.start(bootBucket);
-      } catch (e) {
-        this.logger.warn(
-          { err: e, Category: 'sp00ky-client::Sp00kyClient::init' },
-          'Blob cache failed to start; bucket files will not be cached locally'
-        );
-      }
-
       await this.remote.connect();
       // Start supervising only after the first connect succeeds, so a boot-time
       // failure surfaces as a thrown init() rather than being silently absorbed
@@ -729,6 +715,25 @@ export class Sp00kyClient<S extends SchemaStructure> {
         { Category: 'sp00ky-client::Sp00kyClient::init' },
         'Remote database connected'
       );
+
+      // Warm the blob cache in the background. Deliberately NOT awaited, and
+      // deliberately after `remote.connect()`: this walks the OPFS directory to
+      // rebuild the manifest, and awaiting it ahead of the socket delayed the
+      // connect (and the connection supervisor with it) for no benefit. Reads
+      // await `BlobCache.ready` internally, so a bucket read that lands mid-walk
+      // still sees a reconciled manifest. Best-effort: a cold blob cache is a
+      // slow first image, not a broken client.
+      void (async () => {
+        try {
+          this.blobs.setMaxBytes(await resolveBlobBudget(this.config.blobCache?.maxBytes));
+          await this.blobs.start(bootBucket);
+        } catch (e) {
+          this.logger.warn(
+            { err: e, Category: 'sp00ky-client::Sp00kyClient::init' },
+            'Blob cache failed to start; bucket files will not be cached locally'
+          );
+        }
+      })();
 
       this.streamProcessor.setStateKeySuffix(bootBucket);
       await this.streamProcessor.init();

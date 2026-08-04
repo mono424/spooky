@@ -107,6 +107,14 @@ export class Sp00kySync<S extends SchemaStructure> {
    * initial connect. See {@link subscribeToReconnect}.
    */
   private needsResubscribe: boolean = false;
+  /** When the last reconnect-driven full refetch ran, for burst coalescing. */
+  private lastReconnectRefetchAt = 0;
+  /**
+   * Minimum gap between reconnect-driven full refetches. Long enough to absorb
+   * a flapping socket (the SDK reconnect ladder starts at 1s), short enough
+   * that a genuine drop minutes later still refetches.
+   */
+  private static readonly RECONNECT_REFETCH_COOLDOWN_MS = 10_000;
   public events = createSyncEventSystem();
 
   // Auth identity that drives per-user `_00_list_ref_user_<id>` routing
@@ -1034,11 +1042,26 @@ export class Sp00kySync<S extends SchemaStructure> {
     client.subscribe('connected', () => {
       if (!this.needsResubscribe) return;
       this.needsResubscribe = false;
+      // A flapping socket produces reconnecting -> connected repeatedly, and
+      // each cycle used to re-register EVERY active query (a busy app has
+      // dozens). That is the "everything reloads about a second after a blip"
+      // symptom: the SDK's retryDelay is 1s, so the refetch lands right after
+      // the drop the user never saw. Collapse bursts into one refetch.
+      const sinceLast = Date.now() - this.lastReconnectRefetchAt;
+      if (sinceLast < Sp00kySync.RECONNECT_REFETCH_COOLDOWN_MS) {
+        this.logger.debug(
+          { sinceLast, Category: 'sp00ky-client::Sp00kySync::onReconnect' },
+          'Reconnected again within the cooldown; skipping duplicate refetch'
+        );
+        return;
+      }
+      this.lastReconnectRefetchAt = Date.now();
+      const hashes = this.dataModule.getActiveQueryHashes();
       this.logger.info(
-        { Category: 'sp00ky-client::Sp00kySync::onReconnect' },
+        { queries: hashes.length, Category: 'sp00ky-client::Sp00kySync::onReconnect' },
         'Remote reconnected, refetching active queries'
       );
-      for (const hash of this.dataModule.getActiveQueryHashes()) {
+      for (const hash of hashes) {
         this.scheduler.enqueueDownEvent({ type: 'register', payload: { hash } });
       }
       // The WS reconnect leaves the server-side LIVE subscription dead — the
