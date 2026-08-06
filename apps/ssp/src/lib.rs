@@ -340,6 +340,54 @@ async fn register_with_retry(
     }
 }
 
+/// Ask the scheduler to settle a bootstrap integrity mismatch against its
+/// replica *content* (see `handle_bootstrap_verify`). Returns `None` when no
+/// verdict could be obtained — standalone mode, an older scheduler without the
+/// endpoint (404), or a transport error — so the caller can fall back to the
+/// legacy re-register-and-retry path.
+async fn verify_bootstrap_with_scheduler(
+    scheduler_url: &str,
+    ssp_id: &str,
+    actual: &BTreeMap<String, String>,
+) -> Option<ssp_protocol::SspBootstrapVerifyResponse> {
+    let url = format!(
+        "{}/ssp/bootstrap-verify",
+        scheduler_url.trim_end_matches('/')
+    );
+    let payload = ssp_protocol::SspBootstrapVerifyRequest {
+        ssp_id: ssp_id.to_string(),
+        table_hashes: actual.clone(),
+    };
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&payload)
+        // The scheduler rehashes the disputed tables from content, which on a
+        // large table is seconds of paged reads — generous, but bounded so a
+        // hung scheduler can't park the bootstrap forever.
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => match r.json().await {
+            Ok(v) => Some(v),
+            Err(e) => {
+                warn!(error = %e, "Could not parse bootstrap-verify response; falling back to re-register");
+                None
+            }
+        },
+        Ok(r) => {
+            warn!(status = %r.status(), "Scheduler bootstrap-verify unavailable; falling back to re-register");
+            None
+        }
+        Err(e) => {
+            warn!(error = %e, "Scheduler bootstrap-verify request failed; falling back to re-register");
+            None
+        }
+    }
+}
+
 // --- Bootstrap Source ---
 
 /// Abstraction for database access during bootstrap.
@@ -926,8 +974,12 @@ pub async fn run_server() -> anyhow::Result<()> {
             };
 
             // Retry bootstrap up to 10 times with backoff (tables may not exist yet
-            // if migrations haven't run)
+            // if migrations haven't run). `integrity_attempt` is counted
+            // separately: a transient bootstrap error must not consume the
+            // integrity gate's one retry (it used to, sending an SSP straight
+            // to exit(2) on its first-ever hash mismatch).
             let mut attempt = 0;
+            let mut integrity_attempt = 0;
             loop {
                 attempt += 1;
                 match self_bootstrap_with_metadata(&metadata_source, &data_source, &processor, bootstrap_page_size).await {
@@ -975,6 +1027,7 @@ pub async fn run_server() -> anyhow::Result<()> {
                                 !meta
                             });
                             if !diffs.is_empty() {
+                                integrity_attempt += 1;
                                 for d in &diffs {
                                     error!(
                                         table = %d.table,
@@ -983,52 +1036,103 @@ pub async fn run_server() -> anyhow::Result<()> {
                                         "Bootstrap integrity mismatch"
                                     );
                                 }
-                                if attempt >= 2 {
-                                    // The retry below re-registered, so this
-                                    // mismatch is against FRESH scheduler
-                                    // hashes — a real divergence, not staleness.
-                                    error!(
-                                        attempts = attempt,
+
+                                // Ask the scheduler for a second opinion FIRST.
+                                // Our rows came from its replica over /proxy,
+                                // so a disagreement is usually its cached hash
+                                // map having drifted from its own content, not
+                                // a bad circuit. It rehashes the disputed
+                                // tables from content and tells us what it
+                                // really holds. (Blindly re-registering, the
+                                // old first move, just refetched the same
+                                // cache — a stale entry then crash-looped the
+                                // SSP forever.)
+                                let verdict = match scheduler_url.as_deref() {
+                                    Some(sched_url) => {
+                                        verify_bootstrap_with_scheduler(sched_url, &ssp_id, &actual).await
+                                    }
+                                    None => None,
+                                };
+
+                                if let Some(v) = verdict {
+                                    if v.diverging.is_empty() {
+                                        info!(
+                                            tables = diffs.len(),
+                                            "Scheduler rehashed from replica content and agrees — its hash cache was stale, continuing"
+                                        );
+                                        expected_hashes = v.table_hashes;
+                                    } else if v.admit {
+                                        error!(
+                                            diverging = ?v.diverging,
+                                            "Scheduler admitted us despite a persistent divergence — going Ready to restore sync"
+                                        );
+                                        expected_hashes = v.table_hashes;
+                                    } else {
+                                        // Genuine divergence against freshly
+                                        // hashed content. Wipe and retry once;
+                                        // a re-clone on the scheduler side also
+                                        // invalidates what we loaded.
+                                        if integrity_attempt >= 2 || v.recloned {
+                                            error!(
+                                                attempts = integrity_attempt,
+                                                diverging = ?v.diverging,
+                                                recloned = v.recloned,
+                                                "Integrity mismatch persisted against replica content — exiting for restart"
+                                            );
+                                            *status.write().await = SspStatus::Failed;
+                                            std::process::exit(2);
+                                        }
+                                        warn!(
+                                            attempt = integrity_attempt,
+                                            diverging = ?v.diverging,
+                                            "Integrity mismatch confirmed against content — reloading the circuit and retrying"
+                                        );
+                                        {
+                                            let mut guard = processor.write().await;
+                                            *guard = Circuit::new();
+                                        }
+                                        expected_hashes = v.table_hashes;
+                                        continue;
+                                    }
+                                } else {
+                                    // No verdict (standalone, or an older
+                                    // scheduler without the endpoint): fall
+                                    // back to the previous behaviour — wipe,
+                                    // re-register for fresh hashes, retry once.
+                                    if integrity_attempt >= 2 {
+                                        error!(
+                                            attempts = integrity_attempt,
+                                            diffs = diffs.len(),
+                                            "Integrity mismatch persisted after retry — exiting for restart"
+                                        );
+                                        *status.write().await = SspStatus::Failed;
+                                        std::process::exit(2);
+                                    }
+                                    warn!(
+                                        attempt = integrity_attempt,
                                         diffs = diffs.len(),
-                                        "Integrity mismatch persisted after retry — exiting for restart"
+                                        "Integrity mismatch — re-registering to refetch scheduler hashes before retry"
                                     );
-                                    *status.write().await = SspStatus::Failed;
-                                    // Exit so the supervisor restarts us
-                                    // with a clean circuit and fresh
-                                    // registration handshake.
-                                    std::process::exit(2);
+                                    {
+                                        let mut guard = processor.write().await;
+                                        *guard = Circuit::new();
+                                    }
+                                    if let Some(sched_url) = scheduler_url.as_deref() {
+                                        let client = reqwest::Client::new();
+                                        let registration = register_with_retry(
+                                            &client,
+                                            sched_url,
+                                            &ssp_id,
+                                            &listen_addr,
+                                            advertise_addr.as_deref(),
+                                            register_max_wait_secs,
+                                            &status,
+                                        )
+                                        .await;
+                                        expected_hashes = registration.table_hashes;
+                                    }
+                                    continue;
                                 }
-                                // First failure: the scheduler's hashes may
-                                // themselves be stale (snapshot drift while we
-                                // bootstrapped). The hashes captured at our
-                                // original registration can never change, so
-                                // retrying against them is guaranteed to fail
-                                // again — wipe the circuit AND re-register to
-                                // verify against the scheduler's CURRENT state.
-                                warn!(
-                                    attempt,
-                                    diffs = diffs.len(),
-                                    "Integrity mismatch — re-registering to refetch scheduler hashes before retry"
-                                );
-                                {
-                                    let mut guard = processor.write().await;
-                                    *guard = Circuit::new();
-                                }
-                                if let Some(sched_url) = scheduler_url.as_deref() {
-                                    let client = reqwest::Client::new();
-                                    let registration = register_with_retry(
-                                        &client,
-                                        sched_url,
-                                        &ssp_id,
-                                        &listen_addr,
-                                        advertise_addr.as_deref(),
-                                        register_max_wait_secs,
-                                        &status,
-                                    )
-                                    .await;
-                                    expected_hashes = registration.table_hashes;
-                                }
-                                continue;
                             }
                         }
 

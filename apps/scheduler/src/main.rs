@@ -117,6 +117,10 @@ async fn main() -> Result<()> {
     scheduler::metrics::start_query_reassignment_monitor(
         std::sync::Arc::clone(&query_state.ssp_pool),
         std::sync::Arc::clone(&query_tracker),
+        // Same budget the snapshot updater uses for hung bootstraps; the
+        // heartbeat-staleness timeout must never apply to an SSP that has not
+        // started heartbeating yet.
+        std::time::Duration::from_secs(scheduler.config().bootstrap_timeout_secs + 60),
     ).await;
     
     scheduler::job_scheduler::start_job_recovery_sweep(

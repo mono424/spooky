@@ -119,10 +119,26 @@ impl MaintenanceHost for SchedulerHost {
         {
             // Persist the restored seq explicitly so the metadata row matches
             // the authoritative counter even if the dump's seq differs subtly.
+            //
+            // Rehash EVERYTHING while we're here. The dump is an export of the
+            // main DB, so it carries no `_00_metadata:snapshot` row: the reload
+            // above left `known_tables`/`snapshot_hashes` empty over fully
+            // populated content. Persisting just the seq (`set_snapshot_seq`
+            // rehashes nothing) shipped that lie to every SSP that registered
+            // afterwards.
             let mut rep = self.ingest.replica.write().await;
-            rep.set_snapshot_seq(restored_seq)
+            let discovered = rep
+                .rediscover_known_tables()
                 .await
-                .context("Failed to persist restored snapshot_seq")?;
+                .context("Failed to rediscover replica tables after restore")?;
+            rep.set_snapshot_state(restored_seq, None)
+                .await
+                .context("Failed to persist restored snapshot state")?;
+            info!(
+                restored_seq,
+                tables = discovered,
+                "Replica snapshot state rehashed from restored content"
+            );
         }
 
         // Evict SSPs. They will re-register on next heartbeat.

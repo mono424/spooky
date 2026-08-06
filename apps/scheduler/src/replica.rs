@@ -117,6 +117,11 @@ pub struct Replica {
     /// them ourselves and persist alongside the hashes so a fresh process
     /// can find them.
     known_tables: BTreeSet<String>,
+    /// Tables whose last hash attempt failed. Re-tried on the next
+    /// `set_snapshot_state` so a transient error can't strand a table with a
+    /// stale (or absent) hash indefinitely. Not persisted: a fresh process
+    /// re-derives the truth via `startup_integrity_check`.
+    dirty_hashes: BTreeSet<String>,
 }
 
 impl Replica {
@@ -159,6 +164,7 @@ impl Replica {
             snapshot_seq,
             snapshot_hashes,
             known_tables,
+            dirty_hashes: BTreeSet::new(),
         })
     }
 
@@ -188,22 +194,31 @@ impl Replica {
     ) -> Result<()> {
         self.snapshot_seq = seq;
 
-        let to_hash: BTreeSet<String> = match touched_tables {
+        let mut to_hash: BTreeSet<String> = match touched_tables {
             Some(t) => t.clone(),
             None => self.known_tables.clone(),
         };
+        // Retry anything a previous call failed to hash. Otherwise a single
+        // transient error dropped that table out of the hash map until the next
+        // full recompute — and a missing entry reads as the *empty-table* hash
+        // in `diff_table_hashes`, so every bootstrap of a populated table
+        // mismatched from then on.
+        to_hash.extend(self.dirty_hashes.iter().cloned());
 
         for table in &to_hash {
             match self.hash_one_table(table).await {
                 Ok(hash) => {
                     self.snapshot_hashes.insert(table.clone(), hash);
+                    self.dirty_hashes.remove(table);
                 }
                 Err(e) => {
                     // Don't fail the snapshot advance just because one table
-                    // can't be hashed (e.g. schema race). Log and remove the
-                    // stale entry so /health/snapshot doesn't lie.
-                    warn!(table = %table, error = %e, "Failed to hash table");
-                    self.snapshot_hashes.remove(table);
+                    // can't be hashed (e.g. schema race). Keep the previous
+                    // value (a stale hash is recoverable; a missing one is
+                    // indistinguishable from "empty table") and mark it for
+                    // retry on the next advance.
+                    warn!(table = %table, error = %e, "Failed to hash table — keeping previous hash, will retry");
+                    self.dirty_hashes.insert(table.clone());
                 }
             }
         }
@@ -860,8 +875,48 @@ impl Replica {
         self.snapshot_seq = 0;
         self.snapshot_hashes.clear();
         self.known_tables.clear();
+        self.dirty_hashes.clear();
         info!(path = ?self.db_path, "Replica reset (REMOVE DATABASE)");
         Ok(())
+    }
+
+    /// Re-derive `known_tables` from the replica's OWN schema. Used after a
+    /// restore: the imported dump is an export of the *main* database, which
+    /// carries `DEFINE TABLE` statements but no `_00_metadata:snapshot` row —
+    /// so `reload_snapshot_seq` finds nothing and leaves the replica claiming
+    /// zero known tables (and zero hashes) over fully populated content.
+    /// Returns the number of tables discovered.
+    pub async fn rediscover_known_tables(&mut self) -> Result<usize> {
+        let info: Value = match self.db.query("INFO FOR DB").await {
+            Ok(mut response) => {
+                let v: Vec<Value> = response.take(0).unwrap_or_default();
+                v.into_iter().next().unwrap_or_default()
+            }
+            Err(e) if is_missing_error(&e) => Value::Null,
+            Err(e) => {
+                return Err(anyhow::Error::from(e)
+                    .context("Failed to query INFO FOR DB on the replica"))
+            }
+        };
+
+        let tables: Vec<String> = match info.get("tables") {
+            Some(Value::Object(tables_map)) => tables_map
+                .iter()
+                .filter(|(name, _)| !ssp_protocol::table_excluded_from_sync(name))
+                .filter(|(_, def)| {
+                    !def.as_str()
+                        .map(ssp_protocol::define_str_is_nosync)
+                        .unwrap_or(false)
+                })
+                .map(|(name, _)| name.clone())
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        for t in &tables {
+            self.known_tables.insert(t.clone());
+        }
+        Ok(tables.len())
     }
 
     /// Re-read snapshot state from the embedded metadata table. Useful after

@@ -10,7 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::backend_health::{BackendHealthCache, BackendStatus, SharedBackendConfigs};
 use crate::ingest::{pending_events_snapshot, IngestState};
@@ -500,6 +500,7 @@ async fn info_text_handler(
 pub async fn start_query_reassignment_monitor(
     ssp_pool: Arc<RwLock<SspPool>>,
     query_tracker: Arc<QueryTracker>,
+    stale_bootstrap_max_age: std::time::Duration,
 ) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -507,10 +508,42 @@ pub async fn start_query_reassignment_monitor(
         loop {
             interval.tick().await;
 
-            // Check for stale SSPs
+            // Reap bootstraps that are genuinely hung, on their own (much
+            // longer) budget. Doing it here as well as in the snapshot updater
+            // keeps the latency at ~30s instead of the updater's 300s tick —
+            // an SSP parked in Bootstrapping holds the snapshot freeze.
+            {
+                let stale_boots = {
+                    let pool = ssp_pool.read().await;
+                    pool.stale_active_bootstraps(stale_bootstrap_max_age)
+                };
+                if !stale_boots.is_empty() {
+                    let mut pool = ssp_pool.write().await;
+                    for id in stale_boots {
+                        warn!(
+                            ssp_id = %id,
+                            max_age_secs = stale_bootstrap_max_age.as_secs(),
+                            "Evicting SSP stuck in bootstrap/replay state"
+                        );
+                        pool.remove(&id);
+                    }
+                }
+            }
+
+            // Check for stale SSPs. An SSP only starts heartbeating once it
+            // reaches Ready, so one that is still Bootstrapping/Replaying is
+            // "stale" by construction — evicting it here killed live bootstraps
+            // the moment they ran longer than this 30s timeout (which any
+            // sizeable dataset does), and the SSP then 404'd on its first
+            // heartbeat and exited. Hung bootstraps are reaped by the snapshot
+            // updater's `stale_active_bootstraps` sweep instead, which is
+            // budgeted against `bootstrap_timeout_secs`.
             let stale_ssps = {
                 let pool = ssp_pool.read().await;
                 pool.get_stale_ssps(30000) // 30s timeout
+                    .into_iter()
+                    .filter(|id| !pool.is_active_bootstrap(id))
+                    .collect::<Vec<_>>()
             };
 
             if stale_ssps.is_empty() {

@@ -49,6 +49,7 @@ pub struct SspManagementState {
 pub fn create_ssp_router(state: SspManagementState) -> Router {
     Router::new()
         .route("/ssp/register", post(handle_register))
+        .route("/ssp/bootstrap-verify", post(handle_bootstrap_verify))
         .route("/ssp/heartbeat", post(handle_heartbeat))
         .route("/admin/ssp/resync-all", post(handle_resync_all))
         .route("/admin/resync", post(handle_resync))
@@ -175,6 +176,178 @@ async fn handle_resync(
     }
 }
 
+/// Recompute the persisted hashes for `tables` **from replica content** and
+/// return the fresh values. The replica is the authority; `snapshot_hashes` is
+/// only a cache of it, advanced incrementally as batches drain. Any path that
+/// mutates content without rehashing (or a one-off hash error) leaves that
+/// cache lying, and every subsequent bootstrap fails against the lie.
+///
+/// Content-only read plus a metadata write — no rows change, so this is safe
+/// to run while an SSP is mid-bootstrap. Takes `drain_lock` so it can't
+/// interleave with a drain's apply/rehash pair.
+async fn rehash_tables_from_content(
+    state: &SspManagementState,
+    tables: &BTreeSet<String>,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let _drain_guard = state.drain_lock.lock().await;
+    let mut rep = state.replica.write().await;
+    let seq = rep.snapshot_seq();
+    rep.set_snapshot_state(seq, Some(tables)).await?;
+    Ok(rep.snapshot_hashes().clone())
+}
+
+/// Second opinion for an SSP whose post-bootstrap integrity check failed.
+///
+/// The SSP bootstraps its rows from this scheduler's replica (via `/proxy`), so
+/// "SSP hash != scheduler hash" does NOT imply the SSP is wrong — far more
+/// often the scheduler's *cached* hash has drifted from its own replica
+/// content. Rehash the disputed tables from content and compare again:
+///
+///   * agreement  → the cache was stale, now repaired; SSP proceeds to Ready.
+///   * divergence → real. Escalate by consecutive-failure count, mirroring the
+///     catch-up breaker: re-clone the replica once, then admit anyway rather
+///     than leave the cluster with no ready SSP.
+async fn handle_bootstrap_verify(
+    State(state): State<SspManagementState>,
+    Json(request): Json<ssp_protocol::SspBootstrapVerifyRequest>,
+) -> Result<Json<ssp_protocol::SspBootstrapVerifyResponse>, (StatusCode, String)> {
+    let ssp_id = request.ssp_id.clone();
+
+    // Which tables do we actually disagree about? Compare the SSP's hashes
+    // against the cached map; `diff_table_hashes` treats a table missing on
+    // either side as the empty-table hash, so appearing/disappearing tables
+    // are disputed too.
+    let cached = { state.replica.read().await.snapshot_hashes().clone() };
+    let disputed: BTreeSet<String> =
+        ssp_protocol::snapshot_hash::diff_table_hashes(&cached, &request.table_hashes)
+            .into_iter()
+            .map(|d| d.table)
+            .filter(|t| !ssp_protocol::SYNCED_META_TABLES.contains(&t.as_str()))
+            .collect();
+
+    if disputed.is_empty() {
+        // Nothing to settle (the SSP retried against hashes that already
+        // agree) — let it through.
+        state.ssp_pool.write().await.reset_bootstrap_failures(&ssp_id);
+        return Ok(Json(ssp_protocol::SspBootstrapVerifyResponse {
+            table_hashes: cached,
+            diverging: Vec::new(),
+            admit: false,
+            recloned: false,
+        }));
+    }
+
+    let refreshed = rehash_tables_from_content(&state, &disputed)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("content rehash failed: {}", e),
+            )
+        })?;
+
+    let still: Vec<String> = disputed
+        .iter()
+        .filter(|t| {
+            refreshed.get(*t).map(String::as_str)
+                != request.table_hashes.get(*t).map(String::as_str)
+        })
+        .cloned()
+        .collect();
+
+    let repaired: Vec<&String> = disputed.iter().filter(|t| !still.contains(t)).collect();
+    if !repaired.is_empty() {
+        warn!(
+            ssp_id = %ssp_id,
+            tables = ?repaired,
+            "Bootstrap hash cache was stale — repaired from replica content"
+        );
+    }
+
+    if still.is_empty() {
+        state.ssp_pool.write().await.reset_bootstrap_failures(&ssp_id);
+        info!(
+            ssp_id = %ssp_id,
+            repaired = repaired.len(),
+            "Bootstrap integrity settled against replica content — admitting SSP"
+        );
+        return Ok(Json(ssp_protocol::SspBootstrapVerifyResponse {
+            table_hashes: refreshed,
+            diverging: Vec::new(),
+            admit: false,
+            recloned: false,
+        }));
+    }
+
+    // Real divergence: the SSP's circuit disagrees with content we just hashed.
+    for table in &still {
+        error!(
+            ssp_id = %ssp_id,
+            table = %table,
+            scheduler = %refreshed.get(table).map(String::as_str).unwrap_or("<none>"),
+            ssp = %request.table_hashes.get(table).map(String::as_str).unwrap_or("<none>"),
+            "Bootstrap integrity mismatch persists against freshly hashed replica content"
+        );
+    }
+
+    let fails = state.ssp_pool.write().await.record_bootstrap_failure(&ssp_id);
+    let (reclone_after, admit_after) = bootstrap_breaker_thresholds();
+
+    if fails >= admit_after {
+        error!(
+            ssp_id = %ssp_id,
+            fails,
+            tables = ?still,
+            "ALERT: bootstrap integrity never converged after {} attempts — admitting SSP anyway to restore sync. Its circuit may be marginally divergent from the replica.",
+            fails,
+        );
+        state.ssp_pool.write().await.reset_bootstrap_failures(&ssp_id);
+        return Ok(Json(ssp_protocol::SspBootstrapVerifyResponse {
+            table_hashes: refreshed,
+            diverging: still,
+            admit: true,
+            recloned: false,
+        }));
+    }
+
+    let mut recloned = false;
+    if fails == reclone_after {
+        warn!(
+            ssp_id = %ssp_id,
+            fails,
+            "Bootstrap integrity failed {} times — re-cloning replica from upstream before the next attempt",
+            fails,
+        );
+        match reclone_replica_from_upstream(
+            &state.config,
+            &state.replica,
+            &state.seq_counter,
+            &state.reclone_lock,
+        )
+        .await
+        {
+            Ok(true) => {
+                recloned = true;
+                state.ssp_pool.write().await.mark_all_for_resync();
+                info!("Replica re-cloned from upstream after repeated bootstrap mismatches");
+            }
+            Ok(false) => {
+                info!(ssp_id = %ssp_id, "Re-clone already in progress on another task")
+            }
+            Err(e) => {
+                error!(ssp_id = %ssp_id, error = %e, "Replica re-clone failed; SSP will retry a plain bootstrap")
+            }
+        }
+    }
+
+    Ok(Json(ssp_protocol::SspBootstrapVerifyResponse {
+        table_hashes: refreshed,
+        diverging: still,
+        admit: false,
+        recloned,
+    }))
+}
+
 /// Handle SSP registration — freezes snapshot, returns snapshot_seq, spawns poll task
 async fn handle_register(
     State(state): State<SspManagementState>,
@@ -249,7 +422,15 @@ async fn handle_register(
 
         *state.status.write().await = SchedulerStatus::SnapshotFrozen;
 
-        let sibling_active = state.ssp_pool.read().await.has_active_bootstrap();
+        // Exclude ourselves: a re-registering SSP is still parked in
+        // `Bootstrapping` from its previous attempt, and treating that as a
+        // sibling skipped the drain and handed back the same hashes it just
+        // failed against — making the SSP's single integrity retry pointless.
+        let sibling_active = state
+            .ssp_pool
+            .read()
+            .await
+            .has_active_bootstrap_excluding(&request.ssp_id);
         if sibling_active {
             // A sibling bootstrap holds hashes captured earlier; mutating the
             // replica now would invalidate them mid-flight. This SSP still
@@ -780,7 +961,9 @@ async fn verify_catchup_at_m(
     // `_00_*` system tables (scheduler/view bookkeeping, not replicated content).
     let mut per_table: BTreeMap<String, Vec<&RecordUpdate>> = BTreeMap::new();
     for ev in replayed {
-        if ev.table.starts_with("_00_") {
+        // Same carve-out as the drain's touched set: the synced meta tables are
+        // real replicated content and must be verified like any other table.
+        if ssp_protocol::table_excluded_from_sync(&ev.table) {
             continue;
         }
         per_table.entry(ev.table.clone()).or_default().push(ev);
@@ -982,16 +1165,28 @@ const CATCHUP_ADMIT_AFTER_DEFAULT: u32 = 5;
 /// falling back to the compiled defaults. `admit_after` is floored to at least
 /// `reclone_after` so admit never precedes the re-clone attempt.
 fn catchup_breaker_thresholds() -> (u32, u32) {
-    let parse = |k: &str| {
-        std::env::var(k)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .filter(|n: &u32| *n > 0)
-    };
     resolve_breaker_thresholds(
-        parse("SPKY_CATCHUP_RECLONE_AFTER"),
-        parse("SPKY_CATCHUP_ADMIT_AFTER"),
+        breaker_env("SPKY_CATCHUP_RECLONE_AFTER"),
+        breaker_env("SPKY_CATCHUP_ADMIT_AFTER"),
     )
+}
+
+/// Same escalation for the *bootstrap* integrity gate. Separate env knobs so a
+/// deployment can tune the two gates independently; same defaults.
+fn bootstrap_breaker_thresholds() -> (u32, u32) {
+    resolve_breaker_thresholds(
+        breaker_env("SPKY_BOOTSTRAP_RECLONE_AFTER"),
+        breaker_env("SPKY_BOOTSTRAP_ADMIT_AFTER"),
+    )
+}
+
+/// Read a positive breaker threshold from the environment; `None` when unset,
+/// unparseable, or zero (so a typo can't silently disable a gate).
+fn breaker_env(key: &str) -> Option<u32> {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|n: &u32| *n > 0)
 }
 
 /// Pure core of [`catchup_breaker_thresholds`]: apply defaults and floor
@@ -1152,6 +1347,28 @@ mod catchup_tests {
         assert_eq!(resolve_breaker_thresholds(Some(4), Some(1)), (4, 4));
         // Setting them equal disables the re-clone step (admit on the same count).
         assert_eq!(resolve_breaker_thresholds(Some(3), Some(3)), (3, 3));
+    }
+
+    #[test]
+    fn bootstrap_breaker_shares_defaults_with_catchup() {
+        // Separate env knobs, same escalation shape: re-clone first, admit
+        // later, admit never before re-clone.
+        assert_eq!(
+            resolve_breaker_thresholds(breaker_env("SPKY_BOOTSTRAP_RECLONE_AFTER"), breaker_env("SPKY_BOOTSTRAP_ADMIT_AFTER")),
+            (CATCHUP_RECLONE_AFTER_DEFAULT, CATCHUP_ADMIT_AFTER_DEFAULT),
+            "unset env must fall back to the compiled defaults"
+        );
+    }
+
+    #[test]
+    fn catchup_projection_covers_synced_meta_tables() {
+        // `_00_user_feature` / `_00_app_release` are replicated content, so the
+        // catch-up verifier must project them like any other table; only the
+        // runtime-internal `_00_*` tables are skipped.
+        assert!(!ssp_protocol::table_excluded_from_sync("_00_user_feature"));
+        assert!(!ssp_protocol::table_excluded_from_sync("_00_app_release"));
+        assert!(ssp_protocol::table_excluded_from_sync("_00_query"));
+        assert!(ssp_protocol::table_excluded_from_sync("_00_list_ref_user_abc"));
     }
 
     #[test]

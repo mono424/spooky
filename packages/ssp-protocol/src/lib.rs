@@ -183,6 +183,45 @@ pub struct SspRegistrationResponse {
     pub table_hashes: BTreeMap<String, String>,
 }
 
+/// Sent by an SSP whose post-bootstrap integrity check disagreed with the
+/// hashes handed out at registration, carrying the hashes it actually computed
+/// over its freshly loaded circuit.
+///
+/// The scheduler's `table_hashes` are a *cache* maintained incrementally as
+/// events drain; the replica content is the authority. So a disagreement is
+/// resolved by rehashing the disputed tables **from replica content** rather
+/// than by assuming the SSP is wrong — the SSP loaded its rows from that same
+/// replica, so a stale cache would otherwise crash-loop it forever.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SspBootstrapVerifyRequest {
+    pub ssp_id: String,
+    /// The SSP's own per-table hashes, in the same `b3:`-prefixed form.
+    #[serde(default)]
+    pub table_hashes: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SspBootstrapVerifyResponse {
+    /// Hashes recomputed from replica content for the disputed tables, so the
+    /// SSP can log (and re-diff) against corrected values.
+    #[serde(default)]
+    pub table_hashes: BTreeMap<String, String>,
+    /// Tables that still disagree after the content rehash — a genuine
+    /// divergence. Empty means the scheduler's cache was simply stale and has
+    /// now been repaired; the SSP may go Ready.
+    #[serde(default)]
+    pub diverging: Vec<String>,
+    /// Breaker escalation: proceed to Ready despite `diverging`, because
+    /// withholding this SSP any longer costs more (no ready SSP ⇒ no sync)
+    /// than admitting a marginally divergent circuit.
+    #[serde(default)]
+    pub admit: bool,
+    /// The scheduler re-cloned its replica from upstream; the SSP's circuit is
+    /// stale by construction and it must bootstrap again.
+    #[serde(default)]
+    pub recloned: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SspHeartbeat {
     pub ssp_id: String,

@@ -43,6 +43,23 @@ use crate::router::SspPool;
 use crate::transport::HttpTransport;
 use crate::wal::EventWal;
 
+/// Tables a drained batch wrote, i.e. the set whose cached hashes must be
+/// recomputed alongside the content.
+///
+/// The filter is `table_excluded_from_sync`, NOT a raw `_00_` prefix test:
+/// `Replica::apply` DOES write the synced meta tables (`_00_user_feature`,
+/// `_00_app_release`) into the replica and into `known_tables`. Leaving them
+/// out advanced the content while their cached hash stayed behind — exactly
+/// the stale-cache drift that makes an SSP's bootstrap integrity check fail,
+/// forever and unrecoverably.
+fn touched_tables(events: &[BufferedEvent]) -> BTreeSet<String> {
+    events
+        .iter()
+        .filter(|e| !ssp_protocol::table_excluded_from_sync(&e.update.table))
+        .map(|e| e.update.table.clone())
+        .collect()
+}
+
 /// Drain the in-memory event buffer and apply all events to the replica.
 /// Also advances `snapshot_seq` and truncates the WAL up to that seq.
 /// Returns the number of events applied (may be 0). Does NOT touch `SchedulerStatus`.
@@ -65,11 +82,7 @@ pub async fn drain_and_apply(
 
     // Track which tables this batch touched so the snapshot-state writer
     // only rehashes the affected tables, not the whole replica.
-    let touched: BTreeSet<String> = events
-        .iter()
-        .filter(|e| !e.update.table.starts_with("_00_"))
-        .map(|e| e.update.table.clone())
-        .collect();
+    let touched = touched_tables(&events);
 
     {
         let mut rep = replica.write().await;
@@ -634,5 +647,49 @@ pub async fn snapshot_updater_tick(
         if *st == SchedulerStatus::SnapshotUpdating {
             *st = SchedulerStatus::Ready;
         }
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+    use crate::messages::{RecordOp, RecordUpdate};
+
+    fn ev(seq: u64, table: &str) -> BufferedEvent {
+        BufferedEvent {
+            seq,
+            update: RecordUpdate {
+                table: table.to_string(),
+                operation: RecordOp::Update,
+                record_id: format!("{}:r1", table),
+                data: Some(serde_json::json!({"a": 1})),
+                version: 0,
+            },
+            received_at: 0,
+        }
+    }
+
+    #[test]
+    fn touched_includes_synced_meta_tables() {
+        // `Replica::apply` writes these into the replica, so the drain must
+        // rehash them too — a raw `_00_` prefix filter left their cached hash
+        // stale and broke every later bootstrap integrity check.
+        let events = vec![
+            ev(1, "game"),
+            ev(2, "_00_user_feature"),
+            ev(3, "_00_app_release"),
+        ];
+        let touched = touched_tables(&events);
+        assert!(touched.contains("game"));
+        assert!(touched.contains("_00_user_feature"));
+        assert!(touched.contains("_00_app_release"));
+    }
+
+    #[test]
+    fn touched_excludes_runtime_internal_meta_tables() {
+        let events = vec![ev(1, "_00_query"), ev(2, "_00_list_ref_user_abc"), ev(3, "user")];
+        let touched = touched_tables(&events);
+        assert_eq!(touched.len(), 1);
+        assert!(touched.contains("user"));
     }
 }

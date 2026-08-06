@@ -33,6 +33,16 @@ pub struct SspPool {
     /// this counter lets the catch-up path escalate — re-clone the replica,
     /// then admit anyway — instead of looping forever. See `poll_and_replay_ssp`.
     catchup_failures: HashMap<String, u32>,
+    /// Consecutive *bootstrap* integrity failures per SSP, reset on any pass.
+    /// Same escalation rationale as `catchup_failures`, for the earlier gate:
+    /// the SSP's post-bootstrap hash check. See `handle_bootstrap_verify`.
+    bootstrap_failures: HashMap<String, u32>,
+    /// SSPs whose per-SSP buffer actually overflowed and was dropped. An
+    /// explicit flag, because "buffer entry exists but is empty" is ALSO the
+    /// normal state right after `drain_buffer` — inferring overflow from it
+    /// made healthy SSPs 409 (→ exit(4)) in the window between the last drain
+    /// and `mark_ready`.
+    buffer_overflowed: HashSet<String>,
     /// When each SSP last changed state. Lets the snapshot updater evict SSPs
     /// parked in `Bootstrapping`/`Replaying` (which would otherwise hold
     /// `has_active_bootstrap()` — and thus the snapshot freeze — forever).
@@ -57,6 +67,8 @@ impl SspPool {
             ssp_snapshot_seqs: HashMap::new(),
             forced_resync: HashSet::new(),
             catchup_failures: HashMap::new(),
+            bootstrap_failures: HashMap::new(),
+            buffer_overflowed: HashSet::new(),
             state_since: HashMap::new(),
             registration_gen: HashMap::new(),
             strategy,
@@ -78,6 +90,23 @@ impl SspPool {
     /// or once we admit it to broadcast to break the loop).
     pub fn reset_catchup_failures(&mut self, ssp_id: &str) {
         self.catchup_failures.remove(ssp_id);
+    }
+
+    /// Record one more consecutive bootstrap integrity failure for this SSP
+    /// and return the new running count.
+    pub fn record_bootstrap_failure(&mut self, ssp_id: &str) -> u32 {
+        let entry = self
+            .bootstrap_failures
+            .entry(ssp_id.to_string())
+            .or_insert(0);
+        *entry += 1;
+        *entry
+    }
+
+    /// Reset the consecutive bootstrap failure count (on a pass, or once the
+    /// breaker admits the SSP anyway).
+    pub fn reset_bootstrap_failures(&mut self, ssp_id: &str) {
+        self.bootstrap_failures.remove(ssp_id);
     }
 
     /// Flag an SSP for forced re-bootstrap on its next heartbeat. Used by
@@ -160,6 +189,7 @@ impl SspPool {
                         buffer.len()
                     );
                     buffer.clear();
+                    self.buffer_overflowed.insert(ssp_id.to_string());
                     return false;
                 }
 
@@ -173,24 +203,23 @@ impl SspPool {
         }
     }
 
-    /// Check if SSP has buffer overflow (needs re-bootstrap)
+    /// Check if SSP has buffer overflow (needs re-bootstrap).
+    ///
+    /// Reads the explicit flag set by `buffer_message` when it dropped a full
+    /// buffer. The old form inferred overflow from an empty-but-present buffer
+    /// entry, which `drain_buffer` also produces on the happy path — so a
+    /// heartbeat landing between the final drain and `mark_ready` got a
+    /// spurious 409 and the SSP exited(4) mid-handshake.
     pub fn has_buffer_overflow(&self, ssp_id: &str) -> bool {
-        self.message_buffers
-            .get(ssp_id)
-            .map(|buf| {
-                buf.is_empty()
-                    && matches!(
-                        self.ssp_states.get(ssp_id),
-                        Some(SspState::Bootstrapping) | Some(SspState::Replaying)
-                    )
-            })
-            .unwrap_or(false)
+        self.buffer_overflowed.contains(ssp_id)
     }
 
     /// Mark SSP as ready and return any remaining buffered messages
     pub fn mark_ready(&mut self, ssp_id: &str) -> Vec<RecordUpdate> {
         self.ssp_states.insert(ssp_id.to_string(), SspState::Ready);
         self.state_since.insert(ssp_id.to_string(), Instant::now());
+        self.buffer_overflowed.remove(ssp_id);
+        self.bootstrap_failures.remove(ssp_id);
 
         // Return and clear buffered messages
         self.message_buffers
@@ -292,6 +321,8 @@ impl SspPool {
         self.ssp_snapshot_seqs.remove(ssp_id);
         self.forced_resync.remove(ssp_id);
         self.catchup_failures.remove(ssp_id);
+        self.bootstrap_failures.remove(ssp_id);
+        self.buffer_overflowed.remove(ssp_id);
         self.state_since.remove(ssp_id);
         // registration_gen is intentionally kept: it must stay monotonic
         // across remove/re-register so stale poll tasks always lose.
@@ -309,6 +340,8 @@ impl SspPool {
         self.ssp_snapshot_seqs.clear();
         self.forced_resync.clear();
         self.catchup_failures.clear();
+        self.bootstrap_failures.clear();
+        self.buffer_overflowed.clear();
         self.state_since.clear();
         // registration_gen kept monotonic; see `remove`.
         self.round_robin_index = 0;
@@ -418,6 +451,36 @@ impl SspPool {
             .values()
             .any(|s| matches!(s, SspState::Bootstrapping | SspState::Replaying))
     }
+
+    /// Like [`has_active_bootstrap`], but ignoring one SSP id.
+    ///
+    /// Registration uses this with the registering SSP's own id. An SSP that
+    /// re-registers (after an integrity mismatch, or after a restart) is still
+    /// parked in `Bootstrapping` from its previous attempt, and counting itself
+    /// as a "sibling" made the scheduler skip the pre-registration drain and
+    /// hand back the very same (possibly stale) hashes it just failed against —
+    /// so its one retry could never succeed.
+    pub fn has_active_bootstrap_excluding(&self, ssp_id: &str) -> bool {
+        self.ssp_states
+            .iter()
+            .filter(|(id, _)| id.as_str() != ssp_id)
+            .any(|(_, s)| matches!(s, SspState::Bootstrapping | SspState::Replaying))
+    }
+
+    /// True while this SSP is still bootstrapping or replaying — i.e. before it
+    /// has any reason to have sent a heartbeat. The heartbeat-staleness sweep
+    /// must skip these: the SSP only starts heartbeating once it goes Ready, so
+    /// any bootstrap slower than the sweep's timeout would otherwise be evicted
+    /// mid-flight (and then 404 on its first heartbeat → exit(3) → restart →
+    /// same again, with the cluster stuck at zero ready SSPs). Bootstraps that
+    /// genuinely hang are reaped by `stale_active_bootstraps` instead, which is
+    /// budgeted against `bootstrap_timeout_secs`.
+    pub fn is_active_bootstrap(&self, ssp_id: &str) -> bool {
+        matches!(
+            self.ssp_states.get(ssp_id),
+            Some(SspState::Bootstrapping) | Some(SspState::Replaying)
+        )
+    }
 }
 
 #[cfg(test)]
@@ -440,6 +503,77 @@ mod tests {
         p.reset_catchup_failures("ssp-0");
         assert_eq!(p.record_catchup_failure("ssp-0"), 1);
         assert_eq!(p.record_catchup_failure("ssp-1"), 2);
+    }
+
+    #[test]
+    fn bootstrap_failures_count_up_and_clear_on_ready() {
+        let mut p = pool();
+        assert_eq!(p.record_bootstrap_failure("ssp-1"), 1);
+        assert_eq!(p.record_bootstrap_failure("ssp-1"), 2);
+        // Going Ready ends the streak — the next failure starts over.
+        let _ = p.mark_ready("ssp-1");
+        assert_eq!(p.record_bootstrap_failure("ssp-1"), 1);
+        p.reset_bootstrap_failures("ssp-1");
+        assert_eq!(p.record_bootstrap_failure("ssp-1"), 1);
+    }
+
+    #[test]
+    fn active_bootstrap_check_can_exclude_the_caller() {
+        let mut p = pool();
+        p.mark_bootstrapping("ssp-1");
+
+        // Its own entry makes the plain check true...
+        assert!(p.has_active_bootstrap());
+        // ...but a re-registering ssp-1 must not count itself as a sibling,
+        // or registration skips the drain and hands back the same hashes.
+        assert!(!p.has_active_bootstrap_excluding("ssp-1"));
+
+        p.mark_replaying("ssp-0");
+        assert!(p.has_active_bootstrap_excluding("ssp-1"));
+    }
+
+    #[test]
+    fn is_active_bootstrap_tracks_state() {
+        let mut p = pool();
+        p.mark_bootstrapping("ssp-1");
+        assert!(p.is_active_bootstrap("ssp-1"));
+        p.mark_replaying("ssp-1");
+        assert!(p.is_active_bootstrap("ssp-1"));
+        // Once Ready it heartbeats for itself and the stale sweep may judge it.
+        let _ = p.mark_ready("ssp-1");
+        assert!(!p.is_active_bootstrap("ssp-1"));
+        assert!(!p.is_active_bootstrap("never-seen"));
+    }
+
+    #[test]
+    fn overflow_flag_is_explicit_not_inferred_from_an_empty_buffer() {
+        let mut p = SspPool::new(LoadBalanceStrategy::RoundRobin, 2);
+        p.mark_bootstrapping("ssp-1");
+
+        let msg = || RecordUpdate {
+            table: "game".to_string(),
+            operation: crate::messages::RecordOp::Update,
+            record_id: "game:r1".to_string(),
+            data: None,
+            version: 0,
+        };
+
+        // Normal buffering then a normal drain leaves the entry present but
+        // empty — that is NOT an overflow (the old inference said it was, so
+        // any heartbeat in the drain→mark_ready window got a 409 → exit(4)).
+        assert!(p.buffer_message("ssp-1", msg()));
+        assert_eq!(p.drain_buffer("ssp-1").len(), 1);
+        assert!(!p.has_buffer_overflow("ssp-1"));
+
+        // A real overflow drops the buffer and latches the flag.
+        assert!(p.buffer_message("ssp-1", msg()));
+        assert!(p.buffer_message("ssp-1", msg()));
+        assert!(!p.buffer_message("ssp-1", msg()));
+        assert!(p.has_buffer_overflow("ssp-1"));
+
+        // Cleared once the SSP is admitted.
+        let _ = p.mark_ready("ssp-1");
+        assert!(!p.has_buffer_overflow("ssp-1"));
     }
 
     #[test]
