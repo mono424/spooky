@@ -319,14 +319,6 @@ impl Scheduler {
         // before selecting them on the connection.
         let db = maintenance::db::connect_http_raw(&self.config.db).await?;
 
-        // This handle lives for the scheduler's whole lifetime (feature-flag
-        // sweep holds a clone); keep its HTTP auth token fresh.
-        maintenance::db::spawn_periodic_resignin(
-            db.clone(),
-            self.config.db.clone(),
-            maintenance::db::RESIGNIN_INTERVAL_SECS,
-        );
-
         // Self-heal NS/DB so the scheduler can bootstrap against a brand-new
         // SurrealDB instance — Phase 4a (CLI) usually defines these, but the
         // scheduler may be started against an upstream that hasn't run it yet.
@@ -448,14 +440,29 @@ impl Scheduler {
         // Step 3: Spawn periodic snapshot update task
         self.spawn_snapshot_updater();
 
+        // Bootstrap is done with the raw handle; hand it to the long-lived
+        // consumers wrapped so a SurrealDB restart (which drops the server-side
+        // session this handle is pinned to) is recoverable without restarting
+        // the scheduler.
+        //
+        // One `ReconnectingDb` shared by both consumers, deliberately: each
+        // `Surreal::clone()` attaches its OWN server-side session, so the
+        // previous `db.clone()` per consumer meant several independent sessions
+        // to lose and several to re-establish.
+        let shared_db = maintenance::db::ReconnectingDb::new(db, self.config.db.clone());
+
+        // Keep the handle's HTTP auth token fresh, and replace the handle
+        // outright if its session dies.
+        maintenance::db::spawn_periodic_resignin(
+            Arc::clone(&shared_db),
+            maintenance::db::RESIGNIN_INTERVAL_SECS,
+        );
+
         // Spawn the feature-flag materialization sweep. The `spky flag` CLI
         // materializes existing users inline on every write; this periodic
         // pass fills in users who signed up since (and self-heals after an
-        // interrupted CLI run). Holds its own clone of the root connection.
-        crate::feature_flags::spawn(
-            Arc::new(db.clone()),
-            self.config.feature_flag_sweep_interval_secs,
-        );
+        // interrupted CLI run).
+        crate::feature_flags::spawn(shared_db, self.config.feature_flag_sweep_interval_secs);
 
         // Keep running until shutdown signal
         tokio::signal::ctrl_c().await?;

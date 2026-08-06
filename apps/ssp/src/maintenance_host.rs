@@ -57,7 +57,7 @@ impl MaintenanceHost for SspHost {
         // 1. Registered views are tied to live clients; rows restored from the
         //    dump point at sessions that no longer exist (mirrors the
         //    scheduler's startup `DELETE _00_query`).
-        if let Err(e) = self.db.query("DELETE _00_query").await {
+        if let Err(e) = self.db.handle().query("DELETE _00_query").await {
             warn!(error = %e, "Failed to clear _00_query after restore (table may not exist)");
         }
 

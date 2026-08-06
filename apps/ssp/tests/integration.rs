@@ -23,6 +23,24 @@ use tokio::sync::mpsc;
 
 const AUTH_SECRET: &str = "test-secret-for-integration";
 
+/// A `SharedDb` over an unconnected client, for handlers that never touch the
+/// database. `ReconnectingDb` needs credentials to rebuild a dead connection;
+/// these are never used because nothing here reaches a server.
+fn unconnected_db() -> SharedDb {
+    maintenance::db::ReconnectingDb::new(surrealdb::Surreal::init(), test_db_config())
+}
+
+fn test_db_config() -> maintenance::db::DbConfig {
+    maintenance::db::DbConfig {
+        url: std::env::var("TEST_SURREALDB_ADDR")
+            .unwrap_or_else(|_| "127.0.0.1:8000".to_string()),
+        namespace: "test".to_string(),
+        database: "test".to_string(),
+        username: "root".to_string(),
+        password: "root".to_string(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Test Harness
 // ---------------------------------------------------------------------------
@@ -62,8 +80,7 @@ impl TestHarness {
 
         // Unconnected SurrealDB client — handlers that don't touch DB work fine,
         // handlers that do will get runtime errors (which are logged but not propagated).
-        let db: surrealdb::Surreal<surrealdb::engine::remote::http::Client> =
-            surrealdb::Surreal::init();
+        let db = unconnected_db();
 
         // Permission injection now default-denies any table without a
         // registered permission. The integration suite was written before
@@ -83,7 +100,7 @@ impl TestHarness {
         let job_dispatcher = {
             // Timer receiver dropped: tests never dispatch on_timer.
             let (platform, _timer_rx) =
-                ssp_server::adapters::vm_platform(Arc::new(db.clone()), Arc::clone(&metrics));
+                ssp_server::adapters::vm_platform(Arc::clone(&db), Arc::clone(&metrics));
             let dispatcher = Arc::new(ssp_node::jobs::JobDispatcher::new(
                 Arc::clone(&platform.db),
                 Arc::clone(&platform.spawner),
@@ -110,7 +127,7 @@ impl TestHarness {
             job_config,
             job_dispatcher,
             job_queue_rx: Arc::new(tokio::sync::Mutex::new(rx)),
-            db: Arc::new(db),
+            db,
             crdt_cache: Arc::new(CrdtCache::new(64, CrdtAllowList::default())),
             start_time: std::time::Instant::now(),
         }
@@ -1273,7 +1290,7 @@ mod db_integration_tests {
 
         let metrics = Arc::new(Metrics::new(&provider));
         let job_config = Arc::new(JobConfig::default());
-        let db = Arc::new(db);
+        let db = maintenance::db::ReconnectingDb::new(db, test_db_config());
         let job_dispatcher = {
             let (platform, _timer_rx) =
                 ssp_server::adapters::vm_platform(Arc::clone(&db), Arc::clone(&metrics));
@@ -1304,7 +1321,7 @@ mod db_integration_tests {
 
     /// Query a table that may not exist yet, returning an empty vec if the table is missing.
     async fn query_table(db: &SharedDb, surql: &str) -> Vec<Value> {
-        let result = db.query(surql).await;
+        let result = db.handle().query(surql).await;
         match result {
             Ok(mut res) => {
                 // Try to take results as surrealdb::types::Value first
@@ -1486,7 +1503,7 @@ mod db_integration_tests {
              RELATE _00_query:{query_id}->{lr}->game:seed SET version = 1, \
                  auth_id = '{auth}', clientId = 'c';"
         );
-        h.db.query(surql).await.expect("seed query failed").check().expect("seed not ok");
+        h.db.handle().query(surql).await.expect("seed query failed").check().expect("seed not ok");
     }
 
     #[tokio::test]
@@ -1529,6 +1546,7 @@ mod db_integration_tests {
         let h = create_test_harness_with_db().await;
         // A fresh view (lastActiveAt = now, long ttl) — must survive the sweep.
         h.db
+            .handle()
             .query(
                 "CREATE _00_query:fresh SET auth_id = 'user:fresh', clientId = 'c', \
                  ttl = 10m, lastActiveAt = time::now(), surql = 'SELECT * FROM game', params = {};",

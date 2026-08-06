@@ -24,9 +24,11 @@ impl SurrealSdkDb {
         surql: &str,
     ) -> anyhow::Result<serde_json::Value> {
         use anyhow::Context;
-        let mut response = db
+        let handle = db.handle();
+        let mut response = handle
             .query(surql)
             .await
+            .inspect_err(|e| db.note_error(&e.to_string()))
             .with_context(|| format!("Query failed: {}", surql))?;
         let val: surrealdb::types::Value = response
             .take(0)
@@ -42,13 +44,20 @@ impl Db for SurrealSdkDb {
         surql: &str,
         binds: &[(&str, serde_json::Value)],
     ) -> Result<Vec<serde_json::Value>, DbError> {
-        let mut q = self.db.query(surql);
+        let handle = self.db.handle();
+        let mut q = handle.query(surql);
         for (name, value) in binds {
             q = q.bind(((*name).to_string(), value.clone()));
         }
-        let mut response = q
-            .await
-            .map_err(|e| DbError::Transport(e.to_string()))?;
+        // Every SSP database call funnels through here, so this is the one
+        // place that has to tell the connection its session died — that report
+        // is what makes a SurrealDB restart heal on the next failed query
+        // instead of at the next refresh tick.
+        let mut response = q.await.map_err(|e| {
+            let msg = e.to_string();
+            self.db.note_error(&msg);
+            DbError::Transport(msg)
+        })?;
 
         let n = response.num_statements();
         let mut out = Vec::with_capacity(n);
@@ -63,9 +72,14 @@ impl Db for SurrealSdkDb {
 
     async fn version(&self) -> Result<String, DbError> {
         self.db
+            .handle()
             .version()
             .await
             .map(|v| v.to_string())
-            .map_err(|e| DbError::Transport(e.to_string()))
+            .map_err(|e| {
+                let msg = e.to_string();
+                self.db.note_error(&msg);
+                DbError::Transport(msg)
+            })
     }
 }

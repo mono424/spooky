@@ -34,13 +34,16 @@ const RULE_ROLLOUT: &str = "rollout";
 /// Default interval is 30 seconds: a newly-signed-up user gets their flag
 /// assignments within half a minute, and a quiet table costs one cheap
 /// SELECT-per-flag per tick.
-pub fn spawn(db: Arc<Surreal<Client>>, interval_secs: u64) {
+pub fn spawn(db: Arc<maintenance::db::ReconnectingDb>, interval_secs: u64) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
         interval.tick().await; // skip the immediate first tick
         loop {
             interval.tick().await;
-            if let Err(err) = tick(&db).await {
+            // Re-read the handle every tick: it is replaced wholesale when
+            // SurrealDB restarts and invalidates its session.
+            if let Err(err) = tick(&db.handle()).await {
+                db.note_error(&format!("{err:#}"));
                 warn!(error = %err, "Feature flag sweep failed; will retry on next tick");
             }
         }

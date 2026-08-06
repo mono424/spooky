@@ -14,8 +14,6 @@ use tokio::sync::RwLock;
 
 use ssp::circuit::{Circuit, Record, ViewDelta};
 use ssp::circuit::view::OutputFormat;
-use surrealdb::engine::remote::http::Client;
-use surrealdb::Surreal;
 use tokio::signal;
 use tracing::{debug, error, info, warn};
 
@@ -37,8 +35,13 @@ use ssp_node::jobs::{
 };
 use tokio::sync::mpsc;
 
-/// Shared database connection wrapped in Arc for zero-copy sharing across tasks
-pub type SharedDb = Arc<Surreal<Client>>;
+/// Shared database connection, shared across tasks without copying.
+///
+/// `ReconnectingDb` rather than a bare `Surreal<Client>` so that a SurrealDB
+/// restart — which wipes the server-side HTTP session every handle is pinned to
+/// — is survivable. Reach the live handle with `.handle()`; see
+/// [`maintenance::db::ReconnectingDb`] for why re-signin alone cannot recover.
+pub type SharedDb = Arc<maintenance::db::ReconnectingDb>;
 
 // Status types live in the portable core; re-exported for compatibility.
 pub use ssp_node::{error_codes, SspError, SspStatus};
@@ -444,15 +447,20 @@ pub async fn connect_database(config: &Config) -> anyhow::Result<SharedDb> {
         username: config.db_user.clone(),
         password: config.db_pass.clone(),
     };
-    let db = maintenance::db::connect_http(&db_config)
+    let db = maintenance::db::ReconnectingDb::connect(&db_config)
         .await
         .context("Failed to connect to SurrealDB")?;
 
-    // HTTP-engine tokens expire; the run_server timer dispatcher keeps the
-    // handle fresh via TimerKind::DbResignin (maintenance::db::resignin_once).
+    // HTTP-engine tokens expire and the server-side session dies with a
+    // SurrealDB restart; the run_server timer dispatcher keeps the handle both
+    // fresh and reconnected via TimerKind::DbResignin
+    // (maintenance::db::resignin_once). That timer is the periodic floor; this
+    // healer is the fast path, reconnecting on the first query that reports a
+    // dead session rather than up to a full interval later.
+    maintenance::db::spawn_dead_session_healer(Arc::clone(&db));
 
     info!("Connected to SurrealDB successfully");
-    Ok(Arc::new(db))
+    Ok(db)
 }
 
 // --- Job Config Loading ---
@@ -558,7 +566,7 @@ pub async fn run_server() -> anyhow::Result<()> {
     let db = connect_database(&config).await?;
 
     // Query the upstream SurrealDB server version once; surfaced via `/info`.
-    let surrealdb_version = match db.version().await {
+    let surrealdb_version = match db.handle().version().await {
         Ok(v) => v.to_string(),
         Err(e) => {
             info!(error = %e, "Could not read SurrealDB server version");
@@ -796,13 +804,6 @@ pub async fn run_server() -> anyhow::Result<()> {
         let backend_cache = backend_health.clone();
         let backend_configs = shared_backend_configs.clone();
         let health_client = maintenance::backend_health::health_http_client();
-        let resignin_db_config = maintenance::DbConfig {
-            url: config.db_addr.clone(),
-            namespace: config.db_ns.clone(),
-            database: config.db_db.clone(),
-            username: config.db_user.clone(),
-            password: config.db_pass.clone(),
-        };
         let health_interval_ms = config.health_check_interval_secs * 1000;
         tokio::spawn(async move {
             while let Some(kind) = timer_rx.recv().await {
@@ -816,7 +817,7 @@ pub async fn run_server() -> anyhow::Result<()> {
                         }
                     }
                     ssp_node::TimerKind::DbResignin => {
-                        maintenance::db::resignin_once(&db, &resignin_db_config).await;
+                        maintenance::db::resignin_once(&db).await;
                         scheduler
                             .schedule(
                                 kind.clone(),

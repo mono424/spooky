@@ -1824,8 +1824,12 @@ pub fn load_config(path: &Path) -> Sp00kyConfig {
             // an empty config (no slug, no cloudApi → commands hit the wrong/prod
             // API and fail with confusing DNS errors). Surface the exact parse
             // error and location so the user can fix the manifest.
+            // `{:#}` (not `{}`) so anyhow prints the whole source chain. With
+            // `{}` the only line shown was the outermost context ("failed to
+            // interpret sp00ky manifest"), which names neither the offending
+            // key nor its line — useless for actually fixing the manifest.
             eprintln!(
-                "\x1b[31merror\x1b[0m: failed to parse {}:\n  {}\n\
+                "\x1b[31merror\x1b[0m: failed to parse {}:\n  {:#}\n\
                  Falling back to default configuration — fix the manifest, then re-run.",
                 path.display(),
                 e
