@@ -25,9 +25,18 @@ export function StorageTab() {
 
   // Fetch once Sp00ky is detected (the panel can mount before the page's
   // client is up — same gating as DatabaseTab's table enumeration).
+  //
+  // `attempted` rather than inferring intent from `storageInfo()`: fetchStorageInfo
+  // CATCHES its errors, so on failure the snapshot stays null while
+  // isFetchingStorage flips true -> false — which re-runs this effect, which
+  // refetches, forever. A plain `let` dies with the component, so re-opening the
+  // tab retries exactly once, which is the behaviour we want.
+  let attempted = false;
   createEffect(() => {
     if (!isSp00kyAvailable()) return;
-    if (!storageInfo() && !isFetchingStorage()) void fetchStorageInfo();
+    if (attempted || storageInfo()) return;
+    attempted = true;
+    void fetchStorageInfo();
   });
 
   // Live health beats snapshot health: `state.database.storage` updates via the
@@ -148,17 +157,12 @@ export function StorageTab() {
 
   return (
     <div class="mcp-container">
+      {/* Refresh lives in the top toolbar now (it re-fetches this snapshot when
+          the Storage tab is active). "Count rows" below stays put — it opts
+          into an expensive per-table COUNT(*), which is an action, not a
+          refresh. */}
       <div class="mcp-header">
         <h2>Storage</h2>
-        <div class="mcp-header-controls">
-          <button
-            class="storage-refresh-btn"
-            disabled={isFetchingStorage()}
-            onClick={() => void fetchStorageInfo()}
-          >
-            {isFetchingStorage() ? 'Refreshing…' : 'Refresh'}
-          </button>
-        </div>
       </div>
 
       {/* 1. Health banner — the OPFS pain point, always first. */}

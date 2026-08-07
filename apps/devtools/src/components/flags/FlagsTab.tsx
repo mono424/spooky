@@ -16,9 +16,9 @@ export function FlagsTab() {
   const {
     flagsSnapshot,
     flagsError,
-    isFetchingFlags,
     isMutatingFlag,
     fetchFlags,
+    isSp00kyAvailable,
     setFlagEnabled,
     setFlagUserVariant,
     setFlagOverride,
@@ -27,8 +27,21 @@ export function FlagsTab() {
 
   // The tab body is unmounted while inactive (App.tsx wraps it in <Show>), so
   // this runs on every open — the snapshot is a point-in-time remote read.
+  //
+  // Gated on availability because the panel can mount before the page's client
+  // is up, and an early call can only time out (30s) rather than fail fast.
+  //
+  // `attempted` rather than inferring intent from `flagsSnapshot()`: fetchFlags
+  // CATCHES its errors, so on failure the snapshot stays null while
+  // isFetchingFlags flips true -> false — which re-runs this effect, which
+  // refetches, forever, one 30s remote read after another. A plain `let` dies
+  // with the component, so re-opening the tab retries exactly once.
+  let attempted = false;
   createEffect(() => {
-    if (!flagsSnapshot() && !isFetchingFlags()) void fetchFlags();
+    if (!isSp00kyAvailable()) return;
+    if (attempted || flagsSnapshot()) return;
+    attempted = true;
+    void fetchFlags();
   });
 
   const snap = () => flagsSnapshot();
@@ -73,18 +86,12 @@ export function FlagsTab() {
       <div class="mcp-header">
         <h2>Feature Flags</h2>
         <div class="mcp-header-controls">
+          {/* Refresh lives in the top toolbar now — it re-reads flags when this
+              tab is active. */}
           <div class={`status-pill ${statusPill().cls}`}>
             <span class="status-dot" />
             {statusPill().label}
           </div>
-          <button
-            class="icon-btn"
-            title="Refresh flags"
-            disabled={isFetchingFlags()}
-            onClick={() => void fetchFlags()}
-          >
-            ⟳
-          </button>
         </div>
       </div>
 

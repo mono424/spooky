@@ -18,6 +18,24 @@ const tabs: { id: TabType; label: string }[] = [
 // Reserve for the » overflow button when it has to be shown.
 const CHEVRON_W = 30;
 
+// What a plain Refresh click actually refetches, per tab — every tab also gets
+// a `getState()` resync, which is what covers Queries/Timing/Events/Auth.
+//
+// Typed as a full Record so adding a TabType member is a compile error here as
+// well as in `refreshScoped` (context/DevToolsContext.tsx). The copy and the
+// behavior can't drift apart.
+const REFRESH_SCOPE: Record<TabType, string> = {
+  queries: 'page state',
+  timing: 'page state',
+  events: 'page state',
+  auth: 'page state',
+  database: 'the table list and rows',
+  storage: 'storage diagnostics',
+  flags: 'feature flags',
+  versions: 'version discovery',
+  mcp: 'MCP bridge status',
+};
+
 function RefreshIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
@@ -44,7 +62,13 @@ function DoubleChevronIcon() {
 }
 
 export function Tabs() {
-  const { activeTab, setActiveTab, isSp00kyAvailable, refresh, clearEvents } = useDevTools();
+  const { activeTab, setActiveTab, isSp00kyAvailable, refresh, isRefreshing, clearEvents } =
+    useDevTools();
+
+  const refreshLabel = () =>
+    isRefreshing()
+      ? 'Refreshing…'
+      : `Refresh ${REFRESH_SCOPE[activeTab()]} — Shift+click to refresh everything`;
 
   let tabsEl: HTMLDivElement | undefined;
   let statusEl: HTMLDivElement | undefined;
@@ -204,7 +228,17 @@ export function Tabs() {
       </Show>
 
       <div class="toolbar-group-right" ref={actionsEl}>
-        <button class="icon-btn" title="Refresh" aria-label="Refresh" onClick={refresh}>
+        {/* Shift+click = refresh everything. Note a keyboard activation reports
+            shiftKey:false in Chrome, so there is no keyboard path to a full
+            refresh — acceptable for a power-user escape hatch. */}
+        <button
+          class="icon-btn"
+          classList={{ 'is-busy': isRefreshing() }}
+          title={refreshLabel()}
+          aria-label={refreshLabel()}
+          disabled={isRefreshing()}
+          onClick={(e) => refresh({ full: e.shiftKey })}
+        >
           <RefreshIcon />
         </button>
         <button

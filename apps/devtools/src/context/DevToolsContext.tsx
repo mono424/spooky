@@ -42,7 +42,19 @@ interface DevToolsContextValue {
   setSelectedQueryHash: (hash: number | null) => void;
   setSelectedTable: (table: string | null) => void;
   clearEvents: () => void;
-  refresh: () => void;
+  /**
+   * Toolbar Refresh. Scoped to the active tab; `{ full: true }` (Shift+click)
+   * refreshes everything. Options bag, not a positional boolean — see the
+   * implementation for why that matters.
+   */
+  refresh: (opts?: { full?: boolean }) => void;
+  /** True while any refresh-driven fetch is in flight (drives the spinner). */
+  isRefreshing: () => boolean;
+  /** Bumped to make the Database tab refetch its list and rows. */
+  dbRefreshNonce: () => number;
+  isFetchingRows: () => boolean;
+  /** Written only by TableView, the sole row fetcher. */
+  setFetchingRows: (value: boolean) => void;
   refreshVersions: () => void;
   fetchTableData: (tableName: string) => void;
   updateTableRow: (tableName: string, recordId: string, updates: Record<string, unknown>) => void;
@@ -123,6 +135,55 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const [isFetchingFlags, setIsFetchingFlags] = createSignal(false);
   const [isMutatingFlag, setIsMutatingFlag] = createSignal<string | null>(null);
   const [mcpStatus, setMcpStatus] = createSignal<McpStatus>({ enabled: false, connected: false, port: 9315 });
+
+  // Bumped by the toolbar Refresh when the Database tab is active. Read by
+  // DatabaseTab's table-list effect and TableView's row-fetch effect. Both are
+  // unmounted while another tab is showing, so a bump then is simply inert —
+  // remounting re-runs them from scratch anyway.
+  const [dbRefreshNonce, setDbRefreshNonce] = createSignal(0);
+  const bumpDbRefresh = () => setDbRefreshNonce((n) => n + 1);
+
+  // Rows are fetched by TableView, but the toolbar spinner needs to know about
+  // them, so the flag lives here. TableView is its only writer.
+  const [isFetchingRows, setFetchingRows] = createSignal(false);
+
+  // Refresh fires several independent page evals that have no guards of their
+  // own (checkSp00ky, refreshVersions). Counted so the button stays busy until
+  // the last one lands.
+  const [refreshPending, setRefreshPending] = createSignal(0);
+  const [minSpin, setMinSpin] = createSignal(false);
+  let minSpinTimer: ReturnType<typeof setTimeout> | undefined;
+  const REFRESH_MIN_SPIN_MS = 400;
+  const REFRESH_OP_TIMEOUT_MS = 20_000;
+
+  /**
+   * Start a refresh op; returns its idempotent `end`.
+   *
+   * The watchdog is not paranoia: `chrome.devtools.inspectedWindow.eval` drops
+   * its callback if the page navigates mid-eval, and `checkSp00kyAvailable` has
+   * no error channel at all — so without it the button would strand disabled
+   * with no way back.
+   */
+  function beginOp(): () => void {
+    setRefreshPending((n) => n + 1);
+    let settled = false;
+    const end = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      setRefreshPending((n) => Math.max(0, n - 1));
+    };
+    const timer = setTimeout(end, REFRESH_OP_TIMEOUT_MS);
+    return end;
+  }
+
+  /** True while anything the toolbar Refresh can trigger is in flight. */
+  const isRefreshing = () =>
+    minSpin() ||
+    refreshPending() > 0 ||
+    isFetchingStorage() ||
+    isFetchingFlags() ||
+    isFetchingRows();
 
   // Custom hooks
   const { requestState, sendMessage } = useChromeConnection({
@@ -249,6 +310,9 @@ export const DevToolsProvider: ParentComponent = (props) => {
         // Clear pending queries on reload
         pendingQueries.forEach(({ reject }) => reject('Page reloaded'));
         pendingQueries.clear();
+        // A navigation orphans any eval callbacks still outstanding, which
+        // would otherwise leave the toolbar spinner stuck until its watchdog.
+        setRefreshPending(0);
         break;
 
       default:
@@ -336,24 +400,35 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
   /**
    * Check if Sp00ky is available on the page
+   *
+   * `onSettled` fires exactly once, on every path, so the toolbar's busy
+   * counter can be released. Note `checkSp00kyAvailable` has no error channel
+   * at all (`useRunInHostPage.ts`), so if the page navigates mid-eval its
+   * callback simply never fires — hence the watchdog in `beginOp`.
    */
-  function checkSp00ky() {
+  function checkSp00ky(onSettled?: () => void) {
+    const done = onSettled ?? (() => {});
     hostPage.checkSp00kyAvailable((available) => {
       console.log('[DevTools] Sp00ky available:', available);
       setIsSp00kyAvailable(available);
 
-      if (available) {
-        hostPage.getSp00kyState(
-          (sp00kyState) => {
-            if (sp00kyState) {
-              updateState(sp00kyState);
-            }
-          },
-          (error) => {
-            console.error('[DevTools] Error getting Sp00ky state:', error);
-          }
-        );
+      if (!available) {
+        done();
+        return;
       }
+
+      hostPage.getSp00kyState(
+        (sp00kyState) => {
+          if (sp00kyState) {
+            updateState(sp00kyState);
+          }
+          done();
+        },
+        (error) => {
+          console.error('[DevTools] Error getting Sp00ky state:', error);
+          done();
+        }
+      );
     });
   }
 
@@ -375,28 +450,88 @@ export const DevToolsProvider: ParentComponent = (props) => {
   }
 
   /**
-   * Refresh state from the page
+   * The toolbar Refresh. Scoped to the active tab; Shift+click does everything.
+   *
+   * `opts` is an options bag rather than a positional boolean on purpose. The
+   * button used to be wired as `onClick={refresh}`, which hands the handler a
+   * MouseEvent — with `refresh(full?: boolean)` that event is truthy, so every
+   * plain click would silently trigger a full refresh (remote version
+   * discovery + a 15s OPFS walk + a 30s remote flag read). `MouseEvent.full` is
+   * undefined, so the worst case here is a scoped refresh. The parameter shape
+   * IS the guard; don't "simplify" it to a boolean.
    */
-  function refresh() {
-    checkSp00ky();
-    // The single top-right Refresh also re-runs backend version discovery so the
-    // Versions tab no longer needs its own (removed) button.
-    refreshVersions();
-    // Note: the table list refreshes via the backend's getState() (checkSp00ky
-    // above), so we don't run the panel's own (unreliable) schema queries here.
-    const currentTable = selectedTable();
-    if (currentTable) {
-      fetchTableData(currentTable);
-    }
-    // Storage snapshot is on-demand; the global Refresh re-fetches it only for
-    // the tab that shows it.
-    if (activeTab() === 'storage') {
+  function refresh(opts?: { full?: boolean }) {
+    const full = opts?.full === true;
+
+    // A page eval round-trips in ~20ms. Without a floor the spinner is a
+    // flicker that reads as "the button did nothing".
+    setMinSpin(true);
+    if (minSpinTimer) clearTimeout(minSpinTimer);
+    minSpinTimer = setTimeout(() => setMinSpin(false), REFRESH_MIN_SPIN_MS);
+
+    if (full) {
+      checkSp00ky(beginOp());
+      refreshVersions(beginOp());
+      bumpDbRefresh();
       void fetchStorageInfo();
-    }
-    // Same on-demand deal for flags: a remote read, only worth it when the
-    // tab that shows it is open.
-    if (activeTab() === 'flags') {
       void fetchFlags();
+      sendMessage({ type: 'GET_MCP_STATUS' });
+      return;
+    }
+
+    refreshScoped(activeTab());
+  }
+
+  /**
+   * One tab's worth of refresh.
+   *
+   * `checkSp00ky()` is the baseline for every tab, not just the cheap ones: it
+   * is a single `window.__00__.getState()` eval (no network, no DB), it is the
+   * only writer of `isSp00kyAvailable()` — which renders the connected dot in
+   * the very toolbar this button lives in — and one call feeds events,
+   * activeQueries, auth, the table list and storage health at once. There is no
+   * tab where skipping it buys anything.
+   *
+   * `refreshVersions()` is deliberately NOT baseline: it is a remote fetch and
+   * irrelevant to eight of the nine tabs.
+   *
+   * Keep in sync with REFRESH_SCOPE in components/Tabs.tsx, which is the
+   * user-facing description of exactly this mapping.
+   */
+  function refreshScoped(tab: TabType) {
+    checkSp00ky(beginOp());
+
+    switch (tab) {
+      case 'events':
+      case 'queries':
+      case 'timing':
+      case 'auth':
+        // Fully covered by the baseline — all four render slices of getState().
+        break;
+      case 'database':
+        // Table list (DatabaseTab's effect) and rows (TableView's effect).
+        bumpDbRefresh();
+        break;
+      case 'storage':
+        void fetchStorageInfo();
+        break;
+      case 'flags':
+        void fetchFlags();
+        break;
+      case 'versions':
+        refreshVersions(beginOp());
+        break;
+      case 'mcp':
+        // Otherwise requested exactly once, at onConnect — so a bridge that
+        // connects after the panel opened shows a stale badge until reopen.
+        sendMessage({ type: 'GET_MCP_STATUS' });
+        break;
+      default: {
+        // Adding a TabType member without deciding what Refresh does for it is
+        // a compile error here (and in REFRESH_SCOPE), not a silent default.
+        const exhaustive: never = tab;
+        void exhaustive;
+      }
     }
   }
 
@@ -405,7 +540,8 @@ export const DevToolsProvider: ParentComponent = (props) => {
    * re-fetches the ssp/scheduler/surrealdb versions and posts a state change,
    * which arrives back through the normal SP00KY_STATE_CHANGED channel.
    */
-  function refreshVersions() {
+  function refreshVersions(onSettled?: () => void) {
+    const done = onSettled ?? (() => {});
     hostPage.run(
       `(async function() {
         if (window.__00__ && window.__00__.refreshVersions) {
@@ -415,7 +551,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
         return { success: false };
       })()`,
       {
-        onError: (error) => console.error('[DevTools] Error refreshing versions:', error),
+        onSuccess: () => done(),
+        onError: (error) => {
+          console.error('[DevTools] Error refreshing versions:', error);
+          done();
+        },
       }
     );
   }
@@ -899,6 +1039,10 @@ export const DevToolsProvider: ParentComponent = (props) => {
     setSelectedTable,
     clearEvents,
     refresh,
+    isRefreshing,
+    dbRefreshNonce,
+    isFetchingRows,
+    setFetchingRows,
     refreshVersions,
     fetchTableData,
     updateTableRow,

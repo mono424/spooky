@@ -360,6 +360,34 @@ body {
   outline: 1px solid var(--sys-color-primary);
   outline-offset: -1px;
 }
+/* Disabled must also neutralise :hover above, or a disabled button still
+   lights up under the cursor. */
+.icon-btn:disabled {
+  color: var(--sys-color-outline-variant);
+  cursor: default;
+}
+.icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--sys-color-outline-variant);
+}
+
+/* Busy state for the toolbar Refresh. The icon is already a circular arrow, so
+   spinning it is the whole affordance — no separate spinner element. */
+@keyframes dt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.icon-btn.is-busy svg {
+  transform-origin: 50% 50%;
+  animation: dt-spin 0.9s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn.is-busy svg {
+    animation: none;
+    opacity: 0.55;
+  }
+}
 
 /* Tab overflow (») — collapses tabs that don't fit into a popup menu */
 .tab-overflow {
@@ -1242,11 +1270,8 @@ body {
   width: 20px;
   height: 18px;
 }
-.db-toolbar-right .icon-btn:disabled {
-  color: var(--sys-color-outline-variant);
-  background: transparent;
-  cursor: default;
-}
+/* The disabled styling that used to live here is now the global
+   `.icon-btn:disabled` rule. */
 .db-toolbar-pages {
   font-family: var(--sys-typescale-label-font);
   font-size: 10px;
@@ -2532,7 +2557,6 @@ body {
   font-size: var(--sys-typescale-monospace-size);
 }
 
-.storage-refresh-btn,
 .storage-persist-btn {
   font-family: var(--sys-typescale-label-font);
   font-size: var(--sys-typescale-label-size);
@@ -2543,11 +2567,9 @@ body {
   padding: 2px 10px;
   cursor: pointer;
 }
-.storage-refresh-btn:hover,
 .storage-persist-btn:hover {
   background: var(--sys-color-state-focus, var(--sys-color-state-hover));
 }
-.storage-refresh-btn:disabled,
 .storage-persist-btn:disabled {
   opacity: 0.5;
   cursor: default;

@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on } from 'solid-js';
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from 'solid-js';
 import { useDevTools } from '../../context/DevToolsContext';
 import { escapeHtml } from '../../utils/html';
 import { Cell } from './Cell';
@@ -33,15 +33,6 @@ function CloseIcon() {
     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
       <line x1="6" y1="6" x2="18" y2="18"></line>
       <line x1="18" y1="6" x2="6" y2="18"></line>
-    </svg>
-  );
-}
-
-/** Chrome-style circular refresh arrow. */
-function RefreshIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-      <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
     </svg>
   );
 }
@@ -101,14 +92,13 @@ interface TableViewProps {
 }
 
 export function TableView(props: TableViewProps) {
-  const { selectedTable, setSelectedTable, runQuery } = useDevTools();
+  const { selectedTable, setSelectedTable, runQuery, dbRefreshNonce, isFetchingRows, setFetchingRows } =
+    useDevTools();
   // Filter and source are now props
 
   // Row inspected in the bottom JSON pane
   const [inspectedRow, setInspectedRow] = createSignal<Record<string, unknown> | null>(null);
   const [copied, setCopied] = createSignal(false);
-  // Bumped by the toolbar refresh button to re-run the fetch effect.
-  const [refreshTick, setRefreshTick] = createSignal(0);
 
   const copyInspected = async () => {
     const row = inspectedRow();
@@ -132,16 +122,28 @@ export function TableView(props: TableViewProps) {
     on([selectedTable, () => props.source, limit], () => setPage(1), { defer: true })
   );
 
+  // Monotonic id for the in-flight fetch. Re-running the effect (refresh, paging,
+  // switching table/source) starts a new batch while the previous one may still
+  // be resolving, and the two are NOT ordered: without this guard a slow earlier
+  // batch can land after a fast later one and overwrite fresh rows with stale
+  // ones, and its `allSettled` clears the toolbar spinner while the current
+  // fetch is still running. Stale batches drop their results on the floor.
+  let fetchGeneration = 0;
+
   // Fetch table data when a table is selected, source/page/limit changes, or refresh clicked
   createEffect(() => {
     const table = selectedTable();
     const currentSource = props.source;
     const currentLimit = limit();
     const currentPage = page();
-    refreshTick();
+    // Read before the `if (table && ...)` guard below so the effect stays
+    // subscribed to the toolbar Refresh even with no table selected.
+    dbRefreshNonce();
     setInspectedRow(null); // close the JSON pane when the table/source changes
     if (table && runQuery) {
-      setLoading(true);
+      const run = ++fetchGeneration;
+      const isStale = () => run !== fetchGeneration;
+      setFetchingRows(true);
       const start = (currentPage - 1) * currentLimit;
       console.log('[TableView] Triggering query for table:', table, 'Source:', currentSource);
       const dataPromise = runQuery(
@@ -149,11 +151,13 @@ export function TableView(props: TableViewProps) {
         currentSource
       )
         .then((result: any) => {
+          if (isStale()) return undefined;
           console.log('[TableView] Query result:', result);
           setData(unwrapQueryResult(result) as Record<string, unknown>[]);
           return undefined;
         })
         .catch((err) => {
+          if (isStale()) return;
           console.error('[TableView] Query Error:', err);
           let msg =
             err instanceof Error
@@ -169,21 +173,27 @@ export function TableView(props: TableViewProps) {
         });
       const countPromise = runQuery(`SELECT count() FROM ${table} GROUP ALL`, currentSource)
         .then((result: any) => {
+          if (isStale()) return undefined;
           const rows = unwrapQueryResult(result) as Array<{ count?: unknown }>;
           const count = rows[0]?.count;
           setTotal(typeof count === 'number' ? count : null);
           return undefined;
         })
         .catch((err) => {
+          if (isStale()) return;
           console.error('[TableView] Count Query Error:', err);
           setTotal(null);
         });
-      Promise.allSettled([dataPromise, countPromise]).then(() => setLoading(false));
+      Promise.allSettled([dataPromise, countPromise]).then(() => {
+        if (!isStale()) setFetchingRows(false);
+        return undefined;
+      });
     }
   });
 
   const [data, setData] = createSignal<Record<string, unknown>[]>([]);
-  const [loading, setLoading] = createSignal(false);
+  // Unmounting mid-query would otherwise leave the toolbar spinner running.
+  onCleanup(() => setFetchingRows(false));
 
   const totalPages = createMemo(() => {
     const t = total();
@@ -254,7 +264,7 @@ export function TableView(props: TableViewProps) {
           when={selectedTable()}
           fallback={<div class="empty-state">Select a table to view data</div>}
         >
-          <Show when={!loading()} fallback={<div class="empty-state">Loading...</div>}>
+          <Show when={!isFetchingRows()} fallback={<div class="empty-state">Loading...</div>}>
             {/* Only render the table when there are rows. Otherwise the <thead>
                 would paint a lone actions-column strip (the "weird bar") when
                 the table has no rows / no known fields, so show the empty state
@@ -336,16 +346,9 @@ export function TableView(props: TableViewProps) {
         </div>
       </Show>
 
+      {/* Refresh lives in the top toolbar now — it re-runs this view's fetch
+          via `dbRefreshNonce`. */}
       <div class="db-toolbar">
-        <button
-          class="icon-btn"
-          title="Refresh"
-          aria-label="Refresh"
-          onClick={() => setRefreshTick((t) => t + 1)}
-        >
-          <RefreshIcon />
-        </button>
-        <div class="db-toolbar-sep" />
         <input
           class="dt-filter-input db-toolbar-filter"
           type="text"
@@ -404,7 +407,7 @@ export function TableView(props: TableViewProps) {
               <ChevronRightIcon />
             </button>
             <div class="db-toolbar-sep" />
-            <Show when={!loading()}>
+            <Show when={!isFetchingRows()}>
               <span class="db-toolbar-count">
                 <Show
                   when={total() !== null}

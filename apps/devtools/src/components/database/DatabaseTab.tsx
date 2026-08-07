@@ -6,7 +6,7 @@ import { getPref, setPref } from '../../utils/prefs';
 import { useDevTools } from '../../context/DevToolsContext';
 
 export function DatabaseTab() {
-  const { state, fetchTables, isSp00kyAvailable } = useDevTools();
+  const { state, fetchTables, isSp00kyAvailable, dbRefreshNonce } = useDevTools();
   const [filter, setFilter] = createSignal('');
   const [source, setSource] = createSignal<'local' | 'remote'>('local'); // Default to local
   const [error, setError] = createSignal<string | null>(null);
@@ -29,6 +29,9 @@ export function DatabaseTab() {
   // makes this effect re-run once detection completes, so the tables show up
   // without a manual reload.
   createEffect(() => {
+    // Read the nonce above the availability guard, or the effect would be left
+    // unsubscribed from the toolbar Refresh whenever the page is disconnected.
+    dbRefreshNonce();
     if (!isSp00kyAvailable()) return;
     void fetchTables?.(source());
   });
