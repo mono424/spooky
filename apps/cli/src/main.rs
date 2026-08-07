@@ -267,10 +267,24 @@ enum Commands {
         #[arg(long, hide = true)]
         service: Option<String>,
     },
-    /// Restart the scheduler and SSP containers for the current deployment.
-    /// Backends and frontends are left untouched. Pass --surreal to also
-    /// bounce the SurrealDB container.
+    /// Restart deployment containers. With no target: the scheduler and SSPs,
+    /// leaving backends and frontends untouched.
+    ///
+    /// Targets are roles (`db`/`surrealdb`, `scheduler`, `ssp`, `frontend`) or
+    /// the name of a single app from sp00ky.yml:
+    ///
+    ///   spky restart               # scheduler + SSPs
+    ///   spky restart db            # SurrealDB only
+    ///   spky restart gameanalysis  # one backend
+    ///   spky restart ssp scheduler # several roles
+    #[command(verbatim_doc_comment)]
     Restart {
+        /// Roles and/or app names to restart. Omit for scheduler + SSPs.
+        #[arg(value_name = "TARGET")]
+        targets: Vec<String>,
+        /// Restart every backend app.
+        #[arg(long)]
+        all_backends: bool,
         /// Also wipe the scheduler's persistent volume. Use after
         /// scheduler state corruption. Does NOT touch SurrealDB data.
         #[arg(long)]
@@ -281,6 +295,7 @@ enum Commands {
         /// Also restart the SurrealDB container. This is a process restart,
         /// not a wipe: data on the volume is preserved, but the whole
         /// deployment is briefly unavailable while SurrealDB comes back up.
+        /// Equivalent to adding `db` to the targets.
         #[arg(long, visible_alias = "db")]
         surreal: bool,
     },
@@ -3008,10 +3023,12 @@ fn main() -> Result<()> {
             service,
         }),
         Some(Commands::Restart {
+            targets,
+            all_backends,
             clean,
             upgrade,
             surreal,
-        }) => cloud::restart(clean, upgrade, surreal),
+        }) => cloud::restart(targets, all_backends, clean, upgrade, surreal),
         Some(Commands::Push) => cloud::push(),
         Some(Commands::Scale { action }) => match action {
             ScaleCommands::Ssp { count } => cloud::scale(count),

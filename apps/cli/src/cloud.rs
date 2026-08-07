@@ -4636,16 +4636,168 @@ pub(crate) fn push_schema_inner(client: &mut CloudClient, slug: &str, pid: &str)
     Ok(())
 }
 
-pub fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
+/// Role targets a user may name, and the role they map to. `db` is the alias
+/// worth having: nobody thinks of the database as "surrealdb" when it is down.
+const RESTART_ROLE_ALIASES: &[(&str, &str)] = &[
+    ("db", "surrealdb"),
+    ("database", "surrealdb"),
+    ("surrealdb", "surrealdb"),
+    ("surreal", "surrealdb"),
+    ("scheduler", "scheduler"),
+    ("ssp", "ssp"),
+    ("ssps", "ssp"),
+    ("backend", "backend"),
+    ("backends", "backend"),
+    ("frontend", "frontend"),
+    ("frontends", "frontend"),
+];
+
+/// App names running in the deployment, mapped to the role that hosts them.
+///
+/// Read from `vms[].metadata.app_name` — the very column the control plane
+/// filters on — so a name that resolves here is a name the server can match.
+/// Anything else is rejected locally rather than queued as a restart that
+/// would stop nothing and still report success.
+fn deployed_apps(data: &serde_json::Value) -> std::collections::BTreeMap<String, String> {
+    let mut apps = std::collections::BTreeMap::new();
+    if let Some(vms) = data.get("vms").and_then(|v| v.as_array()) {
+        for vm in vms {
+            // Only live rows: a stopped VM from a superseded deployment is not
+            // something a restart can act on.
+            if !matches!(
+                vm.get("status").and_then(|v| v.as_str()),
+                Some("running") | Some("starting") | Some("pending")
+            ) {
+                continue;
+            }
+            let name = vm
+                .get("metadata")
+                .and_then(|m| m.get("app_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let role = vm.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            if !name.is_empty() && !role.is_empty() {
+                apps.insert(name.to_string(), role.to_string());
+            }
+        }
+    }
+    apps
+}
+
+/// Whether the control plane can act on per-role / per-app restart targets.
+///
+/// Probed from `/health`'s `features` list rather than inferred from the
+/// restart response, because by the time a response comes back the restart is
+/// already queued — and an older control plane would have queued the wrong one.
+fn cloud_supports_restart_targets(client: &mut CloudClient) -> bool {
+    let Ok(resp) = client.get("/health") else {
+        // Unreachable /health is not evidence of an old control plane, and
+        // failing closed here would block restarts during exactly the kind of
+        // incident they exist for. The POST below surfaces a real outage.
+        return true;
+    };
+    let Ok(body) = resp.into_json::<serde_json::Value>() else {
+        return true;
+    };
+    match body.get("features").and_then(|f| f.as_array()) {
+        Some(features) => features
+            .iter()
+            .any(|f| f.as_str() == Some("restart_targets")),
+        // No `features` key at all ⇒ a build older than capability reporting.
+        None => false,
+    }
+}
+
+pub fn restart(
+    targets: Vec<String>,
+    all_backends: bool,
+    clean: bool,
+    upgrade: bool,
+    surreal: bool,
+) -> Result<()> {
     let creds = require_credentials()?;
     let mut client = CloudClient::new(&creds);
     let (slug, pid) = resolve_project_id(&mut client)?;
 
-    // Restarting SurrealDB takes the whole deployment offline for a few
-    // seconds, so confirm before pulling the trigger.
+    let mut roles: std::collections::BTreeSet<String> = Default::default();
+    let mut apps: std::collections::BTreeSet<String> = Default::default();
     if surreal {
+        roles.insert("surrealdb".to_string());
+    }
+    if all_backends {
+        roles.insert("backend".to_string());
+    }
+
+    if !targets.is_empty() {
+        // Only fetch when there is something to resolve, so the default
+        // `spky restart` keeps working even if /deployment is unhappy.
+        let data: serde_json::Value = client
+            .get(&format!("/v1/projects/{}/deployment", pid))?
+            .into_json()
+            .context("Failed to parse deployment response")?;
+        let known = deployed_apps(&data);
+
+        for target in &targets {
+            let key = target.to_ascii_lowercase();
+            // Roles win over app names. The two namespaces only collide if an
+            // app is literally called "scheduler" or "ssp", and resolving that
+            // to the infra role is both the safer reading and the stable one.
+            if let Some((_, role)) = RESTART_ROLE_ALIASES.iter().find(|(a, _)| *a == key) {
+                roles.insert((*role).to_string());
+                continue;
+            }
+            match known.get(&key) {
+                // Only the app, never its role: roles and apps are additive on
+                // the server, so adding `backend` here would restart every
+                // backend instead of the one that was named.
+                Some(_role) => {
+                    apps.insert(key);
+                }
+                None => {
+                    let mut valid: Vec<String> =
+                        RESTART_ROLE_ALIASES.iter().map(|(a, _)| a.to_string()).collect();
+                    valid.dedup();
+                    anyhow::bail!(
+                        "Unknown restart target '{}' for '{}'.\n  roles: {}\n  apps:  {}",
+                        target,
+                        slug,
+                        valid.join(", "),
+                        if known.is_empty() {
+                            "(none running)".to_string()
+                        } else {
+                            known.keys().cloned().collect::<Vec<_>>().join(", ")
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    // Check the control plane understands targeting BEFORE queueing anything.
+    // An older build accepts `roles`/`apps`, ignores them, and queues the
+    // historical scheduler+SSP restart — so detecting this from the response
+    // would mean the wrong restart is already in flight.
+    let targeted = !roles.is_empty() || !apps.is_empty();
+    if targeted && !cloud_supports_restart_targets(&mut client) {
+        anyhow::bail!(
+            "This Sp00ky Cloud control plane does not support targeted restarts yet, \
+             and would restart the scheduler + SSPs instead of: {}\n  \
+             Upgrade the control plane, or use `spky restart` (scheduler + SSPs) \
+             / `spky restart --surreal` explicitly.",
+            {
+                let mut parts: Vec<String> = roles.iter().cloned().collect();
+                parts.extend(apps.iter().cloned());
+                parts.join(" + ")
+            }
+        );
+    }
+
+    // Restarting SurrealDB takes the whole deployment offline for a few
+    // seconds, so confirm before pulling the trigger. A single backend does
+    // not warrant a prompt — that is the whole point of naming one.
+    if roles.contains("surrealdb") {
         let confirmed = inquire::Confirm::new(&format!(
-            "Also restart SurrealDB for '{}'? The deployment will be briefly unavailable (data is preserved).",
+            "Restart SurrealDB for '{}'? The deployment will be briefly unavailable (data is preserved).",
             slug
         ))
         .with_default(false)
@@ -4658,10 +4810,15 @@ pub fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
         }
     }
 
-    let targets = if surreal {
-        "scheduler + SSPs + SurrealDB"
+    // Roles and apps are additive, so the summary is simply both lists. Empty
+    // means neither was named, which the control plane resolves to the
+    // historical scheduler+SSP set.
+    let mut parts: Vec<String> = roles.iter().cloned().collect();
+    parts.extend(apps.iter().cloned());
+    let summary = if parts.is_empty() {
+        "scheduler + SSPs".to_string()
     } else {
-        "scheduler + SSPs"
+        parts.join(" + ")
     };
     let mut flags = Vec::new();
     if clean {
@@ -4675,13 +4832,21 @@ pub fn restart(clean: bool, upgrade: bool, surreal: bool) -> Result<()> {
     } else {
         format!(" ({})", flags.join(", "))
     };
-    println!("Restarting {} for '{}'{}...", targets, slug, suffix);
+    println!("Restarting {} for '{}'{}...", summary, slug, suffix);
 
-    let resp = client.post(
-        &format!("/v1/projects/{}/restart", pid),
-        &serde_json::json!({ "clean": clean, "upgrade": upgrade, "surreal": surreal }),
-    )?;
+    let mut body = serde_json::json!({ "clean": clean, "upgrade": upgrade, "surreal": surreal });
+    // Omit both when empty so the request stays byte-identical to what older
+    // CLIs sent, and the control plane's historical default applies.
+    if !roles.is_empty() {
+        body["roles"] = serde_json::json!(roles.iter().cloned().collect::<Vec<_>>());
+    }
+    if !apps.is_empty() {
+        body["apps"] = serde_json::json!(apps.iter().cloned().collect::<Vec<_>>());
+    }
+
+    let resp = client.post(&format!("/v1/projects/{}/restart", pid), &body)?;
     let _: serde_json::Value = resp.into_json().context("Failed to parse response")?;
+
     // The API only queues the request; the worker stops and recreates the
     // containers itself so there is a single writer of container lifecycle.
     println!("  Restart queued. Worker will recreate the containers shortly.");
