@@ -47,7 +47,7 @@ import type { RecordWithId } from './modules/cache/index';
 import { CrdtManager, CrdtField } from './modules/crdt/index';
 import { preloadLoro } from './modules/crdt/loro-loader';
 import { FeatureFlagModule, FeatureFlagHandle } from './modules/feature-flag/index';
-import type { FeatureFlagOptions } from './modules/feature-flag/index';
+import type { FeatureFlagOptions, FeatureFlagOverride } from './modules/feature-flag/index';
 import { AppReleaseModule, AppReleaseHandle } from './modules/app-release/index';
 import type { AppReleaseOptions } from './modules/app-release/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
@@ -464,6 +464,11 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.auth,
       this.dataModule
     );
+
+    // Let the DevTools Flags tab read and write local flag overrides. Done
+    // here rather than via the constructor because FeatureFlagModule is built
+    // above and DevToolsService takes its deps positionally.
+    this.devTools.setFeatureFlagOverrides(this.featureFlags);
 
     // Register DevTools as a receiver for stream updates
     this.streamProcessor.addReceiver(this.devTools);
@@ -1045,6 +1050,31 @@ export class Sp00kyClient<S extends SchemaStructure> {
    */
   feature(key: string, options?: FeatureFlagOptions): FeatureFlagHandle {
     return this.featureFlags.feature(key, options);
+  }
+
+  /**
+   * Force a feature flag to `variant` in THIS browser only; `null` clears it.
+   *
+   * Nothing is sent to the server — the `_00_user_feature` assignment is
+   * untouched, so clearing restores whatever the server says. Persisted to
+   * localStorage, survives reloads, and applies while signed out. Backs the
+   * DevTools Flags tab, and is a convenient hook for tests.
+   *
+   * To change a flag for OTHER users you need admin rights (`spky admin add`)
+   * and the DevTools Flags tab, or `spky flag`.
+   */
+  setFeatureOverride(key: string, variant: string | null, payload?: unknown): void {
+    this.featureFlags.setLocalOverride(key, variant, payload);
+  }
+
+  /** Drop every local feature flag override set via `setFeatureOverride`. */
+  clearFeatureOverrides(): void {
+    this.featureFlags.clearLocalOverrides();
+  }
+
+  /** The local feature flag overrides currently in effect, keyed by flag. */
+  getFeatureOverrides(): Record<string, FeatureFlagOverride> {
+    return this.featureFlags.getLocalOverrides();
   }
 
   /**

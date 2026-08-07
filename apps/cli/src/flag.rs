@@ -2,9 +2,13 @@
 //!
 //! Writes flag definitions to `_00_feature_flag` and materializes per-user
 //! assignments into `_00_user_feature` by running the evaluator in-process.
-//! Both tables are root-only (PERMISSIONS NONE on definitions, NONE on
-//! create/update/delete for assignments), so clients cannot self-enable or
-//! see other users' rows.
+//!
+//! Ordinary clients can neither read the definitions nor write assignments:
+//! `_00_feature_flag` is invisible to them and `_00_user_feature` is
+//! read-your-own. Users listed in `_00_admin` (see `spky admin`) are the one
+//! exception — they can flip `enabled` and edit allowlist rules from the
+//! DevTools panel via `fn::feature::materialize`. Flag creation and deletion
+//! stay root-only, i.e. this command.
 //!
 //! The percentage-rollout hash here must match `fn::feature::hash` in
 //! `apps/cli/src/meta_tables_remote.surql`. Both sides take the first 8
@@ -75,7 +79,7 @@ pub fn run(action: FlagCommands) -> Result<()> {
 // Connection
 // =============================================================
 
-fn client_from(conn: ConnectionArgs, config: Option<PathBuf>) -> Result<SurrealClient> {
+pub(crate) fn client_from(conn: ConnectionArgs, config: Option<PathBuf>) -> Result<SurrealClient> {
     // `--cloud` resolves the deployment's SurrealDB URL + root password from
     // Sp00ky Cloud; otherwise the local URL/ns/db come from sp00ky.yml.
     let c = conn.resolve(&config)?;
@@ -92,11 +96,11 @@ fn client_from(conn: ConnectionArgs, config: Option<PathBuf>) -> Result<SurrealC
 // SurrealQL helpers
 // =============================================================
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
-fn first_row(responses: Vec<SurrealResponse>) -> Option<Value> {
+pub(crate) fn first_row(responses: Vec<SurrealResponse>) -> Option<Value> {
     let first = responses.into_iter().next()?;
     let result = first.result?;
     match result {
@@ -105,7 +109,7 @@ fn first_row(responses: Vec<SurrealResponse>) -> Option<Value> {
     }
 }
 
-fn rows(responses: Vec<SurrealResponse>) -> Vec<Value> {
+pub(crate) fn rows(responses: Vec<SurrealResponse>) -> Vec<Value> {
     let first = match responses.into_iter().next() {
         Some(r) => r,
         None => return vec![],
@@ -126,7 +130,7 @@ fn load_flag(client: &SurrealClient, key: &str) -> Result<Value> {
     first_row(resp).ok_or_else(|| anyhow!("Flag '{}' not found", key))
 }
 
-fn load_user_id(client: &SurrealClient, who: &str) -> Result<String> {
+pub(crate) fn load_user_id(client: &SurrealClient, who: &str) -> Result<String> {
     if who.starts_with("user:") {
         return Ok(who.to_string());
     }

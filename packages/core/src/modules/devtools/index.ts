@@ -23,6 +23,7 @@ import {
   UNAVAILABLE,
 } from './versions';
 import { walkOpfs, type BlobCacheInfo, type SharedTabsInfo, type StorageInfo } from './storage-info';
+import { FlagsAdminService, type LocalOverrideStore } from './flags';
 
 // Real bundled frontend versions, injected at build time by tsdown's
 // version-define plugin (see tsdown.config.ts). The `typeof` guard keeps these
@@ -85,6 +86,12 @@ export class DevToolsService implements StreamUpdateReceiver {
   private localTablesFetching = false;
   private localTablesAt = 0;
 
+  // Feature flag admin, backing the panel's Flags tab. The local-override
+  // store is injected later (`setFeatureFlagOverrides`) because the
+  // FeatureFlagModule is built after this service.
+  private featureOverrides: LocalOverrideStore | null = null;
+  private readonly flagsAdmin: FlagsAdminService;
+
   constructor(
     private databaseService: LocalStore,
     private remoteDatabaseService: RemoteDatabaseService,
@@ -93,6 +100,18 @@ export class DevToolsService implements StreamUpdateReceiver {
     private authService: AuthService<SchemaStructure>,
     private dataManager?: DataModule<SchemaStructure>
   ) {
+    this.flagsAdmin = new FlagsAdminService({
+      remote: this.remoteDatabaseService,
+      local: this.databaseService,
+      logger: this.logger,
+      currentUserId: () => {
+        const id = this.authService.currentUser?.id;
+        if (!id) return null;
+        return id instanceof RecordId ? encodeRecordId(id) : String(id);
+      },
+      overrides: () => this.featureOverrides,
+    });
+
     this.exposeToWindow();
 
     // Stay dormant until a devtools consumer announces itself. The extension's
@@ -525,11 +544,33 @@ export class DevToolsService implements StreamUpdateReceiver {
     return data;
   }
 
+  /**
+   * Hand the FeatureFlagModule to the Flags tab so it can read and write local
+   * overrides. Called from `Sp00kyClient` once both are constructed; until then
+   * the override methods are no-ops that report an empty map.
+   */
+  public setFeatureFlagOverrides(store: LocalOverrideStore): void {
+    this.featureOverrides = store;
+  }
+
   private exposeToWindow() {
     if (typeof window !== 'undefined') {
       (window as any).__00__ = {
         version: this.version,
         getState: () => this.getState(),
+        // ---- Feature flags (Flags tab) --------------------------------
+        // Remote reads/writes are admin-gated by SurrealDB, not here: a
+        // non-admin gets an empty flag list, and the `fn::feature::*` calls
+        // are denied outright. The override methods are purely local and
+        // work signed out.
+        getFlags: () => this.flagsAdmin.getFlags(),
+        setFlagEnabled: (key: string, enabled: boolean) =>
+          this.flagsAdmin.setFlagEnabled(key, enabled),
+        setFlagUserVariant: (key: string, variant: string, remove: boolean, userId?: string) =>
+          this.flagsAdmin.setFlagUserVariant(key, variant, remove, userId),
+        setLocalFlagOverride: (key: string, variant: string | null, payload?: unknown) =>
+          this.flagsAdmin.setLocalFlagOverride(key, variant, payload),
+        clearLocalFlagOverrides: () => this.flagsAdmin.clearLocalFlagOverrides(),
         clearHistory: () => {
           this.eventsHistory = [];
           this.notifyDevTools();

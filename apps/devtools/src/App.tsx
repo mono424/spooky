@@ -8,6 +8,7 @@ import { TimingTab } from './components/timing/TimingTab';
 import { DatabaseTab } from './components/database/DatabaseTab';
 import { StorageTab } from './components/storage/StorageTab';
 import { AuthTab } from './components/auth/AuthTab';
+import { FlagsTab } from './components/flags/FlagsTab';
 import { VersionsTab } from './components/versions/VersionsTab';
 import { McpTab } from './components/mcp/McpTab';
 
@@ -53,6 +54,12 @@ function AppContent() {
         <div class="tab-content" classList={{ active: activeTab() === 'auth' }}>
           <Show when={activeTab() === 'auth'}>
             <AuthTab />
+          </Show>
+        </div>
+
+        <div class="tab-content" classList={{ active: activeTab() === 'flags' }}>
+          <Show when={activeTab() === 'flags'}>
+            <FlagsTab />
           </Show>
         </div>
 

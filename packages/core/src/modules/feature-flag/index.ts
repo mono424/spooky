@@ -13,6 +13,12 @@ import type { QueryTimeToLive } from '../../types';
 // fallback. Avoids one-registration-per-flag and the param-filtered live query.
 const FEATURE_QUERY = 'SELECT key, variant, payload FROM _00_user_feature';
 
+// Local overrides live on the PAGE origin, so they survive reloads and are
+// shared across tabs of the app. Deliberately not the DevTools panel's own
+// storage — the panel runs on a different origin and would get a separate
+// bucket.
+const OVERRIDE_STORAGE_KEY = 'sp00ky:feature-overrides';
+
 interface FeatureRow {
   key?: string;
   variant?: string;
@@ -27,6 +33,16 @@ export interface FeatureFlagSnapshot {
 export interface FeatureFlagOptions {
   fallback?: string;
   ttl?: QueryTimeToLive;
+}
+
+/**
+ * A locally forced variant. Applies to THIS browser only and is never sent to
+ * the server — the assignment in `_00_user_feature` is untouched, so clearing
+ * the override restores whatever the server says.
+ */
+export interface FeatureFlagOverride {
+  variant: string;
+  payload?: unknown;
 }
 
 export class FeatureFlagHandle {
@@ -114,9 +130,15 @@ export class FeatureFlagModule<S extends SchemaStructure> {
   // back). `snapshots` only holds ASSIGNED keys; an absent key → fallback.
   private snapshots = new Map<string, FeatureFlagSnapshot>();
   private loaded = false;
+  // Developer-forced variants, this browser only. Take precedence over the
+  // server assignment for every read path.
+  private overrides = new Map<string, FeatureFlagOverride>();
 
   constructor(private deps: FeatureFlagModuleDeps<S>) {
     this.logger = deps.logger.child({ service: 'FeatureFlagModule' });
+    // Loaded in the constructor rather than `init()` so an override applies
+    // even when `client.feature()` is called before auth resolves.
+    this.loadOverrides();
   }
 
   init(): void {
@@ -135,8 +157,10 @@ export class FeatureFlagModule<S extends SchemaStructure> {
     if (options.ttl) this.ttl = options.ttl;
     // If the shared query already resolved, seed this handle immediately so a
     // late `feature()` call doesn't flash the fallback for an assigned key.
-    if (this.loaded) {
-      handle.set(this.snapshots.get(key) ?? { variant: undefined, payload: undefined });
+    // An override seeds it too, even before the first result: forcing a
+    // variant should take effect instantly, not one round trip later.
+    if (this.loaded || this.overrides.has(key)) {
+      handle.set(this.resolve(key));
     }
     void this.ensureStarted();
     return handle;
@@ -155,8 +179,10 @@ export class FeatureFlagModule<S extends SchemaStructure> {
     this.loaded = false;
     this.snapshots.clear();
     // Clear handles immediately so a sign-out hides flag-gated UI without lag.
+    // `resolve` keeps any local override in place across the switch — it is a
+    // developer setting for this browser, not part of the session.
     for (const handle of this.handles) {
-      handle.set({ variant: undefined, payload: undefined });
+      handle.set(this.resolve(handle.key));
     }
     await this.ensureStarted();
   }
@@ -202,8 +228,81 @@ export class FeatureFlagModule<S extends SchemaStructure> {
       }
     }
     this.loaded = true;
-    for (const handle of this.handles) {
-      handle.set(this.snapshots.get(handle.key) ?? { variant: undefined, payload: undefined });
+    this.pushAll();
+  }
+
+  // ===========================================================
+  // Local overrides (this browser only)
+  // ===========================================================
+
+  /**
+   * Force `key` to `variant` in THIS browser. Pass `null` to clear.
+   *
+   * Nothing is written to the server: the `_00_user_feature` assignment is
+   * untouched, so clearing restores whatever the server says. Persisted to
+   * localStorage on the page origin, so it survives a reload.
+   */
+  setLocalOverride(key: string, variant: string | null, payload?: unknown): void {
+    if (variant === null) this.overrides.delete(key);
+    else this.overrides.set(key, { variant, payload });
+    this.persistOverrides();
+    this.pushAll();
+  }
+
+  clearLocalOverrides(): void {
+    this.overrides.clear();
+    this.persistOverrides();
+    this.pushAll();
+  }
+
+  getLocalOverrides(): Record<string, FeatureFlagOverride> {
+    return Object.fromEntries(this.overrides);
+  }
+
+  /** The assignment for `key`, with any local override taking precedence. */
+  private resolve(key: string): FeatureFlagSnapshot {
+    const override = this.overrides.get(key);
+    if (override) return { variant: override.variant, payload: override.payload };
+    return this.snapshots.get(key) ?? { variant: undefined, payload: undefined };
+  }
+
+  private pushAll(): void {
+    for (const handle of this.handles) handle.set(this.resolve(handle.key));
+  }
+
+  private loadOverrides(): void {
+    try {
+      const raw = globalThis.localStorage?.getItem(OVERRIDE_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, FeatureFlagOverride>;
+      for (const [key, value] of Object.entries(parsed ?? {})) {
+        if (value && typeof value.variant === 'string') this.overrides.set(key, value);
+      }
+    } catch (err) {
+      // Best-effort: a corrupt or unavailable store must never stop the
+      // client from booting. Same posture as the DevTools prefs helper.
+      this.logger.warn(
+        { err, Category: 'sp00ky-client::FeatureFlagModule::loadOverrides' },
+        'Failed to read local feature flag overrides',
+      );
+    }
+  }
+
+  private persistOverrides(): void {
+    try {
+      if (this.overrides.size === 0) {
+        globalThis.localStorage?.removeItem(OVERRIDE_STORAGE_KEY);
+        return;
+      }
+      globalThis.localStorage?.setItem(
+        OVERRIDE_STORAGE_KEY,
+        JSON.stringify(this.getLocalOverrides()),
+      );
+    } catch (err) {
+      this.logger.warn(
+        { err, Category: 'sp00ky-client::FeatureFlagModule::persistOverrides' },
+        'Failed to persist local feature flag overrides',
+      );
     }
   }
 }
