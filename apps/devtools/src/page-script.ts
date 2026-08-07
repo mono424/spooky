@@ -139,6 +139,69 @@
     }
   });
 
+  // Feature flags (Flags tab). Same shape as SP00KY_STORAGE_OP: one listener,
+  // an `op` discriminator, and `args` passed as a JSON object rather than
+  // concatenated into the eval string — flag keys and user record ids come
+  // from the database, so they must never become code.
+  window.addEventListener('SP00KY_FLAG_OP', async (event: any) => {
+    const { requestId, op, args } = event.detail;
+    const sp00ky = (window as any).__00__;
+
+    const respond = (payload: { success: boolean; data?: any; error?: string }) => {
+      window.postMessage(
+        {
+          type: 'SP00KY_FLAG_RESPONSE',
+          source: 'sp00ky-devtools-page',
+          requestId,
+          ...payload,
+        },
+        '*'
+      );
+    };
+
+    const methodByOp: Record<string, string> = {
+      list: 'getFlags',
+      setEnabled: 'setFlagEnabled',
+      setUserVariant: 'setFlagUserVariant',
+      setOverride: 'setLocalFlagOverride',
+      clearOverrides: 'clearLocalFlagOverrides',
+    };
+    const name = methodByOp[op];
+    // Version skew: a panel newer than the page's core. Without this the
+    // promise on the panel side hangs until its timeout with no explanation.
+    if (!name || typeof sp00ky?.[name] !== 'function') {
+      respond({
+        success: false,
+        error: `${name || op} not supported by this core version`,
+      });
+      return;
+    }
+
+    try {
+      const a = args || {};
+      let data;
+      switch (op) {
+        case 'setEnabled':
+          data = await sp00ky.setFlagEnabled(a.key, a.enabled);
+          break;
+        case 'setUserVariant':
+          data = await sp00ky.setFlagUserVariant(a.key, a.variant, a.remove, a.userId);
+          break;
+        case 'setOverride':
+          data = await sp00ky.setLocalFlagOverride(a.key, a.variant, a.payload);
+          break;
+        case 'clearOverrides':
+          data = await sp00ky.clearLocalFlagOverrides();
+          break;
+        default:
+          data = await sp00ky.getFlags();
+      }
+      respond({ success: true, data });
+    } catch (err: any) {
+      respond({ success: false, error: err?.message || String(err) });
+    }
+  });
+
   // Try immediately, then fast retries, then long-tail fallback
   if (!checkForSp00ky()) {
     // Fast retries for normal case

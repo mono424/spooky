@@ -77,6 +77,26 @@ pub async fn tick(db: &Surreal<Client>) -> Result<()> {
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
 
+    // Stamp the root-enumerated user count so `fn::feature::materialize` can
+    // detect a permission-truncated `SELECT VALUE id FROM user`. That function
+    // runs under the CALLER's permissions (a SurrealDB custom function is not
+    // security-definer), so an admin flipping a flag from the DevTools panel
+    // in an app whose `user` table hides rows would silently materialize only
+    // themselves. This sweep is the only place that sees the true count.
+    //
+    // Written after the `flags.is_empty()` early return, so a project with no
+    // flags pays nothing: materialize is only ever called for a flag that
+    // exists, and then the stamp is at most one sweep old.
+    if let Err(err) = db
+        .query("UPSERT _00_module_state:feature_user_count SET count = $count;")
+        .bind(("count", users.len() as i64))
+        .await
+    {
+        // Non-fatal: the guard is a safety net, not a precondition for the
+        // sweep's own work.
+        warn!(error = %err, "Failed to stamp the feature-flag user count");
+    }
+
     if users.is_empty() {
         return Ok(());
     }

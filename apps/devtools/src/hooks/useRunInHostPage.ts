@@ -225,12 +225,50 @@ export function useRunInHostPage() {
     );
   };
 
+  /**
+   * Feature flag read/write (Flags tab). Same eval-dispatch-only contract as
+   * `storageOp`: page-script.ts awaits the async work and posts a
+   * SP00KY_FLAG_RESPONSE correlated by requestId.
+   *
+   * `args` is JSON-serialized rather than interpolated. Unlike storage ops it
+   * carries user-visible strings — flag keys, variants, user record ids — that
+   * come from the database, so string concatenation here would be an eval
+   * injection.
+   */
+  const flagOp = (
+    op: 'list' | 'setEnabled' | 'setUserVariant' | 'setOverride' | 'clearOverrides',
+    requestId: string,
+    args: Record<string, unknown> | undefined,
+    onSuccess: (result: { success: boolean; error?: string }) => void,
+    onError?: (error: any) => void
+  ): void => {
+    run(
+      `(function() {
+        try {
+            window.dispatchEvent(new CustomEvent('SP00KY_FLAG_OP', {
+                detail: {
+                    requestId: '${requestId}',
+                    op: '${op}',
+                    args: ${JSON.stringify(args ?? null)}
+                }
+            }));
+            return { success: true, started: true };
+        } catch (error) {
+            var msg = error instanceof Error ? error.message : String(error);
+            return { success: false, error: msg || 'Unknown caught error in eval dispatch' };
+        }
+      })()`,
+      { onSuccess, onError }
+    );
+  };
+
   return {
     run,
     getSp00kyState,
     getTableData,
     runQuery,
     storageOp,
+    flagOp,
     updateTableRow,
     deleteTableRow,
     clearHistory,

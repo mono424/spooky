@@ -1,4 +1,5 @@
 mod add_api;
+mod admin;
 mod agents;
 mod annotations;
 mod backend;
@@ -360,6 +361,11 @@ enum Commands {
         #[command(subcommand)]
         action: FlagCommands,
     },
+    /// Manage who may edit feature flags from the DevTools panel
+    Admin {
+        #[command(subcommand)]
+        action: AdminCommands,
+    },
     /// Inspect and control server-side schedules (`schedules:` in sp00ky.yml)
     Schedules {
         #[command(flatten)]
@@ -456,6 +462,48 @@ enum AgentsCommands {
         /// Write to this path instead of `<project>/AGENTS.md`.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+}
+
+/// `spky admin` — the sp00ky operator roster (`_00_admin`).
+///
+/// Root-only by construction: the table denies create/update/delete to every
+/// record token, so this command is the only way in or out. An admin may read
+/// flag definitions and flip flags from the DevTools panel; creating and
+/// deleting flags stays with `spky flag`.
+#[derive(Subcommand, Debug)]
+enum AdminCommands {
+    /// List the current admins
+    #[command(visible_alias = "ls")]
+    List {
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Grant a user admin rights over feature flags
+    Add {
+        /// Username or `user:xxx` record id
+        user: String,
+        /// Optional note (e.g. why, or who asked)
+        #[arg(long)]
+        note: Option<String>,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Revoke a user's admin rights
+    Remove {
+        /// Username or `user:xxx` record id
+        user: String,
+        #[command(flatten)]
+        conn: ConnectionArgs,
+        /// Path to sp00ky.yml config file
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -3051,6 +3099,7 @@ fn main() -> Result<()> {
         Some(Commands::Backup { action }) => cloud::backup(action),
         Some(Commands::Link { action }) => cloud::link(action),
         Some(Commands::Flag { action }) => flag::run(action),
+        Some(Commands::Admin { action }) => admin::run(action),
         Some(Commands::Jobs {
             conn,
             config,

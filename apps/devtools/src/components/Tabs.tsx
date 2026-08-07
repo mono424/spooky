@@ -9,6 +9,7 @@ const tabs: { id: TabType; label: string }[] = [
   { id: 'database', label: 'Database' },
   { id: 'storage', label: 'Storage' },
   { id: 'auth', label: 'Auth' },
+  { id: 'flags', label: 'Flags' },
   { id: 'versions', label: 'Versions' },
   { id: 'mcp', label: 'MCP' },
   { id: 'events', label: 'Events' },
