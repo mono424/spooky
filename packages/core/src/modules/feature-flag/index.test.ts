@@ -1,5 +1,19 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { FeatureFlagModule } from './index';
+
+// vitest runs in the `node` environment here, so there is no localStorage.
+// The module guards every access with `globalThis.localStorage?.`, which keeps
+// overrides in-memory-only — this shim lets the persistence path be tested.
+function installLocalStorage() {
+  const store = new Map<string, string>();
+  const shim = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+  (globalThis as any).localStorage = shim;
+  return { store, uninstall: () => delete (globalThis as any).localStorage };
+}
 
 // Minimal mocks for the three deps the module touches. The DataModule mock
 // captures the single subscribe callback so a test can push live results, and
@@ -116,5 +130,122 @@ describe('FeatureFlagModule', () => {
     await tick();
     expect(flag.enabled()).toBe(false); // cleared until the new query resolves
     expect(env.hasSub()).toBe(true); // re-registered for the new user
+  });
+});
+
+// Local overrides force a variant in THIS browser only. They must win over the
+// server assignment on every read path — `variant()`, `payload()`, `enabled()`
+// and `subscribe()` all funnel through the same resolver, so a gap in any one
+// of them is a gap in all of them.
+describe('FeatureFlagModule local overrides', () => {
+  let env: ReturnType<typeof makeDeps>;
+  let mod: FeatureFlagModule<any>;
+  let ls: ReturnType<typeof installLocalStorage>;
+
+  beforeEach(() => {
+    ls = installLocalStorage();
+    env = makeDeps();
+    mod = new FeatureFlagModule(env.deps);
+  });
+
+  afterEach(() => ls.uninstall());
+
+  it('wins over the server assignment', async () => {
+    const flag = mod.feature('alpha', { fallback: 'off' });
+    await tick();
+    env.push([{ key: 'alpha', variant: 'off' }]);
+    expect(flag.enabled()).toBe(false);
+
+    mod.setLocalOverride('alpha', 'on');
+    expect(flag.variant()).toBe('on');
+    expect(flag.enabled()).toBe(true);
+  });
+
+  it('survives a later live result for the same key', async () => {
+    const flag = mod.feature('alpha', { fallback: 'off' });
+    await tick();
+    mod.setLocalOverride('alpha', 'on');
+
+    env.push([{ key: 'alpha', variant: 'off' }]); // server disagrees
+    expect(flag.variant()).toBe('on');
+  });
+
+  it('applies before the first result, without a fallback flash', () => {
+    mod.setLocalOverride('alpha', 'on');
+    const flag = mod.feature('alpha', { fallback: 'off' });
+    expect(flag.variant()).toBe('on'); // seeded even though nothing loaded yet
+  });
+
+  it('carries its own payload', async () => {
+    const flag = mod.feature('alpha', { fallback: 'off' });
+    await tick();
+    env.push([{ key: 'alpha', variant: 'off', payload: { copy: 'server' } }]);
+
+    mod.setLocalOverride('alpha', 'on', { copy: 'local' });
+    expect(flag.payload()).toEqual({ copy: 'local' });
+  });
+
+  it('notifies subscribers when set and cleared', async () => {
+    const flag = mod.feature('alpha', { fallback: 'off' });
+    await tick();
+    env.push([{ key: 'alpha', variant: 'off' }]);
+
+    const seen: (string | undefined)[] = [];
+    flag.subscribe((s) => seen.push(s.variant));
+    expect(seen).toEqual(['off']); // immediate call
+
+    mod.setLocalOverride('alpha', 'on');
+    mod.setLocalOverride('alpha', null);
+    expect(seen).toEqual(['off', 'on', 'off']);
+  });
+
+  it('restores the server assignment when cleared', async () => {
+    const flag = mod.feature('alpha', { fallback: 'off' });
+    await tick();
+    env.push([{ key: 'alpha', variant: 'treatment', payload: { copy: 'server' } }]);
+
+    mod.setLocalOverride('alpha', 'off');
+    expect(flag.variant()).toBe('off');
+
+    mod.clearLocalOverrides();
+    expect(flag.variant()).toBe('treatment');
+    expect(flag.payload()).toEqual({ copy: 'server' });
+  });
+
+  it('survives a user change — it is a browser setting, not a session one', async () => {
+    mod.init();
+    const flag = mod.feature('alpha', { fallback: 'off' });
+    await tick();
+    mod.setLocalOverride('alpha', 'on');
+
+    env.setUser('user:other');
+    await tick();
+    expect(flag.variant()).toBe('on');
+  });
+
+  it('persists to localStorage and reloads into a fresh module', () => {
+    mod.setLocalOverride('alpha', 'on', { copy: 'local' });
+    expect(mod.getLocalOverrides()).toEqual({ alpha: { variant: 'on', payload: { copy: 'local' } } });
+
+    // A new module reads the same page-origin store, as after a reload.
+    const reloaded = new FeatureFlagModule(makeDeps().deps);
+    expect(reloaded.getLocalOverrides()).toEqual({
+      alpha: { variant: 'on', payload: { copy: 'local' } },
+    });
+    expect(reloaded.feature('alpha', { fallback: 'off' }).variant()).toBe('on');
+  });
+
+  it('drops the storage key entirely once the last override is cleared', () => {
+    mod.setLocalOverride('alpha', 'on');
+    expect(ls.store.size).toBe(1);
+
+    mod.setLocalOverride('alpha', null);
+    expect(ls.store.size).toBe(0);
+    expect(new FeatureFlagModule(makeDeps().deps).getLocalOverrides()).toEqual({});
+  });
+
+  it('ignores a corrupt store rather than failing to construct', () => {
+    ls.store.set('sp00ky:feature-overrides', '{not json');
+    expect(() => new FeatureFlagModule(makeDeps().deps)).not.toThrow();
   });
 });

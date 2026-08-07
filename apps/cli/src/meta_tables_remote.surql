@@ -120,14 +120,69 @@ DEFINE INDEX OVERWRITE idx_record_id ON TABLE _00_version COLUMNS record_id UNIQ
 -- feed without a follow-up subquery.
 
 -- ==================================================
--- SPOOKY FEATURE FLAG (definitions)
--- Root-only. Record-token callers can neither read nor write, so
--- targeting rules (including allowlisted user records) are never on
--- the client. The scheduler and the `spky flag` CLI write here using
--- the project root token; the scheduler recomputes _00_user_feature
--- assignments whenever a row changes.
+-- SPOOKY ADMIN (operator roster)
+-- The `user` table belongs to the app, not to sp00ky, so we can't gate
+-- on a `role` field that may not exist — and a self-writable role field
+-- would be a privilege-escalation hole anyway. This table is the whole
+-- admin concept: a row here means "may edit feature flags from the
+-- DevTools panel".
+--
+-- Root-written ONLY, via `spky admin add|remove|list`. create/update/
+-- delete are denied unconditionally, so a record token cannot insert its
+-- own row even with a forged mutation. Nobody self-promotes.
+--
+-- SELECT is scoped to the caller's OWN row (same shape as
+-- _00_user_feature below). That lets the panel answer "am I an admin?"
+-- with one query while the roster itself stays unreadable: a non-admin
+-- gets [], an admin gets exactly one row — their own.
+--
+-- The _00_feature_flag / _00_user_feature rules below read this table
+-- from INSIDE a PERMISSIONS clause. SurrealDB computes permission
+-- predicates with permission checks disabled on the nested Options
+-- (surrealdb-core `doc/check.rs::process_permissions` does
+-- `opt.new_with_perms(false)`), so that subquery sees every row
+-- regardless of the self-scoped rule here. The membership test works
+-- without the roster ever being readable by a non-admin.
+--
+-- MUST NEVER join `ssp_protocol::SYNCED_META_TABLES`: the SSP injects NO
+-- permission filter for `_00_*` tables (packages/ssp/src/
+-- permission_inject.rs returns Ok(None) for them), so syncing this would
+-- publish the whole roster unfiltered to any client that registers a
+-- query on it.
 -- ==================================================
-DEFINE TABLE OVERWRITE _00_feature_flag SCHEMAFULL PERMISSIONS NONE;
+DEFINE TABLE OVERWRITE _00_admin SCHEMAFULL
+    PERMISSIONS
+      FOR select WHERE user = $auth.id
+      FOR create, update, delete NONE;
+
+DEFINE FIELD OVERWRITE user ON TABLE _00_admin TYPE record;
+DEFINE FIELD OVERWRITE note ON TABLE _00_admin TYPE option<string>;
+DEFINE FIELD OVERWRITE added_at ON TABLE _00_admin TYPE datetime DEFAULT time::now() READONLY;
+DEFINE INDEX OVERWRITE idx_admin_user ON TABLE _00_admin COLUMNS user UNIQUE;
+
+-- ==================================================
+-- SPOOKY FEATURE FLAG (definitions)
+-- Readable and updatable by admins (see _00_admin above), invisible to
+-- everyone else — a non-admin's SELECT silently returns zero rows and
+-- never learns the table exists, so targeting rules (including
+-- allowlisted user records) still never reach an ordinary client.
+--
+-- create/delete stay root-only: `spky flag create|delete` owns the
+-- lifecycle. The DevTools panel only flips `enabled` and edits `rules`,
+-- both of which are UPDATEs.
+--
+-- The membership test is an indexed point lookup on _00_admin
+-- (idx_admin_user). The `$auth.id != NONE` guard keeps anonymous live
+-- queries out. Keep this predicate byte-identical to the one on
+-- _00_user_feature and on the fn::feature::* functions below — if the
+-- four ever drift, one gate opens wider than the others.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_feature_flag SCHEMAFULL
+    PERMISSIONS
+      FOR select, update
+        WHERE $auth.id != NONE
+          AND array::len((SELECT VALUE id FROM _00_admin WHERE user = $auth.id LIMIT 1)) > 0
+      FOR create, delete NONE;
 
 DEFINE FIELD OVERWRITE key ON TABLE _00_feature_flag TYPE string;
 DEFINE FIELD OVERWRITE description ON TABLE _00_feature_flag TYPE option<string>;
@@ -149,14 +204,27 @@ DEFINE INDEX OVERWRITE idx_feature_flag_key ON TABLE _00_feature_flag COLUMNS ke
 
 -- ==================================================
 -- SPOOKY USER FEATURE (per-user materialized assignments)
--- Record-token callers can SELECT only their own rows. Writes are
--- root-only: clients cannot self-enable a flag even with a forged
--- mutation, because create/update/delete are denied unconditionally.
+-- Record-token callers can SELECT only their own rows: an ordinary
+-- client cannot self-enable a flag, and cannot see anyone else's.
+--
+-- Writes are open to ADMINS (and root), not to ordinary users. This is
+-- load-bearing and must not be "tightened" back to NONE: a SurrealDB
+-- custom function is NOT security-definer — `fn::feature::materialize`
+-- below runs its UPSERTs under the CALLER's permissions (surrealdb-core
+-- computes a function body with the caller's Options; the AuthLimit it
+-- applies is a cap, never a grant). With `FOR create, update, delete
+-- NONE` an admin calling materialize from the browser would fail on
+-- every row.
+--
+-- An admin being able to write assignment rows is inside the trust they
+-- already hold: they can flip the flag those rows are derived from.
 -- ==================================================
 DEFINE TABLE OVERWRITE _00_user_feature SCHEMAFULL
     PERMISSIONS
       FOR select WHERE user = $auth.id
-      FOR create, update, delete NONE;
+      FOR create, update, delete
+        WHERE $auth.id != NONE
+          AND array::len((SELECT VALUE id FROM _00_admin WHERE user = $auth.id LIMIT 1)) > 0;
 
 DEFINE FIELD OVERWRITE user ON TABLE _00_user_feature TYPE record;
 DEFINE FIELD OVERWRITE key ON TABLE _00_user_feature TYPE string;
@@ -170,9 +238,207 @@ DEFINE INDEX OVERWRITE idx_user_feature_user_key ON TABLE _00_user_feature COLUM
 -- across deploys. Implementation matches the Rust evaluator in
 -- `apps/cli/src/flag.rs::rollout_hash`: SHA-256, then read the first 8
 -- hex chars as an unsigned 32-bit integer modulo 100.
+--
+-- The hex digits are folded by hand rather than cast. SurrealDB 3 removed
+-- hex support from the int cast — `<int>'0x5f7bdee4'` fails with "Could
+-- not cast into `int`", and `0x5f7bdee4` is no longer even a valid token —
+-- so the original one-liner errors on every call. Nothing exercised it
+-- before (both Rust evaluators hash themselves and the CLI never called
+-- it), which is why it went unnoticed; `fn::feature::materialize` below
+-- does call it, so every rollout rule depends on this being correct.
+-- `string::split(s, '')` yields empty strings at both ends, hence the
+-- filter. The golden vectors in `flag.rs::rollout_hash_matches_golden_vectors`
+-- are asserted against this implementation.
 DEFINE FUNCTION OVERWRITE fn::feature::hash($key: string, $user_id: string) -> int {
-  RETURN <int> (<int> ('0x' + string::slice(crypto::sha256($key + ':' + $user_id), 0, 8))) % 100;
+  LET $hex = string::slice(crypto::sha256($key + ':' + $user_id), 0, 8);
+  LET $digits = ['0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'];
+  LET $chars = array::filter(string::split($hex, ''), |$c| $c != '');
+  RETURN array::fold($chars, 0, |$acc, $c| $acc * 16 + array::find_index($digits, $c)) % 100;
 };
+
+-- ==================================================
+-- ADMIN-CALLABLE FEATURE FLAG MUTATIONS
+--
+-- These exist so the DevTools panel can flip a flag from the browser.
+-- `spky flag` does the same work in Rust and does NOT call them.
+--
+-- Two SurrealDB facts drive the shape of everything below:
+--
+--   1. DEFINE FUNCTION defaults to PERMISSIONS FULL. Omitting the clause
+--      does NOT make a function root-only — it ships a self-service flag
+--      editor to every signed-in user. Each function here therefore
+--      carries an explicit PERMISSIONS clause, identical to the one on
+--      _00_feature_flag / _00_user_feature. (The `fn::job::*` functions
+--      in functions_remote_singlenode.surql claim otherwise in a comment;
+--      that comment is wrong and is tracked separately.)
+--
+--   2. A custom function is NOT security-definer: its body runs under the
+--      CALLER's permissions. That is why _00_user_feature grants writes to
+--      admins, and why the `SELECT VALUE id FROM user` below is subject to
+--      the app's own `user` table SELECT rule — see the guard in
+--      fn::feature::materialize.
+--
+-- Root bypasses permission checks entirely, so the CLI and the scheduler
+-- are unaffected by the clauses.
+-- ==================================================
+
+-- Re-evaluate ONE flag for EVERY user and refresh `_00_user_feature`.
+-- Faithful port of the Rust evaluator (`apps/cli/src/flag.rs::evaluate_one`
+-- and `apps/scheduler/src/feature_flags.rs::evaluate_one`); the golden
+-- vectors pinned in both Rust test suites are asserted against this
+-- implementation too, so drift fails a test rather than silently
+-- assigning different variants depending on who flipped the flag.
+DEFINE FUNCTION OVERWRITE fn::feature::materialize($key: string) -> object {
+    LET $flag = (SELECT * FROM ONLY _00_feature_flag WHERE key = $key LIMIT 1);
+
+    -- Unknown/deleted flag: drop the orphaned assignments, mirroring the
+    -- load_flag-failed branch of `flag.rs::materialize`.
+    IF $flag = NONE {
+        DELETE _00_user_feature WHERE key = $key;
+        RETURN { key: $key, found: false, users: 0 };
+    };
+
+    LET $default  = $flag.default_variant ?? 'off';
+    LET $payloads = $flag.payloads ?? {};
+    -- `enabled = false` => everyone gets default_variant, rules ignored.
+    LET $rules    = IF ($flag.enabled ?? true) { $flag.rules ?? [] } ELSE { [] };
+
+    -- Normalise the rules ONCE (they don't depend on the user).
+    --   rank  — priority ascending, original position as tiebreak, because
+    --           Rust sorts with the stable `sort_by_key`. 100 is the
+    --           missing-priority default; the CLI writes 10 (allowlist)
+    --           and 50 (rollout).
+    --   users — `rules[].users` holds STRINGS on disk (`flag.rs` pushes
+    --           Value::String and interpolates the JSON verbatim), so a
+    --           record-vs-array compare would never match. Cast both
+    --           sides to string and a hand-written record element works
+    --           too.
+    LET $ranked = array::map($rules, |$r, $i| {
+        RETURN {
+            rank: (<int>($r.priority ?? 100)) * 100000 + $i,
+            kind: $r.kind,
+            variant: $r.variant,
+            percent: <int>($r.percent ?? 0),
+            users: array::map($r.users ?? [], |$x| <string>$x)
+        };
+    });
+
+    LET $users = (SELECT VALUE id FROM user);
+
+    -- The SELECT above runs under the CALLER's permissions (fact 2). Every
+    -- shipped schema template uses `FOR create, select WHERE true` on
+    -- `user`, but an app that scopes user selects to `id = $auth.id` would
+    -- return just the admin — materializing one row and leaving everyone
+    -- else on the old variant, with no error. The scheduler stamps the
+    -- root-enumerated count each sweep precisely so we can catch that.
+    LET $expected = _00_module_state:feature_user_count.count ?? 0;
+    IF array::len($users) < $expected {
+        THROW "fn::feature::materialize can only see " + <string>array::len($users) + " of "
+            + <string>$expected + " users, so it would leave most of them on a stale variant. "
+            + "The `user` table's SELECT permission is hiding rows from this admin — widen it, "
+            + "or change the flag with `spky flag` instead.";
+    };
+
+    FOR $u IN $users {
+        LET $uid = <string>$u;
+
+        LET $matched = array::filter($ranked, |$c| {
+            RETURN IF $c.variant = NONE { false }
+                ELSE IF $c.kind = 'allowlist' { $uid IN $c.users }
+                ELSE IF $c.kind = 'rollout' {
+                    $c.percent > 0 AND fn::feature::hash($key, $uid) < $c.percent
+                }
+                ELSE { false };
+        });
+
+        -- First match wins = lowest rank. Avoids `SELECT … ORDER BY` over an
+        -- array, which SurrealDB 3 rejects when the ORDER BY field isn't in
+        -- the projection.
+        LET $best    = array::min(array::map($matched, |$c| $c.rank));
+        LET $win     = array::first(array::filter($matched, |$c| $c.rank = $best));
+        LET $variant = IF $win = NONE { $default } ELSE { $win.variant };
+
+        UPSERT _00_user_feature
+            SET user = $u, key = $key, variant = $variant, payload = $payloads[$variant]
+            WHERE user = $u AND key = $key;
+    };
+
+    RETURN { key: $key, found: true, users: array::len($users) };
+}
+PERMISSIONS WHERE $auth.id != NONE
+    AND array::len((SELECT VALUE id FROM _00_admin WHERE user = $auth.id LIMIT 1)) > 0;
+
+-- Add `$user` to `$key`'s allowlist for `$variant`, then re-materialize.
+-- Rule shape and priority (10) must stay identical to
+-- `apps/cli/src/flag.rs::upsert_allowlist` / PRIORITY_ALLOWLIST. The rule
+-- object is rebuilt field-by-field rather than merged, because an
+-- allowlist rule only ever carries these four keys.
+--
+-- This is a read-modify-write over the whole `rules` array (the same shape
+-- `spky flag set` uses). Two admins acting on one flag at the same moment
+-- therefore collide — but SurrealDB fails the loser with "Transaction
+-- conflict ... can be retried" instead of dropping the write, so no entry is
+-- silently lost. The DevTools bridge retries on that error
+-- (`FlagsAdminService.mutate`); a caller using these functions directly
+-- should do the same.
+DEFINE FUNCTION OVERWRITE fn::feature::allow($key: string, $variant: string, $user: record) -> object {
+    LET $flag = (SELECT * FROM ONLY _00_feature_flag WHERE key = $key LIMIT 1);
+    IF $flag = NONE { THROW "Unknown flag: " + $key };
+    IF !($variant IN ($flag.variants ?? [])) {
+        THROW "Unknown variant '" + $variant + "' for flag '" + $key + "'";
+    };
+
+    LET $uid   = <string>$user;
+    LET $rules = $flag.rules ?? [];
+    LET $has   = array::len(array::filter($rules, |$r| {
+        RETURN $r.kind = 'allowlist' AND $r.variant = $variant;
+    })) > 0;
+
+    LET $next = IF $has {
+        array::map($rules, |$r| {
+            RETURN IF $r.kind = 'allowlist' AND $r.variant = $variant {
+                {
+                    kind: 'allowlist',
+                    variant: $r.variant,
+                    users: array::distinct(array::append(array::map($r.users ?? [], |$x| <string>$x), $uid)),
+                    priority: $r.priority ?? 10
+                }
+            } ELSE { $r };
+        })
+    } ELSE {
+        array::append($rules, { kind: 'allowlist', variant: $variant, users: [$uid], priority: 10 })
+    };
+
+    UPDATE _00_feature_flag SET rules = $next WHERE key = $key;
+    RETURN fn::feature::materialize($key);
+}
+PERMISSIONS WHERE $auth.id != NONE
+    AND array::len((SELECT VALUE id FROM _00_admin WHERE user = $auth.id LIMIT 1)) > 0;
+
+-- Remove `$user` from every allowlist rule on `$key`, then re-materialize.
+-- Mirrors `spky flag unset --for-user`: the rule is kept (possibly with an
+-- empty `users`), only the membership goes.
+DEFINE FUNCTION OVERWRITE fn::feature::disallow($key: string, $user: record) -> object {
+    LET $flag = (SELECT * FROM ONLY _00_feature_flag WHERE key = $key LIMIT 1);
+    IF $flag = NONE { THROW "Unknown flag: " + $key };
+
+    LET $uid  = <string>$user;
+    LET $next = array::map($flag.rules ?? [], |$r| {
+        RETURN IF $r.kind = 'allowlist' {
+            {
+                kind: 'allowlist',
+                variant: $r.variant,
+                users: array::filter(array::map($r.users ?? [], |$x| <string>$x), |$x| $x != $uid),
+                priority: $r.priority ?? 10
+            }
+        } ELSE { $r };
+    });
+
+    UPDATE _00_feature_flag SET rules = $next WHERE key = $key;
+    RETURN fn::feature::materialize($key);
+}
+PERMISSIONS WHERE $auth.id != NONE
+    AND array::len((SELECT VALUE id FROM _00_admin WHERE user = $auth.id LIMIT 1)) > 0;
 
 -- ==================================================
 -- SPOOKY APP RELEASE (per-frontend "current version" announcements)

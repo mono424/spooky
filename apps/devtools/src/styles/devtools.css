@@ -2681,3 +2681,68 @@ body {
 .database-storage.fallback {
   color: var(--sys-color-error);
 }
+
+/* ===== Flags tab =====
+   Reuses the shared vocabulary (.mcp-container/.mcp-section shell, .kv rows,
+   .data-table, .status-pill, .mcp-toggle, .btn/.icon-btn). Only the bits with
+   no existing equivalent are defined here. */
+
+/* An overridden row is lying to the app relative to the server, so it needs to
+   be obvious at a glance — this is the tab's most confusing failure mode
+   ("why is prod behaving differently for me?"). */
+.flags-override-table tr.flags-overridden {
+  background: color-mix(in srgb, var(--sys-color-primary) 8%, transparent);
+}
+.flags-override-table tr.flags-overridden td:first-child {
+  box-shadow: inset 3px 0 0 var(--sys-color-primary);
+}
+
+.flags-variant-select {
+  width: 100%;
+  padding: 2px 4px;
+  font: inherit;
+  color: var(--sys-color-on-surface);
+  background: var(--sys-color-cdt-base-container);
+  border: 1px solid var(--sys-color-outline);
+  border-radius: var(--sys-radius-sm);
+}
+
+.flags-card {
+  padding: var(--sys-spacing-3);
+  margin-bottom: var(--sys-spacing-3);
+  border: 1px solid var(--sys-color-divider);
+  border-radius: var(--sys-radius-sm);
+  background: var(--sys-color-surface-container-low);
+}
+
+/* A mutation calls fn::feature::materialize, which is O(users) server-side.
+   Dim the card so a slow write doesn't read as a dead UI. */
+.flags-card.flags-busy {
+  opacity: 0.55;
+}
+
+.flags-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sys-spacing-2);
+  margin-bottom: var(--sys-spacing-2);
+}
+
+.flags-key {
+  font-weight: 600;
+}
+
+.flags-variant-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sys-spacing-2);
+  margin-top: var(--sys-spacing-2);
+}
+
+.flags-variant-group .btn.flags-variant-active {
+  color: var(--sys-color-on-surface);
+  background: var(--sys-color-primary-container);
+  border-color: var(--sys-color-primary);
+}

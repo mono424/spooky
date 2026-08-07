@@ -180,9 +180,68 @@ export type TabType =
   | 'database'
   | 'storage'
   | 'auth'
+  | 'flags'
   | 'mcp'
   | 'versions'
   | 'timing';
+
+// Flags tab types — mirrored from packages/core/src/modules/devtools/flags.ts
+// (the extension deliberately doesn't import core types; keep the shapes in
+// sync by hand).
+
+export interface FlagRule {
+  kind: 'allowlist' | 'rollout' | string;
+  variant: string;
+  /** Allowlist only. Record-id strings, not records. */
+  users?: string[];
+  /** Rollout only, 0..100. */
+  percent?: number;
+  priority: number;
+}
+
+export interface FlagRow {
+  key: string;
+  description?: string;
+  variants: string[];
+  default_variant: string;
+  enabled: boolean;
+  payloads?: Record<string, unknown>;
+  rules: FlagRule[];
+  updated_at?: string;
+  /** The variant the signed-in user is explicitly allowlisted into, if any. */
+  selfAllowlistedVariant?: string;
+}
+
+export interface FlagAssignment {
+  key: string;
+  variant: string;
+  payload?: unknown;
+}
+
+/** A variant forced in this browser only. Never sent to the server. */
+export interface FlagOverride {
+  variant: string;
+  payload?: unknown;
+}
+
+export interface FlagsSnapshot {
+  at: number;
+  userId: string | null;
+  isAdmin: boolean;
+  /** Empty for non-admins — SurrealDB filters the rows rather than erroring. */
+  flags: FlagRow[];
+  assignments: FlagAssignment[];
+  overrides: Record<string, FlagOverride>;
+  /** Set when the schema predates the Flags tab, or the remote read failed. */
+  error?: string;
+}
+
+export interface FlagMutationResult {
+  success: boolean;
+  error?: string;
+  /** Users re-evaluated by `fn::feature::materialize`. */
+  users?: number;
+}
 
 // Storage tab types — mirrored from packages/core/src/modules/devtools/storage-info.ts
 // (the extension deliberately doesn't import core types).

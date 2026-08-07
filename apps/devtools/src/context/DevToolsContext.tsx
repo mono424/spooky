@@ -14,6 +14,7 @@ import {
   type ChromeMessage,
   type QueryMark,
   type StorageInfo,
+  type FlagsSnapshot,
 } from '../types/devtools';
 import { useChromeConnection } from '../hooks/useChromeConnection';
 import { useRunInHostPage } from '../hooks/useRunInHostPage';
@@ -56,6 +57,18 @@ interface DevToolsContextValue {
   isFetchingStorage: () => boolean;
   fetchStorageInfo: (opts?: { tableCounts?: boolean }) => Promise<void>;
   requestPersistentStorage: () => Promise<boolean>;
+
+  // Flags tab
+  flagsSnapshot: () => FlagsSnapshot | null;
+  flagsError: () => string | null;
+  isFetchingFlags: () => boolean;
+  /** Flag key currently being mutated, so its row can be disabled. */
+  isMutatingFlag: () => string | null;
+  fetchFlags: () => Promise<void>;
+  setFlagEnabled: (key: string, enabled: boolean) => Promise<void>;
+  setFlagUserVariant: (key: string, variant: string, remove: boolean) => Promise<void>;
+  setFlagOverride: (key: string, variant: string | null) => Promise<void>;
+  clearFlagOverrides: () => Promise<void>;
 }
 
 /** Union of two table-name lists, preserving `a`'s order then appending new `b`. */
@@ -103,6 +116,12 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const [storageInfo, setStorageInfo] = createSignal<StorageInfo | null>(null);
   const [storageInfoError, setStorageInfoError] = createSignal<string | null>(null);
   const [isFetchingStorage, setIsFetchingStorage] = createSignal(false);
+  // Flags tab: on-demand too. Definitions aren't synced to the client, so this
+  // is a remote read and can't ride the push channel.
+  const [flagsSnapshot, setFlagsSnapshot] = createSignal<FlagsSnapshot | null>(null);
+  const [flagsError, setFlagsError] = createSignal<string | null>(null);
+  const [isFetchingFlags, setIsFetchingFlags] = createSignal(false);
+  const [isMutatingFlag, setIsMutatingFlag] = createSignal<string | null>(null);
   const [mcpStatus, setMcpStatus] = createSignal<McpStatus>({ enabled: false, connected: false, port: 9315 });
 
   // Custom hooks
@@ -202,6 +221,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
       case 'SP00KY_QUERY_RESPONSE':
       case 'SP00KY_STORAGE_INFO_RESPONSE':
+      case 'SP00KY_FLAG_RESPONSE':
         settlePending(message as any);
         break;
 
@@ -219,6 +239,10 @@ export const DevToolsProvider: ParentComponent = (props) => {
         // "Preserve log").
         seenQueryUpdates.clear();
         setQueryMarks([]);
+        // The flag snapshot is tied to the old page's auth session and local
+        // store, so it's stale by definition. Drop it rather than render it.
+        setFlagsSnapshot(null);
+        setFlagsError(null);
         setTimeout(() => {
           checkSp00ky();
         }, 500);
@@ -368,6 +392,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
     // the tab that shows it.
     if (activeTab() === 'storage') {
       void fetchStorageInfo();
+    }
+    // Same on-demand deal for flags: a remote read, only worth it when the
+    // tab that shows it is open.
+    if (activeTab() === 'flags') {
+      void fetchFlags();
     }
   }
 
@@ -592,6 +621,133 @@ export const DevToolsProvider: ParentComponent = (props) => {
     }
   };
 
+  /**
+   * Dispatch a flag op into the page and await the correlated response.
+   *
+   * 30s, not the 15s storage budget or the 10s query one: a write calls
+   * `fn::feature::materialize`, which re-evaluates the flag for EVERY user and
+   * upserts a row each. That is O(users) server-side work in one statement.
+   */
+  const flagOpRequest = (
+    op: 'list' | 'setEnabled' | 'setUserVariant' | 'setOverride' | 'clearOverrides',
+    args?: Record<string, unknown>
+  ) => {
+    return new Promise<any>((resolve, reject) => {
+      const requestId = Math.random().toString(36).substring(7);
+
+      const timeoutId = setTimeout(() => {
+        if (pendingQueries.has(requestId)) {
+          pendingQueries.delete(requestId);
+          reject('Flag request timed out (30s)');
+        }
+      }, 30000);
+
+      pendingQueries.set(requestId, {
+        resolve: (data) => {
+          clearTimeout(timeoutId);
+          resolve(data);
+        },
+        reject: (err) => {
+          clearTimeout(timeoutId);
+          reject(err || 'Undefined error passed to pendingQueries.reject');
+        },
+      });
+
+      hostPage.flagOp(
+        op,
+        requestId,
+        args,
+        (result) => {
+          if (result && !result.success) {
+            clearTimeout(timeoutId);
+            pendingQueries.delete(requestId);
+            reject(result.error || 'Failed to dispatch flag event');
+          }
+        },
+        (err) => {
+          clearTimeout(timeoutId);
+          pendingQueries.delete(requestId);
+          reject(err instanceof Error ? err.message : String(err));
+        }
+      );
+    });
+  };
+
+  const fetchFlags = async () => {
+    if (isFetchingFlags()) return;
+    setIsFetchingFlags(true);
+    try {
+      const data = (await flagOpRequest('list')) as FlagsSnapshot;
+      setFlagsSnapshot(data);
+      // `snapshot.error` is a per-section failure (not migrated, remote read
+      // denied) that still carries a usable local half — surface it without
+      // discarding the snapshot.
+      setFlagsError(data?.error ?? null);
+    } catch (e) {
+      setFlagsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsFetchingFlags(false);
+    }
+  };
+
+  /**
+   * Run a remote flag mutation, then re-read.
+   *
+   * Serialized on `isMutatingFlag`: `_00_user_feature` has a UNIQUE (user, key)
+   * index, so two overlapping materializes on one flag can collide, and a
+   * failed statement inside the function's FOR loop aborts the rest of it.
+   */
+  const mutateFlag = async (
+    key: string,
+    op: 'setEnabled' | 'setUserVariant',
+    args: Record<string, unknown>
+  ) => {
+    if (isMutatingFlag()) return;
+    setIsMutatingFlag(key);
+    try {
+      const result = await flagOpRequest(op, { key, ...args });
+      if (result && result.success === false) {
+        setFlagsError(result.error || 'Flag update failed');
+      } else {
+        setFlagsError(null);
+      }
+    } catch (e) {
+      setFlagsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsMutatingFlag(null);
+      await fetchFlags();
+    }
+  };
+
+  const setFlagEnabled = (key: string, enabled: boolean) =>
+    mutateFlag(key, 'setEnabled', { enabled });
+
+  const setFlagUserVariant = (key: string, variant: string, remove: boolean) =>
+    mutateFlag(key, 'setUserVariant', { variant, remove });
+
+  /** Local-only: no auth, no network, works signed out. */
+  const setFlagOverride = async (key: string, variant: string | null) => {
+    try {
+      const result = await flagOpRequest('setOverride', { key, variant });
+      setFlagsSnapshot((prev) =>
+        prev ? { ...prev, overrides: result?.overrides ?? prev.overrides } : prev
+      );
+    } catch (e) {
+      setFlagsError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const clearFlagOverrides = async () => {
+    try {
+      const result = await flagOpRequest('clearOverrides');
+      setFlagsSnapshot((prev) =>
+        prev ? { ...prev, overrides: result?.overrides ?? {} } : prev
+      );
+    } catch (e) {
+      setFlagsError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const requestPersistentStorage = async (): Promise<boolean> => {
     try {
       const result = await storageOpRequest('persist');
@@ -755,6 +911,15 @@ export const DevToolsProvider: ParentComponent = (props) => {
     isFetchingStorage,
     fetchStorageInfo,
     requestPersistentStorage,
+    flagsSnapshot,
+    flagsError,
+    isFetchingFlags,
+    isMutatingFlag,
+    fetchFlags,
+    setFlagEnabled,
+    setFlagUserVariant,
+    setFlagOverride,
+    clearFlagOverrides,
   };
 
   return <DevToolsContext.Provider value={contextValue}>{props.children}</DevToolsContext.Provider>;

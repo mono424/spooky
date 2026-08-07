@@ -6,6 +6,7 @@ export {
   FeatureFlagModule,
   FeatureFlagHandle,
   type FeatureFlagOptions,
+  type FeatureFlagOverride,
   type FeatureFlagSnapshot,
 } from './modules/feature-flag/index';
 export {

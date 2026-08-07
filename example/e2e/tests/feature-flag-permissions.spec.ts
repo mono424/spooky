@@ -7,11 +7,19 @@ import { test, expect } from '@playwright/test';
  * are the foundation of the feature flag system, so their permission
  * guarantees are load-bearing:
  *
- *   _00_feature_flag   - PERMISSIONS NONE: record-token clients cannot
- *                        read targeting rules or write definitions.
+ *   _00_feature_flag   - readable/updatable only by users listed in
+ *                        _00_admin; invisible to everyone else, so
+ *                        targeting rules never reach an ordinary client.
  *   _00_user_feature   - select scoped to WHERE user = $auth.id;
- *                        create/update/delete denied entirely so a
+ *                        create/update/delete open only to admins, so a
  *                        client cannot self-enable a flag.
+ *   _00_admin          - the roster itself. Root-written only (`spky
+ *                        admin`), self-scoped on select, so nobody can
+ *                        promote themselves or enumerate the operators.
+ *
+ * The admin path exists for the DevTools Flags tab. It is deliberately
+ * exercised here too: the interesting property isn't "an admin can", it's
+ * that everything stays shut for everyone else.
  *
  * These tests run against the upstream SurrealDB directly (the same
  * pattern as `waitForThreadInUpstream` in `test-fixtures.ts`).
@@ -116,6 +124,9 @@ test.describe.serial('Feature flag permissions', () => {
       await rootSql(`DELETE _00_feature_flag WHERE key = '${flagKey}';`);
       await rootSql(`DELETE _00_user_feature WHERE key = '${flagKey}';`);
     }
+    // Never leave a test user on the operator roster.
+    if (aliceId) await rootSql(`DELETE _00_admin WHERE user = ${aliceId};`);
+    if (bobId) await rootSql(`DELETE _00_admin WHERE user = ${bobId};`);
   });
 
   test('record-token client cannot CREATE _00_user_feature', async () => {
@@ -200,5 +211,82 @@ test.describe.serial('Feature flag permissions', () => {
     }>;
     expect(bobRows.length, 'bob sees exactly one row').toBe(1);
     expect(bobRows[0]?.variant).toBe('off');
+  });
+
+  // ---- _00_admin -----------------------------------------------------
+
+  test('record-token client cannot see or join the admin roster', async () => {
+    await rootSql(`UPSERT _00_admin SET user = ${aliceId} WHERE user = ${aliceId};`);
+
+    // Bob is not an admin: the roster must be invisible to him, otherwise he
+    // learns who the operators are.
+    const { body: seen } = await recordSql(bobToken, `SELECT * FROM _00_admin;`);
+    expect(
+      ((seen[0]?.result ?? []) as unknown[]).length,
+      'the admin roster must not be enumerable by a non-admin'
+    ).toBe(0);
+
+    // Self-promotion is the whole threat model for this table.
+    await recordSql(bobToken, `CREATE _00_admin SET user = $auth.id;`);
+    const after = (await rootSql(
+      `SELECT count() AS n FROM _00_admin WHERE user = ${bobId} GROUP ALL;`
+    )) as Array<{ result?: Array<{ n: number }> }>;
+    expect(after[0]?.result?.[0]?.n ?? 0, 'bob promoted himself to admin').toBe(0);
+
+    // Alice IS an admin, and still only ever sees her own row.
+    const { body: own } = await recordSql(aliceToken, `SELECT user FROM _00_admin;`);
+    const ownRows = (own[0]?.result ?? []) as Array<{ user?: string }>;
+    expect(ownRows.length, 'an admin sees exactly their own roster row').toBe(1);
+  });
+
+  test('an admin can read and flip flags; a non-admin still cannot', async () => {
+    await rootSql(`DELETE _00_feature_flag WHERE key = '${flagKey}';`);
+    await rootSql(
+      `CREATE _00_feature_flag SET key = '${flagKey}', variants = ['off','on'], default_variant = 'off', rules = [], enabled = true;`
+    );
+    await rootSql(`UPSERT _00_admin SET user = ${aliceId} WHERE user = ${aliceId};`);
+
+    // Read: visible to the admin, still invisible to bob.
+    const { body: aliceSees } = await recordSql(
+      aliceToken,
+      `SELECT key FROM _00_feature_flag WHERE key = '${flagKey}';`
+    );
+    expect(
+      ((aliceSees[0]?.result ?? []) as unknown[]).length,
+      'an admin must be able to read flag definitions'
+    ).toBe(1);
+
+    const { body: bobSees } = await recordSql(
+      bobToken,
+      `SELECT key FROM _00_feature_flag WHERE key = '${flagKey}';`
+    );
+    expect(
+      ((bobSees[0]?.result ?? []) as unknown[]).length,
+      'a non-admin must still see nothing'
+    ).toBe(0);
+
+    // Write: the admin's change must reach BOB's assignment, not just her own.
+    // That round trip is the entire point of the DevTools Flags tab.
+    await recordSql(
+      aliceToken,
+      `RETURN fn::feature::allow('${flagKey}', 'on', ${bobId});`
+    );
+    const bobVariant = (await rootSql(
+      `SELECT VALUE variant FROM _00_user_feature WHERE key = '${flagKey}' AND user = ${bobId};`
+    )) as Array<{ result?: string[] }>;
+    expect(
+      bobVariant[0]?.result?.[0],
+      "an admin's allowlist change must materialize onto the other user"
+    ).toBe('on');
+
+    // And bob cannot call the same function himself.
+    const { body: denied } = await recordSql(
+      bobToken,
+      `RETURN fn::feature::allow('${flagKey}', 'on', $auth.id);`
+    );
+    expect(
+      denied.some((r) => r.status === 'ERR'),
+      `a non-admin must be denied fn::feature::allow, got: ${JSON.stringify(denied)}`
+    ).toBeTruthy();
   });
 });
