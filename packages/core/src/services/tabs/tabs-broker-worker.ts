@@ -35,7 +35,7 @@ const PING_INTERVAL_MS = 5000;
 const PONG_TIMEOUT_MS = 15_000;
 const FORCE_TAKEOVER_TIMEOUT_MS = 1000;
 const LEADER_FAILURE_BACKOFF_MS = 1000;
-const OPFS_FAILED_CYCLES_BEFORE_MEMORY = 3;
+const FAILED_CYCLES_BEFORE_MEMORY = 3;
 
 interface BrokerTab {
   port: MessagePort;
@@ -62,8 +62,8 @@ interface Namespace {
   leader: Leader | null;
   /** Tabs whose promotion recently failed: tabId -> retry-not-before. */
   failedUntil: Map<string, number>;
-  /** Consecutive elections that failed with opfs-unavailable. */
-  opfsFailedCycles: number;
+  /** Consecutive elections whose promotion failed, for any reason. */
+  failedCycles: number;
   /** Single-flight guard for the async election path. */
   electing: boolean;
   /** Pending follower attach state: followerTabId -> retry bookkeeping. */
@@ -112,7 +112,7 @@ function getNamespace(fingerprint: string, bucketId: string): Namespace {
       tabs: new Map(),
       leader: null,
       failedUntil: new Map(),
-      opfsFailedCycles: 0,
+      failedCycles: 0,
       electing: false,
       attachRetry: new Map(),
       tabLockMonitor: null,
@@ -274,7 +274,7 @@ function electIfNeeded(ns: Namespace, previous: ClearedLeader | null = null): vo
         brokerInstanceId,
         leadershipId,
         forceTakeover,
-        allowMemoryFallback: ns.opfsFailedCycles >= OPFS_FAILED_CYCLES_BEFORE_MEMORY,
+        allowMemoryFallback: ns.failedCycles >= FAILED_CYCLES_BEFORE_MEMORY,
         resumeHeld,
       });
     } finally {
@@ -488,7 +488,7 @@ function handleTabMessage(port: MessagePort, msg: TabToBrokerMessage, ports: rea
         break;
       }
       ns.leader.ready = true;
-      ns.opfsFailedCycles = 0;
+      ns.failedCycles = 0;
       startTabLockMonitor(ns, msg.leadershipId);
       const tab = ns.tabs.get(msg.tabId);
       if (tab) {
@@ -512,7 +512,12 @@ function handleTabMessage(port: MessagePort, msg: TabToBrokerMessage, ports: rea
     }
     case 'leader-failed': {
       if (ns.leader?.tabId !== msg.tabId || ns.leader.leadershipId !== msg.leadershipId) break;
-      if (msg.reason.includes('opfs-unavailable')) ns.opfsFailedCycles += 1;
+      // Every reason counts. Gating this on 'opfs-unavailable' left any other
+      // recurring failure (e.g. a tab lock nobody frees) looping at the backoff
+      // interval forever, with allowMemoryFallback never granted, so every tab
+      // timed out in start() and booted solo — each one then contending for the
+      // OPFS pool on its own, which is exactly what shared-tabs exists to stop.
+      ns.failedCycles += 1;
       ns.failedUntil.set(msg.tabId, Date.now() + LEADER_FAILURE_BACKOFF_MS);
       const previous = clearLeader(ns, { demote: false, removeTab: false });
       const tab = ns.tabs.get(msg.tabId);

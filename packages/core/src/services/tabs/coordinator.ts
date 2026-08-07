@@ -424,6 +424,15 @@ export class TabsCoordinator {
       );
       this.hub?.detachAll();
       this.hub = null;
+      // Give back everything this attempt claimed. The broker does NOT demote a
+      // tab whose promotion failed (leader-failed clears leadership without a
+      // demote), so nothing else ever frees these. The tab lock name is shared
+      // per namespace, so keeping it after failing to lead makes EVERY later
+      // election in this namespace fail with 'leader tab lock unavailable' —
+      // one OPFS-busy promotion would wedge the whole app into solo mode.
+      if (previousRole === 'leader') await this.deps.hooks.releaseOwnership();
+      this.tabLock?.release();
+      this.tabLock = null;
       this.broker.send({
         type: 'leader-failed',
         tabId: this.deps.tabId,

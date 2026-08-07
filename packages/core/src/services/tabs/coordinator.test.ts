@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { handleConnect, __resetBrokerForTests } from './tabs-broker-worker';
-import { installBrokerGlobals } from './fake-ports.fixture';
+import { installBrokerGlobals, installFakeLocks } from './fake-ports.fixture';
 import { TabsCoordinator, type CoordinatorHooks, type LeaderSyncHub, type SyncForwarder } from './coordinator';
 import type { StorageHealth } from '../../types';
 import type { LeaderToFollowerMessage } from './protocol';
@@ -62,12 +62,12 @@ function makeHooks(): { hooks: CoordinatorHooks; log: HookLog } {
   return { hooks, log };
 }
 
-function makeCoordinator(tabId: string) {
+function makeCoordinator(tabId: string, overrides: Partial<CoordinatorHooks> = {}) {
   const { hooks, log } = makeHooks();
   const coordinator = new TabsCoordinator({
     tabId,
     fingerprint: 'fp-coord-test',
-    hooks,
+    hooks: { ...hooks, ...overrides },
     logger: makeLogger(),
   });
   return { coordinator, log };
@@ -169,6 +169,58 @@ describe('TabsCoordinator integration', () => {
     expect(b.log.adoptOwner[0].workerLockName).not.toBe(a.log.adoptOwner[0].workerLockName);
     expect(b.log.hub).not.toBeNull();
     await b.coordinator.stop();
+  });
+
+  // A failed promotion must give the leader TAB lock back. The name is shared
+  // per namespace, so a leaked one makes every later election fail with
+  // 'leader tab lock unavailable': all tabs time out in start(), boot solo, and
+  // then contend for the OPFS pool individually — one busy pool wedging the
+  // whole app into the pre-shared-tabs behavior it exists to replace.
+  describe('with Web Locks', () => {
+    let locks: ReturnType<typeof installFakeLocks>;
+    beforeEach(() => {
+      locks = installFakeLocks();
+    });
+    afterEach(() => locks.restore());
+
+    /** A tab whose store can never open. Resolves once it has failed a
+     *  promotion, so tests don't wait out start()'s 15s timeout. */
+    function makeDoomedTab(tabId: string) {
+      let failed!: () => void;
+      const hasFailed = new Promise<void>((r) => {
+        failed = r;
+      });
+      const tab = makeCoordinator(tabId, {
+        async adoptOwner() {
+          queueMicrotask(failed);
+          throw new Error('opfs-unavailable: NoModificationAllowedError (after 10 attempts)');
+        },
+      });
+      // start() only settles on a role or the timeout; neither is the point.
+      void tab.coordinator.start('anon').catch(() => {});
+      return { ...tab, hasFailed };
+    }
+
+    it('releases the leader tab lock when adoptOwner throws', async () => {
+      const a = makeDoomedTab('tab-1');
+      await a.hasFailed;
+      // Well inside the 1s re-nomination backoff, so a held lock here is a leak
+      // and not the next attempt's legitimate acquisition.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(locks.heldNames()).not.toContain('sp00ky-tabs:fp-coord-test:anon:tab');
+      await a.coordinator.stop();
+    });
+
+    it('lets a later tab lead after another tab failed to open the store', async () => {
+      const a = makeDoomedTab('tab-1');
+      await a.hasFailed;
+
+      const b = makeCoordinator('tab-2');
+      await expect(b.coordinator.start('anon')).resolves.toBe('leader');
+      expect(b.log.adoptOwner).toHaveLength(1);
+      await b.coordinator.stop();
+      await a.coordinator.stop();
+    });
   });
 
   it('moves buckets by leaving and rejoining: old namespace re-elects', async () => {

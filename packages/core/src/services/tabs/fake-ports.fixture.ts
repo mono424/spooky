@@ -39,6 +39,48 @@ export async function flush(times = 10): Promise<void> {
   for (let i = 0; i < times; i++) await Promise.resolve();
 }
 
+/**
+ * Install a minimal exclusive-only `navigator.locks` on globalThis. Node has no
+ * Web Locks, and `acquireLeaderTabLock` treats a missing LockManager as "always
+ * granted", so without this the whole leader-tab-lock path is a no-op in tests
+ * and lock leaks are invisible. `ifAvailable` resolves null while held (what a
+ * losing tab sees), `steal` evicts the holder, and a plain request queues
+ * forever — the same shapes the real API produces.
+ */
+export function installFakeLocks(): {
+  restore: () => void;
+  heldNames: () => string[];
+} {
+  const g = globalThis as Record<string, unknown>;
+  const previous = g.navigator;
+  const held = new Map<string, () => void>();
+  const locks = {
+    async request(name: string, opts: any, cb: any) {
+      if (opts?.steal) held.get(name)?.();
+      if (held.has(name) && !opts?.steal) {
+        if (opts?.ifAvailable) return cb(null);
+        return new Promise(() => {});
+      }
+      // The holder keeps the lock until the callback's promise settles (the
+      // real contract) or someone steals it out from under them.
+      let stolen!: () => void;
+      const stealSignal = new Promise<void>((r) => {
+        stolen = r as () => void;
+      });
+      held.set(name, stolen);
+      try {
+        await Promise.race([Promise.resolve(cb({ name, mode: 'exclusive' })), stealSignal]);
+      } finally {
+        held.delete(name);
+      }
+    },
+  };
+  const define = (value: unknown) =>
+    Object.defineProperty(g, 'navigator', { value, configurable: true, writable: true });
+  define({ ...(previous ?? {}), locks });
+  return { restore: () => define(previous), heldNames: () => [...held.keys()] };
+}
+
 /** Install `MessageChannel` + `SharedWorker` fakes on globalThis; the fake
  *  SharedWorker pipes its port into `handleConnect`. Returns a restore fn. */
 export function installBrokerGlobals(handleConnect: (port: MessagePort) => void): () => void {

@@ -676,6 +676,13 @@ export class Sp00kyClient<S extends SchemaStructure> {
         // Any failure here (no SharedWorker start, election timeout, rejected
         // fingerprint) falls back to plain solo boot: exactly the flag-off
         // path, including the second-tab memory fallback + its warning.
+        // A role can still land AFTER start() gave up (the election that timed
+        // out here keeps running), and when it does this tab really is sharing
+        // the leader's store. Track every transition so the reported state is
+        // the current one instead of frozen at whatever boot saw.
+        this.tabsCoordinator.onRoleChange((role) => {
+          this.sharedActive = role !== 'solo';
+        });
         try {
           const role = await this.tabsCoordinator.start(bootBucket);
           this.sharedActive = true;

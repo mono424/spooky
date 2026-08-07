@@ -44,10 +44,13 @@ export const LEADER_FAILURE_BACKOFF_MS = 1000;
 /** Follower attachment retry: initial delay, doubling per attempt, capped. */
 export const ATTACH_RETRY_INITIAL_MS = 1000;
 export const ATTACH_RETRY_MAX_MS = 30_000;
-/** After this many consecutive elections failing with opfs-unavailable, the
- *  broker allows the next leader to open in memory (reported as degraded)
- *  rather than leaving the namespace leaderless forever. */
-export const OPFS_FAILED_CYCLES_BEFORE_MEMORY = 3;
+/** After this many consecutive failed elections, the broker allows the next
+ *  leader to open in memory (reported as degraded) rather than leaving the
+ *  namespace leaderless forever. Counts EVERY failure reason, not just
+ *  opfs-unavailable: any reason that keeps recurring leaves every tab timing
+ *  out in `start()` and falling back to solo, which is strictly worse than one
+ *  shared in-memory store. */
+export const FAILED_CYCLES_BEFORE_MEMORY = 3;
 
 // ---- identity ---------------------------------------------------------------
 
