@@ -4711,6 +4711,7 @@ fn cloud_supports_restart_targets(client: &mut CloudClient) -> bool {
 pub fn restart(
     targets: Vec<String>,
     all_backends: bool,
+    yes: bool,
     clean: bool,
     upgrade: bool,
     surreal: bool,
@@ -4795,7 +4796,7 @@ pub fn restart(
     // Restarting SurrealDB takes the whole deployment offline for a few
     // seconds, so confirm before pulling the trigger. A single backend does
     // not warrant a prompt — that is the whole point of naming one.
-    if roles.contains("surrealdb") {
+    if roles.contains("surrealdb") && !yes {
         let confirmed = inquire::Confirm::new(&format!(
             "Restart SurrealDB for '{}'? The deployment will be briefly unavailable (data is preserved).",
             slug

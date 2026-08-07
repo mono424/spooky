@@ -285,6 +285,11 @@ enum Commands {
         /// Restart every backend app.
         #[arg(long)]
         all_backends: bool,
+        /// Skip the confirmation prompt shown when the target includes
+        /// SurrealDB. Required in CI and any non-interactive shell, where the
+        /// prompt cannot be answered at all.
+        #[arg(long, short = 'y')]
+        yes: bool,
         /// Also wipe the scheduler's persistent volume. Use after
         /// scheduler state corruption. Does NOT touch SurrealDB data.
         #[arg(long)]
@@ -3025,10 +3030,11 @@ fn main() -> Result<()> {
         Some(Commands::Restart {
             targets,
             all_backends,
+            yes,
             clean,
             upgrade,
             surreal,
-        }) => cloud::restart(targets, all_backends, clean, upgrade, surreal),
+        }) => cloud::restart(targets, all_backends, yes, clean, upgrade, surreal),
         Some(Commands::Push) => cloud::push(),
         Some(Commands::Scale { action }) => match action {
             ScaleCommands::Ssp { count } => cloud::scale(count),
