@@ -307,12 +307,15 @@ async fn write_rollup(db: &Arc<ReconnectingDb>, outcome: &CycleOutcome) {
     };
     let epoch_hour = now_epoch_ms() / 1000 / 3600 * 3600;
     let key = format!("h{}", epoch_hour);
+    // v3 SurrealQL: `type::thing` is gone (`type::record`), and on the
+    // create branch of an UPSERT the SET expressions see fields as NONE
+    // (DEFAULTs apply after), hence the `?? 0`.
     let query = if ok {
-        "UPSERT type::thing('_00_heartbeat_rollup', $key) SET \
+        "UPSERT type::record('_00_heartbeat_rollup', $key) SET \
              bucket = <datetime>$bucket, count += 1, ok += 1, sum_ms += $ms, \
-             max_ms = math::max([max_ms, $ms]), last_e2e_ms = $ms, last_ok_at = time::now()"
+             max_ms = math::max([max_ms ?? 0, $ms]), last_e2e_ms = $ms, last_ok_at = time::now()"
     } else {
-        "UPSERT type::thing('_00_heartbeat_rollup', $key) SET \
+        "UPSERT type::record('_00_heartbeat_rollup', $key) SET \
              bucket = <datetime>$bucket, count += 1"
     };
     let bucket_iso = chrono::DateTime::from_timestamp(epoch_hour as i64, 0)
