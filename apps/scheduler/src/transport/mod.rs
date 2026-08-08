@@ -93,14 +93,20 @@ impl HttpTransport {
         results
     }
 
-    /// GET from a specific SSP endpoint
+    /// GET from a specific SSP endpoint. Sends the bearer like the POST path
+    /// does — harmless on public routes, required for the authed ones
+    /// (`/debug/heartbeat`, `/debug/catchup-rows/*` previously only worked
+    /// when no auth secret was configured).
     pub async fn get_from_ssp(&self, ssp_url: &str, path: &str) -> Result<reqwest::Response> {
         let url = format!("{}{}", ssp_url.trim_end_matches('/'), path);
         debug!("GET {}", url);
 
-        let response = self
-            .client
-            .get(&url)
+        let mut request = self.client.get(&url);
+        if let Some(ref secret) = self.ssp_auth_secret {
+            request = request.bearer_auth(secret);
+        }
+
+        let response = request
             .send()
             .await
             .with_context(|| format!("Failed to GET from SSP at {}", url))?;

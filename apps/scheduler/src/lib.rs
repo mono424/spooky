@@ -26,6 +26,7 @@ pub mod ssp_management;
 pub mod wal;
 pub mod proxy;
 pub mod feature_flags;
+pub mod heartbeat;
 pub mod schedule_engine;
 
 use anyhow::{Context, Result};
@@ -84,9 +85,15 @@ pub async fn drain_and_apply(
     // only rehashes the affected tables, not the whole replica.
     let touched = touched_tables(&events);
 
-    {
+    // Apply in bounded chunks, releasing the write guard between chunks so
+    // queued readers (/proxy pages, registration, integrity checks) interleave
+    // instead of starving for the whole batch. Safe because `drain_lock`
+    // serializes drains and the freeze protocol keeps bootstraps and drains
+    // mutually exclusive — nobody hands out hashes mid-batch.
+    const DRAIN_APPLY_CHUNK: usize = 256;
+    for chunk in events.chunks(DRAIN_APPLY_CHUNK) {
         let mut rep = replica.write().await;
-        for event in &events {
+        for event in chunk {
             let op = match event.update.operation {
                 crate::messages::RecordOp::Create => crate::replica::RecordOp::Create,
                 crate::messages::RecordOp::Update => crate::replica::RecordOp::Update,
@@ -104,15 +111,37 @@ pub async fn drain_and_apply(
                 error!(seq = event.seq, error = ?e, "Failed to apply event to snapshot");
             }
         }
-        if let Err(e) = rep.set_snapshot_state(max_seq, Some(&touched)).await {
+    }
+
+    // Rehash the touched tables under a READ guard — hashing pages whole
+    // tables out of RocksDB and was the dominant write-lock hold (it starved
+    // /proxy for minutes on large tables, livelocking SSP bootstraps). The
+    // content can't move underneath us: drains are serialized by `drain_lock`
+    // and ingest only appends to the buffer, never the replica.
+    let (hashed, failed) = {
+        let rep = replica.read().await;
+        rep.compute_hashes_for(Some(&touched)).await
+    };
+    {
+        let mut rep = replica.write().await;
+        if let Err(e) = rep.commit_snapshot_state(max_seq, hashed, failed).await {
             error!(error = %e, "Failed to persist snapshot state");
         }
     }
 
+    // Truncation rewrites the whole WAL file synchronously — blocking pool,
+    // not a runtime worker (see handle_ingest's append for the same pattern).
     {
-        let mut wal_guard = wal.write().await;
-        if let Err(e) = wal_guard.truncate(max_seq) {
-            error!(error = %e, "Failed to truncate WAL");
+        let wal_guard = Arc::clone(wal).write_owned().await;
+        let truncate_result = tokio::task::spawn_blocking(move || {
+            let mut wal = wal_guard;
+            wal.truncate(max_seq)
+        })
+        .await;
+        match truncate_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => error!(error = %e, "Failed to truncate WAL"),
+            Err(e) => error!(error = %e, "WAL truncate task panicked"),
         }
     }
 
@@ -152,6 +181,16 @@ pub struct Scheduler {
     /// Upstream SurrealDB server version, queried once on connect and surfaced
     /// via `/info` (`"unknown"` until the bootstrap connect populates it).
     surrealdb_version: Arc<RwLock<String>>,
+    /// Shared cap for concurrent schedule-observer tasks (see
+    /// `IngestState::observer_permits`).
+    observer_permits: Arc<tokio::sync::Semaphore>,
+    /// Lock-free mirror of the replica's `snapshot_seq` (see
+    /// `IngestState::snapshot_seq`).
+    snapshot_seq_cell: Arc<AtomicU64>,
+    /// E2E heartbeat probe results, surfaced via `/metrics` and `/health`.
+    pub heartbeat: Arc<crate::heartbeat::HeartbeatStats>,
+    /// The probe's timing config (also drives `/health` staleness math).
+    pub heartbeat_config: crate::heartbeat::Config,
 }
 
 impl Scheduler {
@@ -193,6 +232,7 @@ impl Scheduler {
         }
 
         let max_buffer_per_ssp = config.max_buffer_per_ssp;
+        let snapshot_seq_cell = replica.snapshot_seq_cell();
         Ok(Self {
             config,
             transport,
@@ -205,6 +245,10 @@ impl Scheduler {
             drain_lock: Arc::new(tokio::sync::Mutex::new(())),
             start_time: std::time::Instant::now(),
             surrealdb_version: Arc::new(RwLock::new("unknown".to_string())),
+            observer_permits: Arc::new(tokio::sync::Semaphore::new(8)),
+            snapshot_seq_cell,
+            heartbeat: crate::heartbeat::HeartbeatStats::new(),
+            heartbeat_config: crate::heartbeat::Config::from_env(),
         })
     }
 
@@ -221,6 +265,8 @@ impl Scheduler {
             drain_lock: Arc::clone(&self.drain_lock),
             db_config: Arc::new(self.config().db.clone()),
             job_tables: Arc::new(crate::schedule_engine::job_tables_from_env()),
+            observer_permits: Arc::clone(&self.observer_permits),
+            snapshot_seq: Arc::clone(&self.snapshot_seq_cell),
         }
     }
 
@@ -262,6 +308,8 @@ impl Scheduler {
             ingest: self.ingest_state(),
             replica: Arc::clone(&self.replica),
             surrealdb_version: Arc::clone(&self.surrealdb_version),
+            heartbeat: Arc::clone(&self.heartbeat),
+            heartbeat_config: self.heartbeat_config.clone(),
         }
     }
 
@@ -462,7 +510,20 @@ impl Scheduler {
         // materializes existing users inline on every write; this periodic
         // pass fills in users who signed up since (and self-heals after an
         // interrupted CLI run).
-        crate::feature_flags::spawn(shared_db, self.config.feature_flag_sweep_interval_secs);
+        crate::feature_flags::spawn(
+            Arc::clone(&shared_db),
+            self.config.feature_flag_sweep_interval_secs,
+        );
+
+        // E2E heartbeat probe: writes _00_heartbeat:probe upstream, watches
+        // it round-trip through /ingest → broadcast → every ready SSP.
+        crate::heartbeat::spawn(
+            shared_db,
+            Arc::clone(&self.ssp_pool),
+            Arc::clone(&self.transport),
+            Arc::clone(&self.heartbeat),
+            self.heartbeat_config.clone(),
+        );
 
         // Keep running until shutdown signal
         tokio::signal::ctrl_c().await?;

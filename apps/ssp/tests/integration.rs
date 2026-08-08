@@ -200,6 +200,7 @@ impl TestHarness {
                     bootstrap_page_size: 200,
                     checkpoint_interval_secs: None,
                     max_snapshot_age_secs: 3600,
+                    last_heartbeat_seen: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 })
             },
         };

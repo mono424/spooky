@@ -40,6 +40,7 @@ struct TestHarness {
     query_tracker: Arc<QueryTracker>,
     job_tracker: Arc<JobTracker>,
     config: Arc<SchedulerConfig>,
+    snapshot_seq_cell: Arc<AtomicU64>,
     _replica_dir: TempDir,
     _wal_dir: TempDir,
 }
@@ -96,7 +97,9 @@ impl TestHarness {
             ..SchedulerConfig::default()
         };
 
+        let snapshot_seq_cell = replica.snapshot_seq_cell();
         Self {
+            snapshot_seq_cell,
             replica: Arc::new(RwLock::new(replica)),
             ssp_pool: Arc::new(RwLock::new(SspPool::new(
                 LoadBalanceStrategy::LeastQueries,
@@ -129,6 +132,8 @@ impl TestHarness {
             drain_lock: Arc::clone(&self.drain_lock),
             db_config: Arc::new(self.config.db.clone()),
             job_tables: Arc::new(vec![]),
+            observer_permits: Arc::new(tokio::sync::Semaphore::new(8)),
+            snapshot_seq: Arc::clone(&self.snapshot_seq_cell),
         };
         ingest::create_ingest_router(state)
     }
@@ -196,9 +201,19 @@ impl TestHarness {
                 drain_lock: Arc::clone(&self.drain_lock),
                 db_config: Arc::new(self.config.db.clone()),
                 job_tables: Arc::new(vec![]),
+                observer_permits: Arc::new(tokio::sync::Semaphore::new(8)),
+                snapshot_seq: Arc::clone(&self.snapshot_seq_cell),
             },
             replica: Arc::clone(&self.replica),
             surrealdb_version: Arc::new(RwLock::new("unknown".to_string())),
+            heartbeat: scheduler::heartbeat::HeartbeatStats::new(),
+            heartbeat_config: scheduler::heartbeat::Config {
+                interval_secs: 30,
+                timeout_secs: 25,
+                fail_threshold: 3,
+                ping_url: None,
+                webhook_url: None,
+            },
         };
         metrics::create_metrics_router(state)
     }
@@ -1231,6 +1246,8 @@ mod bootstrap_protocol_tests {
                 drain_lock: Arc::clone(&h.drain_lock),
                 db_config: Arc::new(h.config.db.clone()),
                 job_tables: Arc::new(vec![]),
+                observer_permits: Arc::new(tokio::sync::Semaphore::new(8)),
+                snapshot_seq: Arc::clone(&h.snapshot_seq_cell),
             };
             let app = ingest::create_ingest_router(ingest_state);
 
@@ -1695,6 +1712,8 @@ mod bootstrap_protocol_tests {
                 drain_lock: Arc::clone(&h.drain_lock),
                 db_config: Arc::new(h.config.db.clone()),
                 job_tables: Arc::new(vec![]),
+                observer_permits: Arc::new(tokio::sync::Semaphore::new(8)),
+                snapshot_seq: Arc::clone(&h.snapshot_seq_cell),
             },
         };
         let seq = host.pre_backup().await.unwrap();
@@ -1781,6 +1800,90 @@ mod bootstrap_protocol_tests {
             current_status,
             SchedulerStatus::SnapshotFrozen,
             "Status should be frozen during bootstrap"
+        );
+    }
+
+    /// Regression for the 2026-08-08 wedge: while a writer holds the replica
+    /// write lock for a long time (drain/rehash/reclone), every probe endpoint
+    /// and /ingest must still answer promptly. Before the fix, /health parked
+    /// on `replica.read()` inside `pending_events_snapshot` (holding the
+    /// backend_health read guard across the await), and one queued writer
+    /// then convoyed every reader — total HTTP silence.
+    #[tokio::test]
+    async fn probes_answer_while_replica_write_lock_held() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://localhost:1").await;
+
+        // Hold the replica write lock like a long drain would.
+        let replica = Arc::clone(&h.replica);
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let holder = tokio::spawn(async move {
+            let _guard = replica.write().await;
+            let _ = locked_tx.send(());
+            let _ = release_rx.await;
+        });
+        locked_rx.await.expect("lock holder started");
+
+        let budget = std::time::Duration::from_secs(1);
+        for path in ["/health", "/health/live", "/health/ready", "/metrics", "/info/text"] {
+            let app = h.metrics_router();
+            let res = tokio::time::timeout(budget, get_json(app, path)).await;
+            assert!(
+                res.is_ok(),
+                "{path} must answer within {budget:?} while the replica write lock is held"
+            );
+        }
+
+        // /ingest must also stay live (it never needs the replica lock).
+        let app = h.ingest_router();
+        let payload = ingest_payload("user", "CREATE", "wedge1");
+        let res = tokio::time::timeout(budget, post_json(app, "/ingest", &payload)).await;
+        let (status, _) = res.expect("/ingest must answer while replica write lock is held");
+        assert_eq!(status, StatusCode::OK);
+
+        let _ = release_tx.send(());
+        let _ = holder.await;
+    }
+
+    /// The chunked drain (write guard released between chunks, hashing under
+    /// a read guard) must land on exactly the same state as the old
+    /// single-guard drain: every event applied, seq advanced, and the cached
+    /// hashes equal to a fresh full recompute of the replica content.
+    #[tokio::test]
+    async fn chunked_drain_matches_full_recompute() {
+        let h = TestHarness::new().await;
+
+        // >1 chunk (chunk size 256) spread over three tables.
+        for i in 0..300 {
+            let table = match i % 3 {
+                0 => "user",
+                1 => "game",
+                _ => "comment",
+            };
+            let app = h.ingest_router();
+            let (status, _) = post_json(
+                app,
+                "/ingest",
+                &ingest_payload(table, "CREATE", &format!("rec{i}")),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        assert_eq!(h.event_buffer.read().await.len(), 300);
+
+        let applied = {
+            let _drain = h.drain_lock.lock().await;
+            scheduler::drain_and_apply(&h.event_buffer, &h.replica, &h.wal).await.unwrap()
+        };
+        assert_eq!(applied, 300);
+
+        let rep = h.replica.read().await;
+        assert_eq!(rep.snapshot_seq(), 300);
+        assert_eq!(
+            rep.snapshot_hashes(),
+            &rep.compute_table_hashes().await.unwrap(),
+            "chunked drain must leave cached hashes equal to content"
         );
     }
 }

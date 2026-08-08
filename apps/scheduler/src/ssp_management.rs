@@ -1241,10 +1241,13 @@ async fn fetch_ssp_catchup_rows(
 /// `Ok(false)` if another task already holds the lock (caller falls back to a
 /// plain re-bootstrap), `Err` on a clone failure.
 ///
-/// Mirrors the bootstrap clone in `Scheduler::start`: reset the replica, clone
-/// every table from upstream, then rehash at the current global seq. Holds the
-/// replica write lock for the whole clone so in-flight bootstrap reads see a
-/// consistent snapshot (they block, then read the fresh clone).
+/// Two-phase, mirroring the bootstrap clone in `Scheduler::start` but without
+/// its worst property: phase 1 pages every table from upstream into a disk
+/// spool while holding NO replica lock (the network clone is the slow part —
+/// the old version held the write lock across it, starving /proxy and every
+/// probe for minutes); phase 2 takes the write lock only for reset + local
+/// bulk load + rehash, so in-flight bootstrap reads still see a consistent
+/// snapshot (they block, then read the fresh clone).
 async fn reclone_replica_from_upstream(
     config: &SchedulerConfig,
     replica: &Arc<RwLock<Replica>>,
@@ -1260,14 +1263,30 @@ async fn reclone_replica_from_upstream(
         .await
         .context("reclone: connect to upstream SurrealDB failed")?;
 
-    // Snapshot the seq the clone reflects BEFORE the (slow) ingest, matching
+    // Snapshot the seq the clone reflects BEFORE the (slow) fetch, matching
     // the bootstrap path — new events past this point re-arrive via replay.
     let seq = seq_counter.load(Ordering::SeqCst);
 
+    // Phase 1: network → disk, no lock. Spool next to the replica so the
+    // local load stays on the same filesystem.
+    let spool_parent = config
+        .replica_db_path
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(std::env::temp_dir);
+    let manifest = Replica::fetch_all_to_spool(&db, &spool_parent)
+        .await
+        .context("reclone: spool fetch from upstream failed")?;
+
+    // Phase 2: disk → replica, short(er) write lock. Reset+load must be
+    // atomic vs readers; a failure here leaves a reset replica, which is the
+    // same failure mode the single-phase version had.
     {
         let mut rep = replica.write().await;
         rep.reset().await.context("reclone: replica reset failed")?;
-        rep.ingest_all(&db).await.context("reclone: ingest_all failed")?;
+        rep.load_from_spool(&manifest)
+            .await
+            .context("reclone: spool load failed")?;
         rep.set_snapshot_state(seq, None)
             .await
             .context("reclone: set_snapshot_state failed")?;

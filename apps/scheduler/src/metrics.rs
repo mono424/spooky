@@ -19,6 +19,21 @@ use crate::query::QueryTracker;
 use crate::replica::Replica;
 use crate::router::{SspPool, SspState};
 
+/// Local IP, resolved once at startup by `init_local_ip`. `hostname -I` is a
+/// blocking fork+exec — running it per `/info` request stalled a runtime
+/// worker; under memory pressure the fork itself can hang.
+static LOCAL_IP: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Resolve and cache the local IP (first non-loopback IPv4). Call once from
+/// `main` before serving; runs the blocking command on the blocking pool.
+pub async fn init_local_ip() {
+    let ip = tokio::task::spawn_blocking(get_local_ip)
+        .await
+        .ok()
+        .flatten();
+    let _ = LOCAL_IP.set(ip);
+}
+
 /// Get the local IP address from network interfaces (first non-loopback IPv4)
 fn get_local_ip() -> Option<String> {
     // Try reading from /proc/net/fib_trie or use a simpler approach
@@ -49,6 +64,12 @@ pub struct SchedulerMetrics {
     pub snapshot_seq: u64,
     pub latest_seq: u64,
     pub lag: u64,
+    /// E2E heartbeat: last successful probe latency (`None` = never / off).
+    pub heartbeat_last_e2e_ms: Option<u64>,
+    /// Epoch-ms of the last successful probe (`None` = never / off).
+    pub heartbeat_last_ok_epoch_ms: Option<u64>,
+    pub heartbeat_consecutive_failures: u32,
+    pub heartbeat_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +96,8 @@ pub struct MetricsState {
     pub ingest: IngestState,
     pub replica: Arc<RwLock<Replica>>,
     pub surrealdb_version: Arc<RwLock<String>>,
+    pub heartbeat: Arc<crate::heartbeat::HeartbeatStats>,
+    pub heartbeat_config: crate::heartbeat::Config,
 }
 
 /// Create metrics router
@@ -82,6 +105,11 @@ pub fn create_metrics_router(state: MetricsState) -> Router {
     Router::new()
         .route("/metrics", get(get_metrics))
         .route("/health", get(health_check))
+        // Pure liveness: touches NO shared state, NO locks, NO awaits. The
+        // contract for external monitors: `/health/live` 200 while `/health`
+        // times out = the process is alive but the runtime/locks are wedged —
+        // restart it. Keep this handler dependency-free forever.
+        .route("/health/live", get(|| async { StatusCode::OK }))
         .route("/health/ready", get(ready_check))
         .route("/health/snapshot", get(snapshot_check))
         .route("/info", get(info_handler))
@@ -90,6 +118,14 @@ pub fn create_metrics_router(state: MetricsState) -> Router {
         // Permissive CORS so browser DevTools can read /info cross-origin
         // (simple GETs, no preflight needed).
         .layer(middleware::from_fn(cors_allow_all))
+        // Health/introspection must answer fast or fail fast: a probe that
+        // hangs is worse than a probe that 408s (inner layer wins over the
+        // global one in main.rs). /health/snapshot legitimately scans the
+        // replica, hence 30s rather than a tighter budget.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(30),
+        ))
         .with_state(state)
 }
 
@@ -108,39 +144,48 @@ async fn cors_allow_all(req: Request, next: Next) -> Response {
 async fn get_metrics(
     State(state): State<MetricsState>,
 ) -> Result<Json<Metrics>, (StatusCode, String)> {
-    let pool = state.ssp_pool.read().await;
+    // Lock discipline (all handlers in this file): copy what we need out of a
+    // guard inside a block and DROP it before the next await. tokio's RwLock
+    // is write-preferring — a read guard held across an await plus one queued
+    // writer blocks every later reader, which is how one long drain turned
+    // into total HTTP silence (2026-08-08).
+    let (total_ssps, ready_ssps, ssps) = {
+        let pool = state.ssp_pool.read().await;
+        let total_ssps = pool.count();
+        let ready_ssps = pool
+            .all()
+            .iter()
+            .filter(|ssp| pool.is_ready(&ssp.id))
+            .count();
+        let ssps: Vec<SspMetrics> = pool
+            .all()
+            .iter()
+            .map(|ssp| {
+                let now = std::time::Instant::now();
+                let last_heartbeat_seconds_ago = now
+                    .duration_since(ssp.last_heartbeat)
+                    .as_secs();
+
+                SspMetrics {
+                    id: ssp.id.clone(),
+                    query_count: ssp.query_count,
+                    views: ssp.views,
+                    cpu_usage: ssp.cpu_usage,
+                    memory_usage: ssp.memory_usage,
+                    last_heartbeat_seconds_ago,
+                }
+            })
+            .collect();
+        (total_ssps, ready_ssps, ssps)
+    };
+
     let query_assignments = state.query_tracker.all().await;
     let running_jobs = state.job_tracker.running_count().await;
-
-    let total_ssps = pool.count();
-    let ready_ssps = pool
-        .all()
-        .iter()
-        .filter(|ssp| pool.is_ready(&ssp.id))
-        .count();
-
-    let ssps: Vec<SspMetrics> = pool
-        .all()
-        .iter()
-        .map(|ssp| {
-            let now = std::time::Instant::now();
-            let last_heartbeat_seconds_ago = now
-                .duration_since(ssp.last_heartbeat)
-                .as_secs();
-
-            SspMetrics {
-                id: ssp.id.clone(),
-                query_count: ssp.query_count,
-                views: ssp.views,
-                cpu_usage: ssp.cpu_usage,
-                memory_usage: ssp.memory_usage,
-                last_heartbeat_seconds_ago,
-            }
-        })
-        .collect();
-
     let pending = pending_events_snapshot(&state.ingest).await;
 
+    let hb = &state.heartbeat;
+    let hb_last_e2e = hb.last_e2e_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let hb_last_ok = hb.last_ok_epoch_ms.load(std::sync::atomic::Ordering::Relaxed);
     let metrics = Metrics {
         scheduler: SchedulerMetrics {
             total_ssps,
@@ -152,6 +197,12 @@ async fn get_metrics(
             snapshot_seq: pending.snapshot_seq,
             latest_seq: pending.latest_seq,
             lag: pending.lag,
+            heartbeat_last_e2e_ms: (hb_last_e2e != u64::MAX).then_some(hb_last_e2e),
+            heartbeat_last_ok_epoch_ms: (hb_last_ok > 0).then_some(hb_last_ok),
+            heartbeat_consecutive_failures: hb
+                .consecutive_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
+            heartbeat_enabled: hb.enabled.load(std::sync::atomic::Ordering::Relaxed),
         },
         ssps,
     };
@@ -184,11 +235,16 @@ async fn health_check(
         (total, ready, pool.has_active_bootstrap())
     };
 
-    let backends = state.backend_health.read().await;
-    let total_backends = backends.len();
-    let healthy_backends = backends.iter().filter(|b| b.status == BackendStatus::Healthy).count();
-    let unhealthy_backends = backends.iter().filter(|b| b.status == BackendStatus::Unhealthy).count();
-    let unreachable_backends = backends.iter().filter(|b| b.status == BackendStatus::Unreachable).count();
+    // Counts only — the guard must not live past this block (see get_metrics).
+    let (total_backends, healthy_backends, unhealthy_backends, unreachable_backends) = {
+        let backends = state.backend_health.read().await;
+        (
+            backends.len(),
+            backends.iter().filter(|b| b.status == BackendStatus::Healthy).count(),
+            backends.iter().filter(|b| b.status == BackendStatus::Unhealthy).count(),
+            backends.iter().filter(|b| b.status == BackendStatus::Unreachable).count(),
+        )
+    };
 
     let ssps_ok = ready_ssps > 0;
     let all_backends_ok = total_backends == 0 || healthy_backends == total_backends;
@@ -214,9 +270,21 @@ async fn health_check(
     let pending = pending_events_snapshot(&state.ingest).await;
     let lag_exceeded = health_max_lag().is_some_and(|max| pending.lag > max);
 
+    // E2E heartbeat staleness degrades rather than 503s, same reasoning as
+    // `stalled` above: a restart does not fix a dead upstream event pipeline.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let heartbeat_stale = state.heartbeat.is_stale(&state.heartbeat_config, now_ms);
+    let hb_last_e2e = state
+        .heartbeat
+        .last_e2e_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
+
     let (status_code, status_str) = if !ssps_ok || all_backends_down {
         (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
-    } else if ssps_ok && all_backends_ok && !stalled && !lag_exceeded {
+    } else if ssps_ok && all_backends_ok && !stalled && !lag_exceeded && !heartbeat_stale {
         (StatusCode::OK, "healthy")
     } else {
         (StatusCode::OK, "degraded")
@@ -241,6 +309,15 @@ async fn health_check(
             "latest_seq": pending.latest_seq,
             "lag": pending.lag,
             "stalled": stalled,
+        },
+        "heartbeat": {
+            "enabled": state.heartbeat.enabled.load(std::sync::atomic::Ordering::Relaxed),
+            "stale": heartbeat_stale,
+            "last_e2e_ms": (hb_last_e2e != u64::MAX).then_some(hb_last_e2e),
+            "consecutive_failures": state
+                .heartbeat
+                .consecutive_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
         }
     })))
 }
@@ -376,10 +453,47 @@ async fn info_handler(
         SchedulerStatus::Restoring => "restoring",
     };
 
-    let pool = state.ssp_pool.read().await;
-    let total_views: usize = pool.all().iter().map(|ssp| ssp.views).sum();
-
-    let now = std::time::Instant::now();
+    // Copy everything pool-derived out and drop the guard before the awaits
+    // below — this guard held across `pending_events_snapshot` was one half
+    // of the reader-convoy wedge (see get_metrics).
+    let (total_views, ssp_entities) = {
+        let pool = state.ssp_pool.read().await;
+        let now = std::time::Instant::now();
+        let total_views: usize = pool.all().iter().map(|ssp| ssp.views).sum();
+        let ssp_entities: Vec<serde_json::Value> = pool
+            .all()
+            .iter()
+            .map(|ssp| {
+                let ssp_status = match pool.get_state(&ssp.id) {
+                    Some(SspState::Bootstrapping) => "bootstrapping",
+                    Some(SspState::Replaying) => "replaying",
+                    Some(SspState::Ready) => "ready",
+                    None => "unknown",
+                };
+                let last_heartbeat_seconds_ago = now
+                    .duration_since(ssp.last_heartbeat)
+                    .as_secs();
+                // Extract IP from SSP's registered URL (e.g. "http://10.100.1.30:8667" -> "10.100.1.30")
+                let ssp_ip = ssp.url.trim_start_matches("http://")
+                    .split(':').next()
+                    .map(|s| s.to_string());
+                let ssp_env = ssp.env.as_ref()
+                    .map(|e| serde_json::Value::Object(mask_sensitive_env(hashmap_env_to_map(e))));
+                serde_json::json!({
+                    "entity": "ssp",
+                    "id": ssp.id,
+                    "ip": ssp_ip,
+                    "status": ssp_status,
+                    "views": ssp.views,
+                    "version": ssp.version,
+                    "uptime_seconds": now.duration_since(ssp.connected_at).as_secs(),
+                    "last_heartbeat_seconds_ago": last_heartbeat_seconds_ago,
+                    "env": ssp_env,
+                })
+            })
+            .collect();
+        (total_views, ssp_entities)
+    };
 
     // Collect scheduler environment variables
     let env_vars: serde_json::Map<String, serde_json::Value> = [
@@ -390,8 +504,8 @@ async fn info_handler(
         std::env::var(key).ok().map(|val| (key.to_string(), serde_json::Value::String(val)))
     }).collect();
 
-    // Get scheduler's own IP from network interfaces or env
-    let scheduler_ip = get_local_ip();
+    // Cached at startup — never fork on the request path.
+    let scheduler_ip = LOCAL_IP.get().cloned().flatten();
 
     let pending = pending_events_snapshot(&state.ingest).await;
     let surrealdb_version = state.surrealdb_version.read().await.clone();
@@ -413,57 +527,32 @@ async fn info_handler(
         "env": mask_sensitive_env(env_vars),
     })];
 
-    for ssp in pool.all() {
-        let ssp_status = match pool.get_state(&ssp.id) {
-            Some(SspState::Bootstrapping) => "bootstrapping",
-            Some(SspState::Replaying) => "replaying",
-            Some(SspState::Ready) => "ready",
-            None => "unknown",
-        };
-        let last_heartbeat_seconds_ago = now
-            .duration_since(ssp.last_heartbeat)
-            .as_secs();
-        // Extract IP from SSP's registered URL (e.g. "http://10.100.1.30:8667" -> "10.100.1.30")
-        let ssp_ip = ssp.url.trim_start_matches("http://")
-            .split(':').next()
-            .map(|s| s.to_string());
-        let ssp_env = ssp.env.as_ref()
-            .map(|e| serde_json::Value::Object(mask_sensitive_env(hashmap_env_to_map(e))));
-        entities.push(serde_json::json!({
-            "entity": "ssp",
-            "id": ssp.id,
-            "ip": ssp_ip,
-            "status": ssp_status,
-            "views": ssp.views,
-            "version": ssp.version,
-            "uptime_seconds": now.duration_since(ssp.connected_at).as_secs(),
-            "last_heartbeat_seconds_ago": last_heartbeat_seconds_ago,
-            "env": ssp_env,
-        }));
-    }
+    entities.extend(ssp_entities);
 
-    // Read cached backend health status
-    let backend_entries = state.backend_health.read().await;
-    for entry in backend_entries.iter() {
-        let backend_env = entry.env.as_ref()
-            .map(|e| serde_json::Value::Object(mask_sensitive_env(vec_env_to_map(e))));
-        entities.push(serde_json::json!({
-            "entity": "backend",
-            "id": entry.name,
-            "ip": entry.ip(),
-            "url": entry.url,
-            "port": entry.port,
-            "status": entry.status.as_str(),
-            "healthcheck": entry.healthcheck,
-            "last_checked": entry.last_checked.map(|t| {
-                chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
-            }),
-            "last_healthy": entry.last_healthy.map(|t| {
-                chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
-            }),
-            "response_time_ms": entry.response_time_ms,
-            "env": backend_env,
-        }));
+    // Read cached backend health status (guard scoped to this block).
+    {
+        let backend_entries = state.backend_health.read().await;
+        for entry in backend_entries.iter() {
+            let backend_env = entry.env.as_ref()
+                .map(|e| serde_json::Value::Object(mask_sensitive_env(vec_env_to_map(e))));
+            entities.push(serde_json::json!({
+                "entity": "backend",
+                "id": entry.name,
+                "ip": entry.ip(),
+                "url": entry.url,
+                "port": entry.port,
+                "status": entry.status.as_str(),
+                "healthcheck": entry.healthcheck,
+                "last_checked": entry.last_checked.map(|t| {
+                    chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+                }),
+                "last_healthy": entry.last_healthy.map(|t| {
+                    chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339()
+                }),
+                "response_time_ms": entry.response_time_ms,
+                "env": backend_env,
+            }));
+        }
     }
 
     Json(serde_json::Value::Array(entities))

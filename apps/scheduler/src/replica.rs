@@ -101,6 +101,23 @@ pub struct ReplicaChunk {
     pub records: Vec<(String, Value)>,
 }
 
+/// One table paged out of the remote into a JSONL spool file
+/// (see [`Replica::fetch_all_to_spool`]).
+pub struct SpooledTable {
+    pub table: String,
+    pub path: std::path::PathBuf,
+    pub records: usize,
+}
+
+/// A completed phase-1 spool: every sync table on disk plus the fetched view
+/// definitions. Dropping it deletes the spool directory.
+pub struct SpoolManifest {
+    /// Owns the temp dir so the spool is cleaned up on drop.
+    _dir: tempfile::TempDir,
+    pub tables: Vec<SpooledTable>,
+    pub views: Vec<Value>,
+}
+
 /// Persistent replica backed by embedded SurrealDB with RocksDB
 pub struct Replica {
     db: Surreal<surrealdb::engine::local::Db>,
@@ -122,6 +139,10 @@ pub struct Replica {
     /// stale (or absent) hash indefinitely. Not persisted: a fresh process
     /// re-derives the truth via `startup_integrity_check`.
     dirty_hashes: BTreeSet<String>,
+    /// Lock-free mirror of `snapshot_seq` for health/metrics readers. A drain
+    /// or reclone holds the replica write lock for a long time; probes must
+    /// never queue behind it just to read one number.
+    seq_cell: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Replica {
@@ -165,12 +186,26 @@ impl Replica {
             snapshot_hashes,
             known_tables,
             dirty_hashes: BTreeSet::new(),
+            seq_cell: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(snapshot_seq)),
         })
     }
 
     /// Get current snapshot sequence number
     pub fn snapshot_seq(&self) -> u64 {
         self.snapshot_seq
+    }
+
+    /// Shared lock-free view of `snapshot_seq` (see `seq_cell`). Clone once at
+    /// wiring time; reading it never touches the replica lock.
+    pub fn snapshot_seq_cell(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+        std::sync::Arc::clone(&self.seq_cell)
+    }
+
+    /// Keep the atomic mirror in step with `snapshot_seq`. Call from every
+    /// site that assigns the field.
+    fn publish_seq(&self) {
+        self.seq_cell
+            .store(self.snapshot_seq, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Per-table content hashes at the current `snapshot_seq`.
@@ -187,29 +222,46 @@ impl Replica {
     /// supplied tables. Pass `None` for `touched_tables` after a full clone
     /// to recompute every known table; pass `Some(set)` from the drain loop
     /// to only rehash the tables a batch touched.
+    ///
+    /// Convenience wrapper over [`Self::compute_hashes_for`] +
+    /// [`Self::commit_snapshot_state`] — hashing happens under whatever lock
+    /// the caller already holds. Callers that can afford it (the drain loop)
+    /// should hash under a READ guard and only take the write guard for the
+    /// commit: hashing pages whole tables out of RocksDB, and holding the
+    /// write lock for that starves /proxy and every bootstrap.
     pub async fn set_snapshot_state(
         &mut self,
         seq: u64,
         touched_tables: Option<&BTreeSet<String>>,
     ) -> Result<()> {
-        self.snapshot_seq = seq;
+        let (hashed, failed) = self.compute_hashes_for(touched_tables).await;
+        self.commit_snapshot_state(seq, hashed, failed).await
+    }
 
+    /// Hash the supplied tables (`None` = every known table) plus anything a
+    /// previous attempt failed to hash. Pure read — safe under a read guard.
+    /// Returns the successfully computed hashes and the set that failed.
+    ///
+    /// The dirty-hash retry matters: a single transient error would otherwise
+    /// drop that table out of the hash map until the next full recompute — and
+    /// a missing entry reads as the *empty-table* hash in `diff_table_hashes`,
+    /// so every bootstrap of a populated table mismatched from then on.
+    pub async fn compute_hashes_for(
+        &self,
+        touched_tables: Option<&BTreeSet<String>>,
+    ) -> (BTreeMap<String, String>, BTreeSet<String>) {
         let mut to_hash: BTreeSet<String> = match touched_tables {
             Some(t) => t.clone(),
             None => self.known_tables.clone(),
         };
-        // Retry anything a previous call failed to hash. Otherwise a single
-        // transient error dropped that table out of the hash map until the next
-        // full recompute — and a missing entry reads as the *empty-table* hash
-        // in `diff_table_hashes`, so every bootstrap of a populated table
-        // mismatched from then on.
         to_hash.extend(self.dirty_hashes.iter().cloned());
 
+        let mut hashed = BTreeMap::new();
+        let mut failed = BTreeSet::new();
         for table in &to_hash {
             match self.hash_one_table(table).await {
                 Ok(hash) => {
-                    self.snapshot_hashes.insert(table.clone(), hash);
-                    self.dirty_hashes.remove(table);
+                    hashed.insert(table.clone(), hash);
                 }
                 Err(e) => {
                     // Don't fail the snapshot advance just because one table
@@ -218,9 +270,30 @@ impl Replica {
                     // indistinguishable from "empty table") and mark it for
                     // retry on the next advance.
                     warn!(table = %table, error = %e, "Failed to hash table — keeping previous hash, will retry");
-                    self.dirty_hashes.insert(table.clone());
+                    failed.insert(table.clone());
                 }
             }
+        }
+        (hashed, failed)
+    }
+
+    /// Commit a snapshot advance: fold in hashes from `compute_hashes_for`,
+    /// mark failures for retry, and persist. Milliseconds under a write guard.
+    pub async fn commit_snapshot_state(
+        &mut self,
+        seq: u64,
+        hashed: BTreeMap<String, String>,
+        failed: BTreeSet<String>,
+    ) -> Result<()> {
+        self.snapshot_seq = seq;
+        self.publish_seq();
+
+        for (table, hash) in hashed {
+            self.dirty_hashes.remove(&table);
+            self.snapshot_hashes.insert(table, hash);
+        }
+        for table in failed {
+            self.dirty_hashes.insert(table);
         }
 
         let hashes_value = serde_json::to_value(&self.snapshot_hashes)
@@ -414,50 +487,7 @@ impl Replica {
     {
         let total_start = std::time::Instant::now();
 
-        // Discover tables from remote. Tolerate "database doesn't exist yet"
-        // by treating it as an empty table list — the scheduler may legitimately
-        // be pointed at a fresh SurrealDB where neither the user schema nor
-        // Phase 4a has run.
-        trace!("remote query: INFO FOR DB");
-        let info: Value = match remote_db.query("INFO FOR DB").await {
-            Ok(mut response) => {
-                let v: Vec<Value> = response.take(0).unwrap_or_default();
-                v.into_iter().next().unwrap_or_default()
-            }
-            Err(e) if is_missing_error(&e) => {
-                debug!("INFO FOR DB on missing database — treating as empty");
-                Value::Null
-            }
-            Err(e) => return Err(anyhow::Error::from(e).context("Failed to query INFO FOR DB on remote")),
-        };
-
-        // If the upstream has no `tables` block, ingest nothing. (Previously a
-        // hardcoded `[thread, job, user]` fallback lived here — actively wrong
-        // for any project not happening to use those exact names.)
-        //
-        // Tables marked `-- @nosync` carry a `COMMENT 'sp00ky:nosync'` marker in
-        // their `DEFINE TABLE` string (baked in by the CLI). They are excluded
-        // from the snapshot entirely — never cloned, never added to
-        // `known_tables`, never hashed. They remain in the main DB (still
-        // backed up); they just don't participate in sync.
-        let tables: Vec<String> = match info.get("tables") {
-            Some(Value::Object(tables_map)) => tables_map
-                .iter()
-                .filter(|(name, _)| !ssp_protocol::table_excluded_from_sync(name))
-                .filter(|(name, def)| {
-                    let nosync = def
-                        .as_str()
-                        .map(ssp_protocol::define_str_is_nosync)
-                        .unwrap_or(false);
-                    if nosync {
-                        info!(table = %name, "Excluding @nosync table from snapshot");
-                    }
-                    !nosync
-                })
-                .map(|(name, _)| name.clone())
-                .collect(),
-            _ => Vec::new(),
-        };
+        let tables = Self::discover_sync_tables(remote_db).await?;
 
         // Track which tables we are about to populate so the integrity-check
         // path can rediscover them after a restart (INFO FOR DB on the
@@ -485,207 +515,11 @@ impl Replica {
                 table_name,
             );
 
-            // Page the SELECT instead of pulling the whole table in one shot.
-            // The SurrealDB Rust SDK's WebSocket engine inherits tungstenite's
-            // default `max_message_size` of 64 MiB. A SELECT response that
-            // exceeds that fails the entire query, which historically caused
-            // bootstrap to stall on tables past ~60 MiB. Paging reads the
-            // table as a sequence of bounded responses; we then concatenate
-            // the pages into the same `Vec<Value>` the rest of the loop
-            // expects.
-            //
-            // Page size is chosen adaptively: a one-row probe measures actual
-            // serialised row size, then we pick a page count that targets
-            // ~32 MiB per response (half the WS frame ceiling, comfortable
-            // headroom). `SPKY_BOOTSTRAP_PAGE_SIZE` lets the operator override
-            // the result.
-            //
-            // Take the SDK's own `Value` then call `into_json_value()` so
-            // RecordId/Datetime are flattened into normal JSON strings instead
-            // of `{"RecordId":{...}}` shapes. Direct deserialization into
-            // `serde_json::Value` doesn't work on SurrealDB 3.0. Tolerate the
-            // table disappearing between INFO FOR DB and SELECT (race) or
-            // simply not existing yet — treat as zero records and move on.
-            let target_page_bytes: usize = 32 * 1024 * 1024;
-            let probe_row_bytes: Option<usize> = match remote_db
-                .query(format!("SELECT * FROM {} LIMIT 1", table_name))
-                .await
-            {
-                Ok(mut r) => match r.take::<surrealdb::types::Value>(0) {
-                    Ok(sdk_val) => match sdk_val.into_json_value() {
-                        Value::Array(arr) => arr
-                            .first()
-                            .map(|v| serde_json::to_vec(v).map(|b| b.len()).unwrap_or(1024)),
-                        _ => None,
-                    },
-                    Err(_) => None,
-                },
-                Err(_) => None,
-            };
-            let auto_page_size = probe_row_bytes
-                .map(|b| (target_page_bytes / b.max(1)).max(1))
-                .unwrap_or(200);
-            let page_size: usize = std::env::var("SPKY_BOOTSTRAP_PAGE_SIZE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .filter(|n: &usize| *n > 0)
-                .unwrap_or(auto_page_size)
-                // Hard ceiling to avoid pathological large pages even if
-                // the probe misses (e.g. variable row sizes).
-                .min(2000);
-            if let Some(b) = probe_row_bytes {
-                trace!(
-                    table = %table_name,
-                    probe_bytes_per_row = b,
-                    page_size,
-                    "bootstrap page-size auto-tuned",
-                );
-            }
-            let mut records: Vec<Value> = Vec::new();
-            // Keyset cursor: the highest `id` paged so far (`None` = first page).
-            // Offset (`START n`) pagination silently drops rows when a concurrent
-            // write shifts the table between page requests — and the remote DB is
-            // LIVE during bootstrap — leaving the replica (and every SSP that
-            // bootstraps from it) with an incomplete table. An incomplete circuit
-            // can't emit a removal for a record it never loaded, so deletes of the
-            // dropped rows never reach clients live. Resume by `id > $last`
-            // instead: a delete behind the cursor can't shift rows ahead of it out
-            // of view. Mirrors `bootstrap_page_query` in apps/ssp.
-            let mut after_id: Option<String> = None;
-            let table_missing;
-            loop {
-                let query = keyset_page_query(table_name, page_size, after_id.as_deref());
-                trace!(table = %table_name, after_id = ?after_id, page_size, "remote page query: {}", query);
-                let resp = remote_db.query(query).await;
-                let page: Vec<Value> = match resp {
-                    Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
-                        Ok(sdk_val) => match sdk_val.into_json_value() {
-                            Value::Array(arr) => arr,
-                            other => bail!(
-                                "Expected array from paged SELECT on {}, got {}",
-                                table_name,
-                                json_kind(&other),
-                            ),
-                        },
-                        Err(e) if is_missing_error(&e) => {
-                            debug!(table = %table_name, "remote table missing during page take — stopping");
-                            table_missing = true;
-                            break;
-                        }
-                        Err(e) => return Err(anyhow::anyhow!(
-                            "take(0) failed for table '{}' page (after_id={:?}): {}",
-                            table_name, after_id, e,
-                        )),
-                    },
-                    Err(e) if is_missing_error(&e) => {
-                        debug!(table = %table_name, "remote table missing during page query — stopping");
-                        table_missing = true;
-                        break;
-                    }
-                    Err(e) => return Err(anyhow::Error::from(e)
-                        .context(format!(
-                            "SELECT page from {} (after_id={:?}, limit={}) failed",
-                            table_name, after_id, page_size,
-                        ))),
-                };
-                let n = page.len();
-                // Advance the cursor to this page's last id (page is ORDER BY id,
-                // so the last row carries the max id) BEFORE consuming `page`.
-                let next_after = page
-                    .last()
-                    .and_then(|row| row.get("id"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                records.extend(page);
-                if n < page_size {
-                    table_missing = false;
-                    break;
-                }
-                // No usable id to resume from → stop rather than loop forever.
-                match next_after {
-                    Some(id) => after_id = Some(id),
-                    None => break,
-                }
-            }
-            // `table_missing` is captured for parity with the old single-shot
-            // path. We don't use it further; the rest of the loop simply
-            // proceeds with whatever records we collected (possibly zero).
-            let _ = table_missing;
-
+            let records = Self::page_whole_table(remote_db, table_name).await?;
             let count = records.len();
             let fetch_ms = table_start.elapsed().as_millis();
             let insert_start = std::time::Instant::now();
-
-            // Bulk-insert in batches. The previous per-record `CREATE … CONTENT`
-            // loop was O(N) round-trips; for tables where each record is large
-            // (e.g. tens to hundreds of KiB) the per-call cost in SurrealDB 3.0
-            // was non-linear and stalled bootstrap entirely past ~60 MiB total.
-            // `INSERT INTO <table> $records` collapses each batch to one
-            // round-trip and lets the engine handle the value tree at bulk.
-            //
-            // We still validate per-record that `id` exists; we let SurrealDB
-            // parse the string id (e.g. "comment:42") into the record-id field
-            // on insert. `.check()` once per batch is enough because a single
-            // bad record fails the whole batch (same outer semantic as the old
-            // loop: any insert failure aborts the whole snapshot clone).
-            const INSERT_BATCH_SIZE: usize = 500;
-            let chunks: Vec<Vec<Value>> = records
-                .chunks(INSERT_BATCH_SIZE)
-                .map(<[Value]>::to_vec)
-                .collect();
-            for (chunk_idx, mut chunk) in chunks.into_iter().enumerate() {
-                // Validate ids upfront so we can give a specific error on the
-                // offending record, matching the old loop's behaviour. Also
-                // strip the leading `<table>:` from each id — without it,
-                // SurrealDB INSERT INTO treats the colon as part of an
-                // escaped composite id and stores the row as
-                // `<table>:`<table>:<raw>``, breaking every SELECT-by-id
-                // query against the replica.
-                let table_prefix = format!("{}:", table_name);
-                for (within, rec) in chunk.iter_mut().enumerate() {
-                    let obj = match rec.as_object_mut() {
-                        Some(o) => o,
-                        None => anyhow::bail!(
-                            "Record {}/{} in '{}' (batch {}) is not a JSON object",
-                            within,
-                            chunk_idx,
-                            table_name,
-                            chunk_idx,
-                        ),
-                    };
-                    let id = obj
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| anyhow::anyhow!(
-                            "Record {}/{} in '{}' (batch {}) missing string `id` after JSON flatten",
-                            within,
-                            chunk_idx,
-                            table_name,
-                            chunk_idx,
-                        ))?
-                        .to_string();
-                    let raw = id.strip_prefix(&table_prefix).unwrap_or(&id).to_string();
-                    obj.insert("id".to_string(), Value::String(raw));
-                }
-                let chunk_len = chunk.len();
-                trace!(
-                    table = %table_name,
-                    chunk = chunk_idx,
-                    records = chunk_len,
-                    "bootstrap INSERT batch"
-                );
-                self.db
-                    .query(format!("INSERT INTO {} $records RETURN NONE", table_name))
-                    .bind(("records", Value::Array(chunk)))
-                    .await
-                    .with_context(|| format!(
-                        "INSERT into {} batch {} send failed", table_name, chunk_idx,
-                    ))?
-                    .check()
-                    .with_context(|| format!(
-                        "INSERT into {} batch {} returned an error", table_name, chunk_idx,
-                    ))?;
-            }
+            self.bulk_insert(table_name, records).await?;
 
             let insert_ms = insert_start.elapsed().as_millis();
             total_records += count;
@@ -704,12 +538,285 @@ impl Replica {
             );
         }
 
-        // Copy view definitions. Tolerate `_00_query` not existing yet — happens
-        // when the scheduler is pointed at a fresh SurrealDB before Phase 4a
-        // has applied the internal Sp00ky schema.
         let views_start = std::time::Instant::now();
+        let views = Self::fetch_remote_views(remote_db).await?;
+        let view_count = self.insert_views(views).await?;
+        info!(
+            views = view_count,
+            elapsed_ms = views_start.elapsed().as_millis() as u64,
+            "Copied {} view definitions",
+            view_count,
+        );
+
+        info!(
+            tables = tables.len(),
+            records = total_records,
+            views = view_count,
+            elapsed_ms = total_start.elapsed().as_millis() as u64,
+            "Snapshot clone summary: {} tables, {} records, {} views in {}ms",
+            tables.len(),
+            total_records,
+            view_count,
+            total_start.elapsed().as_millis(),
+        );
+
+        Ok(())
+    }
+
+    /// Discover the sync-relevant tables on the remote. Tolerates "database
+    /// doesn't exist yet" by treating it as an empty table list — the
+    /// scheduler may legitimately be pointed at a fresh SurrealDB where
+    /// neither the user schema nor Phase 4a has run.
+    ///
+    /// If the upstream has no `tables` block, ingest nothing. (Previously a
+    /// hardcoded `[thread, job, user]` fallback lived here — actively wrong
+    /// for any project not happening to use those exact names.)
+    ///
+    /// Tables marked `-- @nosync` carry a `COMMENT 'sp00ky:nosync'` marker in
+    /// their `DEFINE TABLE` string (baked in by the CLI). They are excluded
+    /// from the snapshot entirely — never cloned, never added to
+    /// `known_tables`, never hashed. They remain in the main DB (still
+    /// backed up); they just don't participate in sync.
+    async fn discover_sync_tables<C>(remote_db: &surrealdb::Surreal<C>) -> Result<Vec<String>>
+    where
+        C: surrealdb::Connection,
+    {
+        trace!("remote query: INFO FOR DB");
+        let info: Value = match remote_db.query("INFO FOR DB").await {
+            Ok(mut response) => {
+                let v: Vec<Value> = response.take(0).unwrap_or_default();
+                v.into_iter().next().unwrap_or_default()
+            }
+            Err(e) if is_missing_error(&e) => {
+                debug!("INFO FOR DB on missing database — treating as empty");
+                Value::Null
+            }
+            Err(e) => return Err(anyhow::Error::from(e).context("Failed to query INFO FOR DB on remote")),
+        };
+
+        Ok(match info.get("tables") {
+            Some(Value::Object(tables_map)) => tables_map
+                .iter()
+                .filter(|(name, _)| !ssp_protocol::table_excluded_from_sync(name))
+                .filter(|(name, def)| {
+                    let nosync = def
+                        .as_str()
+                        .map(ssp_protocol::define_str_is_nosync)
+                        .unwrap_or(false);
+                    if nosync {
+                        info!(table = %name, "Excluding @nosync table from snapshot");
+                    }
+                    !nosync
+                })
+                .map(|(name, _)| name.clone())
+                .collect(),
+            _ => Vec::new(),
+        })
+    }
+
+    /// Page a whole table out of the remote with a keyset cursor.
+    ///
+    /// Paging instead of one SELECT: the SurrealDB Rust SDK's WebSocket
+    /// engine inherits tungstenite's default `max_message_size` of 64 MiB. A
+    /// SELECT response that exceeds that fails the entire query, which
+    /// historically caused bootstrap to stall on tables past ~60 MiB.
+    ///
+    /// Page size is chosen adaptively: a one-row probe measures actual
+    /// serialised row size, then we pick a page count that targets ~32 MiB
+    /// per response (half the WS frame ceiling, comfortable headroom).
+    /// `SPKY_BOOTSTRAP_PAGE_SIZE` lets the operator override the result.
+    ///
+    /// Keyset cursor rationale: offset (`START n`) pagination silently drops
+    /// rows when a concurrent write shifts the table between page requests —
+    /// and the remote DB is LIVE during bootstrap — leaving the replica (and
+    /// every SSP that bootstraps from it) with an incomplete table. Resume by
+    /// `id > $last` instead: a delete behind the cursor can't shift rows
+    /// ahead of it out of view. Mirrors `bootstrap_page_query` in apps/ssp.
+    ///
+    /// Takes the SDK's own `Value` then calls `into_json_value()` so
+    /// RecordId/Datetime are flattened into normal JSON strings instead of
+    /// `{"RecordId":{...}}` shapes. Tolerates the table disappearing between
+    /// INFO FOR DB and SELECT (race) or simply not existing yet — treated as
+    /// zero records.
+    async fn page_whole_table<C>(
+        remote_db: &surrealdb::Surreal<C>,
+        table_name: &str,
+    ) -> Result<Vec<Value>>
+    where
+        C: surrealdb::Connection,
+    {
+        let target_page_bytes: usize = 32 * 1024 * 1024;
+        let probe_row_bytes: Option<usize> = match remote_db
+            .query(format!("SELECT * FROM {} LIMIT 1", table_name))
+            .await
+        {
+            Ok(mut r) => match r.take::<surrealdb::types::Value>(0) {
+                Ok(sdk_val) => match sdk_val.into_json_value() {
+                    Value::Array(arr) => arr
+                        .first()
+                        .map(|v| serde_json::to_vec(v).map(|b| b.len()).unwrap_or(1024)),
+                    _ => None,
+                },
+                Err(_) => None,
+            },
+            Err(_) => None,
+        };
+        let auto_page_size = probe_row_bytes
+            .map(|b| (target_page_bytes / b.max(1)).max(1))
+            .unwrap_or(200);
+        let page_size: usize = std::env::var("SPKY_BOOTSTRAP_PAGE_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|n: &usize| *n > 0)
+            .unwrap_or(auto_page_size)
+            // Hard ceiling to avoid pathological large pages even if
+            // the probe misses (e.g. variable row sizes).
+            .min(2000);
+        if let Some(b) = probe_row_bytes {
+            trace!(
+                table = %table_name,
+                probe_bytes_per_row = b,
+                page_size,
+                "bootstrap page-size auto-tuned",
+            );
+        }
+        let mut records: Vec<Value> = Vec::new();
+        // Keyset cursor: the highest `id` paged so far (`None` = first page).
+        let mut after_id: Option<String> = None;
+        loop {
+            let query = keyset_page_query(table_name, page_size, after_id.as_deref());
+            trace!(table = %table_name, after_id = ?after_id, page_size, "remote page query: {}", query);
+            let resp = remote_db.query(query).await;
+            let page: Vec<Value> = match resp {
+                Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
+                    Ok(sdk_val) => match sdk_val.into_json_value() {
+                        Value::Array(arr) => arr,
+                        other => bail!(
+                            "Expected array from paged SELECT on {}, got {}",
+                            table_name,
+                            json_kind(&other),
+                        ),
+                    },
+                    Err(e) if is_missing_error(&e) => {
+                        debug!(table = %table_name, "remote table missing during page take — stopping");
+                        break;
+                    }
+                    Err(e) => return Err(anyhow::anyhow!(
+                        "take(0) failed for table '{}' page (after_id={:?}): {}",
+                        table_name, after_id, e,
+                    )),
+                },
+                Err(e) if is_missing_error(&e) => {
+                    debug!(table = %table_name, "remote table missing during page query — stopping");
+                    break;
+                }
+                Err(e) => return Err(anyhow::Error::from(e)
+                    .context(format!(
+                        "SELECT page from {} (after_id={:?}, limit={}) failed",
+                        table_name, after_id, page_size,
+                    ))),
+            };
+            let n = page.len();
+            // Advance the cursor to this page's last id (page is ORDER BY id,
+            // so the last row carries the max id) BEFORE consuming `page`.
+            let next_after = page
+                .last()
+                .and_then(|row| row.get("id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            records.extend(page);
+            if n < page_size {
+                break;
+            }
+            // No usable id to resume from → stop rather than loop forever.
+            match next_after {
+                Some(id) => after_id = Some(id),
+                None => break,
+            }
+        }
+        Ok(records)
+    }
+
+    /// Bulk-insert records into a replica table in bounded batches. The
+    /// per-record `CREATE … CONTENT` loop this replaced was O(N) round-trips;
+    /// for tables with large records the per-call cost in SurrealDB 3.0 was
+    /// non-linear and stalled bootstrap entirely past ~60 MiB total.
+    /// `INSERT INTO <table> $records` collapses each batch to one round-trip.
+    ///
+    /// We still validate per-record that `id` exists; we let SurrealDB parse
+    /// the string id (e.g. "comment:42") into the record-id field on insert.
+    /// `.check()` once per batch is enough because a single bad record fails
+    /// the whole batch (any insert failure aborts the whole clone).
+    async fn bulk_insert(&self, table_name: &str, records: Vec<Value>) -> Result<()> {
+        const INSERT_BATCH_SIZE: usize = 500;
+        let chunks: Vec<Vec<Value>> = records
+            .chunks(INSERT_BATCH_SIZE)
+            .map(<[Value]>::to_vec)
+            .collect();
+        for (chunk_idx, mut chunk) in chunks.into_iter().enumerate() {
+            // Validate ids upfront so we can give a specific error on the
+            // offending record. Also strip the leading `<table>:` from each
+            // id — without it, SurrealDB INSERT INTO treats the colon as
+            // part of an escaped composite id and stores the row as
+            // `<table>:`<table>:<raw>``, breaking every SELECT-by-id query
+            // against the replica.
+            let table_prefix = format!("{}:", table_name);
+            for (within, rec) in chunk.iter_mut().enumerate() {
+                let obj = match rec.as_object_mut() {
+                    Some(o) => o,
+                    None => anyhow::bail!(
+                        "Record {}/{} in '{}' (batch {}) is not a JSON object",
+                        within,
+                        chunk_idx,
+                        table_name,
+                        chunk_idx,
+                    ),
+                };
+                let id = obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "Record {}/{} in '{}' (batch {}) missing string `id` after JSON flatten",
+                        within,
+                        chunk_idx,
+                        table_name,
+                        chunk_idx,
+                    ))?
+                    .to_string();
+                let raw = id.strip_prefix(&table_prefix).unwrap_or(&id).to_string();
+                obj.insert("id".to_string(), Value::String(raw));
+            }
+            let chunk_len = chunk.len();
+            trace!(
+                table = %table_name,
+                chunk = chunk_idx,
+                records = chunk_len,
+                "bootstrap INSERT batch"
+            );
+            self.db
+                .query(format!("INSERT INTO {} $records RETURN NONE", table_name))
+                .bind(("records", Value::Array(chunk)))
+                .await
+                .with_context(|| format!(
+                    "INSERT into {} batch {} send failed", table_name, chunk_idx,
+                ))?
+                .check()
+                .with_context(|| format!(
+                    "INSERT into {} batch {} returned an error", table_name, chunk_idx,
+                ))?;
+        }
+        Ok(())
+    }
+
+    /// Copy view definitions from the remote. Tolerates `_00_query` not
+    /// existing yet — happens when the scheduler is pointed at a fresh
+    /// SurrealDB before Phase 4a has applied the internal Sp00ky schema.
+    async fn fetch_remote_views<C>(remote_db: &surrealdb::Surreal<C>) -> Result<Vec<Value>>
+    where
+        C: surrealdb::Connection,
+    {
         trace!("remote query: SELECT * FROM _00_query");
-        let views: Vec<Value> = match remote_db.query("SELECT * FROM _00_query").await {
+        Ok(match remote_db.query("SELECT * FROM _00_query").await {
             Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
                 Ok(sdk_val) => match sdk_val.into_json_value() {
                     Value::Array(arr) => arr,
@@ -730,7 +837,11 @@ impl Replica {
             }
             Err(e) => return Err(anyhow::Error::from(e)
                 .context("Failed to query _00_query on remote")),
-        };
+        })
+    }
+
+    /// Write fetched view definitions into the replica. Returns the count.
+    async fn insert_views(&self, views: Vec<Value>) -> Result<usize> {
         let view_count = views.len();
         for mut record in views {
             let id_str = match record.as_object_mut() {
@@ -751,25 +862,109 @@ impl Replica {
                 .check()
                 .with_context(|| format!("CREATE view {} returned an error", key))?;
         }
-        info!(
-            views = view_count,
-            elapsed_ms = views_start.elapsed().as_millis() as u64,
-            "Copied {} view definitions",
-            view_count,
-        );
+        Ok(view_count)
+    }
 
-        info!(
-            tables = tables.len(),
-            records = total_records,
-            views = view_count,
-            elapsed_ms = total_start.elapsed().as_millis() as u64,
-            "Snapshot clone summary: {} tables, {} records, {} views in {}ms",
-            tables.len(),
-            total_records,
-            view_count,
-            total_start.elapsed().as_millis(),
-        );
+    /// Phase 1 of a two-phase re-clone: page every sync table (and the view
+    /// definitions) out of the remote into a JSONL spool on disk, WITHOUT
+    /// touching the replica or taking any lock. The old single-phase reclone
+    /// held the replica write lock across the whole network clone, starving
+    /// /proxy and every probe for minutes.
+    ///
+    /// The spool lives in a fresh temp dir under `spool_parent` (same disk as
+    /// the replica) and is deleted when the returned manifest drops.
+    pub async fn fetch_all_to_spool<C>(
+        remote_db: &surrealdb::Surreal<C>,
+        spool_parent: &std::path::Path,
+    ) -> Result<SpoolManifest>
+    where
+        C: surrealdb::Connection,
+    {
+        use std::io::Write as _;
 
+        std::fs::create_dir_all(spool_parent)
+            .with_context(|| format!("Failed to create spool parent {:?}", spool_parent))?;
+        let dir = tempfile::tempdir_in(spool_parent)
+            .with_context(|| format!("Failed to create spool dir under {:?}", spool_parent))?;
+
+        let tables = Self::discover_sync_tables(remote_db).await?;
+        let mut spooled = Vec::with_capacity(tables.len());
+        for (idx, table_name) in tables.iter().enumerate() {
+            let records = Self::page_whole_table(remote_db, table_name).await?;
+            let count = records.len();
+            let path = dir.path().join(format!("{}.jsonl", table_name));
+            // Blocking pool: the serialize+write of a large table is real
+            // file IO, and phase 1 runs on the live runtime.
+            let write_path = path.clone();
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                let file = std::fs::File::create(&write_path)
+                    .with_context(|| format!("Failed to create spool file {:?}", write_path))?;
+                let mut w = std::io::BufWriter::new(file);
+                for record in &records {
+                    serde_json::to_writer(&mut w, record)?;
+                    w.write_all(b"\n")?;
+                }
+                w.flush()?;
+                Ok(())
+            })
+            .await
+            .context("spool write task panicked")??;
+            info!(
+                table = %table_name,
+                records = count,
+                progress = format!("{}/{}", idx + 1, tables.len()),
+                "Spooled table from remote",
+            );
+            spooled.push(SpooledTable {
+                table: table_name.clone(),
+                path,
+                records: count,
+            });
+        }
+
+        let views = Self::fetch_remote_views(remote_db).await?;
+        Ok(SpoolManifest {
+            _dir: dir,
+            tables: spooled,
+            views,
+        })
+    }
+
+    /// Phase 2 of a two-phase re-clone: load a spool produced by
+    /// [`Self::fetch_all_to_spool`] into the (freshly reset) replica. Local
+    /// disk → local RocksDB only; hold the write lock for this, not for the
+    /// network clone.
+    pub async fn load_from_spool(&mut self, manifest: &SpoolManifest) -> Result<()> {
+        for spooled in &manifest.tables {
+            let path = spooled.path.clone();
+            let records = tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
+                use std::io::BufRead as _;
+                let file = std::fs::File::open(&path)
+                    .with_context(|| format!("Failed to open spool file {:?}", path))?;
+                let reader = std::io::BufReader::new(file);
+                let mut out = Vec::new();
+                for line in reader.lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    out.push(serde_json::from_str(&line)?);
+                }
+                Ok(out)
+            })
+            .await
+            .context("spool read task panicked")??;
+
+            self.known_tables.insert(spooled.table.clone());
+            self.bulk_insert(&spooled.table, records).await?;
+        }
+        let view_count = self.insert_views(manifest.views.clone()).await?;
+        info!(
+            tables = manifest.tables.len(),
+            records = manifest.tables.iter().map(|t| t.records).sum::<usize>(),
+            views = view_count,
+            "Loaded replica from spool",
+        );
         Ok(())
     }
 
@@ -873,6 +1068,7 @@ impl Replica {
             .await
             .context("Failed to re-select replica database after wipe")?;
         self.snapshot_seq = 0;
+        self.publish_seq();
         self.snapshot_hashes.clear();
         self.known_tables.clear();
         self.dirty_hashes.clear();
@@ -927,6 +1123,7 @@ impl Replica {
             .await
             .unwrap_or_default();
         self.snapshot_seq = state.seq;
+        self.publish_seq();
         self.snapshot_hashes = state.hashes;
         self.known_tables = state.tables;
         Ok(self.snapshot_seq)

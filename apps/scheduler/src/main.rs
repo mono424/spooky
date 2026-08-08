@@ -5,12 +5,34 @@ use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Explicit worker count instead of `#[tokio::main]`'s
+    // `available_parallelism()`: production deploys default to a 1-vCPU
+    // cgroup, which yields a SINGLE worker thread — one blocking call inside
+    // the embedded SurrealDB/RocksDB replica (e.g. a WriteBufferManager
+    // write stall, observed 2026-08-08) then parks the whole runtime: no IO
+    // polling, no timers, total HTTP silence while the process stays alive.
+    let workers = std::env::var("SPKY_WORKER_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(4);
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+
+    // Resolve the local IP once, off the runtime — `hostname -I` is a
+    // blocking fork+exec and used to run on every `/info` request.
+    scheduler::metrics::init_local_ip().await;
 
     info!(
         "\n ____        _              _       _\n/ ___|  ___| |__   ___  __| |_   _| | ___ _ __\n\\___ \\ / __| '_ \\ / _ \\/ _` | | | | |/ _ \\ '__|\n ___) | (__| | | |  __/ (_| | |_| | |  __/ |\n|____/ \\___|_| |_|\\___\\|\\__,_|\\__,_|_|\\___|_|    v{}\n\nSp00ky Cluster Scheduler\nBuilt: {}",
@@ -99,6 +121,15 @@ async fn main() -> Result<()> {
         backup_restore_lock: Arc::clone(&backup_restore_lock),
     });
 
+    // Global request deadline: a handler that never resolves must produce a
+    // 408, never an indefinitely-hung connection (the wedge signature was
+    // /health and /ingest hanging forever while TCP kept accepting).
+    // Generous because /proxy serves whole bootstrap pages from RocksDB.
+    let http_timeout_secs = std::env::var("SPKY_HTTP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(120);
     let app = axum::Router::new()
         .merge(ingest_router)
         .merge(query_router)
@@ -106,7 +137,11 @@ async fn main() -> Result<()> {
         .merge(ssp_router)
         .merge(proxy_router)
         .merge(metrics_router)
-        .merge(backup_router);
+        .merge(backup_router)
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(http_timeout_secs),
+        ));
     
     let ingest_addr = format!("{}:{}", 
         scheduler.config().ingest_host.as_deref().unwrap_or("0.0.0.0"),

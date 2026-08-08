@@ -395,6 +395,39 @@ pub fn generate_sp00ky_events(
     }
     events.push_str("};\n\n");
 
+    // ===================================================================
+    // _00_heartbeat (e2e sync-pipeline probe)
+    // ===================================================================
+    // The scheduler's heartbeat loop UPSERTs `_00_heartbeat:probe` and then
+    // polls each SSP for the last hb_seq it saw. This event is the first hop:
+    // without it a probe write never leaves the database and the loop
+    // measures nothing. `_00_` tables are skipped by the generator above, so
+    // it is hand-written like _00_user_feature — minus the `_00_version`
+    // machinery, because nothing subscribes to this row (the SSP just
+    // records the seq in memory; the row is never client-synced).
+    events.push_str("-- Table: _00_heartbeat Mutation (probe-written; ingest-notify)\n");
+    events.push_str("DEFINE EVENT OVERWRITE _00_heartbeat_mutation ON TABLE _00_heartbeat\n");
+    events.push_str("WHEN $before != $after AND $event != \"DELETE\"\nTHEN {\n");
+    events.push_str("    LET $plain_after = {\n");
+    events.push_str("        id: <string>($after.id OR \"\"),\n");
+    events.push_str("        hb_seq: $after.hb_seq,\n");
+    events.push_str("        sent_at: <string>($after.sent_at OR \"\")\n");
+    events.push_str("    };\n");
+    if is_http {
+        events.push_str("    LET $payload = {\n");
+        events.push_str("        table: '_00_heartbeat',\n");
+        events.push_str("        op: $event,\n");
+        events.push_str("        id: <string>($after.id OR \"\"),\n");
+        events.push_str("        record: $plain_after,\n");
+        events.push_str("        hash: \"\"\n");
+        events.push_str("    };\n");
+        events.push_str("    http::post($sp00ky_endpoint + '/ingest', $payload, { \"Authorization\": \"Bearer \" + $sp00ky_secret });\n");
+    } else {
+        events.push_str("    mod::dbsp::ingest('_00_heartbeat', $event, <string>($after.id OR \"\"), $plain_after);\n");
+        events.push_str("    mod::dbsp::save_state(NONE);\n");
+    }
+    events.push_str("};\n\n");
+
     events
 }
 
@@ -434,6 +467,29 @@ mod tests {
                 "feature-flag changes must notify the SSP ingest endpoint"
             );
         }
+    }
+
+    #[test]
+    fn heartbeat_event_posts_to_ingest_in_http_modes() {
+        for mode in [DeployMode::Singlenode, DeployMode::Cluster] {
+            let out = gen(false, mode);
+            assert!(
+                out.contains(
+                    "DEFINE EVENT OVERWRITE _00_heartbeat_mutation ON TABLE _00_heartbeat"
+                ),
+                "missing heartbeat mutation event"
+            );
+            assert!(
+                out.contains("table: '_00_heartbeat'"),
+                "missing heartbeat ingest payload table"
+            );
+        }
+        // Surrealism mode routes through the module instead.
+        let out = gen(false, DeployMode::Surrealism);
+        assert!(
+            out.contains("mod::dbsp::ingest('_00_heartbeat'"),
+            "surrealism mode must route heartbeat through mod::dbsp"
+        );
     }
 
     #[test]

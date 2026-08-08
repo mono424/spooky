@@ -283,6 +283,7 @@ async fn build(opts: HarnessOpts) -> Harness {
         bootstrap_page_size: 200,
         checkpoint_interval_secs: None,
         max_snapshot_age_secs: 3600,
+        last_heartbeat_seen: std::sync::Arc::new(std::sync::Mutex::new(None)),
     };
 
     // A dummy second receiver is not creatable from one channel; keep the real
@@ -626,6 +627,33 @@ async fn ingest_gated_when_not_ready() {
     let body = json!({ "table": "thread", "op": "CREATE", "id": "thread:1", "record": {} });
     let r = h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap();
     assert_eq!(r.status, 503);
+}
+
+#[tokio::test]
+async fn heartbeat_seen_after_ingest_and_served_authed() {
+    let h = build(HarnessOpts::default()).await;
+
+    // Before any probe: nulls.
+    let r = h.node.route(authed(Method::Get, "/debug/heartbeat", Value::Null)).await.unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(json_of(&r)["hb_seq"], Value::Null);
+
+    // Auth required.
+    let r = h.node.route(req(Method::Get, "/debug/heartbeat", None, Value::Null)).await.unwrap();
+    assert_eq!(r.status, 401);
+
+    // A _00_heartbeat ingest records (hb_seq, received_at_ms) post circuit step.
+    let body = json!({
+        "table": "_00_heartbeat", "op": "UPDATE", "id": "_00_heartbeat:probe",
+        "record": { "hb_seq": 1754690000123u64, "sent_at": "2026-08-08T00:00:00Z" }
+    });
+    let r = h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap();
+    assert_eq!(r.status, 200);
+
+    let r = h.node.route(authed(Method::Get, "/debug/heartbeat", Value::Null)).await.unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(json_of(&r)["hb_seq"], 1754690000123u64);
+    assert!(json_of(&r)["received_at_ms"].as_u64().unwrap() > 0);
 }
 
 #[tokio::test]

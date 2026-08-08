@@ -155,11 +155,15 @@ pub fn load_config() -> Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(100),
         auth_secret: std::env::var("SPKY_AUTH_SECRET").unwrap_or_default(),
+        // 200 was safe but slow: each page is a WHERE+ORDER BY+LIMIT pass over
+        // the scheduler's replica (~0.3-0.6s on a 156k-row table), so a big
+        // table took minutes and blew the scheduler's bootstrap budget. 1000
+        // keeps pages ~1MB while cutting round-trips 5x.
         bootstrap_page_size: std::env::var("SPKY_SSP_BOOTSTRAP_PAGE_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .filter(|n: &usize| *n > 0)
-            .unwrap_or(200),
+            .unwrap_or(1000),
         crdt_cache_size: std::env::var("SPKY_CRDT_CACHE_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -789,6 +793,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         bootstrap_page_size: config.bootstrap_page_size,
         checkpoint_interval_secs: config.checkpoint_interval_secs,
         max_snapshot_age_secs: config.max_snapshot_age_secs,
+        last_heartbeat_seen: std::sync::Arc::new(std::sync::Mutex::new(None)),
     });
     let runtime = ssp_node::Runtime::new(node.clone());
 

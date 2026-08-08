@@ -65,6 +65,9 @@ pub enum RouteId {
     Log,
     DebugView { view_id: String },
     DebugDeps,
+    /// Last `_00_heartbeat` seq this node ingested — the observation point
+    /// for the scheduler's e2e heartbeat probe.
+    DebugHeartbeat,
     DebugCatchupRows { table: String },
     ViewRegister,
     ViewUnregister,
@@ -101,6 +104,7 @@ impl RouteId {
             (Post, ["log"]) => RouteId::Log,
             (Get, ["debug", "view", view_id]) => RouteId::DebugView { view_id: (*view_id).to_string() },
             (Get, ["debug", "deps"]) => RouteId::DebugDeps,
+            (Get, ["debug", "heartbeat"]) => RouteId::DebugHeartbeat,
             (Get, ["debug", "catchup-rows", table]) => RouteId::DebugCatchupRows { table: (*table).to_string() },
             (Post, ["view", "register"]) => RouteId::ViewRegister,
             (Post, ["view", "unregister"]) => RouteId::ViewUnregister,
@@ -146,6 +150,7 @@ mod tests {
             (Method::Post, "/view/register", RouteId::ViewRegister),
             (Method::Get, "/debug/view/v1", RouteId::DebugView { view_id: "v1".into() }),
             (Method::Get, "/debug/catchup-rows/thread", RouteId::DebugCatchupRows { table: "thread".into() }),
+            (Method::Get, "/debug/heartbeat", RouteId::DebugHeartbeat),
             (Method::Put, "/backends", RouteId::BackendsUpdate),
             (Method::Get, "/backup/status/b1", RouteId::BackupStatusById { backup_id: "b1".into() }),
             (Method::Get, "/backup/restore/status/r1", RouteId::BackupRestoreStatusById { restore_id: "r1".into() }),
@@ -163,6 +168,7 @@ mod tests {
     fn auth_split_matches_current_middleware_groups() {
         assert!(RouteId::Ingest.requires_auth());
         assert!(RouteId::BackupCreate.requires_auth());
+        assert!(RouteId::DebugHeartbeat.requires_auth());
         assert!(!RouteId::Health.requires_auth());
         assert!(!RouteId::Version.requires_auth());
     }

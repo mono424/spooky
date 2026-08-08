@@ -476,3 +476,37 @@ DEFINE FIELD OVERWRITE released_at ON TABLE _00_app_release TYPE datetime DEFAUL
 DEFINE TABLE OVERWRITE _00_schema_state SCHEMAFULL PERMISSIONS NONE;
 DEFINE FIELD OVERWRITE hash ON TABLE _00_schema_state TYPE string;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_schema_state TYPE datetime VALUE time::now();
+
+-- ==================================================
+-- SPOOKY HEARTBEAT (e2e sync-pipeline probe)
+-- One row (_00_heartbeat:probe), UPSERTed by the scheduler's heartbeat loop.
+-- Its hand-written mutation event in sp00ky.rs posts to /ingest, so every
+-- probe write exercises the full pipeline: DB event -> scheduler ingest ->
+-- WAL -> broadcast -> SSP circuit step. The SSP records the last hb_seq it
+-- saw and the scheduler polls that back to measure end-to-end latency.
+-- NOT in SYNCED_META_TABLES: excluded from snapshot clones and bootstrap
+-- hashes by design (adding it would force a lockstep scheduler+SSP deploy).
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_heartbeat SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE hb_seq ON TABLE _00_heartbeat TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE sent_at ON TABLE _00_heartbeat TYPE datetime VALUE time::now();
+
+-- ==================================================
+-- SPOOKY HEARTBEAT ROLLUP (bounded latency time series)
+-- One row per hour (_00_heartbeat_rollup:[<epoch-hour>]), advanced with
+-- atomic `+=` UPSERTs from the scheduler's heartbeat loop — 24 rows/day,
+-- mirrors the _00_run_rollup pattern. No mutation events (plain _00_ table),
+-- so writing results here cannot re-trigger the probe's own ingest.
+-- avg = sum_ms / ok; failures leave last_e2e_ms untouched. The probe loop
+-- prunes rows older than 90d once a day.
+-- ==================================================
+DEFINE TABLE OVERWRITE _00_heartbeat_rollup SCHEMAFULL PERMISSIONS NONE;
+DEFINE FIELD OVERWRITE bucket ON TABLE _00_heartbeat_rollup TYPE datetime;
+DEFINE FIELD OVERWRITE count ON TABLE _00_heartbeat_rollup TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE ok ON TABLE _00_heartbeat_rollup TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE sum_ms ON TABLE _00_heartbeat_rollup TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE max_ms ON TABLE _00_heartbeat_rollup TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE last_e2e_ms ON TABLE _00_heartbeat_rollup TYPE option<int>;
+DEFINE FIELD OVERWRITE last_ok_at ON TABLE _00_heartbeat_rollup TYPE option<datetime>;
+DEFINE FIELD OVERWRITE updated_at ON TABLE _00_heartbeat_rollup TYPE datetime VALUE time::now();
+DEFINE INDEX OVERWRITE idx_heartbeat_bucket ON TABLE _00_heartbeat_rollup COLUMNS bucket;

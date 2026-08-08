@@ -6,6 +6,7 @@
 //! (the scheduler's replica/WAL drain, the SSP's circuit re-bootstrap) are
 //! injected through the [`host::MaintenanceHost`] trait.
 
+pub mod alert;
 pub mod backend_health;
 pub mod backup;
 pub mod db;

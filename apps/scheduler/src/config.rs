@@ -60,7 +60,11 @@ impl Default for SchedulerConfig {
             ingest_port: 9667,
             snapshot_update_interval_secs: 300,
             max_buffer_per_ssp: 10_000,
-            bootstrap_timeout_secs: 120,
+            // 120 livelocked a real deployment once its tables outgrew what a
+            // paged /proxy load can move in two minutes (2026-08-08): timeout →
+            // SSP exit → re-register → re-freeze, forever. Override with
+            // SPKY_BOOTSTRAP_TIMEOUT_SECS.
+            bootstrap_timeout_secs: 300,
             ssp_poll_interval_ms: 3000,
             wal_path: PathBuf::from("./data/event_wal.log"),
             health_check_interval_secs: 15,
@@ -122,6 +126,19 @@ impl SchedulerConfig {
             if let Ok(n) = v.parse::<u64>() {
                 if n > 0 {
                     scheduler_config.feature_flag_sweep_interval_secs = n;
+                }
+            }
+        }
+
+        // SSP bootstrap budget. Default 120s fits small datasets; a replica
+        // with large tables (registration drain + rehash + paged /proxy load)
+        // can legitimately need more — the 2026-08-08 whitepawn outage
+        // livelocked on exactly this: every bootstrap timed out, the SSP
+        // exited, re-registered, and re-froze the snapshot forever.
+        if let Ok(v) = std::env::var("SPKY_BOOTSTRAP_TIMEOUT_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                if n > 0 {
+                    scheduler_config.bootstrap_timeout_secs = n;
                 }
             }
         }

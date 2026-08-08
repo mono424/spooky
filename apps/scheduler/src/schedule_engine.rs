@@ -163,26 +163,41 @@ pub fn observe_job_terminal(
     ssp_pool: Arc<RwLock<SspPool>>,
     transport: Arc<HttpTransport>,
     db_config: Arc<DbConfig>,
+    permits: Arc<tokio::sync::Semaphore>,
     job_id: String,
     status: String,
 ) {
     if !matches!(status.as_str(), "success" | "failed") {
         return;
     }
+    // Bounded and time-boxed: each observer opens a fresh upstream session
+    // with no request timeout, so unbounded spawns accumulated hung tasks and
+    // leaked server-side sessions whenever the upstream stalled. Dropping on
+    // saturation or timeout is safe — the sweep heals within one tick.
+    let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
+        debug!(job_id = %job_id, "schedule observers saturated; leaving it to the sweep");
+        return;
+    };
     tokio::spawn(async move {
-        let conn = match maintenance::db::connect_http(&db_config).await {
-            Ok(conn) => conn,
-            Err(e) => {
-                // The sweep will pick this up; nothing is lost but latency.
-                debug!(error = %e, "schedule observer could not connect; leaving it to the sweep");
-                return;
+        let _permit = permit;
+        let work = async {
+            let conn = match maintenance::db::connect_http(&db_config).await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    // The sweep will pick this up; nothing is lost but latency.
+                    debug!(error = %e, "schedule observer could not connect; leaving it to the sweep");
+                    return;
+                }
+            };
+            let engine = build_engine(conn, ssp_pool, transport);
+            match engine.observe_job_terminal(&job_id, &status).await {
+                Ok(true) => debug!(job_id = %job_id, %status, "schedule engine advanced on job completion"),
+                Ok(false) => {}
+                Err(e) => warn!(job_id = %job_id, error = %e, "schedule observer failed"),
             }
         };
-        let engine = build_engine(conn, ssp_pool, transport);
-        match engine.observe_job_terminal(&job_id, &status).await {
-            Ok(true) => debug!(job_id = %job_id, %status, "schedule engine advanced on job completion"),
-            Ok(false) => {}
-            Err(e) => warn!(job_id = %job_id, error = %e, "schedule observer failed"),
+        if tokio::time::timeout(Duration::from_secs(10), work).await.is_err() {
+            warn!(job_id = %job_id, "schedule observer timed out; leaving it to the sweep");
         }
     });
 }

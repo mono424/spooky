@@ -38,6 +38,15 @@ pub struct IngestState {
     /// Outbox tables from `SPKY_JOB_CONFIG`: only an UPDATE on one of these can
     /// be a job finishing, so everything else skips the hook entirely.
     pub job_tables: Arc<Vec<String>>,
+    /// Caps concurrent `observe_job_terminal` tasks. Each one opens a fresh
+    /// upstream SurrealDB session; unbounded spawning leaked sessions and
+    /// memory whenever the upstream was slow. Saturation is safe to drop —
+    /// the schedule sweep reaches the same conclusion within one tick.
+    pub observer_permits: Arc<tokio::sync::Semaphore>,
+    /// Lock-free mirror of the replica's `snapshot_seq`
+    /// (`Replica::snapshot_seq_cell`). Health/metrics probes read this so
+    /// they never queue behind a drain holding the replica write lock.
+    pub snapshot_seq: Arc<AtomicU64>,
 }
 
 /// Snapshot of how far behind the replica is vs. the ingest stream.
@@ -50,10 +59,12 @@ pub struct PendingEventsStat {
     pub lag: u64,
 }
 
-/// Cheap, non-blocking read of the in-memory buffer + counters.
+/// Cheap, non-blocking read of the in-memory buffer + counters. Deliberately
+/// does NOT touch the replica lock: a drain/reclone holds it for a long time,
+/// and this runs on every /health, /health/ready and /metrics request.
 pub async fn pending_events_snapshot(state: &IngestState) -> PendingEventsStat {
     let pending_events = state.event_buffer.read().await.len();
-    let snapshot_seq = state.replica.read().await.snapshot_seq();
+    let snapshot_seq = state.snapshot_seq.load(Ordering::Relaxed);
     let latest_seq = state.seq_counter.load(Ordering::SeqCst);
     let lag = latest_seq.saturating_sub(snapshot_seq);
     PendingEventsStat {
@@ -136,15 +147,34 @@ async fn handle_ingest(
         received_at: now,
     };
 
-    // Write-ahead: append to WAL before processing
+    // Write-ahead: append to WAL before processing. The append is synchronous
+    // file IO (write + flush) — run it on the blocking pool, never on a
+    // runtime worker. The owned guard moves into the closure so the WAL lock
+    // still serializes appends.
     {
-        let mut wal = state.wal.write().await;
-        if let Err(e) = wal.append(&buffered_event) {
-            error!(error = %e, "Failed to write to WAL");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("WAL write failed: {}", e),
-            ));
+        let wal_guard = Arc::clone(&state.wal).write_owned().await;
+        let event = buffered_event.clone();
+        let append_result = tokio::task::spawn_blocking(move || {
+            let mut wal = wal_guard;
+            wal.append(&event)
+        })
+        .await;
+        match append_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                error!(error = %e, "Failed to write to WAL");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("WAL write failed: {}", e),
+                ));
+            }
+            Err(e) => {
+                error!(error = %e, "WAL append task panicked");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("WAL write failed: {}", e),
+                ));
+            }
         }
     }
 
@@ -166,6 +196,7 @@ async fn handle_ingest(
                 Arc::clone(&state.ssp_pool),
                 Arc::clone(&state.transport),
                 Arc::clone(&state.db_config),
+                Arc::clone(&state.observer_permits),
                 request.id.clone(),
                 status.to_string(),
             );

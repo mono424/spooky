@@ -82,6 +82,12 @@ pub struct SspNode {
     pub checkpoint_interval_secs: Option<u64>,
     /// Max age of a restored snapshot before `bootstrap()` rebuilds instead.
     pub max_snapshot_age_secs: u64,
+    /// Last `_00_heartbeat` probe this node ingested: `(hb_seq, epoch_ms
+    /// received)`. Written at the end of `ingest_handler`, read by
+    /// `GET /debug/heartbeat` — the scheduler's e2e probe polls it to measure
+    /// DB event → ingest → broadcast → circuit-step latency. std Mutex on
+    /// purpose: held for nanoseconds, never across an await.
+    pub last_heartbeat_seen: Arc<std::sync::Mutex<Option<(u64, u64)>>>,
 }
 
 /// Standalone job-recovery sweep cadence + staleness windows (were shell consts).
@@ -154,6 +160,7 @@ impl SspNode {
             RouteId::BackendsUpdate => self.update_backends_handler(&req).await?,
             RouteId::DebugView { view_id } => self.debug_view_handler(&view_id).await,
             RouteId::DebugDeps => self.debug_deps_handler().await,
+            RouteId::DebugHeartbeat => self.debug_heartbeat_handler(),
             RouteId::DebugCatchupRows { table } => self.debug_catchup_rows_handler(&table).await,
             RouteId::CrdtApply => self.crdt_apply_handler(&req).await?,
             RouteId::ViewUnregister => self.unregister_view_handler(&req).await?,
@@ -624,6 +631,22 @@ impl SspNode {
         ok_json(json!({ "table": table, "rows": rows }))
     }
 
+    /// Debug: last `_00_heartbeat` probe seen (e2e heartbeat observation
+    /// point). Nulls until the first probe write arrives after boot.
+    fn debug_heartbeat_handler(&self) -> ApiResponse {
+        let seen = *self.last_heartbeat_seen.lock().unwrap();
+        match seen {
+            Some((hb_seq, received_at_ms)) => ok_json(json!({
+                "hb_seq": hb_seq,
+                "received_at_ms": received_at_ms,
+            })),
+            None => ok_json(json!({
+                "hb_seq": Value::Null,
+                "received_at_ms": Value::Null,
+            })),
+        }
+    }
+
     /// Debug: dependency map + store overview.
     async fn debug_deps_handler(&self) -> ApiResponse {
         let circuit = self.processor.read().await;
@@ -929,6 +952,16 @@ impl SspNode {
         };
         let materialization_time_ms = step_start.elapsed().as_secs_f64() * 1000.0;
         self.platform.telemetry.counter("ingest", 1);
+
+        // E2e heartbeat observation point: recorded AFTER the circuit step so
+        // a reported seq means the full pipeline (DB event → scheduler ingest
+        // → broadcast → circuit) processed the probe, not just received it.
+        if payload.table == "_00_heartbeat" {
+            if let Some(seq) = payload.record.get("hb_seq").and_then(|v| v.as_u64()) {
+                *self.last_heartbeat_seen.lock().unwrap() =
+                    Some((seq, crate::now_epoch_ms()));
+            }
+        }
 
         if !deltas.is_empty() {
             // Fan out edge writes off the request path. Waiting on `_00_version`

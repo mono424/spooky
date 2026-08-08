@@ -17,6 +17,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 config = "0.14"
 anyhow = "1"
 axum = "0.7"
+tower-http = { version = "0.6", features = ["timeout"] }
 uuid = { version = "1", features = ["v4"] }
 ssp-protocol = { path = "../../packages/ssp-protocol" }
 maintenance = { path = "../../packages/maintenance" }
