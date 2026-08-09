@@ -2048,6 +2048,54 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* E2E heartbeat: sparkline in the stack row + toolbar badge.
+   Hand-rolled bars, matching the .tb-bar idiom in the timing views — the
+   panel deliberately ships no charting library. */
+.hb-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 14px;
+  padding-left: var(--sys-spacing-1);
+}
+
+.hb-spark-bar {
+  display: block;
+  width: 2px;
+  min-height: 1px;
+  border-radius: 1px;
+  background: var(--sys-color-primary);
+  opacity: 0.75;
+}
+
+.hb-spark-bar.failed {
+  background: var(--sys-color-error);
+  opacity: 1;
+}
+
+.hb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 var(--sys-spacing-1);
+  font-family: var(--sys-typescale-monospace-font, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--sys-color-on-surface-subtle);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.hb-badge-icon {
+  color: var(--sys-color-primary);
+  font-size: 10px;
+}
+
+.hb-badge.failing,
+.hb-badge.failing .hb-badge-icon {
+  color: var(--sys-color-error);
+}
+
 /* ============================================================
    Status pill (shared by Queries list + detail)
    ============================================================ */

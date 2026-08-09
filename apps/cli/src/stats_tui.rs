@@ -67,6 +67,14 @@ struct RolePoint {
     net_rx_bps: i64,
     #[serde(default)]
     net_tx_bps: i64,
+    /// E2E sync-pipeline latency, scheduler role only (the control plane
+    /// scrapes it from the scheduler's `/metrics`). Absent on every other
+    /// role, and on older control planes — hence `default`, and hence the
+    /// "only render the chart if the series has data" rule in `draw_panel`.
+    #[serde(default)]
+    heartbeat_e2e_ms: i64,
+    #[serde(default)]
+    heartbeat_fails: i64,
 }
 
 enum Msg {
@@ -85,6 +93,11 @@ struct RoleSeries {
     disk_write: Vec<(f64, f64)>,
     net_rx: Vec<(f64, f64)>,
     net_tx: Vec<(f64, f64)>,
+    /// E2E heartbeat latency. Trimmed on its own length, not with the block
+    /// below: points only carry it for the scheduler, so it is shorter than
+    /// the resource series and a shared cut index would eat live data.
+    hb: Vec<(f64, f64)>,
+    hb_fails: i64,
     mem_limit: f64,
     last_ts: f64,
 }
@@ -105,6 +118,14 @@ impl RoleSeries {
         if p.mem_limit_bytes > 0 {
             self.mem_limit = p.mem_limit_bytes as f64;
         }
+        if p.heartbeat_e2e_ms > 0 {
+            self.hb.push((ts, p.heartbeat_e2e_ms as f64));
+            if self.hb.len() > MAX_POINTS {
+                let cut = self.hb.len() - MAX_POINTS;
+                self.hb.drain(..cut);
+            }
+        }
+        self.hb_fails = p.heartbeat_fails;
         if self.cpu.len() > MAX_POINTS {
             let cut = self.cpu.len() - MAX_POINTS;
             for v in [
@@ -308,15 +329,31 @@ fn draw_panel(f: &mut ratatui::Frame, area: Rect, label: &str, s: &RoleSeries) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Ratio(1, 4),
-            Constraint::Ratio(1, 4),
-            Constraint::Ratio(1, 4),
-            Constraint::Ratio(1, 4),
-        ])
-        .split(inner);
+    // The scheduler carries a 5th series (e2e sync latency); every other role
+    // keeps the 4-column layout rather than rendering an empty chart.
+    let has_hb = !s.hb.is_empty();
+    let cols = if has_hb {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Ratio(1, 5),
+                Constraint::Ratio(1, 5),
+                Constraint::Ratio(1, 5),
+                Constraint::Ratio(1, 5),
+                Constraint::Ratio(1, 5),
+            ])
+            .split(inner)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Ratio(1, 4),
+                Constraint::Ratio(1, 4),
+                Constraint::Ratio(1, 4),
+                Constraint::Ratio(1, 4),
+            ])
+            .split(inner)
+    };
 
     let cpu_now = s.cpu.last().map(|p| p.1).unwrap_or(0.0);
     render_chart(
@@ -360,12 +397,27 @@ fn draw_panel(f: &mut ratatui::Frame, area: Rect, label: &str, s: &RoleSeries) {
         &[(&s.net_rx, Color::Green), (&s.net_tx, Color::Blue)],
         Unit::Rate,
     );
+
+    if has_hb {
+        let hb_now = s.hb.last().map(|p| p.1).unwrap_or(0.0);
+        // Consecutive failures are the tell that the number on screen is
+        // stale: the last successful probe stays plotted while the pipeline
+        // is already broken.
+        let title = if s.hb_fails > 0 {
+            format!("e2e {} !{}", fmt_ms(hb_now), s.hb_fails)
+        } else {
+            format!("e2e {}", fmt_ms(hb_now))
+        };
+        let color = if s.hb_fails > 0 { Color::Red } else { Color::Yellow };
+        render_chart(f, cols[4], &title, &[(&s.hb, color)], Unit::Millis);
+    }
 }
 
 enum Unit {
     Percent,
     Bytes,
     Rate,
+    Millis,
 }
 
 fn render_chart(
@@ -398,6 +450,7 @@ fn render_chart(
         Unit::Percent => format!("{:.0}%", y_top),
         Unit::Bytes => fmt_bytes(y_top),
         Unit::Rate => fmt_rate(y_top),
+        Unit::Millis => fmt_ms(y_top),
     };
 
     let datasets: Vec<Dataset> = series
@@ -444,6 +497,16 @@ fn fmt_bytes(v: f64) -> String {
 
 fn fmt_rate(v: f64) -> String {
     format!("{}/s", fmt_bytes(v))
+}
+
+/// Latency label. Sub-second values are what a healthy pipeline produces, so
+/// they stay in ms; anything past a second reads better as seconds.
+fn fmt_ms(v: f64) -> String {
+    if v >= 1000.0 {
+        format!("{:.1}s", v / 1000.0)
+    } else {
+        format!("{:.0}ms", v)
+    }
 }
 
 // ---------- SSE stream thread ----------

@@ -16,6 +16,30 @@ export const UNAVAILABLE = 'unavailable';
  * backend). Carries far more than versions — status, uptime, ip, views — so the
  * DevTools can render the whole stack. Extra fields are preserved verbatim.
  */
+/** One end-to-end sync-pipeline probe cycle recorded by the scheduler. */
+export interface HeartbeatSample {
+  ts: number;
+  /** `null` for a failed cycle. */
+  ms: number | null;
+  ok: boolean;
+}
+
+/**
+ * E2E heartbeat state, reported on the scheduler entity only. The scheduler
+ * times a probe row's full round trip (DB event → ingest → broadcast → SSP
+ * circuit step); `samples` is its rolling window of recent cycles, which the
+ * DevTools sparkline renders.
+ */
+export interface HeartbeatInfo {
+  enabled: boolean;
+  stale: boolean;
+  last_e2e_ms: number | null;
+  last_ok_epoch_ms: number | null;
+  consecutive_failures: number;
+  interval_secs: number;
+  samples?: HeartbeatSample[];
+}
+
 export interface BackendEntity {
   entity: string;
   id?: string;
@@ -25,6 +49,8 @@ export interface BackendEntity {
   surrealdb_version?: string;
   uptime_seconds?: number;
   views?: number;
+  /** Scheduler entity only. */
+  heartbeat?: HeartbeatInfo;
   [key: string]: unknown;
 }
 

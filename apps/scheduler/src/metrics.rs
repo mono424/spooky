@@ -277,10 +277,11 @@ async fn health_check(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let heartbeat_stale = state.heartbeat.is_stale(&state.heartbeat_config, now_ms);
-    let hb_last_e2e = state
+    // Scalars only — the sample window is `/info`'s job (it feeds the DevTools
+    // sparkline); a health probe should stay small.
+    let heartbeat = state
         .heartbeat
-        .last_e2e_ms
-        .load(std::sync::atomic::Ordering::Relaxed);
+        .snapshot(&state.heartbeat_config, now_ms, false);
 
     let (status_code, status_str) = if !ssps_ok || all_backends_down {
         (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
@@ -310,15 +311,7 @@ async fn health_check(
             "lag": pending.lag,
             "stalled": stalled,
         },
-        "heartbeat": {
-            "enabled": state.heartbeat.enabled.load(std::sync::atomic::Ordering::Relaxed),
-            "stale": heartbeat_stale,
-            "last_e2e_ms": (hb_last_e2e != u64::MAX).then_some(hb_last_e2e),
-            "consecutive_failures": state
-                .heartbeat
-                .consecutive_failures
-                .load(std::sync::atomic::Ordering::Relaxed),
-        }
+        "heartbeat": heartbeat
     })))
 }
 
@@ -510,6 +503,17 @@ async fn info_handler(
     let pending = pending_events_snapshot(&state.ingest).await;
     let surrealdb_version = state.surrealdb_version.read().await.clone();
 
+    // With the sample window: this is the only surface browser DevTools can
+    // reach (via `fn::spooky::info()`), and the panel has no poller of its own,
+    // so the recent-cycle history has to come down with the entity.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let heartbeat = state
+        .heartbeat
+        .snapshot(&state.heartbeat_config, now_ms, true);
+
     let mut entities = vec![serde_json::json!({
         "entity": "scheduler",
         "id": state.scheduler_id,
@@ -524,6 +528,7 @@ async fn info_handler(
         "snapshot_seq": pending.snapshot_seq,
         "latest_seq": pending.latest_seq,
         "lag": pending.lag,
+        "heartbeat": heartbeat,
         "env": mask_sensitive_env(env_vars),
     })];
 

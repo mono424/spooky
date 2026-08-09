@@ -15,9 +15,12 @@
 //! (dead-man's-switch, see `maintenance::alert`) is the primary alert
 //! channel, and the failure webhook only the fast path.
 //!
-//! Results land in three places:
+//! Results land in four places:
 //! - `HeartbeatStats` (atomics) → `/metrics` + `/health` (staleness folds
 //!   into "degraded"),
+//! - the recent-cycle window → `/info`, which is what browser DevTools can
+//!   reach through `fn::spooky::info()` (it has no poller of its own, so the
+//!   history has to arrive with the entity),
 //! - `_00_heartbeat_rollup` hourly rows upstream (bounded time series the
 //!   control plane can scrape),
 //! - the alerter's ping/webhook URLs.
@@ -34,6 +37,21 @@ use crate::transport::HttpTransport;
 use maintenance::alert::Alerter;
 use maintenance::db::ReconnectingDb;
 
+/// How many recent probe cycles `/info` carries. 60 at the 30s default is a
+/// 30-minute window — enough for the DevTools sparkline to show something the
+/// moment the panel opens (it has no poller of its own), small enough that the
+/// added `/info` payload stays around 2KB.
+const SAMPLE_WINDOW: usize = 60;
+
+/// One probe cycle, as served to UIs. `ms` is `None` for a failed cycle.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct Sample {
+    /// Epoch-ms the cycle was recorded.
+    pub ts: u64,
+    pub ms: Option<u64>,
+    pub ok: bool,
+}
+
 /// Lock-free probe results, shared with the metrics/health handlers.
 pub struct HeartbeatStats {
     /// Last successful cycle's end-to-end latency. `u64::MAX` = never.
@@ -46,6 +64,9 @@ pub struct HeartbeatStats {
     /// False until `spawn` runs (and stays false when disabled via env), so
     /// `/health` doesn't report a stale heartbeat on deployments without one.
     pub enabled: AtomicBool,
+    /// Rolling window of recent cycles, newest last. std Mutex on purpose:
+    /// held for nanoseconds, never across an await.
+    samples: std::sync::Mutex<std::collections::VecDeque<Sample>>,
 }
 
 impl HeartbeatStats {
@@ -56,7 +77,47 @@ impl HeartbeatStats {
             last_attempt_epoch_ms: AtomicU64::new(0),
             consecutive_failures: AtomicU32::new(0),
             enabled: AtomicBool::new(false),
+            samples: std::sync::Mutex::new(std::collections::VecDeque::with_capacity(
+                SAMPLE_WINDOW,
+            )),
         })
+    }
+
+    /// Append one cycle, evicting the oldest past `SAMPLE_WINDOW`.
+    fn push_sample(&self, sample: Sample) {
+        let mut samples = self.samples.lock().unwrap();
+        if samples.len() == SAMPLE_WINDOW {
+            samples.pop_front();
+        }
+        samples.push_back(sample);
+    }
+
+    /// The recent-cycle window, oldest first.
+    pub fn samples(&self) -> Vec<Sample> {
+        self.samples.lock().unwrap().iter().copied().collect()
+    }
+
+    /// The single heartbeat shape every consumer reads. `/info` serves it with
+    /// `samples` (DevTools draws the sparkline from them); `/health` and
+    /// `/metrics` serve the scalars only.
+    ///
+    /// Keep the scalar keys stable — `spky status`, the control-plane scrape
+    /// and external monitors all read them by name.
+    pub fn snapshot(&self, cfg: &Config, now_epoch_ms: u64, with_samples: bool) -> serde_json::Value {
+        let last_e2e = self.last_e2e_ms.load(Ordering::Relaxed);
+        let last_ok = self.last_ok_epoch_ms.load(Ordering::Relaxed);
+        let mut out = serde_json::json!({
+            "enabled": self.enabled.load(Ordering::Relaxed),
+            "stale": self.is_stale(cfg, now_epoch_ms),
+            "last_e2e_ms": (last_e2e != u64::MAX).then_some(last_e2e),
+            "last_ok_epoch_ms": (last_ok > 0).then_some(last_ok),
+            "consecutive_failures": self.consecutive_failures.load(Ordering::Relaxed),
+            "interval_secs": cfg.interval_secs,
+        });
+        if with_samples {
+            out["samples"] = serde_json::json!(self.samples());
+        }
+        out
     }
 
     /// Staleness predicate for `/health`: enabled AND the last success is
@@ -272,17 +333,20 @@ fn record(stats: &Arc<HeartbeatStats>, alerter: &Alerter, outcome: &CycleOutcome
             stats.last_e2e_ms.store(*e2e_ms, Ordering::Relaxed);
             stats.last_ok_epoch_ms.store(now, Ordering::Relaxed);
             stats.consecutive_failures.store(0, Ordering::Relaxed);
+            stats.push_sample(Sample { ts: now, ms: Some(*e2e_ms), ok: true });
             debug!(e2e_ms, "heartbeat ok");
             alerter.observe(true, 0, || {
                 serde_json::json!({ "component": "scheduler_heartbeat", "e2e_ms": e2e_ms })
             });
         }
         CycleOutcome::Skipped(reason) => {
-            // Not a failure of the pipeline itself; don't page, but do note.
+            // Not a failure of the pipeline itself; don't page, and leave no
+            // sample — a gap in the window reads truthfully as "not probed".
             debug!(reason, "heartbeat skipped");
         }
         CycleOutcome::Failed { stage, detail } => {
             let failures = stats.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
+            stats.push_sample(Sample { ts: now, ms: None, ok: false });
             warn!(stage, %detail, failures, "heartbeat failed");
             alerter.observe(false, failures, || {
                 serde_json::json!({
@@ -373,6 +437,63 @@ mod tests {
         assert!(!never.is_stale(&c, now), "no attempts yet → not stale");
         never.last_attempt_epoch_ms.store(now - 200_000, Ordering::Relaxed);
         assert!(never.is_stale(&c, now));
+    }
+
+    #[test]
+    fn sample_window_is_bounded_and_ordered() {
+        let stats = HeartbeatStats::new();
+        let alerter = maintenance::alert::Alerter::new(None, None, 3);
+
+        for i in 0..(SAMPLE_WINDOW + 10) {
+            record(&stats, &alerter, &CycleOutcome::Ok { e2e_ms: i as u64 });
+        }
+        let samples = stats.samples();
+        assert_eq!(samples.len(), SAMPLE_WINDOW, "window must be capped");
+        assert_eq!(
+            samples.first().unwrap().ms,
+            Some(10),
+            "oldest samples are evicted first"
+        );
+        assert_eq!(samples.last().unwrap().ms, Some((SAMPLE_WINDOW + 9) as u64));
+
+        // A failed cycle is recorded with no latency; a skipped one leaves no
+        // sample at all (a gap reads as "not probed", not as "0ms").
+        record(&stats, &alerter, &CycleOutcome::Failed { stage: "db_write", detail: "x".into() });
+        assert_eq!(stats.samples().last().unwrap().ms, None);
+        assert!(!stats.samples().last().unwrap().ok);
+        let len = stats.samples().len();
+        record(&stats, &alerter, &CycleOutcome::Skipped("no ready SSPs"));
+        assert_eq!(stats.samples().len(), len);
+    }
+
+    #[test]
+    fn snapshot_shape_is_stable() {
+        let c = cfg(30, 25);
+        let stats = HeartbeatStats::new();
+
+        // Never probed: scalars null rather than sentinel values.
+        let v = stats.snapshot(&c, 1_000, false);
+        assert_eq!(v["enabled"], false);
+        assert_eq!(v["last_e2e_ms"], serde_json::Value::Null);
+        assert_eq!(v["last_ok_epoch_ms"], serde_json::Value::Null);
+        assert_eq!(v["consecutive_failures"], 0);
+        assert_eq!(v["interval_secs"], 30);
+        assert!(v.get("samples").is_none(), "samples are opt-in");
+
+        let alerter = maintenance::alert::Alerter::new(None, None, 3);
+        stats.enabled.store(true, Ordering::Relaxed);
+        record(&stats, &alerter, &CycleOutcome::Ok { e2e_ms: 42 });
+
+        let v = stats.snapshot(&c, now_epoch_ms(), true);
+        assert_eq!(v["enabled"], true);
+        assert_eq!(v["stale"], false);
+        assert_eq!(v["last_e2e_ms"], 42);
+        assert!(v["last_ok_epoch_ms"].as_u64().unwrap() > 0);
+        let samples = v["samples"].as_array().expect("samples array");
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0]["ms"], 42);
+        assert_eq!(samples[0]["ok"], true);
+        assert!(samples[0]["ts"].as_u64().unwrap() > 0);
     }
 
     #[test]

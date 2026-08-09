@@ -9,6 +9,28 @@ export interface BackendDevToolsState {
   database: DatabaseState;
 }
 
+// One end-to-end sync-pipeline probe cycle, as recorded by the scheduler.
+// `ms` is null for a failed cycle; skipped cycles produce no sample at all,
+// so a gap in the window means "not probed", never "0ms".
+export interface HeartbeatSample {
+  ts: number;
+  ms: number | null;
+  ok: boolean;
+}
+
+// E2E heartbeat state on the scheduler entity. The scheduler writes a probe
+// row upstream and times the full round trip (DB event → ingest → broadcast →
+// SSP circuit step); `samples` is its rolling window of recent cycles.
+export interface HeartbeatInfo {
+  enabled: boolean;
+  stale: boolean;
+  last_e2e_ms: number | null;
+  last_ok_epoch_ms: number | null;
+  consecutive_failures: number;
+  interval_secs: number;
+  samples?: HeartbeatSample[];
+}
+
 // A single stack entity as reported by the backend `/info` (via
 // `fn::spooky::info()`): one per ssp / scheduler / backend.
 export interface BackendEntity {
@@ -20,6 +42,8 @@ export interface BackendEntity {
   surrealdb_version?: string;
   uptime_seconds?: number;
   views?: number;
+  /** Scheduler entity only. */
+  heartbeat?: HeartbeatInfo;
   [key: string]: unknown;
 }
 

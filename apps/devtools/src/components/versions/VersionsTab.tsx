@@ -1,6 +1,7 @@
 import { For, Show } from 'solid-js';
 import { useDevTools } from '../../context/DevToolsContext';
-import { formatDuration } from '../../utils/formatters';
+import { formatDuration, formatMs, formatRelativeTime } from '../../utils/formatters';
+import { HeartbeatSparkline } from './HeartbeatSparkline';
 import type { BackendEntity } from '../../types/devtools';
 
 const NA = '—';
@@ -59,11 +60,26 @@ const STATUS_LABEL: Record<RowStatus, string> = {
 };
 
 /** Ordered key facts to render per stack entity (skipped when absent). */
-function entityFacts(e: BackendEntity): { label: string; value: string }[] {
-  const facts: { label: string; value: string }[] = [];
+function entityFacts(e: BackendEntity): { label: string; value: string; title?: string }[] {
+  const facts: { label: string; value: string; title?: string }[] = [];
   const uptime = formatUptime(e.uptime_seconds);
   if (e.surrealdb_version) facts.push({ label: 'surrealdb', value: String(e.surrealdb_version) });
   if (typeof e.views === 'number') facts.push({ label: 'views', value: String(e.views) });
+  // E2E sync latency (scheduler only): the round trip of a probe row through
+  // the DB event → ingest → broadcast → SSP circuit path.
+  const hb = e.heartbeat;
+  if (hb?.enabled) {
+    const failing = hb.stale || hb.consecutive_failures > 0;
+    facts.push({
+      label: 'e2e',
+      value: failing ? 'failing' : formatMs(hb.last_e2e_ms),
+      title: hb.last_ok_epoch_ms
+        ? `last ok ${formatRelativeTime(hb.last_ok_epoch_ms)}${
+            hb.consecutive_failures > 0 ? ` · ${hb.consecutive_failures} consecutive failures` : ''
+          }`
+        : 'no successful probe yet',
+    });
+  }
   if (uptime) facts.push({ label: 'uptime', value: uptime });
   if (e.ip) facts.push({ label: 'ip', value: String(e.ip) });
   return facts;
@@ -197,12 +213,15 @@ export function VersionsTab() {
                 <div class="versions-stack-facts">
                   <For each={entityFacts(e)}>
                     {(f) => (
-                      <span class="versions-fact">
+                      <span class="versions-fact" title={f.title}>
                         <span class="versions-fact-label">{f.label}</span>
                         <span class="versions-fact-value">{f.value}</span>
                       </span>
                     )}
                   </For>
+                  <Show when={e.heartbeat?.enabled && e.heartbeat}>
+                    {(hb) => <HeartbeatSparkline heartbeat={hb()} />}
+                  </Show>
                 </div>
               </div>
             )}
@@ -216,6 +235,12 @@ export function VersionsTab() {
           info come from the <code>fn::spooky::info()</code> function (the same data the{' '}
           <code>/info</code> endpoint exposes), called over the live connection. Unreachable
           components show <code>unavailable</code>; a red dot marks a frontend/backend mismatch.
+        </p>
+        <p>
+          <code>e2e</code> on the scheduler is the end-to-end sync latency: the scheduler writes a
+          probe row and times its full round trip through the database event, its own ingest, the
+          broadcast, and the SSP circuit step. The bars are its recent probes, oldest first — red
+          ones failed. Both advance on Refresh, not on their own.
         </p>
       </div>
     </div>

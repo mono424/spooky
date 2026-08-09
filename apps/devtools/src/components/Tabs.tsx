@@ -1,6 +1,7 @@
-import { For, Show, createSignal, createMemo, onMount, onCleanup } from 'solid-js';
+import { For, Show, createSignal, createMemo, createEffect, onMount, onCleanup } from 'solid-js';
 import { useDevTools } from '../context/DevToolsContext';
-import type { TabType } from '../types/devtools';
+import { formatMs, formatRelativeTime } from '../utils/formatters';
+import type { HeartbeatInfo, TabType } from '../types/devtools';
 
 // Events moved to the end (was first); Queries is now the default landing tab.
 const tabs: { id: TabType; label: string }[] = [
@@ -62,8 +63,42 @@ function DoubleChevronIcon() {
 }
 
 export function Tabs() {
-  const { activeTab, setActiveTab, isSp00kyAvailable, refresh, isRefreshing, clearEvents } =
+  const { state, activeTab, setActiveTab, isSp00kyAvailable, refresh, isRefreshing, clearEvents } =
     useDevTools();
+
+  // E2E sync latency from the scheduler entity, shown in the toolbar so it is
+  // visible from every tab. Absent (not zero) whenever the probe is off or the
+  // scheduler is unreachable — an unknown latency must not read as a fast one.
+  const heartbeat = (): HeartbeatInfo | undefined => {
+    const scheduler = state.versions.entities?.find((e) => e.entity === 'scheduler');
+    const hb = scheduler?.heartbeat;
+    return hb?.enabled ? hb : undefined;
+  };
+
+  const hbFailing = (): boolean => {
+    const hb = heartbeat();
+    return !!hb && (hb.stale || hb.consecutive_failures > 0);
+  };
+
+  const hbLabel = (): string => {
+    const hb = heartbeat();
+    if (!hb) return '';
+    return hbFailing() ? 'e2e !' : formatMs(hb.last_e2e_ms);
+  };
+
+  // There is no poller: the value is as fresh as the last version discovery.
+  // Say so rather than implying it is live.
+  const hbTitle = (): string => {
+    const hb = heartbeat();
+    if (!hb) return '';
+    const parts = ['End-to-end sync latency (scheduler probe)'];
+    if (hb.last_ok_epoch_ms) parts.push(`last ok ${formatRelativeTime(hb.last_ok_epoch_ms)}`);
+    else parts.push('no successful probe yet');
+    if (hb.consecutive_failures > 0) parts.push(`${hb.consecutive_failures} consecutive failures`);
+    if (hb.stale) parts.push('stale');
+    parts.push('updates on Refresh');
+    return parts.join(' · ');
+  };
 
   const refreshLabel = () =>
     isRefreshing()
@@ -139,6 +174,17 @@ export function Tabs() {
       }
     }
     return { visible, overflow };
+  });
+
+  // The badge widens the right-hand group, which `recompute` treats as
+  // reserved space. It appears asynchronously (first version discovery), so
+  // without this the tab split keeps using the pre-badge reservation.
+  createEffect(() => {
+    const present = !!heartbeat();
+    const width = hbLabel().length;
+    void present;
+    void width;
+    requestAnimationFrame(recompute);
   });
 
   onMount(() => {
@@ -228,6 +274,14 @@ export function Tabs() {
       </Show>
 
       <div class="toolbar-group-right" ref={actionsEl}>
+        <Show when={heartbeat()}>
+          <span class="hb-badge" classList={{ failing: hbFailing() }} title={hbTitle()}>
+            <span class="hb-badge-icon" aria-hidden="true">
+              ♥
+            </span>
+            {hbLabel()}
+          </span>
+        </Show>
         {/* Shift+click = refresh everything. Note a keyboard activation reports
             shiftKey:false in Chrome, so there is no keyboard path to a full
             refresh — acceptable for a power-user escape hatch. */}
