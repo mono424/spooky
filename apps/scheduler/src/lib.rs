@@ -94,6 +94,14 @@ pub async fn drain_and_apply(
     for chunk in events.chunks(DRAIN_APPLY_CHUNK) {
         let mut rep = replica.write().await;
         for event in chunk {
+            // Sync-excluded tables were never cloned into the replica, so
+            // applying them is guaranteed to fail — `_00_heartbeat`'s probe
+            // write logged "table does not exist" every 30s. The SSPs still
+            // receive these events via the broadcast; the replica just has no
+            // business storing them.
+            if ssp_protocol::table_excluded_from_sync(&event.update.table) {
+                continue;
+            }
             let op = match event.update.operation {
                 crate::messages::RecordOp::Create => crate::replica::RecordOp::Create,
                 crate::messages::RecordOp::Update => crate::replica::RecordOp::Update,
