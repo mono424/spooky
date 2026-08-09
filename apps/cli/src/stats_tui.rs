@@ -654,3 +654,73 @@ fn run_ndjson(args: &StatsArgs) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn point(json: &str) -> RolePoint {
+        serde_json::from_str(json).expect("RolePoint deserializes")
+    }
+
+    #[test]
+    fn heartbeat_fields_are_optional() {
+        // Every non-scheduler role — and any control plane older than the
+        // scrape — sends points without them. Missing must not fail the
+        // stream, and must not plot a fabricated 0ms.
+        let p = point(r#"{"role":"backend","ts":"2026-08-09T10:00:00Z","cpu_pct":1.0}"#);
+        assert_eq!(p.heartbeat_e2e_ms, 0);
+
+        let mut s = RoleSeries::default();
+        s.push(&p);
+        assert!(s.hb.is_empty(), "no heartbeat field → no series → no 5th chart");
+        assert_eq!(s.cpu.len(), 1, "resource series still recorded");
+    }
+
+    #[test]
+    fn heartbeat_series_tracks_scheduler_points() {
+        let mut s = RoleSeries::default();
+        s.push(&point(
+            r#"{"role":"scheduler","ts":"2026-08-09T10:00:00Z","heartbeat_e2e_ms":11}"#,
+        ));
+        s.push(&point(
+            r#"{"role":"scheduler","ts":"2026-08-09T10:00:15Z","heartbeat_e2e_ms":83,"heartbeat_fails":2}"#,
+        ));
+
+        assert_eq!(s.hb.iter().map(|p| p.1).collect::<Vec<_>>(), vec![11.0, 83.0]);
+        assert_eq!(s.hb_fails, 2, "surfaced in the chart title");
+    }
+
+    #[test]
+    fn a_gap_in_heartbeat_does_not_desync_the_resource_series() {
+        // `hb` is trimmed on its own length precisely because it is shorter
+        // than the resource series — a shared cut index would eat live data.
+        let mut s = RoleSeries::default();
+        s.push(&point(
+            r#"{"role":"scheduler","ts":"2026-08-09T10:00:00Z","cpu_pct":1.0,"heartbeat_e2e_ms":11}"#,
+        ));
+        // Probe disabled / never succeeded → field omitted for this tick.
+        s.push(&point(r#"{"role":"scheduler","ts":"2026-08-09T10:00:15Z","cpu_pct":2.0}"#));
+
+        assert_eq!(s.cpu.len(), 2);
+        assert_eq!(s.hb.len(), 1);
+        assert_eq!(s.hb[0], (s.cpu[0].0, 11.0), "kept its own timestamp");
+    }
+
+    #[test]
+    fn reconnect_overlap_is_still_deduped_with_heartbeat() {
+        let mut s = RoleSeries::default();
+        let p = point(r#"{"role":"scheduler","ts":"2026-08-09T10:00:00Z","heartbeat_e2e_ms":11}"#);
+        s.push(&p);
+        s.push(&p);
+        assert_eq!(s.hb.len(), 1, "replayed backfill must not double-plot");
+    }
+
+    #[test]
+    fn ms_labels_switch_to_seconds_past_a_second() {
+        assert_eq!(fmt_ms(0.0), "0ms");
+        assert_eq!(fmt_ms(11.0), "11ms");
+        assert_eq!(fmt_ms(999.0), "999ms");
+        assert_eq!(fmt_ms(1500.0), "1.5s");
+    }
+}
