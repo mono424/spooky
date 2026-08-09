@@ -326,6 +326,57 @@ describe('membership-authoritative rendering', () => {
       expect(state.config.remoteArray).toEqual([]);
     });
 
+    it('ignores an empty id-set while the server still reports rows', async () => {
+      // The reported failure: registration returns before the SSP flushes the
+      // view's edges, and the poll 500ms later is still inside that window. A
+      // retry counter believes the second read and blanks the list ~2s after
+      // load; `rowCount` says the query has 26 rows, so no number of empty
+      // reads should ever be taken as "empty".
+      const { dm, state, local, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+
+      for (let i = 0; i < 5; i++) {
+        await dm.updateQueryRemoteArray(hash, [], { serverRowCount: 26 });
+      }
+
+      expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
+      expect(local.windowRows.has('stable-key')).toBe(false);
+    });
+
+    it('believes an empty id-set the moment the server reports zero rows', async () => {
+      // The other half: a genuinely empty query must not sit on a stale seed
+      // waiting for a retry budget to run out.
+      const { dm, state, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+
+      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: 0 });
+
+      expect(state.config.membershipKnown).toBe(true);
+      expect(state.config.remoteArray).toEqual([]);
+    });
+
+    it('falls back to the retry budget when the row count is unreadable', async () => {
+      // Older servers, or a row the client cannot select: unknown must not
+      // strand the device on its durable seed forever.
+      const { dm, state, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+
+      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
+      expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
+
+      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
+      expect(state.config.remoteArray).toEqual([]);
+    });
+
     it('does not seed membership from an empty durable row', async () => {
       // Self-heals devices poisoned before the guard existed: an empty durable
       // row is indistinguishable from "never had membership", so it must fall

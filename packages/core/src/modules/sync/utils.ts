@@ -189,6 +189,25 @@ export function buildListRefSelect(table: string): string {
 }
 
 /**
+ * Build the select that says whether an EMPTY id-set means "this query has no
+ * rows" or "the server has not published them yet".
+ *
+ * The SSP writes `rowCount` onto the `_00_query` row in the same statement that
+ * registers the view — synchronously, and BEFORE it hands the view's initial
+ * edges to the coalescing edge flusher. So the two are not interchangeable:
+ * `rowCount > 0` with no edges is the flush window, and only `rowCount === 0`
+ * is a genuinely empty query. Polling the edges alone cannot tell those apart
+ * no matter how long it waits, which is why this is read alongside them rather
+ * than a retry counter.
+ *
+ * Returns `NONE` (→ null) when the row is not readable or does not exist yet;
+ * callers must treat that as "unknown", not as zero.
+ */
+export function buildQueryRowCountSelect(): string {
+  return 'SELECT VALUE rowCount FROM ONLY $in';
+}
+
+/**
  * Build the SurrealQL select for a query's SUBQUERY child edges — the
  * mirror of {@link buildListRefSelect}. `.related()` queries register a
  * correlated subquery; the SSP materializes each matched child as a

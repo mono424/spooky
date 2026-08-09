@@ -1197,7 +1197,14 @@ export class DataModule<S extends SchemaStructure> {
     }
   }
 
-  async updateQueryRemoteArray(hash: string, remoteArray: RecordVersionArray): Promise<void> {
+  async updateQueryRemoteArray(
+    hash: string,
+    remoteArray: RecordVersionArray,
+    opts?: {
+      /** `_00_query.rowCount` read in the same round trip; `null` = unknown. */
+      serverRowCount?: number | null;
+    }
+  ): Promise<void> {
     const queryState = this.getQueryByHash(hash);
     if (!queryState) {
       this.logger.warn(
@@ -1220,20 +1227,40 @@ export class DataModule<S extends SchemaStructure> {
     // row, and overwriting that with `[]` would blank the very rows the seed
     // exists to paint. The `_00_list_ref` poll re-reads within ~500ms and
     // delivers the real set.
-    // Bounded, though: a query seeded from the durable row on a cold start has
-    // `remoteSeen === false`, and if its window really did empty while this
-    // device was away, the server will keep answering `[]`. Believe it on the
-    // second such read — one poll cycle (~500ms) past the flush window — so
-    // stale rows can't render forever.
+    // `serverRowCount` is what makes the two cases separable. The SSP writes it
+    // onto the `_00_query` row in the same statement that registers the view,
+    // before it queues the view's initial edges — so `> 0` with no edges is the
+    // flush window and `=== 0` is a genuinely empty query. `null`/undefined
+    // means we could not read it (older server, row not visible yet).
+    //
+    // Retry counting cannot substitute for this: the poll runs 500ms after
+    // registration, well inside the flush window for a real collection, so
+    // "believe it the second time" blanked exactly the lists this guard exists
+    // to protect — reported as rows vanishing ~2s after a page load.
     if (remoteArray.length === 0 && !queryState.config.remoteSeen) {
-      const emptyReads = (queryState.config.emptyReads ?? 0) + 1;
-      queryState.config.emptyReads = emptyReads;
-      if (emptyReads < EMPTY_MEMBERSHIP_CONFIRMATIONS) {
-        this.logger.debug(
-          { hash, emptyReads, Category: 'sp00ky-client::DataModule::updateQueryRemoteArray' },
-          'Ignoring unconfirmed empty membership (server may not have flushed list_ref yet)'
-        );
-        return;
+      const serverRowCount = opts?.serverRowCount;
+      const knownEmpty = serverRowCount === 0;
+      if (!knownEmpty) {
+        // Unknown row count still gets a bounded escape hatch, so a server that
+        // cannot report one never strands a device on a durable seed forever.
+        const emptyReads = (queryState.config.emptyReads ?? 0) + 1;
+        queryState.config.emptyReads = emptyReads;
+        const exhausted =
+          serverRowCount === null || serverRowCount === undefined
+            ? emptyReads >= EMPTY_MEMBERSHIP_CONFIRMATIONS
+            : false; // a positive row count is never "confirmed empty"
+        if (!exhausted) {
+          this.logger.debug(
+            {
+              hash,
+              emptyReads,
+              serverRowCount,
+              Category: 'sp00ky-client::DataModule::updateQueryRemoteArray',
+            },
+            'Ignoring empty membership: the server still reports rows for this query'
+          );
+          return;
+        }
       }
     }
 

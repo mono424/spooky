@@ -19,6 +19,7 @@ import {
   applyRecordVersionDiff,
   ArraySyncer,
   buildListRefSelect,
+  buildQueryRowCountSelect,
   buildSubqueryListRefSelect,
   createDiffFromDbOp,
   diffRecordVersionArray,
@@ -853,10 +854,11 @@ export class Sp00kySync<S extends SchemaStructure> {
     const queryState = this.dataModule.getQueryByHash(queryHash);
     if (!queryState) return false;
     const listRefTbl = this.listRefTable();
-    const [items] = await this.remote.query<[{ out: RecordId<string>; version: number }[]]>(
-      buildListRefSelect(listRefTbl),
-      { in: queryState.config.id }
-    );
+    const [items, serverRowCount] = await this.remote.query<
+      [{ out: RecordId<string>; version: number }[], number | null]
+    >(`${buildListRefSelect(listRefTbl)};\n${buildQueryRowCountSelect()}`, {
+      in: queryState.config.id,
+    });
     if (!Array.isArray(items)) return false;
     const fresh: RecordVersionArray = items.map((item) => [encodeRecordId(item.out), item.version]);
     // Capture which ids LEFT the query's window (present in the cached
@@ -881,7 +883,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       // and notifies subscribers. We skip an explicit `notifyQuerySynced`
       // because that path races the stream-update path (can notify with stale
       // records).
-      await this.dataModule.updateQueryRemoteArray(queryHash, fresh);
+      await this.dataModule.updateQueryRemoteArray(queryHash, fresh, { serverRowCount });
     }
     // Run `syncQuery` every tick regardless: it's a no-op when localArray has
     // caught up to remoteArray (`if (!diff) return`, issues no query), but it
@@ -1636,12 +1638,14 @@ export class Sp00kySync<S extends SchemaStructure> {
     // sync. `parent IS NONE` excludes subquery entries; the
     // `localArray` cache only tracks primary records.
     const listRefTbl = this.listRefTable();
-    const [items] = await this.remote.query<[{ out: RecordId<string>; version: number }[]]>(
-      buildListRefSelect(listRefTbl),
-      {
-        in: queryState.config.id,
-      }
-    );
+    // `rowCount` rides along: it is written by the SSP in the same statement
+    // that registers the view, BEFORE the edges are flushed, so it is the only
+    // way to tell "this query is empty" from "its edges have not landed yet".
+    const [items, serverRowCount] = await this.remote.query<
+      [{ out: RecordId<string>; version: number }[], number | null]
+    >(`${buildListRefSelect(listRefTbl)};\n${buildQueryRowCountSelect()}`, {
+      in: queryState.config.id,
+    });
 
     this.logger.trace(
       {
@@ -1665,7 +1669,7 @@ export class Sp00kySync<S extends SchemaStructure> {
 
     if (array) {
       /// Incantation existed already
-      await this.dataModule.updateQueryRemoteArray(queryHash, array);
+      await this.dataModule.updateQueryRemoteArray(queryHash, array, { serverRowCount });
     }
 
     // Pull the bodies of any `.related()` subquery children into the local
