@@ -6,11 +6,25 @@ import { SyncQueueEventTypes } from './events/index';
  * SyncScheduler manages when to sync: queue management and orchestration.
  * Decides the order and timing of sync operations.
  */
+/** Backoff for re-draining a queue that halted on an error. */
+const RETRY_BASE_MS = 500;
+const RETRY_MAX_MS = 15_000;
+
 export class SyncScheduler {
   private isSyncingUp: boolean = false;
   private isSyncingDown: boolean = false;
   private paused: boolean = false;
   private pauseWaiters: Array<() => void> = [];
+  // A failed drain re-queues its item at the HEAD (see DownQueue.next) and
+  // stops the pass. Without a timer nothing ever drains it again: the queues
+  // only move on a fresh enqueue, so a transient failure — canonically the
+  // SSP answering 503 NOT_READY for the whole of its bootstrap window — left
+  // every pending `register` parked forever and its `useQuery` loading forever.
+  // Retry on a backoff so that heals itself instead of needing a reload.
+  private upRetryTimer?: ReturnType<typeof setTimeout>;
+  private downRetryTimer?: ReturnType<typeof setTimeout>;
+  private upRetryAttempt = 0;
+  private downRetryAttempt = 0;
 
   constructor(
     private upQueue: UpQueue,
@@ -62,13 +76,18 @@ export class SyncScheduler {
    */
   pause(): Promise<void> {
     this.paused = true;
+    this.clearRetryTimers();
     if (!this.isSyncingUp && !this.isSyncingDown) return Promise.resolve();
     return new Promise<void>((resolve) => this.pauseWaiters.push(resolve));
   }
 
   resume(): void {
     this.paused = false;
+    // A resume is a fresh start, not a continuation of the failing streak.
+    this.upRetryAttempt = 0;
+    this.downRetryAttempt = 0;
     void this.syncUp();
+    void this.syncDown();
   }
 
   private maybeResolvePause() {
@@ -76,6 +95,51 @@ export class SyncScheduler {
     const waiters = this.pauseWaiters;
     this.pauseWaiters = [];
     for (const resolve of waiters) resolve();
+  }
+
+  /** Exponential backoff, capped. Attempt 0 is the first retry. */
+  private retryDelay(attempt: number): number {
+    return Math.min(RETRY_BASE_MS * 2 ** attempt, RETRY_MAX_MS);
+  }
+
+  private scheduleUpRetry() {
+    if (this.paused || this.upRetryTimer || this.upQueue.size === 0) return;
+    const delay = this.retryDelay(this.upRetryAttempt++);
+    this.upRetryTimer = setTimeout(() => {
+      this.upRetryTimer = undefined;
+      void this.syncUp();
+    }, delay);
+  }
+
+  /**
+   * Re-arm the down pass. With no argument this is failure backoff and the
+   * streak grows; with an explicit delay it is a yield (the up-queue holds the
+   * floor), which is not a failure and must not push the backoff out.
+   */
+  private scheduleDownRetry(delayMs?: number) {
+    if (this.paused || this.downRetryTimer || this.downQueue.size === 0) return;
+    const delay = delayMs ?? this.retryDelay(this.downRetryAttempt++);
+    this.downRetryTimer = setTimeout(() => {
+      this.downRetryTimer = undefined;
+      void this.syncDown();
+    }, delay);
+  }
+
+  private clearRetryTimers() {
+    if (this.upRetryTimer) {
+      clearTimeout(this.upRetryTimer);
+      this.upRetryTimer = undefined;
+    }
+    if (this.downRetryTimer) {
+      clearTimeout(this.downRetryTimer);
+      this.downRetryTimer = undefined;
+    }
+  }
+
+  /** Stop all pending retries. Call when tearing the client down. */
+  dispose(): void {
+    this.paused = true;
+    this.clearRetryTimers();
   }
 
   /**
@@ -91,8 +155,10 @@ export class SyncScheduler {
         processedAny = true;
       }
       if (processedAny) this.onSyncOutcome?.(true);
+      this.upRetryAttempt = 0;
     } catch (error) {
       this.onSyncOutcome?.(false, error);
+      this.scheduleUpRetry();
       // syncUp runs fire-and-forget — it's wired to the MutationEnqueued event
       // (broadcast synchronously, return value dropped) and is also kicked off
       // via `void this.syncDown()` below. A rejection escaping here therefore
@@ -116,7 +182,15 @@ export class SyncScheduler {
    */
   async syncDown() {
     if (this.isSyncingDown || this.paused) return;
-    if (this.upQueue.size > 0) return;
+    // Down-sync yields to a non-empty up-queue so a register never races ahead
+    // of the mutation it should observe. That yield used to be permanent: if
+    // the up-queue never drained, nothing re-armed the down pass. Come back on
+    // the backoff instead, so a wedged push delays reads rather than killing
+    // them.
+    if (this.upQueue.size > 0) {
+      this.scheduleDownRetry(RETRY_BASE_MS);
+      return;
+    }
 
     this.isSyncingDown = true;
     let processedAny = false;
@@ -127,8 +201,10 @@ export class SyncScheduler {
         processedAny = true;
       }
       if (processedAny) this.onSyncOutcome?.(true);
+      this.downRetryAttempt = 0;
     } catch (error) {
       this.onSyncOutcome?.(false, error);
+      this.scheduleDownRetry();
       // Same fire-and-forget story as syncUp: this is the QueryItemEnqueued
       // subscriber (and is also called via `void this.syncDown()`), so a thrown
       // error here becomes an unhandled rejection. The canonical case is a
