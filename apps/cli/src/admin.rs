@@ -98,7 +98,7 @@ fn add(
         GREEN, RESET, user, user_id
     );
     println!(
-        "{}They can now edit feature flags from the DevTools Flags tab. No re-login needed —\n\
+        "{}They can now edit feature flags from the DevTools Access tab. No re-login needed —\n\
          $auth.id is evaluated per query.{}",
         DIM, RESET
     );

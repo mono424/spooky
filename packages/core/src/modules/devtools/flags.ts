@@ -150,7 +150,7 @@ export class FlagsAdminService {
   constructor(private deps: FlagsAdminDeps) {}
 
   /**
-   * Everything the Flags tab renders, in one round trip per source.
+   * Everything the Access tab renders, in one round trip per source.
    *
    * Each section fails independently: a remote read that throws downgrades to
    * `isAdmin: false` plus an `error`, while local assignments and overrides
@@ -196,7 +196,7 @@ export class FlagsAdminService {
     } catch (err) {
       // A missing `_00_admin` table means the deployment hasn't applied the
       // internal schema yet. Say so — otherwise it reads as "not an admin".
-      snapshot.error = `Could not check admin status: ${message(err)}. If this deployment predates the Flags tab, run \`spky migrate\` (or redeploy) to apply the internal schema.`;
+      snapshot.error = `Could not check admin status: ${message(err)}. If this deployment predates the Access tab, run \`spky migrate\` (or redeploy) to apply the internal schema.`;
       return snapshot;
     }
 

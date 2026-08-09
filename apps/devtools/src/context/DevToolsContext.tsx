@@ -70,7 +70,7 @@ interface DevToolsContextValue {
   fetchStorageInfo: (opts?: { tableCounts?: boolean }) => Promise<void>;
   requestPersistentStorage: () => Promise<boolean>;
 
-  // Flags tab
+  // Access tab
   flagsSnapshot: () => FlagsSnapshot | null;
   flagsError: () => string | null;
   isFetchingFlags: () => boolean;
@@ -78,7 +78,13 @@ interface DevToolsContextValue {
   isMutatingFlag: () => string | null;
   fetchFlags: () => Promise<void>;
   setFlagEnabled: (key: string, enabled: boolean) => Promise<void>;
-  setFlagUserVariant: (key: string, variant: string, remove: boolean) => Promise<void>;
+  /** `userId` (a `user:xxx` record id) targets someone else; omitted = the signed-in user. */
+  setFlagUserVariant: (
+    key: string,
+    variant: string,
+    remove: boolean,
+    userId?: string
+  ) => Promise<void>;
   setFlagOverride: (key: string, variant: string | null) => Promise<void>;
   clearFlagOverrides: () => Promise<void>;
 }
@@ -128,7 +134,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const [storageInfo, setStorageInfo] = createSignal<StorageInfo | null>(null);
   const [storageInfoError, setStorageInfoError] = createSignal<string | null>(null);
   const [isFetchingStorage, setIsFetchingStorage] = createSignal(false);
-  // Flags tab: on-demand too. Definitions aren't synced to the client, so this
+  // Access tab: on-demand too. Definitions aren't synced to the client, so this
   // is a remote read and can't ride the push channel.
   const [flagsSnapshot, setFlagsSnapshot] = createSignal<FlagsSnapshot | null>(null);
   const [flagsError, setFlagsError] = createSignal<string | null>(null);
@@ -493,7 +499,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
    * tab where skipping it buys anything.
    *
    * `refreshVersions()` is deliberately NOT baseline: it is a remote fetch and
-   * irrelevant to eight of the nine tabs.
+   * irrelevant to seven of the eight tabs.
    *
    * Keep in sync with REFRESH_SCOPE in components/Tabs.tsx, which is the
    * user-facing description of exactly this mapping.
@@ -505,8 +511,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
       case 'events':
       case 'queries':
       case 'timing':
-      case 'auth':
-        // Fully covered by the baseline — all four render slices of getState().
+        // Fully covered by the baseline — all three render slices of getState().
         break;
       case 'database':
         // Table list (DatabaseTab's effect) and rows (TableView's effect).
@@ -515,7 +520,9 @@ export const DevToolsProvider: ParentComponent = (props) => {
       case 'storage':
         void fetchStorageInfo();
         break;
-      case 'flags':
+      case 'access':
+        // The session half rides the baseline getState(); the flag snapshot is
+        // a separate remote read.
         void fetchFlags();
         break;
       case 'versions':
@@ -862,8 +869,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const setFlagEnabled = (key: string, enabled: boolean) =>
     mutateFlag(key, 'setEnabled', { enabled });
 
-  const setFlagUserVariant = (key: string, variant: string, remove: boolean) =>
-    mutateFlag(key, 'setUserVariant', { variant, remove });
+  // `userId` is forwarded to core's `setFlagUserVariant`, which defaults it to
+  // the signed-in user. Passing `undefined` therefore keeps the "for me" path
+  // identical rather than sending an empty target.
+  const setFlagUserVariant = (key: string, variant: string, remove: boolean, userId?: string) =>
+    mutateFlag(key, 'setUserVariant', { variant, remove, userId });
 
   /** Local-only: no auth, no network, works signed out. */
   const setFlagOverride = async (key: string, variant: string | null) => {

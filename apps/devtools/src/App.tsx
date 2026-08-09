@@ -7,8 +7,7 @@ import { QueriesTab } from './components/queries/QueriesTab';
 import { TimingTab } from './components/timing/TimingTab';
 import { DatabaseTab } from './components/database/DatabaseTab';
 import { StorageTab } from './components/storage/StorageTab';
-import { AuthTab } from './components/auth/AuthTab';
-import { FlagsTab } from './components/flags/FlagsTab';
+import { AccessTab } from './components/access/AccessTab';
 import { VersionsTab } from './components/versions/VersionsTab';
 import { McpTab } from './components/mcp/McpTab';
 
@@ -51,15 +50,9 @@ function AppContent() {
           </Show>
         </div>
 
-        <div class="tab-content" classList={{ active: activeTab() === 'auth' }}>
-          <Show when={activeTab() === 'auth'}>
-            <AuthTab />
-          </Show>
-        </div>
-
-        <div class="tab-content" classList={{ active: activeTab() === 'flags' }}>
-          <Show when={activeTab() === 'flags'}>
-            <FlagsTab />
+        <div class="tab-content" classList={{ active: activeTab() === 'access' }}>
+          <Show when={activeTab() === 'access'}>
+            <AccessTab />
           </Show>
         </div>
 

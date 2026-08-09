@@ -139,7 +139,7 @@
     }
   });
 
-  // Feature flags (Flags tab). Same shape as SP00KY_STORAGE_OP: one listener,
+  // Feature flags (Access tab). Same shape as SP00KY_STORAGE_OP: one listener,
   // an `op` discriminator, and `args` passed as a JSON object rather than
   // concatenated into the eval string — flag keys and user record ids come
   // from the database, so they must never become code.

@@ -86,7 +86,7 @@ export class DevToolsService implements StreamUpdateReceiver {
   private localTablesFetching = false;
   private localTablesAt = 0;
 
-  // Feature flag admin, backing the panel's Flags tab. The local-override
+  // Feature flag admin, backing the panel's Access tab. The local-override
   // store is injected later (`setFeatureFlagOverrides`) because the
   // FeatureFlagModule is built after this service.
   private featureOverrides: LocalOverrideStore | null = null;
@@ -545,7 +545,7 @@ export class DevToolsService implements StreamUpdateReceiver {
   }
 
   /**
-   * Hand the FeatureFlagModule to the Flags tab so it can read and write local
+   * Hand the FeatureFlagModule to the Access tab so it can read and write local
    * overrides. Called from `Sp00kyClient` once both are constructed; until then
    * the override methods are no-ops that report an empty map.
    */
@@ -558,7 +558,7 @@ export class DevToolsService implements StreamUpdateReceiver {
       (window as any).__00__ = {
         version: this.version,
         getState: () => this.getState(),
-        // ---- Feature flags (Flags tab) --------------------------------
+        // ---- Feature flags (Access tab) --------------------------------
         // Remote reads/writes are admin-gated by SurrealDB, not here: a
         // non-admin gets an empty flag list, and the `fn::feature::*` calls
         // are denied outright. The override methods are purely local and

@@ -226,7 +226,7 @@ export function useRunInHostPage() {
   };
 
   /**
-   * Feature flag read/write (Flags tab). Same eval-dispatch-only contract as
+   * Feature flag read/write (Access tab). Same eval-dispatch-only contract as
    * `storageOp`: page-script.ts awaits the async work and posts a
    * SP00KY_FLAG_RESPONSE correlated by requestId.
    *

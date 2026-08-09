@@ -203,13 +203,14 @@ export type TabType =
   | 'queries'
   | 'database'
   | 'storage'
-  | 'auth'
-  | 'flags'
+  // Auth + feature flags, merged: identity and what that identity is allowed
+  // to see are one story.
+  | 'access'
   | 'mcp'
   | 'versions'
   | 'timing';
 
-// Flags tab types — mirrored from packages/core/src/modules/devtools/flags.ts
+// Access tab types — mirrored from packages/core/src/modules/devtools/flags.ts
 // (the extension deliberately doesn't import core types; keep the shapes in
 // sync by hand).
 
@@ -256,7 +257,7 @@ export interface FlagsSnapshot {
   flags: FlagRow[];
   assignments: FlagAssignment[];
   overrides: Record<string, FlagOverride>;
-  /** Set when the schema predates the Flags tab, or the remote read failed. */
+  /** Set when the schema predates the Access tab, or the remote read failed. */
   error?: string;
 }
 

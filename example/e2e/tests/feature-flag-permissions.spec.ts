@@ -17,7 +17,7 @@ import { test, expect } from '@playwright/test';
  *                        admin`), self-scoped on select, so nobody can
  *                        promote themselves or enumerate the operators.
  *
- * The admin path exists for the DevTools Flags tab. It is deliberately
+ * The admin path exists for the DevTools Access tab. It is deliberately
  * exercised here too: the interesting property isn't "an admin can", it's
  * that everything stays shut for everyone else.
  *
@@ -266,7 +266,7 @@ test.describe.serial('Feature flag permissions', () => {
     ).toBe(0);
 
     // Write: the admin's change must reach BOB's assignment, not just her own.
-    // That round trip is the entire point of the DevTools Flags tab.
+    // That round trip is the entire point of the DevTools Access tab.
     await recordSql(
       aliceToken,
       `RETURN fn::feature::allow('${flagKey}', 'on', ${bobId});`

@@ -9,8 +9,7 @@ const tabs: { id: TabType; label: string }[] = [
   { id: 'timing', label: 'Timing' },
   { id: 'database', label: 'Database' },
   { id: 'storage', label: 'Storage' },
-  { id: 'auth', label: 'Auth' },
-  { id: 'flags', label: 'Flags' },
+  { id: 'access', label: 'Access' },
   { id: 'versions', label: 'Versions' },
   { id: 'mcp', label: 'MCP' },
   { id: 'events', label: 'Events' },
@@ -20,7 +19,8 @@ const tabs: { id: TabType; label: string }[] = [
 const CHEVRON_W = 30;
 
 // What a plain Refresh click actually refetches, per tab — every tab also gets
-// a `getState()` resync, which is what covers Queries/Timing/Events/Auth.
+// a `getState()` resync, which is what covers Queries/Timing/Events (and the
+// session half of Access).
 //
 // Typed as a full Record so adding a TabType member is a compile error here as
 // well as in `refreshScoped` (context/DevToolsContext.tsx). The copy and the
@@ -29,10 +29,9 @@ const REFRESH_SCOPE: Record<TabType, string> = {
   queries: 'page state',
   timing: 'page state',
   events: 'page state',
-  auth: 'page state',
+  access: 'feature flags',
   database: 'the table list and rows',
   storage: 'storage diagnostics',
-  flags: 'feature flags',
   versions: 'version discovery',
   mcp: 'MCP bridge status',
 };
