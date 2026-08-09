@@ -262,6 +262,33 @@ export class SqliteCacheEngine implements LocalStore {
     return result;
   }
 
+  /**
+   * Ops dispatched to the worker and not yet answered. Role transitions run on
+   * their own chain (see {@link transitionChain}), so they can start while the
+   * opQueue still has an op at the worker; tearing the transport down under it
+   * would reject that op — and its caller may be a query whose only fetch this
+   * was. {@link drainInFlight} lets a deliberate teardown wait them out.
+   */
+  private inFlightCalls = new Set<Promise<unknown>>();
+
+  /** Wait for dispatched ops to answer before a deliberate transport teardown.
+   *  Bounded: a wedged worker must not block the role change forever. */
+  private async drainInFlight(timeoutMs = 2_000): Promise<void> {
+    if (this.inFlightCalls.size === 0) return;
+    const settled = Promise.all([...this.inFlightCalls].map((p) => p.catch(() => undefined)));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        settled,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private rawCall<T = any>(type: string, payload?: unknown): Promise<T> {
     if (!this.transport) throw new Error('SqliteCacheEngine: not connected');
     // --- instrumentation: live, inspectable via `globalThis.__sqliteStats` ---
@@ -276,8 +303,21 @@ export class SqliteCacheEngine implements LocalStore {
     s.maxInFlight = Math.max(s.maxInFlight, s.inFlight);
     if (this.transport.kind === 'port') s.proxiedOps = (s.proxiedOps ?? 0) + 1;
     const sentAt = performance.now();
-    return this.transport.call<T>(type, payload).then(
+    // Track the dispatch, not the returned promise: attaching a handler to
+    // `result` would mark it handled and swallow the unhandled-rejection
+    // reports that surface a caller which forgot to catch.
+    let settle!: () => void;
+    const tracked = new Promise<void>((res) => {
+      settle = res;
+    });
+    this.inFlightCalls.add(tracked);
+    const finish = () => {
+      this.inFlightCalls.delete(tracked);
+      settle();
+    };
+    const result = this.transport.call<T>(type, payload).then(
       (v: T) => {
+        finish();
         s.inFlight--;
         // Split the round-trip: `wt` is time inside the worker's handler,
         // the remainder is postMessage + scheduling overhead.
@@ -289,10 +329,12 @@ export class SqliteCacheEngine implements LocalStore {
         return v;
       },
       (e: unknown) => {
+        finish();
         s.inFlight--;
         throw e;
       }
     );
+    return result;
   }
 
   /**
@@ -514,6 +556,7 @@ export class SqliteCacheEngine implements LocalStore {
         this.closeRoleGate();
         return this.storageHealthValue;
       }
+      if (this.transport) await this.drainInFlight();
       if (this.hadStore) this.storeEpoch++;
       if (this.transport) {
         try {
@@ -521,7 +564,7 @@ export class SqliteCacheEngine implements LocalStore {
         } catch {
           /* ignore */
         }
-        this.transport.close('adopting ownership');
+        this.transport.close('adopting ownership', new BrokerPortClosedError('adopting ownership'));
         this.transport = null;
       }
       await this.openInternal(bucketId, {
@@ -555,8 +598,12 @@ export class SqliteCacheEngine implements LocalStore {
   ): Promise<void> {
     this.roleLabel = 'follower';
     return this.chainTransition(async () => {
+      if (this.transport) await this.drainInFlight();
       if (this.hadStore) this.storeEpoch++;
-      this.transport?.close('adopting leader port');
+      this.transport?.close(
+        'adopting leader port',
+        new BrokerPortClosedError('adopting leader port')
+      );
       this.transport = new PortSqliteTransport(dbPort, onPortDead, this.logger);
       this.bucketId = snapshot.bucketId;
       // The shared store exists and is seeded; mirror the owner's bookkeeping.
@@ -578,6 +625,11 @@ export class SqliteCacheEngine implements LocalStore {
   async releaseOwnership(): Promise<void> {
     await this.chainTransition(async () => {
       if (this.transport) {
+        // Let ops already at the worker answer first. Without this they die
+        // with the transport — a bucket switch (moveToBucket → teardownLeader)
+        // runs while the opQueue may still have a query's fetch in flight, and
+        // that fetch's caller is not necessarily prepared to retry.
+        await this.drainInFlight();
         try {
           if (this.transport.kind === 'worker') {
             await (this.transport as WorkerSqliteTransport).shutdown();
@@ -585,7 +637,13 @@ export class SqliteCacheEngine implements LocalStore {
         } catch {
           /* worker may already be fenced/dead */
         }
-        this.transport.close('ownership released');
+        // Anything still pending (drain timed out) is a deliberate teardown,
+        // not a crash: fail it the way a follower's lost port does, so the
+        // error text is honest and callers can treat it as retryable.
+        this.transport.close(
+          'ownership released',
+          new BrokerPortClosedError('ownership released')
+        );
         this.transport = null;
       }
       this.storeEpoch++;

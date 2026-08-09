@@ -22,8 +22,10 @@ export interface SqliteTransport {
   call<T = unknown>(type: string, payload?: unknown): Promise<T>;
   /** Reject every pending request with `reason`. Safe to call repeatedly. */
   failAll(reason: string): void;
-  /** failAll + release the underlying channel. Terminal. */
-  close(reason?: string): void;
+  /** failAll + release the underlying channel. Terminal. `err` overrides the
+   *  transport's own error shape — used for a deliberate teardown (role change)
+   *  so callers see a retryable "transport lost", not "the worker crashed". */
+  close(reason?: string, err?: Error): void;
 }
 
 /** Thrown into pending follower calls when the leader (or its port) goes away.
@@ -81,17 +83,17 @@ abstract class BaseTransport implements SqliteTransport {
     });
   }
 
-  failAll(reason: string): void {
+  failAll(reason: string, err?: Error): void {
     if (this.pending.size === 0) return;
-    const err = this.makeError(reason);
-    for (const [, p] of this.pending) p.reject(err);
+    const e = err ?? this.makeError(reason);
+    for (const [, p] of this.pending) p.reject(e);
     this.pending.clear();
   }
 
-  close(reason = 'closed'): void {
+  close(reason = 'closed', err?: Error): void {
     if (this.closed) return;
     this.closed = true;
-    this.failAll(reason);
+    this.failAll(reason, err);
   }
 }
 
@@ -166,9 +168,9 @@ export class WorkerSqliteTransport extends BaseTransport {
     return this.call('shutdown').then(() => undefined);
   }
 
-  close(reason = 'closed'): void {
+  close(reason = 'closed', err?: Error): void {
     if (this.closed) return;
-    super.close(reason);
+    super.close(reason, err);
     this.worker.terminate();
   }
 }
@@ -193,10 +195,10 @@ export class PortSqliteTransport extends BaseTransport {
     this.dead(reason);
   }
 
-  private dead(reason: string): void {
+  private dead(reason: string, err?: Error): void {
     if (this.closed) return;
     this.closed = true;
-    this.failAll(reason);
+    this.failAll(reason, err);
     try {
       this.port.close();
     } catch {
@@ -213,7 +215,7 @@ export class PortSqliteTransport extends BaseTransport {
     return new BrokerPortClosedError(reason);
   }
 
-  close(reason = 'closed'): void {
-    this.dead(reason);
+  close(reason = 'closed', err?: Error): void {
+    this.dead(reason, err);
   }
 }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { RecordId } from 'surrealdb';
 import { pureWriteOpResult, SqliteCacheEngine } from './sqlite-cache-engine';
 import { stubTransport } from './sqlite-transport.fixture';
+import { BrokerPortClosedError } from './sqlite-transport';
 import { translateSurql } from './surql-translate';
 import type { SqlOp } from './surql-translate';
 import { surql } from '../../utils/surql';
@@ -328,6 +329,99 @@ describe('SqliteCacheEngine role modes', () => {
     });
     await expect(read).resolves.toBeNull();
     expect(engine.storageHealth.role).toBe('leader');
+  });
+
+  /**
+   * A transport with the REAL pending-map semantics (the shared fixture never
+   * rejects on close, which would make the drain test vacuous): `exec` parks
+   * until `flush()`, and `close` rejects whatever is still parked.
+   */
+  function deferredTransport() {
+    const parked: Array<{ resolve: (v: any) => void; reject: (e: unknown) => void }> = [];
+    let closed = false;
+    const transport: any = {
+      kind: 'worker',
+      get connected() {
+        return !closed;
+      },
+      call(type: string) {
+        if (closed) return Promise.reject(new Error('SQLite worker crashed: transport closed'));
+        if (type === 'open') return Promise.resolve({ persisted: true });
+        if (type !== 'exec') return Promise.resolve({});
+        return new Promise((resolve, reject) => parked.push({ resolve, reject }));
+      },
+      shutdown: () => Promise.resolve(),
+      failAll() {},
+      close(reason = 'closed', err?: Error) {
+        if (closed) return;
+        closed = true;
+        const e = err ?? new Error(`SQLite worker crashed: ${reason}`);
+        for (const p of parked.splice(0)) p.reject(e);
+      },
+      flush() {
+        for (const p of parked.splice(0)) p.resolve({ rows: [] });
+      },
+      get parkedCount() {
+        return parked.length;
+      },
+    };
+    return transport;
+  }
+
+  // Regression (WhitePawn first-login): the bucket switch runs
+  // moveToBucket → teardownLeader → releaseOwnership, which lives on the
+  // transition chain, NOT the opQueue — so a query's fetch can be sitting at
+  // the worker when ownership is released. Tearing the transport down under it
+  // rejected that fetch with "SQLite worker crashed: ownership released", which
+  // nothing retries (and nobody caught: an unhandled rejection in the console).
+  it('releaseOwnership waits for in-flight ops instead of killing them', async () => {
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger(), {
+      shared: true,
+    });
+    const transport = deferredTransport();
+    (engine as any).createTransport = () => transport;
+    await engine.adoptOwner('anon', {
+      workerLockName: 'sp00ky-tabs:fp:anon:worker:1',
+      allowMemoryFallback: false,
+      resumeHeld: false,
+    });
+
+    const read = engine.getById('_00_query', 'h1');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(transport.parkedCount).toBe(1);
+
+    const released = engine.releaseOwnership();
+    await new Promise((r) => setTimeout(r, 0));
+    // Still parked: the teardown is waiting on it rather than failing it.
+    expect(transport.parkedCount).toBe(1);
+    transport.flush();
+
+    await released;
+    await expect(read).resolves.toBeNull();
+  });
+
+  it('fails an undrainable op as a retryable transport loss, not a crash', async () => {
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger(), {
+      shared: true,
+    });
+    const transport = deferredTransport();
+    (engine as any).createTransport = () => transport;
+    await engine.adoptOwner('anon', {
+      workerLockName: 'sp00ky-tabs:fp:anon:worker:1',
+      allowMemoryFallback: false,
+      resumeHeld: false,
+    });
+
+    const read = engine.getById('_00_query', 'h1');
+    const caught = read.catch((e: unknown) => e);
+    await new Promise((r) => setTimeout(r, 0));
+    // The op never answers: the drain times out and the teardown proceeds.
+    (engine as any).drainInFlight = () => Promise.resolve();
+    await engine.releaseOwnership();
+
+    const err = await caught;
+    expect(err).toBeInstanceOf(BrokerPortClosedError);
+    expect((err as Error).message).toContain('ownership released');
   });
 
   it('bumps the epoch on promotion after having had a store (fences in-flight chains)', async () => {
