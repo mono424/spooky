@@ -5945,6 +5945,8 @@ fn print_deployment_details(data: &serde_json::Value) {
     // Collect component versions from /api/spooky (keyed by entity name)
     let mut component_versions: std::collections::HashMap<String, (String, String)> =
         std::collections::HashMap::new();
+    // The scheduler's e2e sync heartbeat, if it reports one.
+    let mut heartbeat: Option<serde_json::Value> = None;
     if let Some(db_url) = data
         .get("urls")
         .and_then(|u| u.get("surrealdb"))
@@ -5968,6 +5970,9 @@ fn print_deployment_details(data: &serde_json::Value) {
                     let name = entity["entity"].as_str().unwrap_or("").to_string();
                     let ver = entity["version"].as_str().unwrap_or("-").to_string();
                     let st = entity["status"].as_str().unwrap_or("-").to_string();
+                    if name == "scheduler" {
+                        heartbeat = entity.get("heartbeat").cloned();
+                    }
                     if !name.is_empty() {
                         component_versions.insert(name, (ver, st));
                     }
@@ -5992,10 +5997,10 @@ fn print_deployment_details(data: &serde_json::Value) {
         if !vms.is_empty() {
             println!();
             println!(
-                "  {:<14} {:<18} {:<22} {:<10}",
-                "ROLE", "IP", "VERSION", "STATUS"
+                "  {:<14} {:<18} {:<22} {:<12} {}",
+                "ROLE", "IP", "VERSION", "STATUS", "E2E"
             );
-            println!("  {}", "─".repeat(66));
+            println!("  {}", "─".repeat(78));
 
             for vm in vms {
                 let role = vm["role"].as_str().unwrap_or("-");
@@ -6028,18 +6033,62 @@ fn print_deployment_details(data: &serde_json::Value) {
                     }
                 };
 
-                // Status icon
-                let icon = match vm_status {
+                // The container being up says nothing about the service being
+                // able to do its job. Prefer what the component reports about
+                // itself, and for the scheduler let a failing end-to-end
+                // heartbeat override both: a probe that cannot round-trip
+                // through the sync pipeline means writes are not reaching
+                // clients, however healthy the process looks.
+                let reported = component_versions
+                    .get(role)
+                    .or_else(|| component_versions.get(name))
+                    .map(|(_, st)| st.as_str())
+                    .filter(|st| *st != "-");
+                let hb = if role == "scheduler" { heartbeat.as_ref() } else { None };
+                let hb_enabled = hb.and_then(|h| h["enabled"].as_bool()).unwrap_or(false);
+                let hb_stale = hb.and_then(|h| h["stale"].as_bool()).unwrap_or(false);
+                let hb_fails = hb.and_then(|h| h["consecutive_failures"].as_u64()).unwrap_or(0);
+                let hb_ms = hb.and_then(|h| h["last_e2e_ms"].as_u64());
+
+                let (status_text, health) = if vm_status != "running" {
+                    (vm_status.to_string(), vm_status)
+                } else if hb_enabled && hb_stale {
+                    // No successful probe inside the grace window: the pipeline
+                    // is not carrying changes, so the scheduler is not serving
+                    // its purpose even though it answers HTTP.
+                    ("degraded (e2e)".to_string(), "degraded")
+                } else if hb_enabled && hb_fails > 0 {
+                    (format!("degraded ({hb_fails} failed)"), "degraded")
+                } else {
+                    (reported.unwrap_or(vm_status).to_string(), vm_status)
+                };
+
+                let icon = match health {
                     "running" => "\x1b[32m●\x1b[0m",
                     "starting" => "\x1b[33m◐\x1b[0m",
+                    "degraded" => "\x1b[33m▲\x1b[0m",
                     "failed" => "\x1b[31m✗\x1b[0m",
                     "stopped" => "\x1b[90m○\x1b[0m",
                     _ => "\x1b[90m·\x1b[0m",
                 };
 
+                // Latency column: only the scheduler measures one. `timeout`
+                // rather than a stale number, so a frozen reading can never
+                // read as a healthy one.
+                let e2e = if !hb_enabled {
+                    "-".to_string()
+                } else if hb_stale {
+                    "\x1b[31mtimeout\x1b[0m".to_string()
+                } else {
+                    match hb_ms {
+                        Some(ms) => format!("{ms}ms"),
+                        None => "-".to_string(),
+                    }
+                };
+
                 println!(
-                    "  {} {:<13} {:<18} {:<22} {}",
-                    icon, role, ip, version, vm_status,
+                    "  {} {:<13} {:<18} {:<22} {:<12} {}",
+                    icon, role, ip, version, status_text, e2e,
                 );
             }
         }
