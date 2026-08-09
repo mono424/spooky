@@ -15,6 +15,7 @@ import {
   type QueryMark,
   type StorageInfo,
   type FlagsSnapshot,
+  type Sp00kyFrame,
 } from '../types/devtools';
 import { useChromeConnection } from '../hooks/useChromeConnection';
 import { useRunInHostPage } from '../hooks/useRunInHostPage';
@@ -37,7 +38,15 @@ interface DevToolsContextValue {
   mcpStatus: () => McpStatus;
   setMcpEnabled: (enabled: boolean) => void;
 
+  /** Every frame in the tab running a Sp00ky client (main document + iframes). */
+  frames: () => Sp00kyFrame[];
+  /** Which one the panel is inspecting; 0 is the main document. */
+  activeFrameId: () => number;
+  activeFrame: () => Sp00kyFrame | undefined;
+
   // Actions
+  /** Point the panel at another client. Wipes the previous frame's state. */
+  selectFrame: (frameId: number) => void;
   setActiveTab: (tab: TabType) => void;
   setSelectedQueryHash: (hash: number | null) => void;
   setSelectedTable: (table: string | null) => void;
@@ -129,6 +138,15 @@ export const DevToolsProvider: ParentComponent = (props) => {
   const [selectedQueryHash, setSelectedQueryHash] = createSignal<number | null>(null);
   const [selectedTable, setSelectedTable] = createSignal<string | null>(null);
   const [isSp00kyAvailable, setIsSp00kyAvailable] = createSignal(false);
+  // Every frame in the tab that announced a client, and which one the panel is
+  // inspecting. The main document is frameId 0 and is the default; an iframe is
+  // only ever selected explicitly.
+  const [frames, setFrames] = createSignal<Sp00kyFrame[]>([]);
+  const [activeFrameId, setActiveFrameIdSignal] = createSignal(0);
+  const activeFrame = () => frames().find((f) => f.frameId === activeFrameId());
+  // Undefined for the main document — `useRunInHostPage` then evaluates against
+  // the top frame, which is the pre-iframe behavior.
+  const activeFrameUrl = () => (activeFrameId() === 0 ? undefined : activeFrame()?.url);
   // Storage tab: on-demand diagnostics snapshot (the heavyweight OPFS walk +
   // quota estimate lives behind an explicit fetch, not the push channel).
   const [storageInfo, setStorageInfo] = createSignal<StorageInfo | null>(null);
@@ -192,12 +210,15 @@ export const DevToolsProvider: ParentComponent = (props) => {
     isFetchingRows();
 
   // Custom hooks
-  const { requestState, sendMessage } = useChromeConnection({
+  const { sendMessage: sendRaw } = useChromeConnection({
     onMessage: handleMessage,
     onConnect: () => {
       console.log('[DevTools] Chrome connection established');
       checkSp00ky();
       sendMessage({ type: 'GET_MCP_STATUS' });
+      // The panel can attach after the page loaded, in which case every
+      // detection announcement is already gone; ask for the current list.
+      sendRaw({ type: 'GET_FRAMES' });
     },
     onDisconnect: () => {
       console.log('[DevTools] Chrome connection lost');
@@ -205,7 +226,16 @@ export const DevToolsProvider: ParentComponent = (props) => {
     },
   });
 
-  const hostPage = useRunInHostPage();
+  /**
+   * Stamp the inspected frame on everything the panel sends. The content script
+   * runs in every frame, so an unaddressed message is answered by all of them.
+   */
+  const sendMessage = (message: ChromeMessage) =>
+    sendRaw({ ...message, frameId: activeFrameId() });
+
+  const requestState = () => sendMessage({ type: 'GET_SP00KY_STATE' });
+
+  const hostPage = useRunInHostPage(activeFrameUrl);
 
   // In-flight guards for the panel's own optional schema queries (kept for
   // manual/debug use). The table list itself comes from the backend now.
@@ -251,6 +281,21 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function handleMessage(message: ChromeMessage) {
     console.log('[DevTools] Processing message:', message);
+
+    // The frame registry and the MCP/lifecycle messages are tab-wide; state
+    // pushes belong to exactly one frame.
+    if (message.type === 'SP00KY_FRAMES') {
+      applyFrames(message.frames ?? []);
+      return;
+    }
+
+    // Drop pushes from frames the panel is not inspecting. `frameId` is absent
+    // on panel-internal messages (MCP_STATUS, PAGE_RELOADED), which are not
+    // frame-scoped and must not be filtered.
+    if (message.frameId !== undefined && message.frameId !== activeFrameId()) {
+      console.log('[DevTools] Ignoring message from frame', message.frameId);
+      return;
+    }
 
     switch (message.type) {
       case 'SP00KY_DETECTED':
@@ -324,6 +369,57 @@ export const DevToolsProvider: ParentComponent = (props) => {
       default:
         console.log('[DevTools] Unknown message type:', message.type);
     }
+  }
+
+  /** Adopt a frame list from the background script. */
+  function applyFrames(next: Sp00kyFrame[]) {
+    setFrames(next);
+    // The inspected iframe can disappear (removed from the DOM, navigated
+    // away, whole page reloaded). Fall back to the main document instead of
+    // leaving the panel bound to a frame that no longer exists — every eval
+    // against a stale frameURL silently returns undefined.
+    if (activeFrameId() !== 0 && !next.some((f) => f.frameId === activeFrameId())) {
+      console.log('[DevTools] Inspected frame is gone, falling back to the main document');
+      selectFrame(0);
+    }
+  }
+
+  /**
+   * Point the whole panel at another Sp00ky client.
+   *
+   * Everything on screen — events, queries, tables, flags, storage, versions —
+   * belongs to ONE client, so switching wipes it rather than blending two
+   * clients' state into one view. The new frame's data arrives from the
+   * re-check + state request below.
+   */
+  function selectFrame(frameId: number) {
+    if (frameId === activeFrameId()) return;
+    setActiveFrameIdSignal(frameId);
+
+    setIsSp00kyAvailable(false);
+    setState('events', []);
+    setState('activeQueries', []);
+    setState('auth', { isAuthenticated: false, user: null, lastAuthCheck: Date.now() });
+    setState('database', { tables: [], remoteTables: [], tableData: {} });
+    setState('versions', DEFAULT_VERSIONS);
+    seenQueryUpdates.clear();
+    setQueryMarks([]);
+    setSelectedQueryHash(null);
+    setSelectedTable(null);
+    setStorageInfo(null);
+    setStorageInfoError(null);
+    setFlagsSnapshot(null);
+    setFlagsError(null);
+    // In-flight requests were addressed to the previous frame; their responses
+    // are filtered out on arrival, so settle them here or they leak forever.
+    pendingQueries.forEach(({ reject }) => reject('Switched to another frame'));
+    pendingQueries.clear();
+    setRefreshPending(0);
+
+    // Re-reads availability AND the full state, both against the new frame.
+    checkSp00ky();
+    // Wakes the tab-level effects (table list, rows) that key off the nonce.
+    bumpDbRefresh();
   }
 
   /**
@@ -1044,6 +1140,10 @@ export const DevToolsProvider: ParentComponent = (props) => {
     isSp00kyAvailable,
     mcpStatus,
     setMcpEnabled: setMcpEnabledAction,
+    frames,
+    activeFrameId,
+    activeFrame,
+    selectFrame,
     setActiveTab,
     setSelectedQueryHash,
     setSelectedTable,

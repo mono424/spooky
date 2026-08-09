@@ -292,6 +292,121 @@ body {
   background: var(--sys-color-error);
 }
 
+/* Frame picker — the connection dot doubles as the "which client" selector.
+   Sized to stay a dot-sized target in the common single-client case, so the
+   tab bar keeps the width it had before iframes were selectable. */
+.frame-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.frame-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sys-spacing-1);
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--sys-radius-sm);
+  color: var(--sys-color-on-surface);
+  cursor: pointer;
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  line-height: var(--sys-typescale-label-line-height);
+  white-space: nowrap;
+}
+
+.frame-select-btn:hover,
+.frame-select-btn.open {
+  background: var(--sys-color-state-hover);
+}
+
+.frame-select-btn:focus-visible {
+  outline: 1px solid var(--sys-color-primary);
+  outline-offset: -1px;
+}
+
+.frame-select-label {
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.frame-select-caret {
+  font-size: 9px;
+  color: var(--sys-color-on-surface-subtle);
+}
+
+.frame-select-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  min-width: 220px;
+  max-width: 360px;
+  margin-top: 2px;
+  padding: var(--sys-spacing-1);
+  background: var(--sys-color-surface-container);
+  border: 1px solid var(--sys-color-divider);
+  border-radius: var(--sys-radius-md);
+  box-shadow: var(--sys-shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.frame-select-menu-head {
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.frame-select-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  background: transparent;
+  color: var(--sys-color-on-surface);
+  border: none;
+  border-radius: var(--sys-radius-sm);
+  cursor: pointer;
+  font-family: var(--sys-typescale-label-font);
+  font-size: var(--sys-typescale-label-size);
+  line-height: var(--sys-typescale-label-line-height);
+}
+
+.frame-select-item:hover {
+  background: var(--sys-color-state-hover);
+}
+
+.frame-select-item.active {
+  background: var(--sys-color-primary-container);
+}
+
+.frame-select-item-sub {
+  font-size: 10px;
+  color: var(--sys-color-on-surface-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.frame-select-note {
+  padding: var(--sys-spacing-1) var(--sys-spacing-2);
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 10px;
+  line-height: 1.4;
+  border-top: 1px solid var(--sys-color-divider);
+  margin-top: var(--sys-spacing-1);
+  white-space: normal;
+}
+
 /* Tabs — Chrome main-tab metrics: 27px bar, 12px text, 0 10px padding */
 .tabs {
   display: flex;

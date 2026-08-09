@@ -189,6 +189,28 @@ export interface ChromeMessage {
   data?: unknown;
   state?: DevToolsState;
   tableName?: string;
+  /**
+   * Which frame this concerns. Inbound: the frame that produced the message
+   * (stamped by the background script). Outbound: the frame the background
+   * should deliver to. 0 is the main document.
+   */
+  frameId?: number;
+  frameUrl?: string;
+  /** SP00KY_FRAMES only: every frame in the tab that announced a client. */
+  frames?: Sp00kyFrame[];
+}
+
+/**
+ * One Sp00ky client in the inspected tab. A tab has one per frame that runs
+ * the library — the main document plus any iframe (an embedded app, a preview)
+ * — and the panel inspects exactly one at a time.
+ */
+export interface Sp00kyFrame {
+  /** 0 is the main document. */
+  frameId: number;
+  url: string;
+  /** Client version, for spotting a frame on a different build. */
+  version?: string;
 }
 
 export interface Sp00kyTableDataResponse {

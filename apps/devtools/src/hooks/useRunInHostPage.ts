@@ -8,8 +8,15 @@ export interface RunInHostPageOptions<T> {
 /**
  * Custom hook to run code in the host page context using chrome.devtools.inspectedWindow.eval
  * This is a safer alternative to directly calling eval and handles the callback pattern reactively
+ *
+ * @param frameUrl - URL of the iframe to evaluate in; undefined targets the main
+ *   document. Chrome's eval addresses a frame by URL (there is no frameId
+ *   option), so two iframes sharing a URL are indistinguishable here and the
+ *   first match wins. Every eval in the panel flows through this hook, which is
+ *   what makes "inspect that iframe instead" a single switch rather than a
+ *   change at ~10 call sites.
  */
-export function useRunInHostPage() {
+export function useRunInHostPage(frameUrl?: () => string | undefined) {
   const [isRunning, setIsRunning] = createSignal(false);
   const [error, setError] = createSignal<any>(null);
 
@@ -22,7 +29,7 @@ export function useRunInHostPage() {
     setIsRunning(true);
     setError(null);
 
-    chrome.devtools.inspectedWindow.eval(code, (result: T, isException: any) => {
+    const handle = (result: T, isException: any) => {
       setIsRunning(false);
 
       if (isException) {
@@ -31,7 +38,14 @@ export function useRunInHostPage() {
       } else {
         options?.onSuccess?.(result);
       }
-    });
+    };
+
+    const url = frameUrl?.();
+    if (url) {
+      chrome.devtools.inspectedWindow.eval(code, { frameURL: url }, handle);
+    } else {
+      chrome.devtools.inspectedWindow.eval(code, handle);
+    }
   };
 
   /**

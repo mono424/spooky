@@ -1,5 +1,6 @@
 import { For, Show, createSignal, createMemo, createEffect, onMount, onCleanup } from 'solid-js';
 import { useDevTools } from '../context/DevToolsContext';
+import { FrameSelect } from './FrameSelect';
 import { formatMs, formatRelativeTime } from '../utils/formatters';
 import type { HeartbeatInfo, TabType } from '../types/devtools';
 
@@ -62,7 +63,7 @@ function DoubleChevronIcon() {
 }
 
 export function Tabs() {
-  const { state, activeTab, setActiveTab, isSp00kyAvailable, refresh, isRefreshing, clearEvents } =
+  const { state, activeTab, setActiveTab, frames, activeFrameId, refresh, isRefreshing, clearEvents } =
     useDevTools();
 
   // E2E sync latency from the scheduler entity, shown in the toolbar so it is
@@ -186,6 +187,15 @@ export function Tabs() {
     requestAnimationFrame(recompute);
   });
 
+  // Same story on the left: the frame picker is a bare dot until a second
+  // client shows up, then grows a label. That widens `statusEl`, which is also
+  // reserved space in `recompute`.
+  createEffect(() => {
+    void frames().length;
+    void activeFrameId();
+    requestAnimationFrame(recompute);
+  });
+
   onMount(() => {
     requestAnimationFrame(recompute);
 
@@ -218,14 +228,7 @@ export function Tabs() {
   return (
     <div class="tabs" ref={tabsEl}>
       <div class="toolbar-group" ref={statusEl}>
-        <div class="status-indicator">
-          <Show
-            when={isSp00kyAvailable()}
-            fallback={<span class="status-dot inactive" />}
-          >
-            <span class="status-dot active" />
-          </Show>
-        </div>
+        <FrameSelect />
       </div>
 
       <For each={split().visible}>

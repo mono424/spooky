@@ -22,8 +22,44 @@ let bridgeAttempts = 0;
 let bridgeGaveUp = false;
 const BRIDGE_MAX_ATTEMPTS = 4;
 
-// Track tabs that have Sp00ky detected
-const sp00kyTabs = new Map<number, { url?: string; title?: string }>();
+// Track tabs that have Sp00ky detected. `frameId` is the frame the MCP bridge
+// talks to — the main document whenever it has a client, otherwise the first
+// iframe that announced one. The bridge is tab-scoped (it has no frame picker),
+// so without pinning a frame its requests would fan out to every frame's
+// content script and collect several answers to one question.
+const sp00kyTabs = new Map<number, { url?: string; title?: string; frameId: number }>();
+
+/**
+ * Every FRAME that has announced a Sp00ky client, per tab: `frameId` 0 is the
+ * main document, anything else is an iframe. The content script runs in all
+ * frames, so one tab can hold several independent clients (an embedded app, a
+ * preview iframe) — the panel picks which one it is inspecting.
+ *
+ * Populated from `SP00KY_DETECTED`, which the page script posts once per frame.
+ */
+const sp00kyFrames = new Map<number, Map<number, Sp00kyFrameInfo>>();
+
+interface Sp00kyFrameInfo {
+  frameId: number;
+  url: string;
+  /** Client version, so the picker can flag a frame running a different build. */
+  version?: string;
+}
+
+function frameListFor(tabId: number): Sp00kyFrameInfo[] {
+  const frames = sp00kyFrames.get(tabId);
+  if (!frames) return [];
+  // Main frame first, then iframes in discovery order.
+  return [...frames.values()].sort((a, b) => a.frameId - b.frameId);
+}
+
+/** Push the tab's frame list to its panel (no-op when no panel is attached). */
+function postFrames(tabId: number) {
+  connections.get(tabId)?.postMessage({
+    type: 'SP00KY_FRAMES',
+    frames: frameListFor(tabId),
+  });
+}
 
 function connectToBridge() {
   if (!mcpEnabled || bridgeGaveUp) return;
@@ -164,14 +200,19 @@ async function handleBridgeRequest(msg: any) {
     return;
   }
 
+  // Which frame in that tab the bridge speaks to (see `sp00kyTabs`).
+  const targetFrameId = sp00kyTabs.get(targetTabId)?.frameId ?? 0;
+
   // Handle getState by requesting state from the page
   if (method === 'getState') {
     // Register pending request, then ask content script for state
     pendingBridgeRequests.set(id, targetTabId);
     try {
-      await chrome.tabs.sendMessage(targetTabId, {
-        type: 'GET_SP00KY_STATE',
-      });
+      await chrome.tabs.sendMessage(
+        targetTabId,
+        { type: 'GET_SP00KY_STATE' },
+        { frameId: targetFrameId }
+      );
     } catch (err: any) {
       pendingBridgeRequests.delete(id);
       sendBridgeError(id, -32000, `Failed to contact tab: ${err.message}`);
@@ -199,10 +240,11 @@ async function handleBridgeRequest(msg: any) {
   pendingBridgeRequests.set(requestId, targetTabId);
 
   try {
-    await chrome.tabs.sendMessage(targetTabId, {
-      type: msgType,
-      payload: { ...params, requestId },
-    });
+    await chrome.tabs.sendMessage(
+      targetTabId,
+      { type: msgType, payload: { ...params, requestId } },
+      { frameId: targetFrameId }
+    );
   } catch (err: any) {
     pendingBridgeRequests.delete(requestId);
     sendBridgeError(id, -32000, `Failed to contact tab: ${err.message}`);
@@ -265,7 +307,16 @@ chrome.runtime.onConnect.addListener((port) => {
       tabId = message.tabId;
       if (tabId !== undefined) {
         connections.set(tabId, port);
+        // A panel opened after the page loaded missed every SP00KY_DETECTED,
+        // so hand it what we already know instead of leaving the frame picker
+        // empty until the next navigation.
+        postFrames(tabId);
       }
+    }
+
+    if (message.type === 'GET_FRAMES') {
+      if (tabId !== undefined) postFrames(tabId);
+      return;
     }
 
     // Handle MCP status request from panel — a fresh panel is a good moment to
@@ -289,7 +340,15 @@ chrome.runtime.onConnect.addListener((port) => {
       if (message.type === 'RUN_QUERY') {
         console.log('[DevTools Background] Forwarding RUN_QUERY to tab', tabId);
       }
-      chrome.tabs.sendMessage(tabId, message).catch((error) => {
+      // Address ONE frame when the panel names it. Without this the message
+      // reaches every frame's content script (the script runs in all of them),
+      // so an inspected iframe and the main document would both answer a single
+      // state request and the panel would render whichever landed last.
+      const sent =
+        typeof message.frameId === 'number'
+          ? chrome.tabs.sendMessage(tabId, message, { frameId: message.frameId })
+          : chrome.tabs.sendMessage(tabId, message);
+      sent.catch((error: unknown) => {
         // Ignore errors if content script is not ready or tab is closed
         console.warn('Failed to send message to content script:', error);
       });
@@ -311,14 +370,36 @@ chrome.runtime.onConnect.addListener((port) => {
 // Handle messages from content scripts
 chrome.runtime.onMessage.addListener((message, sender) => {
   const senderTabId = sender.tab?.id;
+  // 0 for the main document. Older Chrome without frameId on a sender falls
+  // back to 0, i.e. "treat it as the main frame" — the pre-iframe behavior.
+  const senderFrameId = sender.frameId ?? 0;
 
   // Track Sp00ky tabs
   if (message.type === 'SP00KY_DETECTED' && senderTabId) {
-    sp00kyTabs.set(senderTabId, {
-      url: sender.tab?.url,
-      title: sender.tab?.title,
+    // The MCP bridge is tab-scoped, so it keeps tracking the TAB; the main
+    // frame wins the entry, an iframe only fills it while no main-frame client
+    // has announced itself.
+    const known = sp00kyTabs.get(senderTabId);
+    if (senderFrameId === 0 || !known) {
+      sp00kyTabs.set(senderTabId, {
+        url: sender.tab?.url,
+        title: sender.tab?.title,
+        frameId: senderFrameId,
+      });
+      reportTabsToBridge();
+    }
+
+    let frames = sp00kyFrames.get(senderTabId);
+    if (!frames) {
+      frames = new Map();
+      sp00kyFrames.set(senderTabId, frames);
+    }
+    frames.set(senderFrameId, {
+      frameId: senderFrameId,
+      url: sender.url ?? sender.tab?.url ?? '',
+      version: message.data?.version,
     });
-    reportTabsToBridge();
+    postFrames(senderTabId);
   }
 
   // Handle bridge responses (from page-script via content script)
@@ -367,7 +448,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
         'Tab:',
         senderTabId
       );
-      port?.postMessage(message);
+      // Stamp the origin frame: with the content script in every frame, the
+      // panel has to drop pushes from frames it is not inspecting.
+      port?.postMessage({ ...message, frameId: senderFrameId, frameUrl: sender.url });
     } else {
       console.log(
         '[DevTools Background] NO CONNECTION found for tab',
@@ -383,6 +466,13 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 
 // Detect when tabs are updated
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  // A top-level navigation destroys every frame, and the new document's frames
+  // get FRESH ids. Dropping the registry here (rather than letting it
+  // accumulate) is what stops the picker from listing iframes that no longer
+  // exist; each surviving client re-announces on load.
+  if (changeInfo.status === 'loading') {
+    if (sp00kyFrames.delete(tabId)) postFrames(tabId);
+  }
   if (changeInfo.status === 'complete' && connections.has(tabId)) {
     // Notify the devtools panel that the page has been reloaded
     const port = connections.get(tabId);
@@ -392,6 +482,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 
 // Clean up sp00ky tabs when tabs are closed
 chrome.tabs.onRemoved.addListener((tabId) => {
+  sp00kyFrames.delete(tabId);
   if (sp00kyTabs.has(tabId)) {
     sp00kyTabs.delete(tabId);
     reportTabsToBridge();
