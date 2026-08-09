@@ -164,6 +164,20 @@ impl ReconnectingDb {
         }
     }
 
+    /// Ask for a reconnect on the next tick, whatever the error text said.
+    ///
+    /// [`note_error`](Self::note_error) can only recognise a dead session from
+    /// its message, but a session the server has forgotten does not always
+    /// produce one — the HTTP engine has no request timeout, so the request can
+    /// simply never return. A caller that time-boxes its own query has nothing
+    /// but that timeout to go on, and it is strong evidence: a healthy handle
+    /// answers a write in milliseconds. Observed on 2026-08-09, where the
+    /// scheduler's writes hung for eight minutes straight while a direct query
+    /// to the same database returned in 10ms.
+    pub fn force_reconnect(&self) {
+        self.wake.notify_one();
+    }
+
     /// One maintenance pass. Returns `true` if the handle is usable afterwards.
     ///
     /// Ordering matters: `signin` doubles as the liveness probe *and* the token
@@ -171,18 +185,37 @@ impl ReconnectingDb {
     /// when it fails do we pay for a reconnect.
     pub async fn refresh(&self) -> bool {
         let db = self.handle();
-        let err = match db
-            .signin(surrealdb::opt::auth::Root {
-                username: self.config.username.clone(),
-                password: self.config.password.clone(),
-            })
-            .await
+        let probe = db.signin(surrealdb::opt::auth::Root {
+            username: self.config.username.clone(),
+            password: self.config.password.clone(),
+        });
+        // Time-boxed, because this probe is routed through the very session it
+        // is testing: when that session is gone in the hanging way, an
+        // un-bounded signin parks forever and takes the whole recovery loop
+        // with it — the handle is then never replaced and every consumer stays
+        // wedged until the container restarts. That is the failure this type
+        // exists to prevent, so it must not be reachable from inside it.
+        let err = match tokio::time::timeout(
+            std::time::Duration::from_secs(REFRESH_PROBE_TIMEOUT_SECS),
+            probe,
+        )
+        .await
         {
-            Ok(_) => return true,
-            Err(e) => e.to_string(),
+            Ok(Ok(_)) => return true,
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => {
+                tracing::warn!(
+                    timeout_secs = REFRESH_PROBE_TIMEOUT_SECS,
+                    "SurrealDB re-signin timed out; treating the session as gone"
+                );
+                // Fall through to the reconnect below rather than the
+                // "transient blip" branch: a signin that never returns is the
+                // dead-session signature, not a slow server.
+                String::new()
+            }
         };
 
-        if !is_dead_session_error(&err) {
+        if !err.is_empty() && !is_dead_session_error(&err) {
             // SurrealDB is unreachable or erroring for some other reason. A new
             // connection would fail the same way, and the existing session may
             // still be perfectly valid once the blip passes — leave it alone.
@@ -195,11 +228,22 @@ impl ReconnectingDb {
             "SurrealDB session is gone (server restarted?); reconnecting"
         );
 
+        // The reconnect gets a deadline for the same reason the probe does —
+        // `connect_http` performs its own signin and can hang just as easily,
+        // and a recovery path that can hang is not a recovery path.
+
         // Always reconnect via `connect_http`, even for handles originally
         // opened with `connect_http_raw`: by the time a reconnect is needed the
         // namespace/database exist (the raw handle's caller defined them), and
         // the replacement has to come back with them selected.
-        match connect_http(&self.config).await {
+        let reconnect = connect_http(&self.config);
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(RECONNECT_TIMEOUT_SECS),
+            reconnect,
+        )
+        .await
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("connect timed out")))
+        {
             Ok(fresh) => {
                 *self
                     .current
@@ -269,6 +313,16 @@ pub async fn resignin_once(db: &ReconnectingDb) {
 /// that no data-path error has reported yet — hence a minute rather than the
 /// token lifetime.
 pub const RESIGNIN_INTERVAL_SECS: u64 = 60;
+
+/// Deadline for the liveness/token-refresh signin in [`ReconnectingDb::refresh`].
+/// Generous for a healthy server (which answers in milliseconds) and short
+/// enough that a dead session is replaced within one tick rather than parking
+/// the recovery loop forever.
+const REFRESH_PROBE_TIMEOUT_SECS: u64 = 10;
+
+/// Deadline for building the replacement handle. `connect_http` signs in too,
+/// so it can hang exactly like the probe it is replacing.
+const RECONNECT_TIMEOUT_SECS: u64 = 15;
 
 #[cfg(test)]
 mod tests {

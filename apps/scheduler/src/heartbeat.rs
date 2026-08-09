@@ -331,9 +331,11 @@ async fn run_one_cycle(
             };
         }
         Err(_) => {
-            // Nudge the reconnect machinery: a write that never returns is the
-            // signature of a session the server has already forgotten.
-            db.note_error("heartbeat probe write timed out");
+            // A write that never returns is the signature of a session the
+            // server has already forgotten. `note_error` cannot see that — it
+            // matches on error text and a hang produces none — so ask for the
+            // reconnect explicitly.
+            db.force_reconnect();
             return CycleOutcome::Failed {
                 stage: "db_write_timeout",
                 detail: format!("probe write exceeded {timeout_secs}s"),
