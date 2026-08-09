@@ -280,6 +280,73 @@ describe('membership-authoritative rendering', () => {
       expect(ids(fresh.records)).toEqual(['thread:a', 'thread:b', 'thread:c']);
     });
 
+    it('ignores an empty id-set until a real one has been seen', async () => {
+      // The registration race: the SSP queues a view's initial edges to a
+      // coalescing flusher and returns from `fn::query::register` before they
+      // land, so this read says nothing about the query being empty. Believing
+      // it rendered a blank list AND persisted the blankness.
+      const { dm, state, local, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+
+      await dm.updateQueryRemoteArray(hash, []);
+
+      expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
+      expect(local.windowRows.has('stable-key')).toBe(false);
+    });
+
+    it('believes an empty id-set once a non-empty one has arrived', async () => {
+      // The genuine transition — the last row left the window. Honouring it is
+      // what stops a removed row resurrecting from the local body cache.
+      const { dm, state, local, hash } = setup({ membershipKey: 'stable-key' });
+
+      await dm.updateQueryRemoteArray(hash, [['thread:a', 1]]);
+      await dm.updateQueryRemoteArray(hash, []);
+
+      expect(state.config.membershipKnown).toBe(true);
+      expect(state.config.remoteArray).toEqual([]);
+      expect(local.windowRows.get('stable-key')).toMatchObject({ ids: [] });
+    });
+
+    it('believes a repeated empty id-set even with nothing seen this session', async () => {
+      // A window that really did empty while this device was away: the durable
+      // seed must not render forever, so the second read is taken at face value.
+      const { dm, state, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+
+      await dm.updateQueryRemoteArray(hash, []);
+      expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
+
+      await dm.updateQueryRemoteArray(hash, []);
+      expect(state.config.remoteArray).toEqual([]);
+    });
+
+    it('does not seed membership from an empty durable row', async () => {
+      // Self-heals devices poisoned before the guard existed: an empty durable
+      // row is indistinguishable from "never had membership", so it must fall
+      // back to the scan rather than paint an empty list.
+      const { dm, local } = setup({ membershipKey: 'stable-key' });
+      local.windowRows.set('stable-key', { ids: [] });
+
+      const fresh = await (dm as any).createNewQuery({
+        recordId: new RecordId('_00_query', 'h-poisoned'),
+        surql: 'SELECT * FROM thread WHERE done = false;',
+        params: {},
+        ttl: '10m',
+        tableName: 'thread',
+        plan,
+        membershipKey: 'stable-key',
+      });
+
+      expect(fresh.config.membershipKnown).toBeFalsy();
+      expect(ids(fresh.records)).toEqual(['thread:a', 'thread:b', 'thread:c']);
+    });
+
     it('derives the membership key without the session salt', async () => {
       const { dm } = setup();
       const key = () => (dm as any).calculateMembershipKey({ surql: 'X', params: {} });

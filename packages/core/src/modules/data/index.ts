@@ -52,6 +52,14 @@ import {
 } from './window-query';
 import { mintMutationId } from './mutation-id';
 
+/**
+ * How many consecutive empty `_00_list_ref` reads it takes to believe a query
+ * really is empty, before any non-empty set has been seen this session. One
+ * read is the registration race (the SSP flushes a view's initial edges
+ * asynchronously); the second comes from the poll a cycle later.
+ */
+const EMPTY_MEMBERSHIP_CONFIRMATIONS = 2;
+
 /** Push a timing sample (ms) into a rolling window, capped at the sample window. */
 function pushSample(samples: number[], ms: number): void {
   samples.push(ms);
@@ -1198,12 +1206,49 @@ export class DataModule<S extends SchemaStructure> {
       );
       return;
     }
+    // An empty id-set is only believable once a real one has arrived in this
+    // session. `_00_list_ref` is published asynchronously — the SSP queues a
+    // view's initial edges to a coalescing flusher and returns from
+    // `fn::query::register` before they land — so an empty read right after
+    // registration is routinely just "not flushed yet", for a query that has
+    // rows. Taking it at face value latched `membershipKnown` on an empty set,
+    // which renders nothing (no scan fallback), and mirrored `[]` into the
+    // durable `_00_window` row, which kept the list blank across reloads.
+    //
+    // Ignoring it entirely (rather than storing `[]` with the latch withheld)
+    // is deliberate: on a cold start `remoteArray` is seeded from the durable
+    // row, and overwriting that with `[]` would blank the very rows the seed
+    // exists to paint. The `_00_list_ref` poll re-reads within ~500ms and
+    // delivers the real set.
+    // Bounded, though: a query seeded from the durable row on a cold start has
+    // `remoteSeen === false`, and if its window really did empty while this
+    // device was away, the server will keep answering `[]`. Believe it on the
+    // second such read — one poll cycle (~500ms) past the flush window — so
+    // stale rows can't render forever.
+    if (remoteArray.length === 0 && !queryState.config.remoteSeen) {
+      const emptyReads = (queryState.config.emptyReads ?? 0) + 1;
+      queryState.config.emptyReads = emptyReads;
+      if (emptyReads < EMPTY_MEMBERSHIP_CONFIRMATIONS) {
+        this.logger.debug(
+          { hash, emptyReads, Category: 'sp00ky-client::DataModule::updateQueryRemoteArray' },
+          'Ignoring unconfirmed empty membership (server may not have flushed list_ref yet)'
+        );
+        return;
+      }
+    }
+
     const epoch = this.local.epoch;
     queryState.config.remoteArray = remoteArray;
     // The single point where authoritative membership arrives (registration and
     // the `_00_list_ref` poll both land here), so it is where "we now know the
     // membership" is latched and where the durable mirror is written.
     queryState.config.membershipKnown = true;
+    if (remoteArray.length > 0) {
+      // Earns the right to believe a later empty set — that transition is a
+      // genuine removal and must be honoured, or removed rows resurrect.
+      queryState.config.remoteSeen = true;
+      queryState.config.emptyReads = 0;
+    }
     if (queryState.config.membershipKey) {
       await this.writeWindowMembership(queryState.config.membershipKey, remoteArray);
     }
@@ -1269,9 +1314,15 @@ export class DataModule<S extends SchemaStructure> {
       // unknown so the first paint falls back to a scan instead of rendering an
       // empty list until the server answers.
       config.membershipKnown = false;
+      // The new bucket's server sets have not been seen yet — an empty read
+      // must be re-confirmed there too.
+      config.remoteSeen = false;
+      config.emptyReads = 0;
       if (config.membershipKey) {
         const durable = await this.getWindowMembership(config.membershipKey);
-        if (durable) {
+        // Length-checked for the same reason as the cold-start read above: an
+        // empty durable row is indistinguishable from "never had membership".
+        if (durable?.length) {
           config.remoteArray = durable;
           config.membershipKnown = true;
         }
@@ -1957,7 +2008,11 @@ export class DataModule<S extends SchemaStructure> {
     // removed row reappearing after a reload, and it works with no network.
     if (membershipKey && !config.remoteArray?.length) {
       const durable = await this.getWindowMembership(membershipKey);
-      if (durable) {
+      // `durable.length` on purpose: an empty durable row cannot be told apart
+      // from one written before this device ever saw a real id-set, and treating
+      // it as known means the first paint is empty with no scan fallback. It
+      // also self-heals devices poisoned by the pre-fix `writeWindowMembership`.
+      if (durable?.length) {
         config.remoteArray = durable;
         config.membershipKnown = true;
       }

@@ -489,6 +489,29 @@ export interface QueryConfig {
    */
   membershipKnown?: boolean;
   /**
+   * Whether a NON-EMPTY id-set has arrived from the server for this query in
+   * this session. Gates whether an empty read may be believed.
+   *
+   * The server publishes `_00_list_ref` asynchronously — the SSP queues a
+   * view's initial edges to a coalescing flusher and returns from
+   * `fn::query::register` before they land — so an empty read right after
+   * registration says nothing about the query being empty. Believing it (and
+   * mirroring it to the durable `_00_window` row) blanked lists and kept them
+   * blank across reloads. Once a real set has been seen, a later empty one is a
+   * genuine transition and must be honoured, or removed rows resurrect.
+   *
+   * In-memory only: a fresh session must re-earn the right to believe empties.
+   */
+  remoteSeen?: boolean;
+  /**
+   * Consecutive empty id-sets read from the server while `remoteSeen` is still
+   * false. Bounds how long an unconfirmed empty may be ignored, so a window
+   * that genuinely emptied while this device was away is believed on the second
+   * read instead of rendering stale rows forever. Reset by any non-empty set.
+   * In-memory only.
+   */
+  emptyReads?: number;
+  /**
    * Key of this query's durable `_00_window` membership row: a hash of
    * `{surql, params}` WITHOUT the `session::id()` salt that `id` carries, so it
    * survives a reload (which mints a new session id) and a bucket switch.
