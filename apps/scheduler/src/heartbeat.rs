@@ -227,11 +227,49 @@ pub fn spawn(
         let mut interval = tokio::time::interval(Duration::from_secs(cfg.interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut last_prune_epoch_ms: u64 = 0;
+        // Hard ceiling on one cycle. The probe's own timeout bounds the SSP
+        // poll, but the upstream write does not have one of its own: the
+        // SurrealDB HTTP engine ships no request timeout, so a dead connection
+        // parks the await forever. That is not hypothetical — it stopped the
+        // probe dead after four cycles on 2026-08-09 while `/metrics` happily
+        // kept serving the last good latency, which the control plane scraped
+        // every 15s into a flat, healthy-looking chart. A monitor that hangs
+        // must report failure, not silence.
+        let cycle_budget = Duration::from_secs(cfg.timeout_secs + 30);
         loop {
             interval.tick().await;
-            let outcome = run_one_cycle(&db, &ssp_pool, &transport, cfg.timeout_secs).await;
+
+            // Run the cycle as its own task so a panic inside it surfaces as a
+            // JoinError instead of unwinding this loop and ending monitoring
+            // for the life of the process.
+            let cycle = tokio::spawn({
+                let db = Arc::clone(&db);
+                let ssp_pool = Arc::clone(&ssp_pool);
+                let transport = Arc::clone(&transport);
+                let timeout_secs = cfg.timeout_secs;
+                async move { run_one_cycle(&db, &ssp_pool, &transport, timeout_secs).await }
+            });
+            let outcome = match tokio::time::timeout(cycle_budget, cycle).await {
+                Ok(Ok(outcome)) => outcome,
+                Ok(Err(join_err)) => CycleOutcome::Failed {
+                    stage: "panic",
+                    detail: join_err.to_string(),
+                },
+                Err(_) => CycleOutcome::Failed {
+                    stage: "cycle_timeout",
+                    detail: format!("cycle exceeded {}s", cycle_budget.as_secs()),
+                },
+            };
+
             record(&stats, &alerter, &outcome);
-            write_rollup(&db, &outcome).await;
+            // Same reasoning: a hung rollup write must not take the loop with
+            // it. Best-effort already, so a timeout just skips the sample.
+            if tokio::time::timeout(Duration::from_secs(15), write_rollup(&db, &outcome))
+                .await
+                .is_err()
+            {
+                warn!("heartbeat rollup write timed out");
+            }
 
             // Bounded retention: prune rollup rows older than 90 days, once
             // a day, from the probe loop itself (no reaper exists for this).
@@ -239,11 +277,11 @@ pub fn spawn(
             if now.saturating_sub(last_prune_epoch_ms) > 24 * 3600 * 1000 {
                 last_prune_epoch_ms = now;
                 let handle = db.handle();
-                if let Err(e) = handle
-                    .query("DELETE _00_heartbeat_rollup WHERE bucket < time::now() - 90d")
-                    .await
-                {
-                    debug!(error = %e, "heartbeat rollup prune failed");
+                let prune = handle.query("DELETE _00_heartbeat_rollup WHERE bucket < time::now() - 90d");
+                match tokio::time::timeout(Duration::from_secs(30), prune).await {
+                    Ok(Err(e)) => debug!(error = %e, "heartbeat rollup prune failed"),
+                    Err(_) => debug!("heartbeat rollup prune timed out"),
+                    Ok(Ok(_)) => {}
                 }
             }
         }
@@ -276,17 +314,31 @@ async fn run_one_cycle(
     let hb_seq = now_epoch_ms();
     let started = tokio::time::Instant::now();
     let handle = db.handle();
-    if let Err(e) = handle
+    // Explicitly time-boxed: the SurrealDB HTTP engine has no request timeout,
+    // so a connection that died under us parks this await forever — the probe
+    // then reports neither success nor failure, which is worse than either.
+    let write = handle
         .query("UPSERT _00_heartbeat:probe SET hb_seq = $s")
-        .bind(("s", hb_seq as i64))
-        .await
-    {
-        let msg = e.to_string();
-        db.note_error(&msg);
-        return CycleOutcome::Failed {
-            stage: "db_write",
-            detail: msg,
-        };
+        .bind(("s", hb_seq as i64));
+    match tokio::time::timeout(Duration::from_secs(timeout_secs), write).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            db.note_error(&msg);
+            return CycleOutcome::Failed {
+                stage: "db_write",
+                detail: msg,
+            };
+        }
+        Err(_) => {
+            // Nudge the reconnect machinery: a write that never returns is the
+            // signature of a session the server has already forgotten.
+            db.note_error("heartbeat probe write timed out");
+            return CycleOutcome::Failed {
+                stage: "db_write_timeout",
+                detail: format!("probe write exceeded {timeout_secs}s"),
+            };
+        }
     }
 
     // Poll until every target reports hb_seq >= the seq we just wrote.

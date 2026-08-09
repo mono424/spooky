@@ -65,11 +65,19 @@ pub struct SchedulerMetrics {
     pub latest_seq: u64,
     pub lag: u64,
     /// E2E heartbeat: last successful probe latency (`None` = never / off).
+    ///
+    /// This is the LAST value, not necessarily a current one — always read it
+    /// with `heartbeat_stale`. A scraper that ignores staleness re-publishes a
+    /// frozen latency forever and draws a healthy flat line over a dead
+    /// pipeline, which is exactly how this probe failed on 2026-08-09.
     pub heartbeat_last_e2e_ms: Option<u64>,
     /// Epoch-ms of the last successful probe (`None` = never / off).
     pub heartbeat_last_ok_epoch_ms: Option<u64>,
     pub heartbeat_consecutive_failures: u32,
     pub heartbeat_enabled: bool,
+    /// No successful probe within the grace window — treat the latency above
+    /// as unknown, not as the current value.
+    pub heartbeat_stale: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,6 +211,13 @@ async fn get_metrics(
                 .consecutive_failures
                 .load(std::sync::atomic::Ordering::Relaxed),
             heartbeat_enabled: hb.enabled.load(std::sync::atomic::Ordering::Relaxed),
+            heartbeat_stale: hb.is_stale(
+                &state.heartbeat_config,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+            ),
         },
         ssps,
     };
