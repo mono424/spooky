@@ -2,6 +2,8 @@ import {
   createContext,
   useContext,
   createSignal,
+  createEffect,
+  onCleanup,
   onMount,
   type ParentComponent,
 } from 'solid-js';
@@ -179,6 +181,9 @@ export const DevToolsProvider: ParentComponent = (props) => {
   let minSpinTimer: ReturnType<typeof setTimeout> | undefined;
   const REFRESH_MIN_SPIN_MS = 400;
   const REFRESH_OP_TIMEOUT_MS = 20_000;
+  // One probe interval on the server side, so the reading is never more than
+  // about a cycle behind while the Versions tab is being watched.
+  const VERSIONS_POLL_MS = 30_000;
 
   /**
    * Start a refresh op; returns its idempotent `end`.
@@ -662,6 +667,64 @@ export const DevToolsProvider: ParentComponent = (props) => {
       }
     );
   }
+
+  /**
+   * Keep the Versions tab's reading current while it is on screen.
+   *
+   * Everything else in the panel is push-driven, but `/info` is a remote fetch
+   * that only happens on Refresh — so the heartbeat it carries was rendering a
+   * snapshot from whenever you last refreshed. A reading captured during an
+   * outage kept showing `stale` long after the pipeline recovered, which is
+   * indistinguishable from the pipeline still being broken.
+   *
+   * Scoped deliberately: only while the Versions tab is the active one AND the
+   * panel is visible, so a backgrounded DevTools window costs nothing. Each
+   * tick is one `fn::spooky::info()` — a SurrealDB-side `http::get` to the
+   * scheduler — which is why this is not panel-wide.
+   */
+  createEffect(() => {
+    if (activeTab() !== 'versions') return;
+
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let inFlight = false;
+
+    const tick = () => {
+      if (inFlight || document.visibilityState !== 'visible') return;
+      inFlight = true;
+      refreshVersions(() => {
+        inFlight = false;
+      });
+    };
+
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(tick, VERSIONS_POLL_MS);
+    };
+    const stop = () => {
+      if (!timer) return;
+      clearInterval(timer);
+      timer = undefined;
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        // Coming back from hidden: the reading is stale by definition.
+        tick();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    tick();
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+
+    onCleanup(() => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    });
+  });
 
   /**
    * Fetch table data from the page
