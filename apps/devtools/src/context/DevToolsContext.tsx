@@ -145,7 +145,14 @@ export const DevToolsProvider: ParentComponent = (props) => {
   // only ever selected explicitly.
   const [frames, setFrames] = createSignal<Sp00kyFrame[]>([]);
   const [activeFrameId, setActiveFrameIdSignal] = createSignal(0);
-  const activeFrame = () => frames().find((f) => f.frameId === activeFrameId());
+  // Falls back to the pinned entry so a client that is momentarily absent
+  // (navigating, or its iframe being rebuilt) still has a name in the picker
+  // instead of blanking out mid-use.
+  const activeFrame = (): Sp00kyFrame | undefined =>
+    frames().find((f) => f.frameId === activeFrameId()) ??
+    (activeFrameId() !== 0 && pinnedFrameUrl()
+      ? { frameId: activeFrameId(), url: pinnedFrameUrl()! }
+      : undefined);
   // Undefined for the main document — `useRunInHostPage` then evaluates against
   // the top frame, which is the pre-iframe behavior.
   const activeFrameUrl = () => (activeFrameId() === 0 ? undefined : activeFrame()?.url);
@@ -240,7 +247,46 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
   const requestState = () => sendMessage({ type: 'GET_SP00KY_STATE' });
 
-  const hostPage = useRunInHostPage(activeFrameUrl);
+  /** URL an eval last failed to address, cleared once the frame list explains it. */
+  let lostFrameUrl: string | null = null;
+  /** Last known URL of the frame the user picked. Its ORIGIN is what identifies
+   *  the client across document swaps and iframe re-creation, since neither the
+   *  frame id nor the full URL survives those. */
+  const [pinnedFrameUrl, setPinnedFrameUrl] = createSignal<string | undefined>(undefined);
+
+  /** Origin of a URL, or undefined if it isn't one (a frame that never
+   *  reported a URL). Used to match a client across frame ids. */
+  const originOf = (url: string | undefined): string | undefined => {
+    if (!url) return undefined;
+    try {
+      return new URL(url).origin;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /**
+   * Whether the inspected client can be reached with `inspectedWindow.eval`.
+   *
+   * Only the main document can, reliably: a cross-origin iframe runs in its own
+   * renderer process, and eval's `frameURL` option does not cross that boundary
+   * (it answers E_NOTFOUND). Everything for a non-main frame therefore goes
+   * over the content-script message channel, which is frameId-addressed and
+   * process-agnostic — the same channel the frame list already arrives on.
+   */
+  const isMainFrame = () => activeFrameId() === 0;
+
+  const hostPage = useRunInHostPage(activeFrameUrl, (lostUrl) => {
+    // The frame we were addressing no longer answers to that URL. Almost always
+    // a route change inside the iframe, whose new URL the content script is
+    // already reporting — so pull the fresh list rather than giving up on the
+    // frame. `applyFrames` re-checks when the URL moved, and falls back to the
+    // main document if the frame is genuinely gone.
+    console.log('[DevTools] Frame URL no longer matches, re-syncing frames:', lostUrl);
+    lostFrameUrl = lostUrl;
+    setIsSp00kyAvailable(false);
+    sendRaw({ type: 'GET_FRAMES' });
+  });
 
   // In-flight guards for the panel's own optional schema queries (kept for
   // manual/debug use). The table list itself comes from the backend now.
@@ -378,14 +424,68 @@ export const DevToolsProvider: ParentComponent = (props) => {
 
   /** Adopt a frame list from the background script. */
   function applyFrames(next: Sp00kyFrame[]) {
+    const previousUrl = activeFrame()?.url;
     setFrames(next);
-    // The inspected iframe can disappear (removed from the DOM, navigated
-    // away, whole page reloaded). Fall back to the main document instead of
-    // leaving the panel bound to a frame that no longer exists — every eval
-    // against a stale frameURL silently returns undefined.
-    if (activeFrameId() !== 0 && !next.some((f) => f.frameId === activeFrameId())) {
-      console.log('[DevTools] Inspected frame is gone, falling back to the main document');
+
+    // Same frame, new URL: the iframe routed somewhere else. Evals now address
+    // it correctly again, so re-read state — a panel that failed while the URL
+    // was stale comes back without the user touching anything.
+    const currentUrl = next.find((f) => f.frameId === activeFrameId())?.url;
+    if (activeFrameId() !== 0 && currentUrl && previousUrl && currentUrl !== previousUrl) {
+      console.log('[DevTools] Inspected frame navigated, re-reading state');
+      lostFrameUrl = null;
+      checkSp00ky();
+    } else if (lostFrameUrl && currentUrl === lostFrameUrl) {
+      // An eval failed against this URL and a fresh list still reports the same
+      // one, so the frame is really gone rather than merely re-routed (the host
+      // page can drop an iframe without its document getting a chance to say
+      // so). Nothing can be evaluated there — go back to the main document.
+      console.log('[DevTools] Inspected frame is unreachable, falling back to the main document');
+      lostFrameUrl = null;
       selectFrame(0);
+      return;
+    }
+    if (activeFrameId() === 0) return;
+
+    const live = next.some((f) => f.frameId === activeFrameId());
+
+    // The frame id can change under the user without them doing anything: a
+    // navigation inside the iframe replaces its document, and the host page
+    // REPLACING the <iframe> element gets a brand-new frame id altogether. So
+    // the panel follows the CLIENT — the same app on the same origin — rather
+    // than an id, and never throws the selection away on its own.
+    if (!live) {
+      const origin = originOf(pinnedFrameUrl());
+      const successor = origin
+        ? next.find((f) => f.frameId !== 0 && originOf(f.url) === origin)
+        : undefined;
+
+      if (successor) {
+        console.log('[DevTools] Client reappeared as frame', successor.frameId);
+        setActiveFrameIdSignal(successor.frameId);
+        setPinnedFrameUrl(successor.url);
+        lostFrameUrl = null;
+        setIsSp00kyAvailable(true);
+        // A new document means the previous one's timeline is finished; keep
+        // the view, refresh its contents.
+        checkSp00ky();
+        return;
+      }
+
+      // Gone for now. Hold the selection and say so — the picker keeps showing
+      // it, so the user's place survives whatever the page is doing.
+      setIsSp00kyAvailable(false);
+      return;
+    }
+
+    const current = next.find((f) => f.frameId === activeFrameId());
+    if (current) setPinnedFrameUrl(current.url);
+    if (!isSp00kyAvailable()) {
+      console.log('[DevTools] Inspected frame is back, re-reading state');
+      lostFrameUrl = null;
+      setIsSp00kyAvailable(true);
+      checkSp00ky();
+      return;
     }
   }
 
@@ -400,6 +500,10 @@ export const DevToolsProvider: ParentComponent = (props) => {
   function selectFrame(frameId: number) {
     if (frameId === activeFrameId()) return;
     setActiveFrameIdSignal(frameId);
+    // Remember WHAT was picked, not just which frame slot: the id is the part
+    // that goes stale (see applyFrames).
+    setPinnedFrameUrl(frames().find((f) => f.frameId === frameId)?.url);
+    lostFrameUrl = null;
 
     setIsSp00kyAvailable(false);
     setState('events', []);
@@ -515,6 +619,20 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function checkSp00ky(onSettled?: () => void) {
     const done = onSettled ?? (() => {});
+
+    // An iframe cannot be evaluated in when it is cross-origin: Chrome puts it
+    // in its own process, and `inspectedWindow.eval` addresses frames by URL
+    // within the inspected process only. The message channel reaches every
+    // frame regardless, so for a non-main frame availability comes from the
+    // frame having announced itself, and state comes from asking it.
+    if (!isMainFrame()) {
+      const present = frames().some((f) => f.frameId === activeFrameId());
+      setIsSp00kyAvailable(present);
+      if (present) requestState();
+      done();
+      return;
+    }
+
     hostPage.checkSp00kyAvailable((available) => {
       console.log('[DevTools] Sp00ky available:', available);
       setIsSp00kyAvailable(available);
@@ -544,14 +662,18 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function clearEvents() {
     // Clear backend history first
-    hostPage.clearHistory(
-      (result) => {
-        console.log('[DevTools] Clear history result:', result);
-      },
-      (error) => {
-        console.error('[DevTools] Error clearing history:', error);
-      }
-    );
+    if (isMainFrame()) {
+      hostPage.clearHistory(
+        (result) => {
+          console.log('[DevTools] Clear history result:', result);
+        },
+        (error) => {
+          console.error('[DevTools] Error clearing history:', error);
+        }
+      );
+    } else {
+      sendMessage({ type: 'CLEAR_HISTORY', payload: { requestId: `clear-${Date.now()}` } } as any);
+    }
     // Clear local state immediately for responsive UI
     setState('events', []);
   }
@@ -650,6 +772,18 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function refreshVersions(onSettled?: () => void) {
     const done = onSettled ?? (() => {});
+
+    if (!isMainFrame()) {
+      // Fire-and-forget over the message channel: the result arrives as a state
+      // push, exactly as it does for the eval path below.
+      sendMessage({
+        type: 'REFRESH_VERSIONS',
+        payload: { requestId: `versions-${Date.now()}` },
+      } as any);
+      done();
+      return;
+    }
+
     hostPage.run(
       `(async function() {
         if (window.__00__ && window.__00__.refreshVersions) {
@@ -731,6 +865,12 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function fetchTableData(tableName: string) {
     console.log('[DevTools] Fetching table data for:', tableName);
+    if (!isMainFrame()) {
+      // The response comes back as SP00KY_TABLE_DATA_RESPONSE, the same message
+      // the eval path's page-side code posts.
+      sendMessage({ type: 'GET_TABLE_DATA', payload: { tableName } } as any);
+      return;
+    }
     hostPage.getTableData(
       tableName,
       (result) => {
@@ -747,6 +887,19 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function updateTableRow(tableName: string, recordId: string, updates: Record<string, unknown>) {
     console.log('[DevTools] Updating row:', { tableName, recordId, updates });
+    if (!isMainFrame()) {
+      const requestId = `update-${Date.now()}`;
+      sendMessage({
+        type: 'UPDATE_TABLE_ROW',
+        payload: { tableName, recordId, updates, requestId },
+      } as any);
+      // The write settles as a SP00KY_BRIDGE_RESPONSE; re-read once it lands.
+      pendingQueries.set(requestId, {
+        resolve: () => fetchTableData(tableName),
+        reject: (err) => console.error('[DevTools] Update failed:', err),
+      });
+      return;
+    }
     hostPage.updateTableRow(
       tableName,
       recordId,
@@ -771,6 +924,18 @@ export const DevToolsProvider: ParentComponent = (props) => {
    */
   function deleteTableRow(tableName: string, recordId: string) {
     console.log('[DevTools] Deleting row:', { tableName, recordId });
+    if (!isMainFrame()) {
+      const requestId = `delete-${Date.now()}`;
+      sendMessage({
+        type: 'DELETE_TABLE_ROW',
+        payload: { tableName, recordId, requestId },
+      } as any);
+      pendingQueries.set(requestId, {
+        resolve: () => fetchTableData(tableName),
+        reject: (err) => console.error('[DevTools] Delete failed:', err),
+      });
+      return;
+    }
     hostPage.deleteTableRow(
       tableName,
       recordId,
@@ -835,6 +1000,14 @@ export const DevToolsProvider: ParentComponent = (props) => {
         },
       });
 
+      // A non-main frame is unreachable by eval when it is cross-origin, so the
+      // request travels the content-script channel instead. Same requestId,
+      // same SP00KY_QUERY_RESPONSE — only the delivery differs.
+      if (!isMainFrame()) {
+        sendMessage({ type: 'RUN_QUERY', payload: { query, target, requestId } } as any);
+        return;
+      }
+
       // Use eval to trigger the event directly in the page
       // This bypasses potential message dropping in background script
       console.log(
@@ -892,6 +1065,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
           reject(err || 'Undefined error passed to pendingQueries.reject');
         },
       });
+
+      if (!isMainFrame()) {
+        sendMessage({ type: 'STORAGE_OP', payload: { op, requestId, options } } as any);
+        return;
+      }
 
       hostPage.storageOp(
         op,
@@ -958,6 +1136,11 @@ export const DevToolsProvider: ParentComponent = (props) => {
           reject(err || 'Undefined error passed to pendingQueries.reject');
         },
       });
+
+      if (!isMainFrame()) {
+        sendMessage({ type: 'FLAG_OP', payload: { op, requestId, args } } as any);
+        return;
+      }
 
       hostPage.flagOp(
         op,

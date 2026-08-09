@@ -397,6 +397,10 @@ body {
   white-space: nowrap;
 }
 
+.frame-select-away {
+  color: var(--sys-color-error);
+}
+
 .frame-select-note {
   padding: var(--sys-spacing-1) var(--sys-spacing-2);
   color: var(--sys-color-on-surface-subtle);
@@ -1698,6 +1702,18 @@ body {
   gap: var(--sys-spacing-4);
 }
 
+/* This column SCROLLS, so overflowing content must scroll — never compress.
+   Flex items shrink by default, and the usual protection (a flex item's
+   automatic minimum size) is switched off by the two things these panels do
+   constantly: `overflow: hidden` on a bordered card, and an explicit
+   `min-height` on its rows. The result was cards squeezed below their content,
+   which does not hide anything — it just makes the content overflow onto
+   whatever is drawn next (the latency chart smeared across the entity rows,
+   the version table collapsed to its header). */
+.mcp-container > * {
+  flex-shrink: 0;
+}
+
 .mcp-header {
   display: flex;
   align-items: center;
@@ -1934,6 +1950,10 @@ body {
   min-height: 24px;
   padding: var(--sys-spacing-1) var(--sys-spacing-2);
   border-bottom: 1px solid var(--sys-color-divider);
+  /* `min-height` replaces the automatic minimum size a flex item would get, so
+     without this these rows compress to nothing inside `.versions-table` and
+     the table renders as a bare header. */
+  flex: none;
 }
 
 .versions-row:last-child {
@@ -2054,6 +2074,11 @@ body {
   min-height: 26px;
   padding: var(--sys-spacing-1) var(--sys-spacing-2);
   border-bottom: 1px solid var(--sys-color-divider);
+  /* `min-height` above REPLACES the content-based automatic minimum a flex
+     item would otherwise get, so a squeezed column could compress this row to
+     26px — and a row holding the latency chart is ~5x that. The chart then
+     overflowed onto the rows below instead of the row growing. */
+  flex: none;
 }
 
 .versions-stack-row:last-child {
@@ -2138,6 +2163,10 @@ body {
 .hb-chart {
   grid-column: 1 / -1;
   margin-top: var(--sys-spacing-2);
+  /* The row this card sits in is padded `4px 8px`, so the card cleared the row
+     by 8px at the sides but only 4px underneath. This makes the gap below it
+     match the sides; the card's own padding stays uniform. */
+  margin-bottom: var(--sys-spacing-1);
   padding: var(--sys-spacing-2);
   border: 1px solid var(--sys-color-divider);
   border-radius: var(--sys-shape-corner-small, 4px);
@@ -2158,18 +2187,39 @@ body {
   letter-spacing: 0.3px;
 }
 
+/* Current reading. A quiet chip rather than a headline number: it is a
+   restatement of where the line ends, so it should read as a label on the
+   chart, not compete with the chart. Tinted with the series colour so the two
+   are visibly the same measurement. */
 .hb-chart-now {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
   margin-left: auto;
-  color: var(--sys-color-on-surface);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sys-color-primary) 12%, transparent);
+  color: var(--sys-color-primary);
   font-family: var(--sys-typescale-monospace-font, monospace);
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 15px;
+}
+
+.hb-chart-now-unit {
+  font-size: 9px;
+  opacity: 0.7;
 }
 
 .hb-chart-now .muted {
   color: var(--sys-color-text-disabled);
   font-weight: 400;
+}
+
+.hb-chart.degraded .hb-chart-now {
+  background: color-mix(in srgb, var(--sys-color-error) 14%, transparent);
+  color: var(--sys-color-error);
 }
 
 .hb-chart-flag {
@@ -2283,12 +2333,31 @@ body {
   align-items: center;
   gap: 3px;
   padding: 0 var(--sys-spacing-1);
+  background: transparent;
+  border: none;
+  border-radius: var(--sys-radius-sm);
   font-family: var(--sys-typescale-monospace-font, monospace);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--sys-color-on-surface-subtle);
   white-space: nowrap;
-  cursor: default;
+  /* It navigates to the Stack tab, so it has to look clickable. */
+  cursor: pointer;
+}
+
+.hb-badge:hover {
+  background: var(--sys-color-state-hover);
+  color: var(--sys-color-on-surface);
+}
+
+.hb-badge:focus-visible {
+  outline: 1px solid var(--sys-color-primary);
+  outline-offset: -1px;
+}
+
+/* Already on the tab it links to — keep it readable, drop the affordance. */
+.hb-badge.active {
+  color: var(--sys-color-on-surface);
 }
 
 .hb-badge-icon {

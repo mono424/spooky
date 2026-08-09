@@ -6049,9 +6049,19 @@ fn print_deployment_details(data: &serde_json::Value) {
                 let hb_stale = hb.and_then(|h| h["stale"].as_bool()).unwrap_or(false);
                 let hb_fails = hb.and_then(|h| h["consecutive_failures"].as_u64()).unwrap_or(0);
                 let hb_ms = hb.and_then(|h| h["last_e2e_ms"].as_u64());
+                // Blocked: nothing failed, but there is nothing to measure —
+                // no ready SSPs means no client is receiving changes, so the
+                // last latency describes a stack that is not serving anyone.
+                let hb_blocked = hb.and_then(|h| h["blocked"].as_bool()).unwrap_or(false);
+                let hb_block_reason = hb.and_then(|h| h["blocked_reason"].as_str());
 
                 let (status_text, health) = if vm_status != "running" {
                     (vm_status.to_string(), vm_status)
+                } else if hb_enabled && hb_blocked {
+                    (
+                        format!("degraded ({})", hb_block_reason.unwrap_or("e2e blocked")),
+                        "degraded",
+                    )
                 } else if hb_enabled && hb_stale {
                     // No successful probe inside the grace window: the pipeline
                     // is not carrying changes, so the scheduler is not serving
@@ -6077,6 +6087,8 @@ fn print_deployment_details(data: &serde_json::Value) {
                 // read as a healthy one.
                 let e2e = if !hb_enabled {
                     "-".to_string()
+                } else if hb_blocked {
+                    "\x1b[33mblocked\x1b[0m".to_string()
                 } else if hb_stale {
                     "\x1b[31mtimeout\x1b[0m".to_string()
                 } else {

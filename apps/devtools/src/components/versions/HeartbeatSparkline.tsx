@@ -23,6 +23,15 @@ const H = 44;
  *
  * Hand-rolled SVG on purpose: the panel ships no charting library.
  */
+/** Split `formatMs` output into the number and its unit, so they can be styled
+ *  apart. Falls back to putting everything in `value` for a non-numeric result
+ *  (the em-dash placeholder), which then renders unchanged. */
+function splitValue(ms: number | null | undefined): { value: string; unit: string } {
+  const text = formatMs(ms);
+  const m = /^([\d.]+)(\D+)$/.exec(text);
+  return m ? { value: m[1]!, unit: m[2]! } : { value: text, unit: '' };
+}
+
 export function HeartbeatSparkline(props: { heartbeat: HeartbeatInfo }) {
   const gradientId = createUniqueId();
 
@@ -112,7 +121,10 @@ export function HeartbeatSparkline(props: { heartbeat: HeartbeatInfo }) {
     return oks.length ? oks[oks.length - 1]! : null;
   });
 
-  const degraded = () => props.heartbeat.stale || props.heartbeat.consecutive_failures > 0;
+  const degraded = () =>
+    props.heartbeat.stale ||
+    props.heartbeat.blocked === true ||
+    props.heartbeat.consecutive_failures > 0;
 
   const windowLabel = () => {
     const spanSecs = Math.max(1, stats().count - 1) * props.heartbeat.interval_secs;
@@ -125,14 +137,22 @@ export function HeartbeatSparkline(props: { heartbeat: HeartbeatInfo }) {
     <div class="hb-chart" classList={{ degraded: degraded() }}>
       <div class="hb-chart-head">
         <span class="hb-chart-title">e2e sync latency</span>
+        {/* The unit is repeated on every reading, so it carries no information
+            once you have read it once — it is set smaller and dimmer than the
+            number, which is the part that actually changes. */}
         <span class="hb-chart-now">
           <Show when={props.heartbeat.last_e2e_ms !== null} fallback={<span class="muted">—</span>}>
-            {formatMs(props.heartbeat.last_e2e_ms)}
+            <span class="hb-chart-now-value">{splitValue(props.heartbeat.last_e2e_ms).value}</span>
+            <span class="hb-chart-now-unit">{splitValue(props.heartbeat.last_e2e_ms).unit}</span>
           </Show>
         </span>
         <Show when={degraded()}>
           <span class="hb-chart-flag">
-            {props.heartbeat.stale ? 'stale' : `${props.heartbeat.consecutive_failures} failing`}
+            {props.heartbeat.blocked
+              ? (props.heartbeat.blocked_reason ?? 'blocked')
+              : props.heartbeat.stale
+                ? 'stale'
+                : `${props.heartbeat.consecutive_failures} failing`}
           </span>
         </Show>
       </div>

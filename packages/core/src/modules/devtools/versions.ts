@@ -33,6 +33,9 @@ export interface HeartbeatSample {
 export interface HeartbeatInfo {
   enabled: boolean;
   stale: boolean;
+  /** Nothing to measure right now (e.g. no ready SSPs mid-bootstrap). */
+  blocked?: boolean;
+  blocked_reason?: string | null;
   last_e2e_ms: number | null;
   last_ok_epoch_ms: number | null;
   consecutive_failures: number;

@@ -67,6 +67,15 @@ pub struct HeartbeatStats {
     /// Rolling window of recent cycles, newest last. std Mutex on purpose:
     /// held for nanoseconds, never across an await.
     samples: std::sync::Mutex<std::collections::VecDeque<Sample>>,
+    /// Why the probe currently cannot measure anything, if it cannot.
+    ///
+    /// "No ready SSPs" is not a slow cycle or a failed one — there is nothing
+    /// to measure, because the probe's whole test is whether a write reaches
+    /// every ready provider. Recording nothing left `last_e2e_ms` sitting at
+    /// its last good value with `stale` still false, so for a full grace
+    /// window (~2 min) a bootstrap looked exactly like a healthy 9ms — during
+    /// the one period when clients demonstrably cannot sync.
+    blocked_reason: std::sync::Mutex<Option<&'static str>>,
 }
 
 impl HeartbeatStats {
@@ -80,6 +89,7 @@ impl HeartbeatStats {
             samples: std::sync::Mutex::new(std::collections::VecDeque::with_capacity(
                 SAMPLE_WINDOW,
             )),
+            blocked_reason: std::sync::Mutex::new(None),
         })
     }
 
@@ -97,6 +107,18 @@ impl HeartbeatStats {
         self.samples.lock().unwrap().iter().copied().collect()
     }
 
+    /// Why the probe cannot currently measure, if it cannot.
+    pub fn blocked_reason(&self) -> Option<&'static str> {
+        *self.blocked_reason.lock().unwrap()
+    }
+
+    /// Whether the reported latency describes the pipeline right now. False
+    /// when the probe is stale OR blocked — the two ways a number on screen
+    /// can be historical rather than current.
+    pub fn is_current(&self, cfg: &Config, now_epoch_ms: u64) -> bool {
+        !self.is_stale(cfg, now_epoch_ms) && self.blocked_reason().is_none()
+    }
+
     /// The single heartbeat shape every consumer reads. `/info` serves it with
     /// `samples` (DevTools draws the sparkline from them); `/health` and
     /// `/metrics` serve the scalars only.
@@ -106,9 +128,12 @@ impl HeartbeatStats {
     pub fn snapshot(&self, cfg: &Config, now_epoch_ms: u64, with_samples: bool) -> serde_json::Value {
         let last_e2e = self.last_e2e_ms.load(Ordering::Relaxed);
         let last_ok = self.last_ok_epoch_ms.load(Ordering::Relaxed);
+        let blocked = self.blocked_reason();
         let mut out = serde_json::json!({
             "enabled": self.enabled.load(Ordering::Relaxed),
             "stale": self.is_stale(cfg, now_epoch_ms),
+            "blocked": blocked.is_some(),
+            "blocked_reason": blocked,
             "last_e2e_ms": (last_e2e != u64::MAX).then_some(last_e2e),
             "last_ok_epoch_ms": (last_ok > 0).then_some(last_ok),
             "consecutive_failures": self.consecutive_failures.load(Ordering::Relaxed),
@@ -388,6 +413,7 @@ fn record(stats: &Arc<HeartbeatStats>, alerter: &Alerter, outcome: &CycleOutcome
             stats.last_ok_epoch_ms.store(now, Ordering::Relaxed);
             stats.consecutive_failures.store(0, Ordering::Relaxed);
             stats.push_sample(Sample { ts: now, ms: Some(*e2e_ms), ok: true });
+            *stats.blocked_reason.lock().unwrap() = None;
             debug!(e2e_ms, "heartbeat ok");
             alerter.observe(true, 0, || {
                 serde_json::json!({ "component": "scheduler_heartbeat", "e2e_ms": e2e_ms })
@@ -396,11 +422,17 @@ fn record(stats: &Arc<HeartbeatStats>, alerter: &Alerter, outcome: &CycleOutcome
         CycleOutcome::Skipped(reason) => {
             // Not a failure of the pipeline itself; don't page, and leave no
             // sample — a gap in the window reads truthfully as "not probed".
+            // But DO mark the reading not-current immediately: waiting for the
+            // staleness window to expire would publish the last good latency
+            // as though it still described a stack that cannot serve anyone.
+            *stats.blocked_reason.lock().unwrap() = Some(reason);
             debug!(reason, "heartbeat skipped");
         }
         CycleOutcome::Failed { stage, detail } => {
             let failures = stats.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
             stats.push_sample(Sample { ts: now, ms: None, ok: false });
+            // A failure is a measurement: we asked and it did not work.
+            *stats.blocked_reason.lock().unwrap() = None;
             warn!(stage, %detail, failures, "heartbeat failed");
             alerter.observe(false, failures, || {
                 serde_json::json!({
@@ -548,6 +580,48 @@ mod tests {
         assert_eq!(samples[0]["ms"], 42);
         assert_eq!(samples[0]["ok"], true);
         assert!(samples[0]["ts"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn a_blocked_probe_is_not_a_healthy_one() {
+        // The bug this guards: during an SSP bootstrap the probe has nothing
+        // to measure, so it recorded nothing at all — leaving the last good
+        // latency on display with `stale` still false for a full grace window,
+        // i.e. a healthy-looking 9ms during the one period when no client can
+        // sync.
+        let c = cfg(30, 25);
+        let stats = HeartbeatStats::new();
+        let alerter = maintenance::alert::Alerter::new(None, None, 3);
+        stats.enabled.store(true, Ordering::Relaxed);
+
+        record(&stats, &alerter, &CycleOutcome::Ok { e2e_ms: 9 });
+        let now = now_epoch_ms();
+        assert!(stats.is_current(&c, now), "a fresh success is current");
+        assert!(stats.blocked_reason().is_none());
+
+        record(&stats, &alerter, &CycleOutcome::Skipped("no ready SSPs"));
+        assert_eq!(stats.blocked_reason(), Some("no ready SSPs"));
+        assert!(
+            !stats.is_current(&c, now),
+            "blocked must stop the reading counting as current immediately, \
+             without waiting for the staleness window"
+        );
+        // The number itself is still reported — consumers decide what to do
+        // with it — but never as a current one.
+        let v = stats.snapshot(&c, now, false);
+        assert_eq!(v["blocked"], true);
+        assert_eq!(v["blocked_reason"], "no ready SSPs");
+        assert_eq!(v["last_e2e_ms"], 9);
+        assert_eq!(v["stale"], false, "blocked is not the same as stale");
+
+        // Recovery clears it.
+        record(&stats, &alerter, &CycleOutcome::Ok { e2e_ms: 12 });
+        assert!(stats.blocked_reason().is_none());
+        assert!(stats.is_current(&c, now_epoch_ms()));
+
+        // A failure is a measurement, not a block.
+        record(&stats, &alerter, &CycleOutcome::Failed { stage: "db_write", detail: "x".into() });
+        assert!(stats.blocked_reason().is_none());
     }
 
     #[test]

@@ -78,6 +78,10 @@ pub struct SchedulerMetrics {
     /// No successful probe within the grace window — treat the latency above
     /// as unknown, not as the current value.
     pub heartbeat_stale: bool,
+    /// The probe currently has nothing to measure (e.g. no ready SSPs during a
+    /// bootstrap). Distinct from stale: nothing failed and nothing timed out,
+    /// but the latency above describes a stack that is not serving anyone.
+    pub heartbeat_blocked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +222,7 @@ async fn get_metrics(
                     .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
             ),
+            heartbeat_blocked: hb.blocked_reason().is_some(),
         },
         ssps,
     };
@@ -291,7 +296,10 @@ async fn health_check(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let heartbeat_stale = state.heartbeat.is_stale(&state.heartbeat_config, now_ms);
+    // Blocked degrades as well as stale: "no ready SSPs" means no client can
+    // be receiving changes, which is not an operational stack however recently
+    // the last probe succeeded.
+    let heartbeat_stale = !state.heartbeat.is_current(&state.heartbeat_config, now_ms);
     // Scalars only — the sample window is `/info`'s job (it feeds the DevTools
     // sparkline); a health probe should stay small.
     let heartbeat = state

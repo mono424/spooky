@@ -16,7 +16,10 @@ export interface RunInHostPageOptions<T> {
  *   what makes "inspect that iframe instead" a single switch rather than a
  *   change at ~10 call sites.
  */
-export function useRunInHostPage(frameUrl?: () => string | undefined) {
+export function useRunInHostPage(
+  frameUrl?: () => string | undefined,
+  onFrameLost?: (frameUrl: string) => void
+) {
   const [isRunning, setIsRunning] = createSignal(false);
   const [error, setError] = createSignal<any>(null);
 
@@ -29,10 +32,20 @@ export function useRunInHostPage(frameUrl?: () => string | undefined) {
     setIsRunning(true);
     setError(null);
 
+    const url = frameUrl?.();
+
     const handle = (result: T, isException: any) => {
       setIsRunning(false);
 
       if (isException) {
+        // `E_NOTFOUND` means the frameURL matched no frame — the iframe
+        // navigated (a route change rewrites its URL in place) rather than the
+        // page throwing. Reported separately so the panel can re-address the
+        // frame instead of showing a page error, or worse, quietly failing
+        // every call from here on.
+        if (url && isException?.code === 'E_NOTFOUND') {
+          onFrameLost?.(url);
+        }
         setError(isException);
         options?.onError?.(isException);
       } else {
@@ -40,7 +53,6 @@ export function useRunInHostPage(frameUrl?: () => string | undefined) {
       }
     };
 
-    const url = frameUrl?.();
     if (url) {
       chrome.devtools.inspectedWindow.eval(code, { frameURL: url }, handle);
     } else {
@@ -114,7 +126,11 @@ export function useRunInHostPage(frameUrl?: () => string | undefined) {
    * Check if Sp00ky is available on the page
    */
   const checkSp00kyAvailable = (onSuccess: (available: boolean) => void): void => {
-    run(`!!window.__00__`, { onSuccess });
+    // An eval that cannot run (frame gone, page navigating) is a "no client
+    // reachable" answer, not a reason to leave the caller hanging: without this
+    // the connection dot froze on its last value and the refresh spinner ran
+    // until its watchdog.
+    run(`!!window.__00__`, { onSuccess, onError: () => onSuccess(false) });
   };
 
   /**

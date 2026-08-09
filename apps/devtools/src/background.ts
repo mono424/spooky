@@ -46,6 +46,28 @@ interface Sp00kyFrameInfo {
   version?: string;
 }
 
+/**
+ * Frame removals waiting to be applied, keyed `tabId:frameId`.
+ *
+ * `pagehide` says "this document is going away", but on a navigation the NEXT
+ * document in the same frame often announces itself first — the two messages
+ * come from different scripts and are not ordered. Deleting on arrival
+ * therefore threw away an entry that had just been re-added, leaving a frame
+ * that was very much alive missing from the list. So a removal is deferred and
+ * cancelled by any sign of life from that frame.
+ */
+const pendingFrameRemovals = new Map<string, ReturnType<typeof setTimeout>>();
+const FRAME_REMOVAL_DELAY_MS = 1500;
+
+function cancelFrameRemoval(tabId: number, frameId: number) {
+  const key = `${tabId}:${frameId}`;
+  const timer = pendingFrameRemovals.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    pendingFrameRemovals.delete(key);
+  }
+}
+
 function frameListFor(tabId: number): Sp00kyFrameInfo[] {
   const frames = sp00kyFrames.get(tabId);
   if (!frames) return [];
@@ -389,6 +411,9 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       reportTabsToBridge();
     }
 
+    // The frame just spoke, so any queued removal for it is stale.
+    cancelFrameRemoval(senderTabId, senderFrameId);
+
     let frames = sp00kyFrames.get(senderTabId);
     if (!frames) {
       frames = new Map();
@@ -400,6 +425,51 @@ chrome.runtime.onMessage.addListener((message, sender) => {
       version: message.data?.version,
     });
     postFrames(senderTabId);
+  }
+
+  // A frame this panel can be pointed at changed its URL (SPA route change).
+  // The URL is how `inspectedWindow.eval` addresses a frame, so a stale one
+  // breaks every eval — keep the registry current and re-publish it.
+  if (message.type === 'SP00KY_FRAME_URL' && senderTabId && message.url) {
+    cancelFrameRemoval(senderTabId, senderFrameId);
+    const frames = sp00kyFrames.get(senderTabId);
+    if (frames) {
+      const existing = frames.get(senderFrameId);
+      // Re-registers a bfcache-restored frame as well as re-addressing a routed
+      // one, so `pageshow` does not need its own branch here.
+      frames.set(senderFrameId, { ...existing, frameId: senderFrameId, url: message.url });
+      postFrames(senderTabId);
+    }
+    return;
+  }
+
+  // The frame's document is being torn down (navigation, or the host page
+  // dropped the iframe). Forget it — a frame that cannot be evaluated in must
+  // not stay in the picker.
+  if (message.type === 'SP00KY_FRAME_GONE' && senderTabId) {
+    const tabId = senderTabId;
+    const frameId = senderFrameId;
+    const key = `${tabId}:${frameId}`;
+    if (pendingFrameRemovals.has(key)) return;
+    pendingFrameRemovals.set(
+      key,
+      setTimeout(() => {
+        pendingFrameRemovals.delete(key);
+        const frames = sp00kyFrames.get(tabId);
+        if (frames?.delete(frameId)) postFrames(tabId);
+      }, FRAME_REMOVAL_DELAY_MS)
+    );
+    return;
+  }
+
+  // A new top-level document. THIS is a page reload — not `tabs.onUpdated`,
+  // which reports "loading" for subframe navigations too. Every frame of the
+  // previous page is gone; the new page's frames announce themselves.
+  if (message.type === 'SP00KY_MAIN_DOCUMENT' && senderTabId) {
+    sp00kyFrames.delete(senderTabId);
+    postFrames(senderTabId);
+    connections.get(senderTabId)?.postMessage({ type: 'PAGE_RELOADED' });
+    return;
   }
 
   // Handle bridge responses (from page-script via content script)
@@ -438,6 +508,19 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     }
   }
 
+  // Anything arriving from a frame proves that frame is alive, whatever the
+  // registry currently believes. Re-adding it here makes the list self-healing:
+  // no ordering of detect/teardown messages can leave a frame that is actively
+  // pushing state missing from the picker.
+  if (senderTabId && message.source === 'sp00ky-devtools-page') {
+    cancelFrameRemoval(senderTabId, senderFrameId);
+    const frames = sp00kyFrames.get(senderTabId);
+    if (frames && !frames.has(senderFrameId)) {
+      frames.set(senderFrameId, { frameId: senderFrameId, url: sender.url ?? '' });
+      postFrames(senderTabId);
+    }
+  }
+
   // Forward state updates to the appropriate devtools panel
   if (senderTabId) {
     if (connections.has(senderTabId)) {
@@ -464,21 +547,12 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   }
 });
 
-// Detect when tabs are updated
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  // A top-level navigation destroys every frame, and the new document's frames
-  // get FRESH ids. Dropping the registry here (rather than letting it
-  // accumulate) is what stops the picker from listing iframes that no longer
-  // exist; each surviving client re-announces on load.
-  if (changeInfo.status === 'loading') {
-    if (sp00kyFrames.delete(tabId)) postFrames(tabId);
-  }
-  if (changeInfo.status === 'complete' && connections.has(tabId)) {
-    // Notify the devtools panel that the page has been reloaded
-    const port = connections.get(tabId);
-    port?.postMessage({ type: 'PAGE_RELOADED' });
-  }
-});
+// Page lifecycle is driven by the content script's `SP00KY_MAIN_DOCUMENT` and
+// per-frame `SP00KY_FRAME_GONE` instead of `chrome.tabs.onUpdated`. The tab's
+// status is a whole-TAB signal: a subframe navigating flips it to "loading" and
+// back to "complete", so using it meant an embedded app navigating looked
+// exactly like the top page reloading — which wiped the frame registry and
+// dropped the iframe the panel was inspecting.
 
 // Clean up sp00ky tabs when tabs are closed
 chrome.tabs.onRemoved.addListener((tabId) => {

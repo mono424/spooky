@@ -400,6 +400,32 @@
     }
   });
 
+  // Backend version discovery. The panel drives this by eval in the main
+  // document, but an out-of-process (cross-origin) iframe cannot be evaluated
+  // in at all — `inspectedWindow.eval` addresses frames by URL and only reaches
+  // same-process ones — so it has to be reachable over the message channel too.
+  window.addEventListener('SP00KY_REFRESH_VERSIONS', async (event: any) => {
+    const { requestId } = event.detail ?? {};
+    const sp00ky = (window as any).__00__;
+    const respond = (payload: { success: boolean; error?: string }) => {
+      window.postMessage(
+        { type: 'SP00KY_BRIDGE_RESPONSE', source: 'sp00ky-devtools-page', requestId, ...payload },
+        '*'
+      );
+    };
+
+    if (!sp00ky?.refreshVersions) {
+      respond({ success: false, error: 'Sp00ky not found or refreshVersions not supported' });
+      return;
+    }
+    try {
+      await sp00ky.refreshVersions();
+      respond({ success: true });
+    } catch (err: any) {
+      respond({ success: false, error: err?.message || String(err) });
+    }
+  });
+
   // Also listen for custom event in case Sp00ky loads later
   window.addEventListener('sp00ky:init', () => {
     checkForSp00ky();

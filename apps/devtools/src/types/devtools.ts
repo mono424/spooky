@@ -24,6 +24,10 @@ export interface HeartbeatSample {
 export interface HeartbeatInfo {
   enabled: boolean;
   stale: boolean;
+  /** Nothing to measure right now (e.g. no ready SSPs mid-bootstrap). The
+   *  latency is historical: nothing failed, but nothing is being served. */
+  blocked?: boolean;
+  blocked_reason?: string | null;
   last_e2e_ms: number | null;
   last_ok_epoch_ms: number | null;
   consecutive_failures: number;
@@ -196,6 +200,8 @@ export interface ChromeMessage {
    */
   frameId?: number;
   frameUrl?: string;
+  /** SP00KY_FRAME_URL only: the frame's new URL after a route change. */
+  url?: string;
   /** SP00KY_FRAMES only: every frame in the tab that announced a client. */
   frames?: Sp00kyFrame[];
 }

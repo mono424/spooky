@@ -134,7 +134,7 @@ export function VersionsTab() {
   return (
     <div class="mcp-container">
       <div class="mcp-header">
-        <h2>Versions</h2>
+        <h2>Stack</h2>
       </div>
 
       <div class="versions-table">
@@ -183,7 +183,9 @@ export function VersionsTab() {
 
       <Show when={entities().length > 0}>
         <div class="versions-stack">
-          <div class="versions-stack-head">Stack</div>
+          {/* Not "Stack" — that is the tab's own title now, and two identical
+              headings in a row read as a rendering bug. */}
+          <div class="versions-stack-head">Entities</div>
           <For each={entities()}>
             {(e) => (
               <div class="versions-stack-row">

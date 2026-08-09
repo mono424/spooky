@@ -23,9 +23,22 @@ export function FrameSelect() {
   // panel already renders via the status dot.
   const options = createMemo<Sp00kyFrame[]>(() => {
     const detected = frames();
-    if (detected.some((f) => f.frameId === 0)) return detected;
-    return [{ frameId: 0, url: '' }, ...detected];
+    const withMain = detected.some((f) => f.frameId === 0)
+      ? detected
+      : [{ frameId: 0, url: '' }, ...detected];
+
+    // The selected client keeps its place in the list even while it is absent
+    // (its document is being replaced, or the page rebuilt the iframe). Dropping
+    // it would move the user somewhere they did not ask to be.
+    const active = activeFrame();
+    if (active && !withMain.some((f) => f.frameId === active.frameId)) {
+      return [...withMain, active];
+    }
+    return withMain;
   });
+
+  /** Selected, but not currently in the live list — reconnecting, not gone. */
+  const isAway = (frame: Sp00kyFrame) => !frames().some((f) => f.frameId === frame.frameId);
 
   const hasChoice = () => options().length > 1;
 
@@ -103,6 +116,9 @@ export function FrameSelect() {
                 <span class="frame-select-item-sub mono">
                   {frame.frameId === 0 ? hostOf(frame.url) : `iframe · ${hostOf(frame.url)}`}
                   <Show when={frame.version}>{(v) => <> · v{v()}</>}</Show>
+                  <Show when={frame.frameId !== 0 && isAway(frame)}>
+                    <span class="frame-select-away"> · reconnecting…</span>
+                  </Show>
                 </span>
               </button>
             )}

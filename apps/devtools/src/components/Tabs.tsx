@@ -11,7 +11,7 @@ const tabs: { id: TabType; label: string }[] = [
   { id: 'database', label: 'Database' },
   { id: 'storage', label: 'Storage' },
   { id: 'access', label: 'Access' },
-  { id: 'versions', label: 'Versions' },
+  { id: 'versions', label: 'Stack' },
   { id: 'mcp', label: 'MCP' },
   { id: 'events', label: 'Events' },
 ];
@@ -77,7 +77,7 @@ export function Tabs() {
 
   const hbFailing = (): boolean => {
     const hb = heartbeat();
-    return !!hb && (hb.stale || hb.consecutive_failures > 0);
+    return !!hb && (hb.stale || hb.blocked === true || hb.consecutive_failures > 0);
   };
 
   const hbLabel = (): string => {
@@ -97,6 +97,7 @@ export function Tabs() {
     if (hb.consecutive_failures > 0) parts.push(`${hb.consecutive_failures} consecutive failures`);
     if (hb.stale) parts.push('stale');
     parts.push('updates on Refresh');
+    parts.push('click to open Stack');
     return parts.join(' · ');
   };
 
@@ -276,13 +277,23 @@ export function Tabs() {
       </Show>
 
       <div class="toolbar-group-right" ref={actionsEl}>
+        {/* A button, not a readout: the number is the summary of the chart on
+            the Stack tab, so clicking it goes there rather than making you find
+            the tab that explains it. */}
         <Show when={heartbeat()}>
-          <span class="hb-badge" classList={{ failing: hbFailing() }} title={hbTitle()}>
+          <button
+            type="button"
+            class="hb-badge"
+            classList={{ failing: hbFailing(), active: activeTab() === 'versions' }}
+            title={hbTitle()}
+            aria-label={hbTitle()}
+            onClick={() => setActiveTab('versions')}
+          >
             <span class="hb-badge-icon" aria-hidden="true">
               ♥
             </span>
             {hbLabel()}
-          </span>
+          </button>
         </Show>
         {/* Shift+click = refresh everything. Note a keyboard activation reports
             shiftKey:false in Chrome, so there is no keyboard path to a full
