@@ -720,6 +720,10 @@ export class SqliteCacheEngine implements LocalStore {
       sql += ` WHERE ${renderWhereSql(plan.where, bind, params)}`;
     }
     if (plan.orderBy && plan.orderBy.length > 0) sql += renderOrderSql(plan.orderBy);
+    // Deterministic fallback, in parity with `sqlite-select.ts`: without it an
+    // unordered query renders in insertion order here and in membership order
+    // after the server answers, which reshuffles the list on screen.
+    else sql += ` ORDER BY id`;
     if (plan.limit !== undefined) sql += ` LIMIT ${Number(plan.limit)}`;
     if (plan.offset !== undefined) sql += ` OFFSET ${Number(plan.offset)}`;
     const rows = await this.execRows(sql, bind);

@@ -591,6 +591,18 @@ export class DataModule<S extends SchemaStructure> {
         ordered.push(id);
       }
     }
+    // `_00_list_ref` is selected without an ORDER BY, so this id-set arrives in
+    // whatever order the server happened to return. For a query with its own
+    // ORDER BY that does not matter (the engine sorts), and for a window the
+    // id-set order IS the window's slice order and must be preserved. Anything
+    // else renders in server order while its first paint came from the local
+    // scan in id order — the same rows, visibly reshuffled a second later.
+    // Sorting here is what makes the two paints agree.
+    const hasExplicitOrder = (config.plan?.orderBy?.length ?? 0) > 0;
+    const isWindow = buildWindowMaterialization(config.surql) !== null;
+    if (!hasExplicitOrder && !isWindow) {
+      ordered.sort();
+    }
     return ordered.map((id) => parseRecordIdString(id));
   }
 

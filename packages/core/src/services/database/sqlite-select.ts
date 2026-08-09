@@ -103,6 +103,14 @@ export async function executeSelect(
     sql += ` WHERE ${renderWhereSql(plan.where, bind, params)}`;
   }
   if (plan.orderBy && plan.orderBy.length > 0) sql += renderOrderSql(plan.orderBy);
+  // A query with no ORDER BY still has to render in SOME order, and "whatever
+  // SQLite hands back" is insertion order — which disagrees with the order the
+  // same query gets once it renders from server membership, and disagrees with
+  // SurrealDB, whose natural order is by id. That mismatch is visible: the
+  // first paint comes from this scan and the second from membership, so an
+  // unordered list visibly reshuffled about a second after load. Ordering by
+  // id here makes the two agree and makes the result stable across reloads.
+  else sql += ` ORDER BY id`;
   if (plan.limit !== undefined) sql += ` LIMIT ${Number(plan.limit)}`;
   if (plan.offset !== undefined) sql += ` OFFSET ${Number(plan.offset)}`;
   const rows = execRows(db, sql, bind);

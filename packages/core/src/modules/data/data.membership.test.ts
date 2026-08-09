@@ -229,6 +229,53 @@ describe('membership-authoritative rendering', () => {
     });
   });
 
+  describe('render order', () => {
+    it('sorts an unordered query so both paints agree', async () => {
+      // `_00_list_ref` is selected without an ORDER BY, so membership arrives
+      // shuffled. The first paint came from the local scan in id order, so
+      // rendering server order here is what made lists visibly reorder about a
+      // second after load.
+      const { dm, hash, state } = setup();
+      state.config.plan = { table: 'thread', where: [['done', '=', false]] } as any;
+
+      const ids = await (dm as any).buildRenderIds(state.config, [
+        ['thread:c', 1],
+        ['thread:a', 1],
+        ['thread:b', 1],
+      ]);
+
+      expect(ids.map(String)).toEqual(['thread:a', 'thread:b', 'thread:c']);
+    });
+
+    it('leaves an explicitly ordered query to the engine', async () => {
+      const { dm, state } = setup();
+      state.config.plan = { table: 'thread', orderBy: [['created', 'desc']] } as any;
+
+      const ids = await (dm as any).buildRenderIds(state.config, [
+        ['thread:c', 1],
+        ['thread:a', 1],
+      ]);
+
+      // Untouched: the engine applies the ORDER BY over the id set.
+      expect(ids.map(String)).toEqual(['thread:c', 'thread:a']);
+    });
+
+    it('preserves the slice order of a windowed query', async () => {
+      // For a window the id-set order IS the window: sorting it would reorder
+      // rows within the page.
+      const { dm, state } = setup();
+      state.config.surql = 'SELECT * FROM thread LIMIT 50 START 100;';
+      state.config.plan = { table: 'thread' } as any;
+
+      const ids = await (dm as any).buildRenderIds(state.config, [
+        ['thread:c', 1],
+        ['thread:a', 1],
+      ]);
+
+      expect(ids.map(String)).toEqual(['thread:c', 'thread:a']);
+    });
+  });
+
   describe('durability across a reload', () => {
     it('updateQueryRemoteArray latches membership and writes _00_window', async () => {
       const { dm, state, local, hash } = setup({ membershipKey: 'stable-key' });
