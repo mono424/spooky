@@ -166,6 +166,8 @@ export interface DatabaseState {
   tables: string[];
   /** Tables that exist on the remote DB (enumerated on demand). */
   remoteTables?: string[];
+  /** Local cache backend: 'surreal' (WASM) | 'sqlite' | 'custom'. */
+  engine?: string;
   tableData: Record<string, Record<string, unknown>[]>;
   schema?: Record<string, string[]>; // table -> column names
   /** Durability of the local store. `fallback: true` means persistence was

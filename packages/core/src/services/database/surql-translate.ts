@@ -18,8 +18,29 @@ import { stableKey } from './relation-resolver';
 
 export type SqlOp =
   | { kind: 'getById'; id: unknown; select?: string[]; value?: string }
-  | { kind: 'selectByIds'; ids: unknown[]; select?: string[]; orderBy?: OrderBy; value?: string }
-  | { kind: 'selectTable'; table: string; where?: WhereNode[]; orderBy?: OrderBy; select?: string[]; value?: string }
+  | {
+      kind: 'selectByIds';
+      ids: unknown[];
+      select?: string[];
+      orderBy?: OrderBy;
+      value?: string;
+      limit?: number;
+      start?: number;
+    }
+  | {
+      kind: 'selectTable';
+      table: string;
+      where?: WhereNode[];
+      orderBy?: OrderBy;
+      select?: string[];
+      value?: string;
+      limit?: number;
+      start?: number;
+    }
+  /** `SELECT count() FROM t [WHERE …] GROUP ALL` — one `{ count }` row. */
+  | { kind: 'count'; table: string; where?: WhereNode[] }
+  /** `INFO FOR DB` — the table list, in SurrealDB's `{ tables: {…} }` shape. */
+  | { kind: 'infoForDb' }
   | { kind: 'upsert'; id: unknown; data: Row; mode: 'replace' | 'merge' }
   | { kind: 'updateSet'; id: unknown; sets: SetClause[]; returnNone: boolean }
   | { kind: 'delete'; id: unknown }
@@ -95,6 +116,12 @@ function translateStatement(stmt: string, vars: Record<string, unknown>): SqlOp 
     return { kind: 'return', entries };
   }
 
+  // `INFO FOR DB` is the ONE INFO statement with a real answer here: the
+  // DevTools Database explorer enumerates tables with it. Answered from
+  // `sqlite_master` (see the engine) instead of being swallowed by the DDL
+  // noop below, which left the explorer with an empty table list.
+  if (/^INFO\s+FOR\s+DB(\s+STRUCTURE)?$/i.test(s)) return { kind: 'infoForDb' };
+
   // ---- schema / session DDL: no-ops on a schemaless engine --------------
   // SQLite creates tables lazily and has no namespaces/DB DDL, so DEFINE /
   // REMOVE / USE / INFO / RETURN statements are safely ignored.
@@ -110,11 +137,13 @@ function translateStatement(stmt: string, vars: Record<string, unknown>): SqlOp 
     return { kind: 'upsert', id: rid(vars[m[1]]), data: asRow(vars[m[2]]), mode: 'replace' };
   }
 
+  // The `ONLY` variants come from `surql`; the bare `UPDATE <id> MERGE $x` form
+  // (with a LITERAL record id) is what the DevTools row editor emits.
   m =
-    /^UPSERT\s+ONLY\s+\$(\w+)\s+MERGE\s+\$(\w+)$/i.exec(s) ||
-    /^UPDATE\s+ONLY\s+\$(\w+)\s+MERGE\s+\$(\w+)$/i.exec(s);
+    idRe(String.raw`^UPSERT\s+ONLY\s+%ID%\s+MERGE\s+\$(\w+)$`).exec(s) ||
+    idRe(String.raw`^UPDATE\s+(?:ONLY\s+)?%ID%\s+MERGE\s+\$(\w+)$`).exec(s);
   if (m) {
-    return { kind: 'upsert', id: rid(vars[m[1]]), data: asRow(vars[m[2]]), mode: 'merge' };
+    return { kind: 'upsert', id: idOperand(m[1], vars), data: asRow(vars[m[2]]), mode: 'merge' };
   }
 
   // CREATE ONLY $id SET a = ..., b = ...  (createSet / createMutation)
@@ -126,32 +155,46 @@ function translateStatement(stmt: string, vars: Record<string, unknown>): SqlOp 
   }
 
   // UPDATE $id SET a.b = $x, c = $y [RETURN NONE]
-  m = /^UPDATE\s+\$(\w+)\s+SET\s+(.+?)(\s+RETURN\s+NONE)?$/i.exec(s);
+  m = idRe(String.raw`^UPDATE\s+%ID%\s+SET\s+(.+?)(\s+RETURN\s+NONE)?$`).exec(s);
   if (m) {
     return {
       kind: 'updateSet',
-      id: rid(vars[m[1]]),
+      id: idOperand(m[1], vars),
       sets: parseSetClauses(m[2], vars),
       returnNone: !!m[3],
     };
   }
 
-  m = /^DELETE\s+\$(\w+)$/i.exec(s);
-  if (m) return { kind: 'delete', id: rid(vars[m[1]]) };
-
-  m = /^DELETE\s+([A-Za-z_]\w*)$/i.exec(s); // DELETE <table>
+  m = /^DELETE\s+([A-Za-z_]\w*)$/i.exec(s); // DELETE <table> (no `:` — a table)
   if (m) return { kind: 'deleteAll', table: m[1] };
 
+  // DELETE $id, and `DELETE <table>:<id>` from the DevTools row actions.
+  m = idRe(String.raw`^DELETE\s+%ID%$`).exec(s);
+  if (m) return { kind: 'delete', id: idOperand(m[1], vars) };
+
   // ---- reads ------------------------------------------------------------
-  // SELECT [VALUE] <proj> FROM ONLY $id
-  m = /^SELECT\s+(VALUE\s+)?(.+?)\s+FROM\s+ONLY\s+\$(\w+)$/i.exec(s);
+  // The paging tail (`LIMIT n [START m]`) is peeled off first so it can't be
+  // swallowed by the lazily-matched WHERE/ORDER BY groups below. Everything
+  // after this point sees a window-free statement.
+  const { head, limit, start } = peelWindow(s, vars);
+
+  // SELECT count() FROM <table> [WHERE ...] GROUP ALL — the row-count query the
+  // DevTools Database explorer pages with. GROUP ALL is required: without it
+  // SurrealDB counts per row, which is a different result this can't fake.
+  m = /^SELECT\s+count\(\)\s+FROM\s+([A-Za-z_]\w*)(?:\s+WHERE\s+(.+?))?\s+GROUP\s+ALL$/i.exec(head);
+  if (m) {
+    return { kind: 'count', table: m[1], where: m[2] ? parseWhere(m[2], vars) : undefined };
+  }
+
+  // SELECT [VALUE] <proj> FROM ONLY <id>
+  m = idRe(String.raw`^SELECT\s+(VALUE\s+)?(.+?)\s+FROM\s+ONLY\s+%ID%$`).exec(head);
   if (m) {
     const value = m[1] ? m[2].trim() : undefined;
-    return { kind: 'getById', id: rid(vars[m[3]]), select: projFields(m[2], !!m[1]), value };
+    return { kind: 'getById', id: idOperand(m[3], vars), select: projFields(m[2], !!m[1]), value };
   }
 
   // SELECT [VALUE] <proj> FROM $arrayParam
-  m = /^SELECT\s+(VALUE\s+)?(.+?)\s+FROM\s+\$(\w+)$/i.exec(s);
+  m = /^SELECT\s+(VALUE\s+)?(.+?)\s+FROM\s+\$(\w+)$/i.exec(head);
   if (m) {
     const value = m[1] ? m[2].trim() : undefined;
     return {
@@ -159,13 +202,16 @@ function translateStatement(stmt: string, vars: Record<string, unknown>): SqlOp 
       ids: (vars[m[3]] as unknown[]) ?? [],
       select: projFields(m[2], !!m[1]),
       value,
+      limit,
+      start,
     };
   }
 
   // SELECT <proj> FROM <table> [WHERE ...] [ORDER BY ...]
-  m = /^SELECT\s+(VALUE\s+)?(.+?)\s+FROM\s+([A-Za-z_]\w*)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?$/i.exec(
-    s
-  );
+  m =
+    /^SELECT\s+(VALUE\s+)?(.+?)\s+FROM\s+([A-Za-z_]\w*)(?:\s+WHERE\s+(.+?))?(?:\s+ORDER\s+BY\s+(.+?))?$/i.exec(
+      head
+    );
   if (m) {
     return {
       kind: 'selectTable',
@@ -174,6 +220,8 @@ function translateStatement(stmt: string, vars: Record<string, unknown>): SqlOp 
       orderBy: m[5] ? parseOrderBy(m[5]) : undefined,
       select: projFields(m[2], !!m[1]),
       value: m[1] ? m[2].trim() : undefined,
+      limit,
+      start,
     };
   }
 
@@ -181,6 +229,83 @@ function translateStatement(stmt: string, vars: Record<string, unknown>): SqlOp 
 }
 
 // ==================== clause parsers ====================
+
+/**
+ * Split a SELECT's trailing `LIMIT n [START m]` off its head.
+ *
+ * Peeled rather than folded into the SELECT regexes because those match WHERE
+ * and ORDER BY lazily: with the window left in place the WHERE group happily
+ * expands over `… LIMIT 20`, which is how `SELECT * FROM t LIMIT 20 START 0`
+ * ended up unmatched entirely.
+ *
+ * A tail sitting inside a string literal (`WHERE note = 'LIMIT 5'`) is left
+ * alone — an odd quote count in the head means the match is inside a string.
+ */
+function peelWindow(
+  stmt: string,
+  vars: Record<string, unknown>
+): { head: string; limit?: number; start?: number } {
+  let head = stmt;
+  let limit: number | undefined;
+  let start: number | undefined;
+
+  const peel = (re: RegExp): string | undefined => {
+    const m = re.exec(head);
+    if (!m) return undefined;
+    const before = head.slice(0, m.index);
+    if (countQuotes(before) % 2 !== 0) return undefined;
+    head = before;
+    return m[1];
+  };
+
+  // START is the outer token, so it comes off first.
+  const startTok = peel(/\s+START(?:\s+AT)?\s+(\$?\w+)\s*$/i);
+  const limitTok = peel(/\s+LIMIT(?:\s+BY)?\s+(\$?\w+)\s*$/i);
+  if (startTok !== undefined) start = numOperand(startTok, vars);
+  if (limitTok !== undefined) limit = numOperand(limitTok, vars);
+  return { head, limit, start };
+}
+
+function countQuotes(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "'" && s[i - 1] !== '\\') n++;
+  }
+  return n;
+}
+
+/** A `LIMIT`/`START` operand: a literal integer or a `$var` holding one. */
+function numOperand(token: string, vars: Record<string, unknown>): number | undefined {
+  const raw = token.startsWith('$') ? vars[token.slice(1)] : token;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/**
+ * A single-record operand: `$var` or a LITERAL `table:id`.
+ *
+ * A bare identifier deliberately does NOT match: in SurrealQL that is a table,
+ * and `UPDATE game MERGE $x` rewrites every row of `game` — a shape this
+ * vocabulary does not implement. Not matching means such a statement reaches
+ * the "unsupported SurrealQL" throw instead of quietly writing one row called
+ * `game`.
+ */
+const ID_TOKEN = String.raw`(\$\w+|[A-Za-z_]\w*:\S+)`;
+
+/** Build a statement regex, `%ID%` expanding to {@link ID_TOKEN}. */
+function idRe(pattern: string): RegExp {
+  return new RegExp(pattern.replace('%ID%', ID_TOKEN), 'i');
+}
+
+/**
+ * Resolve an {@link ID_TOKEN} match. Literals matter because the DevTools row
+ * editor inlines the id (`UPDATE game:abc MERGE $updates`) rather than binding
+ * it; `stableKey` treats that string and a `RecordId` identically downstream.
+ */
+function idOperand(token: string, vars: Record<string, unknown>): unknown {
+  const t = token.trim();
+  return t.startsWith('$') ? rid(vars[t.slice(1)]) : t;
+}
 
 function projFields(proj: string, isValue: boolean): string[] | undefined {
   const p = proj.trim();

@@ -906,13 +906,43 @@ export class SqliteCacheEngine implements LocalStore {
           select: op.select,
           orderBy: op.orderBy,
         });
+        // Windowed in JS, not SQL: the id list is already the whole result set,
+        // and its order is restored after the fetch (see selectByIds).
+        if (op.start !== undefined || op.limit !== undefined) {
+          const from = op.start ?? 0;
+          rows = rows.slice(from, op.limit === undefined ? undefined : from + op.limit);
+        }
         if (op.value) return rows.map((r) => r[op.value!]);
         return rows;
       }
       case 'selectTable': {
-        const rows = await this.rawSelectTable(op.table, op.where, op.orderBy);
+        const rows = await this.rawSelectTable(op.table, op.where, op.orderBy, {
+          limit: op.limit,
+          start: op.start,
+        });
         if (op.value) return rows.map((r) => r[op.value!]);
         return op.select ? rows.map((r) => project(r, op.select!)) : rows;
+      }
+      case 'count': {
+        await this.ensureTable(op.table);
+        const bind: unknown[] = [];
+        let sql = `SELECT COUNT(*) AS n FROM "${op.table}"`;
+        if (op.where && op.where.length > 0) sql += ` WHERE ${renderWhereSql(op.where, bind, {})}`;
+        const { rows } = await this.call<{ rows: { n: number }[] }>('exec', { sql, bind });
+        // `GROUP ALL` collapses to a single `{ count }` row on SurrealDB; match
+        // it exactly so callers can read `rows[0].count` on either engine.
+        return [{ count: rows?.[0]?.n ?? 0 }];
+      }
+      case 'infoForDb': {
+        const { rows } = await this.call<{ rows: { name: string }[] }>('exec', {
+          sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        });
+        // SurrealDB answers with the DEFINE statement per table. Nothing here
+        // parses it (the DevTools explorer only reads the keys), so a truthful
+        // schemaless stand-in beats inventing field definitions.
+        const tables: Record<string, string> = {};
+        for (const r of rows ?? []) tables[r.name] = `DEFINE TABLE ${r.name} SCHEMALESS`;
+        return { tables, analyzers: {}, functions: {}, params: {}, users: {} };
       }
       case 'upsert':
         await this.upsert(tableOf(op.id), op.id, op.data, op.mode);
@@ -1018,13 +1048,19 @@ export class SqliteCacheEngine implements LocalStore {
   private async rawSelectTable(
     table: string,
     where?: WhereNode[],
-    orderBy?: OrderBy
+    orderBy?: OrderBy,
+    window?: { limit?: number; start?: number }
   ): Promise<Row[]> {
     await this.ensureTable(table);
     const bind: unknown[] = [];
     let sql = `SELECT data FROM "${table}"`;
     if (where && where.length > 0) sql += ` WHERE ${renderWhereSql(where, bind, {})}`;
     if (orderBy && orderBy.length > 0) sql += renderOrderSql(orderBy);
+    // SQLite has no bare OFFSET, so a START without a LIMIT needs `LIMIT -1`
+    // (its documented "no limit" sentinel) to stay valid SQL.
+    if (window?.limit !== undefined) sql += ` LIMIT ${Number(window.limit)}`;
+    else if (window?.start !== undefined) sql += ' LIMIT -1';
+    if (window?.start !== undefined) sql += ` OFFSET ${Number(window.start)}`;
     return this.execRows(sql, bind);
   }
 

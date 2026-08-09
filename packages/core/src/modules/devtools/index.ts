@@ -370,6 +370,10 @@ export class DevToolsService implements StreamUpdateReceiver {
           ? this.localTables
           : this.schema.tables.map((t) => t.name),
         tableData: {},
+        // Which backend answers "Local". The Database explorer labels its source
+        // picker with it and explains translation failures against `sqlite`,
+        // whose SurrealQL vocabulary is a bounded subset.
+        engine: this.databaseService.engineKind ?? 'custom',
         // Durability of the local store. `fallback: true` means persistence was
         // requested but the dataset is actually sitting in RAM.
         storage: this.databaseService.storageHealth ?? { status: 'unknown', fallback: false },

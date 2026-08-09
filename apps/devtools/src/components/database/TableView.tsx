@@ -56,6 +56,19 @@ function ChevronRightIcon() {
 const PAGE_SIZES = [10, 20, 50, 100];
 
 /**
+ * The SQLite local engine speaks a bounded SurrealQL subset (see core's
+ * `surql-translate.ts`), so a statement it can't translate fails with a message
+ * that reads like a client bug. Say what it actually means, and where the same
+ * query does work.
+ */
+function explainQueryError(msg: string, source: 'local' | 'remote'): string {
+  if (source === 'local' && msg.includes('unsupported SurrealQL for translation')) {
+    return `${msg} — the local store is SQLite, which understands only a subset of SurrealQL. Switch the source to Remote to run this query.`;
+  }
+  return msg;
+}
+
+/**
  * SurrealDB can return different formats depending on version and transport:
  * [{ status: 'OK', result: [...] }], [[...]], a bare array of records, or a
  * single { result: ... } object. Normalize all of them to a plain array.
@@ -92,8 +105,12 @@ interface TableViewProps {
 }
 
 export function TableView(props: TableViewProps) {
-  const { selectedTable, setSelectedTable, runQuery, dbRefreshNonce, isFetchingRows, setFetchingRows } =
+  const { state, selectedTable, setSelectedTable, runQuery, dbRefreshNonce, isFetchingRows, setFetchingRows } =
     useDevTools();
+
+  // 'surreal' | 'sqlite' | 'custom'; absent against a page whose core predates
+  // the field, in which case the picker just reads "Local" as before.
+  const localEngine = () => state.database.engine;
   // Filter and source are now props
 
   // Row inspected in the bottom JSON pane
@@ -168,7 +185,7 @@ export function TableView(props: TableViewProps) {
           if (!msg) {
             msg = `EMPTY ERROR OBJ: ${String(err)} type=${typeof err}`;
           }
-          props.onError?.(msg);
+          props.onError?.(explainQueryError(msg, currentSource));
           setData([]);
         });
       const countPromise = runQuery(`SELECT count() FROM ${table} GROUP ALL`, currentSource)
@@ -358,10 +375,14 @@ export function TableView(props: TableViewProps) {
         />
         <select
           class="db-source-select"
+          title={`Local store: ${localEngine() ?? 'unknown engine'}`}
           value={props.source}
           onChange={(e) => props.setSource(e.currentTarget.value as 'local' | 'remote')}
         >
-          <option value="local">Local</option>
+          {/* Naming the engine matters here: SQLite and SurrealDB-WASM answer
+              the same query differently (bounded SurrealQL, link fields as
+              strings), so "Local" alone hides which one you are looking at. */}
+          <option value="local">{localEngine() ? `Local (${localEngine()})` : 'Local'}</option>
           <option value="remote">Remote</option>
         </select>
         <Show when={selectedTable()}>
