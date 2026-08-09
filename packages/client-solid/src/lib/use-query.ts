@@ -159,7 +159,29 @@ export function useQuery<
 
   const sp00ky = db.getSp00ky();
 
+  /**
+   * Registration can fail — the canonical case is the SSP answering 503
+   * NOT_READY while it bootstraps. Nothing here used to catch that: the
+   * rejection escaped as an unhandled promise, `isFetched` stayed false, and
+   * `isLoading()` therefore stayed true FOREVER, which is what a spinner that
+   * never resolves actually was. Surface it as `error()` instead; the sync
+   * scheduler retries the registration underneath, so a transient failure
+   * still recovers on its own.
+   */
   const initQuery = async (
+    query: FinalQuery<S, TableName, T, RelatedFields, IsOne, Sp00kyQueryResultPromise>,
+    myRun: number
+  ) => {
+    try {
+      await subscribeQuery(query, myRun);
+    } catch (err) {
+      // A superseded run's failure is not this subscription's problem.
+      if (myRun !== runId) return;
+      setError(err instanceof Error ? err : new Error(String(err)));
+    }
+  };
+
+  const subscribeQuery = async (
     query: FinalQuery<S, TableName, T, RelatedFields, IsOne, Sp00kyQueryResultPromise>,
     myRun: number
   ) => {
@@ -245,7 +267,10 @@ export function useQuery<
     const myRun = ++runId;
     teardownActive();
     setIsFetched(false);
-    initQuery(query, myRun);
+    // A new identity starts clean: a previous identity's failure must not keep
+    // this one out of its loading state.
+    setError(undefined);
+    void initQuery(query, myRun);
   });
 
   // Tear down the live subscription when the hook's owner is disposed. Registered
