@@ -500,7 +500,19 @@ fn lower_where_to_plan(scan: &Value, expr: &Value) -> Value {
                 base = json!({ "op": "filter", "predicate": pred, "input": base });
             }
             for sub in subs {
-                base = semijoin_for_subquery(&base, &sub);
+                // `where_contains_subquery` is recursive, so a conjunct here is
+                // not necessarily an `in_subquery` LEAF — it can be a nested
+                // and/or that merely contains one. Handing such a node to
+                // `semijoin_for_subquery` read `table`/`left`/`proj` off a node
+                // that has none, yielding `Scan{table: ""}` and silently
+                // dropping the rest of the branch: whitepawn's
+                // `owner = $auth.id OR database INSIDE (…)` permission admitted
+                // NOTHING, so a table with 70 readable rows materialised empty.
+                base = if sub.get("type").and_then(|t| t.as_str()) == Some("in_subquery") {
+                    semijoin_for_subquery(&base, &sub)
+                } else {
+                    lower_where_to_plan(&base, &sub)
+                };
             }
             base
         }
@@ -644,8 +656,15 @@ fn lower_predicate_to_plan(scan: &Value, expr: &Value, table: &str, links: &Link
                 .and_then(|p| p.as_array())
                 .cloned()
                 .unwrap_or_default();
-            let (markers, preds): (Vec<Value>, Vec<Value>) =
+            // Three buckets, not two: leaf markers become SemiJoins, nested
+            // and/or nodes that CONTAIN a marker must recurse (folding them into
+            // the flat predicate would emit an `in_subquery` marker inside a
+            // `Predicate`, which cannot deserialize), and the rest is one Filter.
+            let (markers, rest): (Vec<Value>, Vec<Value>) =
                 list.into_iter().partition(|p| is_marker_leaf(p, table, links));
+            let (nested, preds): (Vec<Value>, Vec<Value>) = rest
+                .into_iter()
+                .partition(|p| contains_marker(p, table, links));
             let mut base = scan.clone();
             if !preds.is_empty() {
                 let pred = if preds.len() == 1 {
@@ -657,6 +676,9 @@ fn lower_predicate_to_plan(scan: &Value, expr: &Value, table: &str, links: &Link
             }
             for m in markers {
                 base = semijoin_for_subquery(&base, &to_marker(&m, table, links));
+            }
+            for n in nested {
+                base = lower_predicate_to_plan(&base, &n, table, links);
             }
             base
         }
@@ -677,6 +699,27 @@ fn predicate_contains_link_leaf(expr: &Value, table: &str, links: &LinkMap) -> b
             .map(|list| list.iter().any(|p| predicate_contains_link_leaf(p, table, links)))
             .unwrap_or(false),
         _ => is_link_leaf(expr, table, links),
+    }
+}
+
+/// True if `expr` contains a marker leaf anywhere in its and/or tree — the
+/// recursive counterpart of [`is_marker_leaf`], used to decide whether a
+/// conjunct needs plan lowering rather than flat-predicate treatment.
+fn contains_marker(
+    expr: &Value,
+    table: &str,
+    links: &HashMap<String, HashMap<String, String>>,
+) -> bool {
+    if is_marker_leaf(expr, table, links) {
+        return true;
+    }
+    match expr.get("type").and_then(|t| t.as_str()) {
+        Some("and") | Some("or") => expr
+            .get("predicates")
+            .and_then(|p| p.as_array())
+            .map(|list| list.iter().any(|p| contains_marker(p, table, links)))
+            .unwrap_or(false),
+        _ => false,
     }
 }
 

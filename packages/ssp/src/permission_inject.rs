@@ -222,13 +222,47 @@ fn build_injection(
         // subplan over `Scan{table}` — compose it whole (see PermInjection).
         plan @ (OperatorPlan::SemiJoin { .. }
         | OperatorPlan::Union { .. }
-        | OperatorPlan::Distinct { .. }) => Ok(Some(PermInjection::Plan(plan))),
+        | OperatorPlan::Distinct { .. }) => {
+            // A scan with no table name can never match a row, so a permission
+            // containing one silently admits NOTHING — the view materialises
+            // empty and every client renders an empty list with no error
+            // anywhere. That cost two debugging sessions on whitepawn's
+            // `statistics` table; refuse it at registration instead.
+            if let Some(bad) = scans_unnamed_table(&plan) {
+                return Err(anyhow!(
+                    "permission for `{table}` lowered to a scan of an unnamed table                      ({bad}) — it would admit no rows at all"
+                ));
+            }
+            Ok(Some(PermInjection::Plan(plan)))
+        }
         OperatorPlan::Filter { .. } => Err(anyhow!(
             "permission for `{table}` produced a non-flat plan (likely identifier-vs-identifier comparison)"
         )),
         _ => Err(anyhow!(
             "permission for `{table}` produced a non-filter plan (likely a join or subquery)"
         )),
+    }
+}
+
+/// Find a `Scan` with an empty table name anywhere in `plan`. Such a scan is
+/// always empty at runtime, so any permission built on one denies everything —
+/// the failure mode this guards is silence, not an error.
+fn scans_unnamed_table(plan: &OperatorPlan) -> Option<String> {
+    match plan {
+        OperatorPlan::Scan { table } => {
+            if table.trim().is_empty() {
+                Some("Scan{table: \"\"}".to_string())
+            } else {
+                None
+            }
+        }
+        OperatorPlan::Filter { input, .. }
+        | OperatorPlan::Distinct { input }
+        | OperatorPlan::Project { input, .. } => scans_unnamed_table(input),
+        OperatorPlan::SemiJoin { left, right, .. } | OperatorPlan::Union { left, right } => {
+            scans_unnamed_table(left).or_else(|| scans_unnamed_table(right))
+        }
+        _ => None,
     }
 }
 
@@ -537,6 +571,65 @@ mod tests {
         )]);
         inject_permissions(&mut plan, &perms, None).unwrap();
         assert!(matches!(plan, OperatorPlan::SemiJoin { .. }), "INSIDE lowered to SemiJoin");
+    }
+
+    #[test]
+    fn or_of_flat_and_subquery_keeps_both_branches() {
+        // whitepawn's `statistics` permission, verbatim. 70 rows owned by the
+        // caller materialised as ZERO on staging, so the `owner = $auth.id`
+        // branch is being lost somewhere in the OR.
+        let mut plan = OperatorPlan::Scan { table: "statistics".into() };
+        let perms = perms_with(&[(
+            "statistics",
+            "$access = 'account' AND (owner = $auth.id OR database INSIDE \
+             (SELECT VALUE collection FROM collection_share WHERE user = $auth.id AND role = 'editor'))",
+        )]);
+        let params = json!({"auth": {"id": "user:a"}, "access": "account"});
+        inject_permissions(&mut plan, &perms, Some(&params))
+            .expect("whitepawn's statistics permission must lower");
+
+        // Both OR branches must survive. Before the fix the AND branch handed
+        // the nested `or` node straight to `semijoin_for_subquery`, which read
+        // `table` off a node that has none — producing `Scan{table: ""}` and
+        // dropping `owner = $auth.id` entirely, so the permission admitted no
+        // rows at all.
+        let rendered = format!("{plan:?}");
+        assert!(
+            rendered.contains("collection_share"),
+            "subquery branch lost its source table: {rendered}"
+        );
+        assert!(
+            !rendered.contains("table: \"\""),
+            "permission lowered to a scan of an unnamed table: {rendered}"
+        );
+        assert!(
+            rendered.contains("Union"),
+            "the OR must lower to a Union of both branches: {rendered}"
+        );
+        assert!(
+            rendered.contains("\"owner\""),
+            "the `owner = $auth.id` branch must survive: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_permission_that_admits_nothing_is_rejected() {
+        // The safety net for the class of bug above: whatever the lowering
+        // does, a permission that can only ever match zero rows must fail
+        // registration loudly rather than install and render empty lists.
+        let bad = OperatorPlan::SemiJoin {
+            left: Box::new(OperatorPlan::Scan { table: "statistics".into() }),
+            right: Box::new(OperatorPlan::Scan { table: String::new() }),
+            on: crate::operator::plan::JoinCondition {
+                left_field: Path::new("id"),
+                right_field: Path::new("id"),
+            },
+        };
+        assert!(scans_unnamed_table(&bad).is_some(), "walker must spot the empty scan");
+        assert!(
+            scans_unnamed_table(&OperatorPlan::Scan { table: "statistics".into() }).is_none(),
+            "a named scan is fine"
+        );
     }
 
     #[test]
