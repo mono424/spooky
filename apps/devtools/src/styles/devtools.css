@@ -2133,29 +2133,149 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* E2E heartbeat: sparkline in the stack row + toolbar badge.
-   Hand-rolled bars, matching the .tb-bar idiom in the timing views — the
-   panel deliberately ships no charting library. */
-.hb-spark {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 1px;
-  height: 14px;
-  padding-left: var(--sys-spacing-1);
+/* E2E heartbeat: latency chart in the stack row + toolbar badge.
+   Hand-rolled SVG — the panel deliberately ships no charting library. */
+.hb-chart {
+  grid-column: 1 / -1;
+  margin-top: var(--sys-spacing-2);
+  padding: var(--sys-spacing-2);
+  border: 1px solid var(--sys-color-divider);
+  border-radius: var(--sys-shape-corner-small, 4px);
+  background: var(--sys-color-surface-variant, rgba(127, 127, 127, 0.04));
 }
 
-.hb-spark-bar {
-  display: block;
-  width: 2px;
-  min-height: 1px;
-  border-radius: 1px;
-  background: var(--sys-color-primary);
-  opacity: 0.75;
+.hb-chart-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sys-spacing-2);
+  margin-bottom: var(--sys-spacing-1);
 }
 
-.hb-spark-bar.failed {
+.hb-chart-title {
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.hb-chart-now {
+  margin-left: auto;
+  color: var(--sys-color-on-surface);
+  font-family: var(--sys-typescale-monospace-font, monospace);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.hb-chart-now .muted {
+  color: var(--sys-color-text-disabled);
+  font-weight: 400;
+}
+
+.hb-chart-flag {
+  padding: 1px 5px;
+  border-radius: 999px;
   background: var(--sys-color-error);
-  opacity: 1;
+  color: var(--sys-color-on-error, #fff);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+/* Non-uniform scaling: the plot stretches to the row width while strokes keep
+   their pixel weight via vector-effect on the shapes themselves. */
+.hb-chart-plot {
+  display: block;
+  width: 100%;
+  height: 44px;
+  overflow: visible;
+}
+
+.hb-chart-grid {
+  stroke: var(--sys-color-divider);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.hb-chart-line {
+  fill: none;
+  stroke: var(--sys-color-primary);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.hb-chart-area {
+  stroke: none;
+}
+
+.hb-fill-top {
+  stop-color: var(--sys-color-primary);
+  stop-opacity: 0.28;
+}
+
+.hb-fill-bottom {
+  stop-color: var(--sys-color-primary);
+  stop-opacity: 0.02;
+}
+
+/* An outage reads as a region, not as a row of separate events. */
+.hb-chart-fail-band {
+  fill: var(--sys-color-error);
+  opacity: 0.12;
+}
+
+.hb-chart-fail-edge {
+  stroke: var(--sys-color-error);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  opacity: 0.7;
+}
+
+.hb-chart-latest {
+  stroke: var(--sys-color-primary);
+  stroke-width: 1.5;
+  opacity: 0.5;
+}
+
+.hb-chart.degraded .hb-chart-latest {
+  stroke: var(--sys-color-error);
+}
+
+/* A stale window is history, not a reading — mute it so it cannot be mistaken
+   for the current state. */
+.hb-chart.degraded .hb-chart-line {
+  stroke: var(--sys-color-error);
+}
+
+.hb-chart.degraded .hb-fill-top {
+  stop-color: var(--sys-color-error);
+  stop-opacity: 0.18;
+}
+
+.hb-chart.degraded .hb-fill-bottom {
+  stop-color: var(--sys-color-error);
+  stop-opacity: 0.02;
+}
+
+.hb-chart-foot,
+.hb-chart-empty {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sys-spacing-2);
+  margin-top: 2px;
+  color: var(--sys-color-on-surface-subtle);
+  font-size: 10px;
+}
+
+.hb-chart-empty {
+  justify-content: center;
+  padding: var(--sys-spacing-3) 0;
+  color: var(--sys-color-text-disabled);
+}
+
+.hb-chart-scale {
+  font-variant-numeric: tabular-nums;
 }
 
 .hb-badge {

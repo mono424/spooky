@@ -219,10 +219,13 @@ export function VersionsTab() {
                       </span>
                     )}
                   </For>
-                  <Show when={e.heartbeat?.enabled && e.heartbeat}>
-                    {(hb) => <HeartbeatSparkline heartbeat={hb()} />}
-                  </Show>
                 </div>
+                {/* Row-level, not a fact: the chart spans all three columns
+                    (`grid-column: 1 / -1`), which only works as a direct child
+                    of the grid row. */}
+                <Show when={e.heartbeat?.enabled && e.heartbeat}>
+                  {(hb) => <HeartbeatSparkline heartbeat={hb()} />}
+                </Show>
               </div>
             )}
           </For>
