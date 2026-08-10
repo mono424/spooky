@@ -65,6 +65,31 @@ Full syntax, layering rules and the auto-injected variables are on
 | `port` | Port your service listens on inside the container. |
 | `timeout` | Per-request timeout in seconds (default `10`). |
 | `timeoutOverridable` | Let the client override `timeout` per call. |
+| `resources` | CPU, memory and disk for the container (see below). |
+
+## Resources
+
+`deploy.resources` sets the container's CPU, memory and disk. Omit it and the app gets the
+defaults; set only the fields you want to change.
+
+<CodeBlock fileName="sp00ky.yml" code={resourcesCode} lang="yaml" />
+
+| Field | Unit | Default | Minimum |
+| --- | --- | --- | --- |
+| `vcpus` | cores | `1` | `1` |
+| `memory` | MB | `512` | `128` |
+| `disk` | GB | `5` | `1` |
+
+Below a minimum, `spky deploy` fails validation rather than creating a container the kernel would
+kill on startup. The same block works for frontend apps.
+
+<Note>
+Resources apply when the container is created, so a change takes effect on the next `spky deploy` —
+not on the running container.
+</Note>
+
+This sizes **your** apps. The database, scheduler and SSP are sized by the platform from your plan
+and aren't configurable in `sp00ky.yml`.
 
 ## Hosting it yourself
 
@@ -136,6 +161,18 @@ export const deployCode = `apps:
       dockerfile: ../api/Dockerfile
       port: 3660
       timeout: 30`;
+
+export const resourcesCode = `apps:
+  api:
+    type: backend
+    # …
+    deploy:
+      dockerfile: ../api/Dockerfile
+      port: 3660
+      resources:
+        vcpus: 2
+        memory: 2048
+        disk: 10`;
 
 export const externalCode = `apps:
   api:
