@@ -146,7 +146,7 @@ pub fn generate_sp00ky_events(
             // doesn't filter or join on CRDT contents anyway — its job is
             // membership tracking — so omitting them keeps the payload
             // clean and saves bandwidth on every keystroke debounce push.
-            if has_annotation(&field_def.annotations, "crdt") {
+            if has_annotation(&field_def.annotations, "crdt") || has_annotation(&field_def.annotations, "nosync") {
                 continue;
             }
             match field_def.field_type {
@@ -211,7 +211,7 @@ pub fn generate_sp00ky_events(
             let field_def = table.fields.get(field_name).unwrap();
             // See the matching skip in the mutation event above for why
             // CRDT bytes don't go through the JSON ingest payload.
-            if has_annotation(&field_def.annotations, "crdt") {
+            if has_annotation(&field_def.annotations, "crdt") || has_annotation(&field_def.annotations, "nosync") {
                 continue;
             }
             match field_def.field_type {

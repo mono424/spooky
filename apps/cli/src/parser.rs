@@ -133,6 +133,17 @@ impl SchemaParser {
             }
         }
 
+        for ((table_name, field_name), anns) in crate::annotations::extract_field_annotations(content) {
+            if let Some(table) = self.tables.get_mut(&table_name) {
+                if let Some(field) = table.fields.get_mut(&field_name) {
+                    field.annotations = anns.clone();
+                    if crate::annotations::has_annotation(&anns, "nosync") {
+                        field.should_strip = true;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 

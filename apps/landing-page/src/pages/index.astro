@@ -312,6 +312,24 @@ import { basePath } from '../config/nav';
           title="sp00ky Demo"
           allowfullscreen
         ></iframe>
+        <!-- Shown instead of the iframe while the demo host is unreachable. A
+             visitor seeing our own "temporarily unavailable" note is far better
+             than one seeing a browser-level security warning. -->
+        <div
+          id="tryout-unavailable"
+          class="hidden flex-1 w-full rounded-xl border border-white/10 bg-black items-center justify-center p-8"
+        >
+          <div class="max-w-md text-center">
+            <h3 class="text-lg font-semibold text-white mb-2">The live demo is temporarily offline</h3>
+            <p class="text-sm text-text-tertiary mb-6">
+              We're restoring it. In the meantime you can run the same app locally in about a
+              minute.
+            </p>
+            <code class="inline-block px-3 py-2 rounded-lg bg-white/10 text-sm text-white"
+              >npx @spooky-sync/cli@canary create</code
+            >
+          </div>
+        </div>
       </div>
     </div>
 
@@ -337,14 +355,33 @@ import { basePath } from '../config/nav';
       }
 
       // Try sp00ky overlay
+      //
+      // The demo host is named once, here. `DEMO_ENABLED` is the switch to flip
+      // when the demo cannot be embedded — currently Cloudflare serves a
+      // "Suspected Phishing" interstitial for this hostname, so embedding it
+      // would show every visitor a security warning inside our own page. Flip
+      // back to true once that clears (or once the demo moves to a hostname
+      // with real reputation, which is the durable fix).
+      const DEMO_URL = 'https://threads.stg.spky.cloud/';
+      const DEMO_ENABLED = false;
+
       const overlay = document.getElementById('tryout-overlay');
       const iframe = document.getElementById('tryout-iframe') as HTMLIFrameElement;
+      const unavailable = document.getElementById('tryout-unavailable');
       const closeBtn = document.getElementById('tryout-close');
       const backdrop = document.getElementById('tryout-backdrop');
 
       function openTryout() {
         if (!overlay || !iframe) return;
-        iframe.src = 'https://threads.stg.spky.cloud/';
+        if (DEMO_ENABLED) {
+          iframe.src = DEMO_URL;
+          iframe.classList.remove('hidden');
+          unavailable?.classList.add('hidden');
+        } else {
+          iframe.classList.add('hidden');
+          unavailable?.classList.remove('hidden');
+          unavailable?.classList.add('flex');
+        }
         overlay.classList.remove('hidden');
         document.body.style.overflow = 'hidden';
       }

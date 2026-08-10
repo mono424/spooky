@@ -36,33 +36,33 @@ table or field is generated and synced.
 
 | Descriptor | Placement | Effect |
 | --- | --- | --- |
-| `-- @nosync` | above a `DEFINE TABLE` | Server-only table. Excluded from sync entirely (see below). |
+| `-- @nosync` | above a `DEFINE TABLE` or `DEFINE FIELD` | Server-only table or field. Excluded from sync entirely (see below). |
 | `-- @crdt text` | above a `DEFINE FIELD` | Marks a collaborative text field backed by a Loro CRDT. See [CRDT fields](/docs/client/crdt). |
 | `-- @cursor` | above a `DEFINE FIELD` (with `@crdt`) | Stores per-session cursors alongside the CRDT snapshot. |
 | `-- @parent` | suffix on a `DEFINE FIELD ... TYPE record<...>` | Marks the parent side of a relationship; written automatically from the auth context, never by client code. |
 
 <CodeBlock code={annotationsCode} lang="sql" />
 
-### Keeping a table off the client (`@nosync`)
+### Keeping a table or field off the client (`@nosync`)
 
-Put `-- @nosync` on the line above a `DEFINE TABLE` to make it **server-only**, useful for audit
-logs, bookkeeping, or anything that should live in your database but never reach a browser.
+Put `-- @nosync` on the line above a `DEFINE TABLE` or `DEFINE FIELD` to make it **server-only**. This is useful for audit
+logs, bookkeeping, internal secrets, or anything that should live in your database but never reach a browser.
 
 <CodeBlock code={nosyncCode} lang="sql" />
 
-A `@nosync` table is:
+A `@nosync` table or field is:
 
 - **Omitted from generated types** (TypeScript / Dart / JSON Schema).
-- **Omitted from relations**: any `record<...>` field on another table pointing at it is dropped
+- **Omitted from relations**: any `record<...>` field on another table pointing at a `@nosync` table is dropped
   from the generated relationships.
 - **Never synced**: no sync events are emitted, so nothing flows to the scheduler or SSP.
 - **Excluded from the scheduler snapshot** and from SSP bootstrap.
 - **Still stored in the main database, and still included in backups.**
 
 <Warning title="Not the same as locking permissions">
-  `@nosync` is distinct from `PERMISSIONS FOR select WHERE false`. A permission-locked table is
+  `@nosync` is distinct from `PERMISSIONS FOR select WHERE false`. A permission-locked table or field is
   still synced (it shows up in generated types and the snapshot, it just can't be read); `@nosync`
-  removes the table from sync altogether. Reach for `@nosync` when a table should never leave the
+  removes the table or field from sync altogether. Reach for `@nosync` when data should never leave the
   server.
 </Warning>
 
@@ -124,4 +124,9 @@ DEFINE TABLE audit_log SCHEMALESS;`;
 export const nosyncCode = `-- @nosync
 DEFINE TABLE audit_log SCHEMALESS;
 DEFINE FIELD action ON TABLE audit_log TYPE string;
-DEFINE FIELD at     ON TABLE audit_log TYPE datetime VALUE time::now();`;
+DEFINE FIELD at     ON TABLE audit_log TYPE datetime VALUE time::now();
+
+DEFINE TABLE user SCHEMALESS;
+DEFINE FIELD username ON TABLE user TYPE string;
+-- @nosync
+DEFINE FIELD secret_token ON TABLE user TYPE string;`;
