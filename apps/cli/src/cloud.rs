@@ -1432,6 +1432,47 @@ fn verify_data_plane(db_url: &str, ns: &str, db: &str) -> Result<(), String> {
 ///
 /// Idempotent — all DEFINE statements use OVERWRITE.
 #[allow(clippy::too_many_arguments)]
+/// What a schema-apply pass could NOT do.
+///
+/// Empty means everything landed. Anything else has to reach the operator and
+/// the exit code: a deploy that prints success while the internal schema was
+/// skipped is exactly how a broken tenant looks healthy. The meta tables and
+/// per-table events the scheduler and SSP bootstrap against are simply absent,
+/// and the first symptom is a client that hangs or renders empty hours later,
+/// with nothing in the deploy log to connect it to.
+#[derive(Default)]
+pub(crate) struct SchemaApplyFailures {
+    steps: Vec<String>,
+}
+
+impl SchemaApplyFailures {
+    fn record(&mut self, step: &str, err: impl std::fmt::Debug) {
+        self.steps.push(format!("{step} failed: {err:?}"));
+    }
+
+    fn skipped(&mut self, why: &str) {
+        self.steps.push(why.to_string());
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+
+    /// Print a block an operator cannot scroll past, naming the consequence.
+    pub(crate) fn report(&self, what: &str) {
+        if self.is_empty() {
+            return;
+        }
+        println!();
+        println!("  ✖ {what}: the internal Sp00ky schema did NOT fully apply.");
+        for step in &self.steps {
+            println!("      - {step}");
+        }
+        println!("    The tenant is now running an out-of-date internal schema.");
+        println!("    Re-run `spky deploy --force-schema` once the cause is fixed.");
+    }
+}
+
 fn apply_remote_fns_and_internal_schema(
     db_url: &str,
     db_password: &str,
@@ -1440,7 +1481,8 @@ fn apply_remote_fns_and_internal_schema(
     config_path: &std::path::Path,
     client: &mut CloudClient,
     pid: &str,
-) {
+) -> SchemaApplyFailures {
+    let mut failures = SchemaApplyFailures::default();
     let resolved = config.resolved_surrealdb();
 
     let surreal_client = if db_password.is_empty() {
@@ -1466,7 +1508,8 @@ fn apply_remote_fns_and_internal_schema(
     // SurrealQL `http::` call. See `derive_fn_endpoint`.
     let Some(fn_endpoint) = derive_fn_endpoint(&mode, deployment_status) else {
         println!("  ▸ Warning: could not derive scheduler endpoint; skipping remote functions + internal schema.");
-        return;
+        failures.skipped("could not derive the scheduler endpoint, so nothing was applied");
+        return failures;
     };
     let auth_secret = deployment_status["sp00ky_auth_secret"]
         .as_str()
@@ -1489,6 +1532,7 @@ fn apply_remote_fns_and_internal_schema(
     if let Err(e) = crate::migrate::apply_remote_functions_if_changed(&surreal_client, &functions_sql)
     {
         println!("  ▸ Warning: failed to apply remote functions: {:?}", e);
+        failures.record("remote functions", &e);
     }
 
     let int_schema = config.resolved_schema();
@@ -1504,9 +1548,13 @@ fn apply_remote_fns_and_internal_schema(
             Some(&auth_secret),
         ) {
             Ok(()) => {}
-            Err(e) => println!("  ▸ Warning: failed to apply internal schema: {:?}", e),
+            Err(e) => {
+                println!("  ▸ Warning: failed to apply internal schema: {:?}", e);
+                failures.record("internal schema", &e);
+            }
         }
     }
+    failures
 }
 
 /// Version of a frontend app, read from the `version` field of the
@@ -1939,6 +1987,10 @@ pub fn deploy(
 
     println!();
     println!("Deploying project '{}'...", slug);
+
+    // Collected rather than printed-and-forgotten: this decides the exit code,
+    // so a deploy cannot report success while the internal schema was skipped.
+    let mut schema_failures = SchemaApplyFailures::default();
 
     // Load sp00ky.yml and find deployable apps
     let config_path = std::env::current_dir()?.join("sp00ky.yml");
@@ -2962,7 +3014,7 @@ pub fn deploy(
                                 println!("  ▸ No migrations directory found, skipping.");
                             }
 
-                            apply_remote_fns_and_internal_schema(
+                            schema_failures = apply_remote_fns_and_internal_schema(
                                 db_url,
                                 db_password,
                                 &status_data,
@@ -3021,7 +3073,7 @@ pub fn deploy(
                                     println!("  ▸ Data plane not responding; re-applying remote functions...");
                                     let db_password =
                                         status["surrealdb_password"].as_str().unwrap_or("");
-                                    apply_remote_fns_and_internal_schema(
+                                    let reapply = apply_remote_fns_and_internal_schema(
                                         db_url,
                                         db_password,
                                         &status,
@@ -3030,6 +3082,9 @@ pub fn deploy(
                                         &mut client,
                                         &pid,
                                     );
+                                    if !reapply.is_empty() {
+                                        schema_failures = reapply;
+                                    }
                                     if let Err(e) = verify_data_plane(
                                         db_url,
                                         &resolved.namespace,
@@ -3114,10 +3169,151 @@ pub fn deploy(
         println!("Applying schema to the SSP node...");
         if let Err(e) = push_schema_inner(&mut client, &slug, &pid) {
             println!("  ▸ Warning: schema push failed: {} (run `spky push` to retry)", e);
+            schema_failures.record("SSP node schema push", &e);
         }
     }
 
+    // A schema that did not apply is a failed deploy, however healthy the
+    // containers look. Reporting success here is what let a tenant run for
+    // weeks on a stale internal schema, with the first symptom showing up in
+    // the app instead of in this log.
+    if !schema_failures.is_empty() {
+        schema_failures.report("Deploy");
+        bail!("deploy completed but the internal schema did not apply");
+    }
+
     Ok(())
+}
+
+/// Name the case where the deployed components do not all run the same release.
+///
+/// The table already prints every version, but reading skew off three columns is
+/// a thing nobody does until something is broken. That is how a tenant ran an
+/// SSP many releases behind its client for weeks: the server-side fix for a
+/// permission that admitted no rows was published, the client picked it up, and
+/// the SSP that actually evaluates permissions never moved — so analytics stayed
+/// empty and every version reading in the deploy looked plausible.
+///
+/// Compares only what the components report about themselves; a component that
+/// did not answer is listed as unknown rather than assumed to match.
+/// The roles whose release must move together for the sync path to agree.
+const CORE_ROLES: [&str; 2] = ["ssp", "scheduler"];
+
+/// Outcome of the skew check, separated from printing so it can be tested.
+#[derive(Debug, PartialEq)]
+pub(crate) struct VersionSkew {
+    /// (role, reported version) for every core role that answered.
+    pub reported: Vec<(String, String)>,
+    /// Core roles that did not report a version at all.
+    pub unknown: Vec<String>,
+    /// True when the reported versions and the CLI's own are not all equal.
+    pub skewed: bool,
+}
+
+pub(crate) fn detect_version_skew(
+    component_versions: &std::collections::HashMap<String, (String, String)>,
+    cli_version: &str,
+) -> VersionSkew {
+    let mut reported: Vec<(String, String)> = Vec::new();
+    let mut unknown: Vec<String> = Vec::new();
+    for role in CORE_ROLES {
+        match component_versions.get(role).map(|(v, _)| v.as_str()) {
+            Some(v) if v != "-" && !v.is_empty() => {
+                reported.push((role.to_string(), v.to_string()))
+            }
+            _ => unknown.push(role.to_string()),
+        }
+    }
+
+    // Only compare what actually answered: an unreported role is called out
+    // separately rather than counted as agreeing.
+    let skewed = reported.iter().any(|(_, v)| v != cli_version);
+
+    VersionSkew { reported, unknown, skewed }
+}
+
+fn report_version_skew(
+    component_versions: &std::collections::HashMap<String, (String, String)>,
+) {
+    let cli_version = env!("CARGO_PKG_VERSION");
+    let skew = detect_version_skew(component_versions, cli_version);
+
+    if skew.skewed {
+        println!();
+        println!("  \x1b[33m▲ Version skew:\x1b[0m components are not on the same release.");
+        println!("      {:<26} {}", "cli (this deploy's target)", cli_version);
+        for (role, v) in &skew.reported {
+            let marker = if v == cli_version { "" } else { "  ← does not match" };
+            println!("      {role:<26} {v}{marker}");
+        }
+        println!("    A server-side fix is only live once ssp + scheduler move too.");
+        println!("    Run `spky deploy --upgrade` to bring them to {cli_version}.");
+    }
+
+    if !skew.unknown.is_empty() {
+        println!();
+        println!(
+            "  \x1b[33m▲ Could not read the running version for: {}\x1b[0m",
+            skew.unknown.join(", ")
+        );
+        println!("    Unknown is not the same as up to date — treat skew as possible.");
+    }
+}
+
+#[cfg(test)]
+mod version_skew_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn versions(pairs: &[(&str, &str)]) -> HashMap<String, (String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), (v.to_string(), "running".to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn no_skew_when_everything_matches() {
+        let v = versions(&[("ssp", "1.2.3"), ("scheduler", "1.2.3")]);
+        let skew = detect_version_skew(&v, "1.2.3");
+        assert!(!skew.skewed);
+        assert!(skew.unknown.is_empty());
+    }
+
+    #[test]
+    fn flags_an_ssp_left_behind() {
+        // The whitepawn case: client moved, the SSP that evaluates permissions
+        // did not, so a server-side fix was never actually live.
+        let v = versions(&[("ssp", "0.0.1-canary.168"), ("scheduler", "0.0.1-canary.168")]);
+        let skew = detect_version_skew(&v, "0.0.1-canary.178");
+        assert!(skew.skewed);
+        assert_eq!(skew.reported.len(), 2);
+    }
+
+    #[test]
+    fn flags_a_partial_upgrade() {
+        let v = versions(&[("ssp", "1.2.3"), ("scheduler", "1.2.2")]);
+        let skew = detect_version_skew(&v, "1.2.3");
+        assert!(skew.skewed);
+    }
+
+    #[test]
+    fn unknown_is_reported_but_is_not_skew_on_its_own() {
+        let v = versions(&[("ssp", "1.2.3")]);
+        let skew = detect_version_skew(&v, "1.2.3");
+        assert!(!skew.skewed);
+        assert_eq!(skew.unknown, vec!["scheduler".to_string()]);
+    }
+
+    #[test]
+    fn a_placeholder_version_counts_as_unknown() {
+        // The control plane reports "-" for a component it cannot read; that
+        // must not be compared as if it were a real release.
+        let v = versions(&[("ssp", "-"), ("scheduler", "")]);
+        let skew = detect_version_skew(&v, "1.2.3");
+        assert!(!skew.skewed);
+        assert_eq!(skew.unknown.len(), 2);
+    }
 }
 
 /// Get the Docker image ID (SHA digest) for a given tag.
@@ -5162,7 +5358,7 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                 // The dump only contains user-table data; without this, the restored
                 // DB is missing _00_metadata / _00_query / mutation + delete events
                 // and the scheduler/SSP can't bootstrap against it.
-                apply_remote_fns_and_internal_schema(
+                let restore_schema = apply_remote_fns_and_internal_schema(
                     &db_url,
                     &db_password,
                     &deployment,
@@ -5171,6 +5367,14 @@ pub fn backup(action: CloudBackupCommands) -> Result<()> {
                     &mut client,
                     &pid,
                 );
+                if !restore_schema.is_empty() {
+                    // The dump carries user-table data only. Without the meta
+                    // tables and per-table events the scheduler and SSP cannot
+                    // bootstrap against the restored DB at all, so this is not a
+                    // completed restore.
+                    restore_schema.report("Restore");
+                    bail!("restore finished but the internal schema did not apply");
+                }
             } else {
                 println!("  Warning: could not resolve SurrealDB URL from deployment; skipping migrations.");
             }
@@ -6103,6 +6307,8 @@ fn print_deployment_details(data: &serde_json::Value) {
                     icon, role, ip, version, status_text, e2e,
                 );
             }
+
+            report_version_skew(&component_versions);
         }
     }
 
