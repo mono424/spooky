@@ -888,6 +888,36 @@ struct CircuitState {
     queries: Vec<QueryState>,
 }
 
+/// Borrowed mirror of [`CircuitState`], used only for writing.
+///
+/// Field names and types must stay in lockstep with `CircuitState`: that is
+/// what makes a snapshot written through this readable through that. The whole
+/// point is to avoid `self.store.clone()`, which duplicated every row in the
+/// store just to hand it to the serializer — a full extra copy of the largest
+/// structure in the process, on a timer, inside a capped container.
+#[derive(Serialize)]
+struct CircuitStateRef<'a> {
+    store: &'a Store,
+    queries: Vec<QueryStateRef<'a>>,
+}
+
+/// Borrowed mirror of [`QueryState`]. See [`CircuitStateRef`].
+#[derive(Serialize)]
+struct QueryStateRef<'a> {
+    plan: &'a QueryPlan,
+    /// Still converted rather than borrowed: `Sp00kyValue`'s derived
+    /// `Serialize` is externally tagged (`{"Int":5}`), so borrowing it here
+    /// would silently change the snapshot format. Bind params are per-view and
+    /// small, so the conversion is not worth a hand-written serializer.
+    params: Option<serde_json::Value>,
+    format: OutputFormat,
+    cache: &'a ZSet,
+    last_hash: &'a str,
+    content_generation: u64,
+    subquery_cache: &'a HashMap<String, (String, String)>,
+    auth_id: &'a str,
+}
+
 /// Serializable snapshot of a single query's state.
 #[derive(Serialize, Deserialize)]
 struct QueryState {
@@ -913,27 +943,49 @@ impl Circuit {
     /// The operator DAG (which contains trait objects) is NOT serialized.
     /// Instead, we serialize the query plans and rebuild graphs on restore.
     pub fn save(&self) -> serde_json::Result<String> {
-        let queries: Vec<QueryState> = self
+        let queries: Vec<QueryStateRef<'_>> = self
             .views
             .values()
-            .map(|view| QueryState {
-                plan: view.plan.clone(),
-                params: view.params.as_ref().map(|sv| serde_json::Value::from(sv.clone())),
+            .map(|view| QueryStateRef {
+                plan: &view.plan,
+                params: view
+                    .params
+                    .as_ref()
+                    .map(|sv| serde_json::Value::from(sv.clone())),
                 format: view.format,
-                cache: view.cache.clone(),
-                last_hash: view.last_hash.clone(),
+                cache: &view.cache,
+                last_hash: &view.last_hash,
                 content_generation: view.content_generation,
-                subquery_cache: view.subquery_cache.clone(),
-                auth_id: view.auth_id.clone(),
+                subquery_cache: &view.subquery_cache,
+                auth_id: &view.auth_id,
             })
             .collect();
 
-        let state = CircuitState {
-            store: self.store.clone(),
+        let state = CircuitStateRef {
+            store: &self.store,
             queries,
         };
 
-        serde_json::to_string(&state)
+        // Reserve up front rather than letting the buffer double its way up:
+        // the growth reallocation transiently holds both the old and new
+        // buffer, so on a large store that spike lands on top of the store
+        // itself. The estimate only has to be the right order of magnitude —
+        // a short reserve costs one realloc, not correctness.
+        let mut buf = Vec::with_capacity(self.estimated_snapshot_bytes());
+        serde_json::to_writer(&mut buf, &state)?;
+        // Safe by construction: serde_json only emits UTF-8.
+        Ok(String::from_utf8(buf).expect("serde_json emits UTF-8"))
+    }
+
+    /// Rough byte estimate for a serialized snapshot, used only to size the
+    /// output buffer. Deliberately cheap: it must not walk every row, or
+    /// sizing the buffer would cost more than the reallocation it avoids.
+    fn estimated_snapshot_bytes(&self) -> usize {
+        // ~200 bytes of JSON per row is a mid-range guess for application data;
+        // being wrong just means one more realloc.
+        const BYTES_PER_ROW_GUESS: usize = 200;
+        let rows: usize = self.store.collections.values().map(|c| c.rows.len()).sum();
+        rows.saturating_mul(BYTES_PER_ROW_GUESS).max(64 * 1024)
     }
 
     /// Restore a circuit from a JSON string.
@@ -1070,17 +1122,26 @@ impl Circuit {
     /// `Replica::compute_table_hashes` on the scheduler side when the
     /// contents agree — used by SSP self-verify (`self_bootstrap`) and
     /// `spky verify` to detect drift.
+    /// Fed row by row through [`TableHasher`] rather than collected into a
+    /// `Vec<(String, Value)>` first. The old shape held the entire table as a
+    /// parsed `Value` tree *plus* a vec of all of them, at roughly six times
+    /// the resident cost of the rows themselves — on a million-row table that
+    /// is a multi-gigabyte transient inside a 1 GB container, and `/info`
+    /// reaches this code on every request. `TableHasher` reduces each record
+    /// to its canonical bytes on `add` and produces byte-identical output by
+    /// construction, so peak is now one row's tree plus the accumulated bytes.
+    ///
+    /// [`TableHasher`]: ssp_protocol::snapshot_hash::TableHasher
     pub fn compute_table_hashes(&self) -> BTreeMap<String, String> {
         self.store
             .collections
             .iter()
             .map(|(name, coll)| {
-                let pairs: Vec<(String, serde_json::Value)> = coll
-                    .rows
-                    .iter()
-                    .map(|(id, val)| (id.clone(), serde_json::Value::from(val.clone())))
-                    .collect();
-                (name.clone(), ssp_protocol::snapshot_hash::hash_table(pairs))
+                let mut hasher = ssp_protocol::snapshot_hash::TableHasher::new();
+                for (id, val) in &coll.rows {
+                    hasher.add(id, serde_json::Value::from(val.clone()));
+                }
+                (name.clone(), hasher.finish())
             })
             .collect()
     }
@@ -1100,6 +1161,16 @@ impl Circuit {
     /// table has no versioned row). This is the resume-point a `CircuitStore`
     /// snapshot carries: on a warm restart, catch-up loads only rows whose
     /// `_00_rv` exceeds the per-table value here (see `bootstrap::catch_up_from_db`).
+    /// Reads the field directly instead of converting each row to a
+    /// `serde_json::Value` to pull one integer out of it — that conversion
+    /// deep-copied every row body in the store, per checkpoint, to look at 8
+    /// bytes.
+    ///
+    /// Matching `Sp00kyValue::Int` specifically is deliberate: `as_i64` also
+    /// accepts a whole-valued `Float`, where the `serde_json` path this
+    /// replaces returned `None` for `json!(5.0)`. Accepting more here would
+    /// raise the resume point past rows that catch-up still needs to replay,
+    /// and a skipped row is silent divergence, not a visible failure.
     pub fn max_row_versions(&self) -> BTreeMap<String, i64> {
         self.store
             .collections
@@ -1108,10 +1179,9 @@ impl Circuit {
                 let max = coll
                     .rows
                     .values()
-                    .filter_map(|v| {
-                        serde_json::Value::from(v.clone())
-                            .get("_00_rv")
-                            .and_then(|r| r.as_i64())
+                    .filter_map(|v| match v.get("_00_rv") {
+                        Some(Sp00kyValue::Int(rv)) => Some(*rv),
+                        _ => None,
                     })
                     .max()
                     .unwrap_or(-1);
@@ -1158,15 +1228,42 @@ impl Circuit {
     /// reconstructed projection row-by-row against the circuit, so an operator
     /// can see the specific diverging (or missing/extra) row instead of guessing
     /// from a one-sided hash. Returns an empty vec for an unknown table.
-    pub fn dump_table_rows(&self, table: &str) -> Vec<(String, serde_json::Value)> {
-        match self.store.collections.get(table) {
-            Some(coll) => coll
-                .rows
-                .iter()
-                .map(|(id, val)| (id.clone(), serde_json::Value::from(val.clone())))
-                .collect(),
-            None => Vec::new(),
-        }
+    /// Rows come back **sorted by raw id and capped at `limit`**, and the
+    /// second tuple element reports whether the table had more.
+    ///
+    /// Both properties matter to the caller. Unbounded, this materialized the
+    /// entire table as owned `Value` trees and then serialized that into a
+    /// response body — roughly twice the store, at the exact moment (a
+    /// persistent catch-up mismatch) when the SSP is least able to afford it.
+    ///
+    /// But truncating an *unordered* subset would be worse than the memory
+    /// cost: the scheduler diffs this against its own projection to name
+    /// missing and extra rows, so an arbitrary omission reads as "row missing
+    /// on SSP" and sends an operator chasing a divergence that isn't there.
+    /// Sorting makes the returned window a well-defined prefix — every id at
+    /// or below the last one returned is authoritative, everything past it is
+    /// unknown rather than absent — which is a claim the caller can act on.
+    pub fn dump_table_rows(
+        &self,
+        table: &str,
+        limit: usize,
+    ) -> (Vec<(String, serde_json::Value)>, bool) {
+        let Some(coll) = self.store.collections.get(table) else {
+            return (Vec::new(), false);
+        };
+        let mut ids: Vec<&String> = coll.rows.keys().collect();
+        ids.sort_unstable();
+        let truncated = ids.len() > limit;
+        let rows = ids
+            .into_iter()
+            .take(limit)
+            .filter_map(|id| {
+                coll.rows
+                    .get(id)
+                    .map(|val| (id.clone(), serde_json::Value::from(val.clone())))
+            })
+            .collect();
+        (rows, truncated)
     }
 }
 
@@ -1192,6 +1289,176 @@ mod tests {
                 table: table.to_string(),
             },
         }
+    }
+
+    /// `compute_table_hashes` streams rows through `TableHasher` instead of
+    /// collecting the whole table into a `Vec<(String, Value)>` for
+    /// `hash_table`. The scheduler compares these hashes against its own and
+    /// the SSP `exit(2)`s on mismatch, so the two must agree byte for byte.
+    #[test]
+    fn streamed_table_hash_matches_hash_table() {
+        let mut circuit = Circuit::new();
+        circuit.store.ensure_collection("thread");
+        for i in 0..64 {
+            circuit.store.apply_change(&Change::create(
+                "thread",
+                &format!("t{i}"),
+                json!({
+                    "title": format!("title {i}"),
+                    "score": i,
+                    // Exercise the paths `hash_table` normalizes away: reserved
+                    // keys and null-valued keys are both stripped before hashing.
+                    "_00_rv": i,
+                    "archived_at": serde_json::Value::Null,
+                    "nested": { "b": 2, "a": 1 },
+                }),
+            ));
+        }
+
+        let coll = circuit.store.get_collection("thread").unwrap();
+        let pairs: Vec<(String, serde_json::Value)> = coll
+            .rows
+            .iter()
+            .map(|(id, val)| (id.clone(), serde_json::Value::from(val.clone())))
+            .collect();
+        let expected = ssp_protocol::snapshot_hash::hash_table(pairs);
+
+        assert_eq!(circuit.compute_table_hashes()["thread"], expected);
+    }
+
+    #[test]
+    fn empty_table_hash_matches_hash_table() {
+        let mut circuit = Circuit::new();
+        circuit.store.ensure_collection("thread");
+        assert_eq!(
+            circuit.compute_table_hashes()["thread"],
+            ssp_protocol::snapshot_hash::empty_table_hash()
+        );
+    }
+
+    /// `max_row_versions` reads `_00_rv` straight off the stored value now
+    /// rather than converting each row to `serde_json::Value`. It must keep
+    /// accepting *only* integers: `Sp00kyValue::as_i64` would also take a
+    /// whole-valued `Float`, but the `serde_json` path it replaces returned
+    /// `None` for `json!(5.0)`. Accepting more would raise the resume point
+    /// past rows catch-up still has to replay, and a skipped row diverges
+    /// silently.
+    #[test]
+    fn max_row_versions_counts_ints_only() {
+        let mut circuit = Circuit::new();
+        circuit.store.ensure_collection("thread");
+        circuit
+            .store
+            .apply_change(&Change::create("thread", "a", json!({ "_00_rv": 7 })));
+        // A float, a string, and a missing field must all be ignored.
+        circuit
+            .store
+            .apply_change(&Change::create("thread", "b", json!({ "_00_rv": 99.5 })));
+        circuit
+            .store
+            .apply_change(&Change::create("thread", "c", json!({ "_00_rv": "42" })));
+        circuit
+            .store
+            .apply_change(&Change::create("thread", "d", json!({ "title": "no rv" })));
+
+        assert_eq!(circuit.max_row_versions()["thread"], 7);
+    }
+
+    #[test]
+    fn max_row_versions_defaults_to_minus_one_without_versioned_rows() {
+        let mut circuit = Circuit::new();
+        circuit.store.ensure_collection("thread");
+        circuit
+            .store
+            .apply_change(&Change::create("thread", "a", json!({ "title": "x" })));
+        assert_eq!(circuit.max_row_versions()["thread"], -1);
+    }
+
+    /// `save` now serializes through a borrowed `CircuitStateRef` rather than
+    /// cloning the whole store. The snapshot format has to be unchanged, or
+    /// every warm restart falls back to a full rebuild.
+    #[test]
+    fn save_through_borrowed_state_restores_identically() {
+        let mut circuit = Circuit::new();
+        circuit.store.ensure_collection("thread");
+        for i in 0..8 {
+            circuit.store.apply_change(&Change::create(
+                "thread",
+                &format!("t{i}"),
+                json!({ "title": format!("t{i}"), "score": i, "_00_rv": i }),
+            ));
+        }
+        // Params exercise the one field `CircuitStateRef` still converts
+        // rather than borrows.
+        circuit.add_query(
+            scan_query("q1", "thread"),
+            Some(json!({ "auth": { "id": "user:abc" } })),
+            None,
+        );
+
+        let blob = circuit.save().unwrap();
+        let mut restored = Circuit::restore(&blob).unwrap();
+
+        assert_eq!(
+            restored.compute_table_hashes(),
+            circuit.compute_table_hashes(),
+            "restored store must hash identically"
+        );
+        assert_eq!(restored.max_row_versions(), circuit.max_row_versions());
+        assert_eq!(restored.view_count(), circuit.view_count());
+
+        // `catchup_xor` is `#[serde(skip)]`, so a freshly restored circuit
+        // carries a zeroed accumulator until it is re-seeded — which is
+        // exactly what `Runtime::bootstrap` does after a restore. Assert the
+        // documented sequence, since a restore that silently kept a zero
+        // accumulator would fail the scheduler's catch-up verification.
+        assert_ne!(
+            restored.compute_catchup_hashes(),
+            circuit.compute_catchup_hashes(),
+            "restore alone must not resurrect the skipped accumulator"
+        );
+        restored.reseed_catchup_hashes();
+        assert_eq!(
+            restored.compute_catchup_hashes(),
+            circuit.compute_catchup_hashes(),
+            "re-seeding after restore must reproduce the accumulator"
+        );
+
+        // A second round trip must be a fixed point *in content*. Not in
+        // bytes: the store is `HashMap`-backed, so JSON key order differs
+        // between two circuits holding identical data. The snapshot has never
+        // been byte-stable and `restore` does not need it to be — but that
+        // also means a snapshot cannot be content-addressed by hashing it.
+        let twice = Circuit::restore(&restored.save().unwrap()).unwrap();
+        assert_eq!(twice.compute_table_hashes(), circuit.compute_table_hashes());
+        assert_eq!(twice.view_count(), circuit.view_count());
+    }
+
+    /// The dump is capped and sorted so the caller can tell "not examined"
+    /// from "absent" — an unordered truncation would read as missing rows.
+    #[test]
+    fn dump_table_rows_returns_a_sorted_capped_prefix() {
+        let mut circuit = Circuit::new();
+        circuit.store.ensure_collection("thread");
+        for i in 0..10 {
+            circuit
+                .store
+                .apply_change(&Change::create("thread", &format!("t{i}"), json!({ "n": i })));
+        }
+
+        let (rows, truncated) = circuit.dump_table_rows("thread", 4);
+        assert!(truncated);
+        assert_eq!(rows.len(), 4);
+        let ids: Vec<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, ["t0", "t1", "t2", "t3"], "must be the sorted prefix");
+
+        let (all, truncated) = circuit.dump_table_rows("thread", 10);
+        assert!(!truncated, "an exact fit is not truncated");
+        assert_eq!(all.len(), 10);
+
+        let (none, truncated) = circuit.dump_table_rows("nosuchtable", 10);
+        assert!(none.is_empty());
+        assert!(!truncated);
     }
 
     /// SELECT * FROM <table> ORDER BY <field> <dir> LIMIT <limit> START <start>

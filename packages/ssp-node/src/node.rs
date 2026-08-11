@@ -91,6 +91,16 @@ pub struct SspNode {
 }
 
 /// Standalone job-recovery sweep cadence + staleness windows (were shell consts).
+/// Row ceiling for `/debug/catchup-rows/:table`.
+///
+/// The endpoint materializes every row it returns as a JSON tree and then
+/// serializes that into a response body, so an unbounded dump costs roughly
+/// twice the table — and it is reached on a persistent catch-up mismatch,
+/// when the SSP is already in trouble. 50k rows is far above any real
+/// divergence (the scheduler logs at most 20 differing rows) while keeping the
+/// worst case bounded.
+pub const CATCHUP_ROWS_DUMP_LIMIT: usize = 50_000;
+
 pub const JOB_RECOVERY_INTERVAL_SECS: u64 = 60;
 const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
 const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
@@ -625,11 +635,24 @@ impl SspNode {
     /// Debug: dump one table's circuit rows as `{ raw_id: json }`. The
     /// scheduler fetches this on a persistent catch-up hash mismatch to diff
     /// its reconstructed projection against the circuit row-by-row.
+    ///
+    /// Bounded by [`CATCHUP_ROWS_DUMP_LIMIT`] and sorted by id, with
+    /// `truncated` and `max_id` telling the caller how far the answer is
+    /// authoritative. See `Circuit::dump_table_rows` for why an unordered
+    /// truncation would be actively misleading here.
     async fn debug_catchup_rows_handler(&self, table: &str) -> ApiResponse {
-        let circuit = self.processor.read().await;
-        let rows: serde_json::Map<String, Value> =
-            circuit.dump_table_rows(table).into_iter().collect();
-        ok_json(json!({ "table": table, "rows": rows }))
+        let (rows, truncated) = {
+            let circuit = self.processor.read().await;
+            circuit.dump_table_rows(table, CATCHUP_ROWS_DUMP_LIMIT)
+        };
+        let max_id = rows.last().map(|(id, _)| id.clone());
+        let rows: serde_json::Map<String, Value> = rows.into_iter().collect();
+        ok_json(json!({
+            "table": table,
+            "rows": rows,
+            "truncated": truncated,
+            "max_id": max_id,
+        }))
     }
 
     /// Debug: last `_00_heartbeat` probe seen (e2e heartbeat observation

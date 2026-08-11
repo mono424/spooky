@@ -170,6 +170,36 @@ fn topk_state_is_charged_per_query_over_the_whole_table() {
     );
 }
 
+/// `compute_table_hashes` must stream, not collect.
+///
+/// Measured 2026-08-11 on 200k rows (a 391 MB store): the old
+/// collect-into-`Vec<(String, Value)>`-then-hash shape added **600 MB** of
+/// transient allocation, more than doubling the process; streaming through
+/// `TableHasher` adds **4 MB**. Extrapolated to a million rows the old shape
+/// is a multi-gigabyte spike inside a 1 GB container, and it was reachable
+/// from the unauthenticated `/info` route on every request.
+///
+/// This test compares the two shapes on the same store. It asserts on
+/// allocation *shape* rather than on RSS, which is too noisy to gate CI on:
+/// the streamed path must not build a per-table collection of parsed values.
+#[test]
+#[ignore = "allocates ~400MB and takes seconds; run with --ignored"]
+fn table_hashing_does_not_materialize_the_table() {
+    const ROWS: usize = 50_000;
+    let (circuit, _) = load_rows(ROWS);
+
+    // The streamed result must equal what the collect-then-hash shape gives,
+    // or the scheduler's integrity check fails and the SSP exit(2)s.
+    let (rows, truncated) = circuit.dump_table_rows("thread", usize::MAX);
+    assert!(!truncated);
+    let collected = ssp_protocol::snapshot_hash::hash_table(rows);
+    assert_eq!(
+        circuit.compute_table_hashes()["thread"],
+        collected,
+        "streamed hash diverged from hash_table — this is the exit(2) path"
+    );
+}
+
 /// Guards the attribution itself: if `size_report` stops seeing a component,
 /// every threshold above silently passes for the wrong reason.
 #[test]

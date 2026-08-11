@@ -1088,7 +1088,13 @@ async fn verify_catchup_at_m(
             None => continue,
         };
         match fetch_ssp_catchup_rows(transport, ssp_url, table).await {
-            Ok(ssp_rows) => {
+            Ok((ssp_rows, horizon)) => {
+                if let Some(h) = &horizon {
+                    warn!(
+                        ssp_id = %ssp_id, table = %table, max_id = %h,
+                        "SSP row dump was truncated — diffing only up to this id; rows above it are unknown, not missing"
+                    );
+                }
                 let all_ids: std::collections::BTreeSet<&String> =
                     ref_rows.keys().chain(ssp_rows.keys()).collect();
                 let mut logged = 0usize;
@@ -1096,6 +1102,13 @@ async fn verify_catchup_at_m(
                     if logged >= CATCHUP_DIAG_MAX_ROWS {
                         warn!(ssp_id = %ssp_id, table = %table, "More diverging rows omitted (diagnostic cap reached)");
                         break;
+                    }
+                    // Past the SSP's truncation point we simply have no data.
+                    // Falling through would report every such row as "missing
+                    // on SSP" and send an operator hunting a divergence that
+                    // does not exist.
+                    if horizon.as_ref().is_some_and(|h| id.as_str() > h.as_str()) {
+                        continue;
                     }
                     match (ref_rows.get(id), ssp_rows.get(id)) {
                         (Some(r), None) => {
@@ -1209,13 +1222,22 @@ fn canon_json(v: &serde_json::Value) -> String {
 }
 
 /// Fetch an SSP's circuit rows for one table (`/debug/catchup-rows/:table`),
-/// returned as `raw_id -> value`. Used by the catch-up diagnostic to diff the
-/// circuit against the scheduler's reconstructed projection.
+/// returned as `raw_id -> value` alongside the id ceiling the answer is
+/// authoritative up to.
+///
+/// The SSP caps the dump (an unbounded one costs roughly twice its store, at
+/// the worst possible moment) and returns a sorted prefix. `Some(max_id)`
+/// means "ids above this were not examined"; `None` means the whole table came
+/// back. Used by the catch-up diagnostic to diff the circuit against the
+/// scheduler's reconstructed projection.
 async fn fetch_ssp_catchup_rows(
     transport: &Arc<HttpTransport>,
     ssp_url: &str,
     table: &str,
-) -> Result<std::collections::HashMap<String, serde_json::Value>> {
+) -> Result<(
+    std::collections::HashMap<String, serde_json::Value>,
+    Option<String>,
+)> {
     let resp = transport
         .get_from_ssp(ssp_url, &format!("/debug/catchup-rows/{}", table))
         .await
@@ -1232,7 +1254,20 @@ async fn fetch_ssp_catchup_rows(
         .and_then(|v| v.as_object())
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
-    Ok(rows)
+    // Only a truncated dump has a horizon; a complete one is authoritative
+    // everywhere. An older SSP omits both fields, which reads as complete —
+    // matching its actual behaviour.
+    let horizon = json
+        .get("truncated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        .then(|| {
+            json.get("max_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .flatten();
+    Ok((rows, horizon))
 }
 
 /// Catch-up breaker step: re-clone the replica from upstream SurrealDB. Serialized

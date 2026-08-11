@@ -1845,7 +1845,7 @@ dependencies = [
 
 [[package]]
 name = "ssp"
-version = "0.0.1-canary.182"
+version = "0.0.1-canary.183"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-cf"
-version = "0.0.1-canary.182"
+version = "0.0.1-canary.183"
 dependencies = [
  "async-trait",
  "console_error_panic_hook",
@@ -1891,7 +1891,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-node"
-version = "0.0.1-canary.182"
+version = "0.0.1-canary.183"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-protocol"
-version = "0.0.1-canary.182"
+version = "0.0.1-canary.183"
 dependencies = [
  "blake3",
  "serde",
