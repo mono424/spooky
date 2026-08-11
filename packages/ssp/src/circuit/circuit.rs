@@ -809,6 +809,74 @@ impl Circuit {
     }
 }
 
+// --- Size reporting ---
+
+/// Estimated heap footprint of one base table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TableSize {
+    pub table: String,
+    pub rows: usize,
+    /// Row bodies plus their raw-id keys.
+    pub rows_bytes: usize,
+    /// Membership Z-set. Separate from `rows_bytes` because its keys are a
+    /// second `"table:id"` string per row on top of the raw id in `rows`.
+    pub zset_bytes: usize,
+}
+
+impl TableSize {
+    pub fn total_bytes(&self) -> usize {
+        self.rows_bytes + self.zset_bytes
+    }
+
+    /// Estimated bytes per row. The headline ratio to watch: it should be a
+    /// small multiple of the source JSON, and today it is not.
+    pub fn bytes_per_row(&self) -> f64 {
+        if self.rows == 0 {
+            0.0
+        } else {
+            self.total_bytes() as f64 / self.rows as f64
+        }
+    }
+}
+
+/// Estimated heap footprint of one registered query.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ViewSize {
+    pub query_id: String,
+    pub auth_id: String,
+    pub cached_records: usize,
+    /// The view's own cache and params.
+    pub view_bytes: usize,
+    /// Z⁻¹ state across the query's operator DAG. Scales with the *table*, not
+    /// the result window, so this usually dominates `view_bytes` by orders of
+    /// magnitude.
+    pub operator_bytes: usize,
+}
+
+impl ViewSize {
+    pub fn total_bytes(&self) -> usize {
+        self.view_bytes + self.operator_bytes
+    }
+}
+
+/// Attributed heap estimate for the whole circuit, sorted heaviest-first.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SizeReport {
+    /// Sum over `tables`: the shared base-table mirror.
+    pub store_bytes: usize,
+    /// Sum over `views`: per-registered-query state, which is charged once per
+    /// query even when many queries read the same table.
+    pub query_bytes: usize,
+    pub tables: Vec<TableSize>,
+    pub views: Vec<ViewSize>,
+}
+
+impl SizeReport {
+    pub fn total_bytes(&self) -> usize {
+        self.store_bytes + self.query_bytes
+    }
+}
+
 // --- Serialization support ---
 
 use serde::{Deserialize, Serialize};
@@ -940,6 +1008,51 @@ impl Circuit {
     /// Names of all tables in the store.
     pub fn table_names(&self) -> Vec<String> {
         self.store.collections.keys().cloned().collect()
+    }
+
+    /// Estimated heap footprint of the circuit, attributed per table and per
+    /// view.
+    ///
+    /// The SSP mirrors every syncable table in RAM for the whole process
+    /// lifetime, so this is what decides whether a tenant fits under its
+    /// cgroup cap. See [`crate::size`] for why these are estimates and how to
+    /// read them (deltas are meaningful; absolutes are indicative).
+    ///
+    /// Cheap enough to serve from an endpoint — it walks every row once, so
+    /// it is O(store), not O(1). Don't call it per-request on a hot path.
+    pub fn size_report(&self) -> SizeReport {
+        let mut tables: Vec<TableSize> = self
+            .store
+            .collections
+            .iter()
+            .map(|(name, coll)| TableSize {
+                table: name.clone(),
+                rows: coll.rows.len(),
+                rows_bytes: coll.rows_bytes(),
+                zset_bytes: coll.zset_bytes(),
+            })
+            .collect();
+        tables.sort_by(|a, b| b.total_bytes().cmp(&a.total_bytes()));
+
+        let mut views: Vec<ViewSize> = self
+            .views
+            .iter()
+            .map(|(query_id, view)| ViewSize {
+                query_id: query_id.clone(),
+                auth_id: view.auth_id.clone(),
+                cached_records: view.cache.len(),
+                view_bytes: view.state_bytes(),
+                operator_bytes: self.graphs.get(query_id).map_or(0, |g| g.state_bytes()),
+            })
+            .collect();
+        views.sort_by(|a, b| b.total_bytes().cmp(&a.total_bytes()));
+
+        SizeReport {
+            store_bytes: tables.iter().map(TableSize::total_bytes).sum(),
+            query_bytes: views.iter().map(ViewSize::total_bytes).sum(),
+            tables,
+            views,
+        }
     }
 
     /// Per-table row counts in the in-memory store. Used by `/info` and

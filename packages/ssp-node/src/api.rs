@@ -69,6 +69,12 @@ pub enum RouteId {
     /// for the scheduler's e2e heartbeat probe.
     DebugHeartbeat,
     DebugCatchupRows { table: String },
+    /// Estimated heap footprint of the circuit, attributed per table and per
+    /// registered query. The SSP mirrors every syncable table in RAM, so an
+    /// OOM kill is the dominant failure mode — and it arrives as a SIGKILL
+    /// with no log line, leaving the control plane's process-wide `mem_bytes`
+    /// as the only signal and no way to tell which table is responsible.
+    DebugMemory,
     ViewRegister,
     ViewUnregister,
     CrdtApply,
@@ -106,6 +112,7 @@ impl RouteId {
             (Get, ["debug", "deps"]) => RouteId::DebugDeps,
             (Get, ["debug", "heartbeat"]) => RouteId::DebugHeartbeat,
             (Get, ["debug", "catchup-rows", table]) => RouteId::DebugCatchupRows { table: (*table).to_string() },
+            (Get, ["debug", "memory"]) => RouteId::DebugMemory,
             (Post, ["view", "register"]) => RouteId::ViewRegister,
             (Post, ["view", "unregister"]) => RouteId::ViewUnregister,
             (Post, ["crdt", "apply"]) => RouteId::CrdtApply,
@@ -151,6 +158,7 @@ mod tests {
             (Method::Get, "/debug/view/v1", RouteId::DebugView { view_id: "v1".into() }),
             (Method::Get, "/debug/catchup-rows/thread", RouteId::DebugCatchupRows { table: "thread".into() }),
             (Method::Get, "/debug/heartbeat", RouteId::DebugHeartbeat),
+            (Method::Get, "/debug/memory", RouteId::DebugMemory),
             (Method::Put, "/backends", RouteId::BackendsUpdate),
             (Method::Get, "/backup/status/b1", RouteId::BackupStatusById { backup_id: "b1".into() }),
             (Method::Get, "/backup/restore/status/r1", RouteId::BackupRestoreStatusById { restore_id: "r1".into() }),

@@ -84,6 +84,20 @@ pub trait Operator: Debug + Send + Sync {
     ) -> bool {
         false
     }
+
+    /// Approximate heap bytes held in this operator's Z⁻¹ state.
+    ///
+    /// This is the term that scales with *both* table size and query count:
+    /// a stateful operator keeps integrated copies of its inputs, so N
+    /// registered queries over the same large table each pay for their own.
+    /// It is invisible in the row-store numbers and can exceed them outright,
+    /// so it gets its own line in [`crate::circuit::Circuit::size_report`].
+    ///
+    /// Default: 0, correct for the stateless operators (Scan, Filter, Map,
+    /// Union). Stateful ones override.
+    fn state_bytes(&self) -> usize {
+        0
+    }
 }
 
 pub use aggregate::{Aggregate, AggregateFunc};

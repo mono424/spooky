@@ -1208,7 +1208,13 @@ pub async fn run_server() -> anyhow::Result<()> {
                         .as_secs(),
                     views,
                     cpu_usage: None,
-                    memory_usage: None,
+                    // Reported as a 0..1 fraction of the cgroup ceiling, not raw
+                    // bytes: the scheduler's `LeastLoad` strategy sums this with
+                    // `cpu_usage` to rank SSPs, so the two have to be on the same
+                    // scale. It stayed `None` here for a long time, which made
+                    // that sum a constant 0.0 for every SSP and silently
+                    // degraded `LeastLoad` into "always pick the first one".
+                    memory_usage: crate::metrics::memory_load_fraction(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 };
 

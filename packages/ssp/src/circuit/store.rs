@@ -98,6 +98,24 @@ impl Collection {
         self.rows.get(raw_id(id))
     }
 
+    /// Approximate heap bytes held by `rows`: the bucket array, every raw-id
+    /// key, and every row body.
+    pub fn rows_bytes(&self) -> usize {
+        crate::size::map_table_bytes::<String, Sp00kyValue>(self.rows.capacity())
+            + self
+                .rows
+                .iter()
+                .map(|(id, row)| id.capacity() + row.heap_bytes())
+                .sum::<usize>()
+    }
+
+    /// Approximate heap bytes held by `zset`. Reported apart from
+    /// [`rows_bytes`] because its keys are a second, independently allocated
+    /// `"table:id"` string per row on top of the raw id already in `rows`.
+    pub fn zset_bytes(&self) -> usize {
+        crate::size::zset_bytes(&self.zset)
+    }
+
     /// Get the version of a record from its `_00_rv` field.
     pub fn get_record_version(&self, id: &str) -> Option<i64> {
         self.rows

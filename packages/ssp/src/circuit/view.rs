@@ -47,6 +47,27 @@ pub struct View {
 }
 
 impl View {
+    /// Approximate heap bytes held by this view's own state, excluding the
+    /// operator DAG (that is [`crate::circuit::graph::Graph::state_bytes`]).
+    ///
+    /// `cache` holds record keys and weights, not row bodies, so a view is
+    /// cheap relative to the store — the expensive part of a registered query
+    /// lives in its operators.
+    pub fn state_bytes(&self) -> usize {
+        crate::size::zset_bytes(&self.cache)
+            + crate::size::map_table_bytes::<String, (String, String)>(
+                self.subquery_cache.capacity(),
+            )
+            + self
+                .subquery_cache
+                .iter()
+                .map(|(child, (parent, alias))| {
+                    child.capacity() + parent.capacity() + alias.capacity()
+                })
+                .sum::<usize>()
+            + self.params.as_ref().map_or(0, |p| p.heap_bytes())
+    }
+
     pub fn new(
         query_id: String,
         plan: QueryPlan,

@@ -72,6 +72,10 @@ impl super::Operator for Distinct {
         self.prev_output.clear();
     }
 
+    fn state_bytes(&self) -> usize {
+        crate::size::zset_bytes(&self.integrated) + crate::size::zset_bytes(&self.prev_output)
+    }
+
     fn evaluate_key(
         &self,
         _key: &str,

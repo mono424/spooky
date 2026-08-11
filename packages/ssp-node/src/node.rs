@@ -162,6 +162,7 @@ impl SspNode {
             RouteId::DebugDeps => self.debug_deps_handler().await,
             RouteId::DebugHeartbeat => self.debug_heartbeat_handler(),
             RouteId::DebugCatchupRows { table } => self.debug_catchup_rows_handler(&table).await,
+            RouteId::DebugMemory => self.debug_memory_handler().await,
             RouteId::CrdtApply => self.crdt_apply_handler(&req).await?,
             RouteId::ViewUnregister => self.unregister_view_handler(&req).await?,
             RouteId::ViewRegister => self.register_view_handler(&req).await?,
@@ -654,6 +655,42 @@ impl SspNode {
             "dependency_map": circuit.dependency_map_dump(),
             "tables_in_store": circuit.table_names(),
             "view_count": circuit.view_count(),
+        }))
+    }
+
+    /// Debug: estimated heap footprint, attributed per table and per view.
+    ///
+    /// Deliberately not folded into `/info`: that route is unauthenticated,
+    /// and this one walks every row in the store to produce its numbers.
+    ///
+    /// The estimates come from `ssp::size` and are meant to be read as deltas
+    /// (which component moved, and by how much) rather than as allocator-exact
+    /// totals — see that module for the reasoning.
+    async fn debug_memory_handler(&self) -> ApiResponse {
+        let report = {
+            let circuit = self.processor.read().await;
+            circuit.size_report()
+        };
+        ok_json(json!({
+            "total_bytes": report.total_bytes(),
+            "store_bytes": report.store_bytes,
+            "query_bytes": report.query_bytes,
+            "tables": report.tables.iter().map(|t| json!({
+                "table": t.table,
+                "rows": t.rows,
+                "rows_bytes": t.rows_bytes,
+                "zset_bytes": t.zset_bytes,
+                "total_bytes": t.total_bytes(),
+                "bytes_per_row": t.bytes_per_row(),
+            })).collect::<Vec<_>>(),
+            "views": report.views.iter().map(|v| json!({
+                "query_id": v.query_id,
+                "auth_id": v.auth_id,
+                "cached_records": v.cached_records,
+                "view_bytes": v.view_bytes,
+                "operator_bytes": v.operator_bytes,
+                "total_bytes": v.total_bytes(),
+            })).collect::<Vec<_>>(),
         }))
     }
 

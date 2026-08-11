@@ -37,6 +37,14 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Approximate heap bytes held in this graph's operators' Z⁻¹ state.
+    ///
+    /// Topology (`nodes`, `topo_order`, `scan_index`) is O(plan size) and
+    /// negligible; the operator state is the term that scales with the data.
+    pub fn state_bytes(&self) -> usize {
+        self.nodes.iter().map(|n| n.operator.state_bytes()).sum()
+    }
+
     /// Build a Graph from an OperatorPlan tree.
     ///
     /// Recursively walks the plan, creating operator nodes and wiring edges.

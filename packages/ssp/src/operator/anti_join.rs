@@ -130,6 +130,12 @@ impl super::Operator for AntiJoin {
         self.prev_output.clear();
     }
 
+    fn state_bytes(&self) -> usize {
+        crate::size::zset_bytes(&self.left_state)
+            + crate::size::zset_bytes(&self.right_state)
+            + crate::size::zset_bytes(&self.prev_output)
+    }
+
     fn evaluate_key(
         &self,
         key: &str,

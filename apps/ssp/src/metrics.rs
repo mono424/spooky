@@ -26,6 +26,61 @@ struct RateState {
     last_tick: Instant,
 }
 
+/// Default assumed cgroup memory ceiling, in MB. Mirrors the SSP `Resources`
+/// entry in the control plane (`internal/vms/specs.go`); override with
+/// `SPKY_SSP_MEMORY_LIMIT_MB` when a deployment carries a per-tenant
+/// `infra_resources.ssp.memory_mb` override.
+const DEFAULT_MEMORY_LIMIT_MB: u64 = 1024;
+
+/// Resident set size of this process, in bytes.
+///
+/// Reads the `VmRSS` line of `/proc/self/status`, which is already in kB — the
+/// `statm` alternative reports pages and would need a `sysconf(_SC_PAGESIZE)`
+/// call (so, a `libc` dependency this crate doesn't otherwise carry) to be
+/// correct on aarch64, where the page size isn't always 4K.
+///
+/// Returns `None` off Linux and on any parse failure, so callers have to treat
+/// the metric as best-effort.
+pub fn process_rss_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let kb: u64 = status
+            .lines()
+            .find_map(|line| line.strip_prefix("VmRSS:"))?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()?;
+        Some(kb.saturating_mul(1024))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Configured memory ceiling in bytes, from `SPKY_SSP_MEMORY_LIMIT_MB`.
+pub fn memory_limit_bytes() -> u64 {
+    std::env::var("SPKY_SSP_MEMORY_LIMIT_MB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|mb| *mb > 0)
+        .unwrap_or(DEFAULT_MEMORY_LIMIT_MB)
+        * 1024
+        * 1024
+}
+
+/// RSS as a fraction of the configured ceiling, clamped to `[0.0, 1.0]`.
+///
+/// This is what the heartbeat reports. The scheduler's `LeastLoad` strategy
+/// sums it with `cpu_usage`, so it has to be a comparable 0..1 load figure
+/// rather than a raw byte count.
+pub fn memory_load_fraction() -> Option<f64> {
+    let rss = process_rss_bytes()?;
+    Some((rss as f64 / memory_limit_bytes() as f64).clamp(0.0, 1.0))
+}
+
 impl Metrics {
     pub fn new(provider: &SdkMeterProvider) -> Self {
         let meter = provider.meter("ssp");
@@ -60,6 +115,20 @@ impl Metrics {
                         state.last_count = current_total;
                         state.last_tick = now;
                     }
+                }
+            })
+            .build();
+
+        // Resident memory. The SSP holds the whole circuit in RAM, so an OOM
+        // kill is the dominant failure mode — and it arrives as a SIGKILL with
+        // no log line, so without this gauge the only trace is the restart.
+        // Observable rather than a counter: RSS is a level, not an event.
+        let _memory_rss = meter
+            .u64_observable_gauge("ssp_memory_rss_bytes")
+            .with_description("Resident set size of the SSP process")
+            .with_callback(|observer| {
+                if let Some(rss) = process_rss_bytes() {
+                    observer.observe(rss, &[]);
                 }
             })
             .build();

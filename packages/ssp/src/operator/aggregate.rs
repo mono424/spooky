@@ -155,6 +155,16 @@ impl super::Operator for Aggregate {
         self.group_state.clear();
         self.prev_output.clear();
     }
+
+    fn state_bytes(&self) -> usize {
+        crate::size::map_table_bytes::<String, AggState>(self.group_state.capacity())
+            + self
+                .group_state
+                .iter()
+                .map(|(k, v)| k.capacity() + crate::size::vec_bytes::<f64>(v.sums.capacity()))
+                .sum::<usize>()
+            + crate::size::zset_bytes(&self.prev_output)
+    }
 }
 
 #[cfg(test)]

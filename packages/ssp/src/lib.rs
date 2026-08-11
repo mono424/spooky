@@ -8,6 +8,7 @@ pub mod converter;
 pub mod permission_inject;
 pub mod sanitizer;
 pub mod service;
+pub mod size;
 
 // DBSP-theoretic module structure
 pub mod algebra;

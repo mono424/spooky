@@ -81,6 +81,34 @@ impl Sp00kyValue {
     pub fn is_null(&self) -> bool {
         matches!(self, Sp00kyValue::Null)
     }
+
+    /// Approximate heap bytes owned by this value, excluding the enum's own
+    /// inline size (the parent's slot already accounts for that).
+    ///
+    /// The `Object` arm is where the cost lives: a fresh `String` allocation
+    /// per field name on every row, with no interning, plus a bucket array
+    /// sized for the field count. A 12-field row runs well over a kilobyte for
+    /// what is a few hundred bytes of JSON.
+    pub fn heap_bytes(&self) -> usize {
+        match self {
+            Sp00kyValue::Null
+            | Sp00kyValue::Bool(_)
+            | Sp00kyValue::Int(_)
+            | Sp00kyValue::Float(_) => 0,
+            Sp00kyValue::Str(s) => s.capacity(),
+            Sp00kyValue::Array(items) => {
+                crate::size::vec_bytes::<Sp00kyValue>(items.capacity())
+                    + items.iter().map(Sp00kyValue::heap_bytes).sum::<usize>()
+            }
+            Sp00kyValue::Object(map) => {
+                crate::size::map_table_bytes::<String, Sp00kyValue>(map.capacity())
+                    + map
+                        .iter()
+                        .map(|(k, v)| k.capacity() + v.heap_bytes())
+                        .sum::<usize>()
+            }
+        }
+    }
 }
 
 impl From<Value> for Sp00kyValue {

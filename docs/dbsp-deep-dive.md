@@ -4,6 +4,36 @@
 
 > This document is designed to be read linearly, like a lecture or a podcast episode. By the end, you will understand the full theory of DBSP, see exactly how it maps to a working Rust implementation (the Sp00ky Stream Processor), and have concrete recommendations for building or rebuilding a DBSP-based system. If you are converting this to audio, it reads well from start to finish.
 
+> ## ⚠️ The code in this document is illustrative, not the implementation
+>
+> **Read this for the DBSP theory. Do not read it as a description of our code.**
+>
+> Every file path below of the form `packages/ssp/src/engine/...` is fictional —
+> there is no `engine/` directory. The real layout is:
+>
+> | This document says | Actually lives in |
+> |---|---|
+> | `src/engine/types/zset.rs` | `packages/ssp/src/algebra/zset.rs` |
+> | `src/engine/view.rs` | `packages/ssp/src/circuit/view.rs` |
+> | `src/engine/circuit.rs` | `packages/ssp/src/circuit/circuit.rs` |
+> | `src/engine/operators/operator.rs` | `packages/ssp/src/operator/mod.rs` (a trait, not an enum) |
+> | `src/engine/eval/filter.rs` | `packages/ssp/src/operator/filter.rs` |
+> | `src/engine/types/batch_deltas.rs` | no equivalent |
+>
+> The performance work it describes is **aspirational and not implemented**.
+> The store uses plain `String` keys and `std::collections::HashMap` with the
+> default SipHash hasher, not `SmolStr` and `FxHasher`; there is no
+> `SmallVec`-backed dependency list and no SIMD fast path in the filter. As of
+> 2026-08-11 the crate declares `smol_str`, `smallvec`, `indexmap`, and
+> `rustc-hash` as dependencies and uses **none** of them.
+>
+> This matters concretely: a reader who believes the small-string optimization
+> is already in place would conclude the row representation is close to
+> optimal. It is not — the measured cost is ~2054 bytes of resident memory per
+> row against ~327 bytes of source JSON, a 6.3x blowup, which is precisely the
+> thing being worked on. See `packages/ssp/tests/memory_profile.rs` for the
+> live numbers and `packages/ssp/src/size.rs` for how they are computed.
+
 ---
 
 ## Part 1: The Problem — Why Your Database Is Always Behind

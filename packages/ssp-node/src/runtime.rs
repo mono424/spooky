@@ -166,11 +166,27 @@ impl Runtime {
                     return Ok(());
                 }
                 tracing::info!(age_ms, "Restoring circuit snapshot");
-                let restored = Circuit::restore(&blob)
-                    .map_err(|e| anyhow::anyhow!("Circuit::restore: {e}"))?;
-                *node.processor.write().await = restored;
-                crate::bootstrap::catch_up_from_db(db, &node.processor, &point).await?;
-                Ok(())
+                // A snapshot that won't deserialize is indistinguishable from a
+                // corrupt one: both mean "this blob is unusable", and the only
+                // safe answer is the same full rebuild that `Corrupt` takes
+                // below. Erroring out here instead would wedge the node in
+                // `SspStatus::Failed` until the `max_snapshot_age_secs` gate
+                // above finally rejects the blob on age (an hour by default) —
+                // and a snapshot *format* change makes every restore fail, so
+                // the whole fleet would sit failed for that hour rather than
+                // rebuilding once.
+                match Circuit::restore(&blob) {
+                    Ok(restored) => {
+                        *node.processor.write().await = restored;
+                        crate::bootstrap::catch_up_from_db(db, &node.processor, &point).await?;
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Unreadable snapshot — full rebuild");
+                        crate::bootstrap::rebuild_from_db(db, &node.processor, page_size).await?;
+                        Ok(())
+                    }
+                }
             }
             Err(CircuitStoreError::NotFound) => {
                 tracing::info!("No snapshot — full rebuild");

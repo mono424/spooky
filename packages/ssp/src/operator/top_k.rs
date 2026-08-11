@@ -87,6 +87,19 @@ impl SortableValue {
     }
 }
 
+/// Heap bytes held by one row's sort key: the `Vec` buffer plus any string
+/// scalars inside it.
+fn sortable_bytes(key: &[SortableValue]) -> usize {
+    crate::size::vec_bytes::<SortableValue>(key.len())
+        + key
+            .iter()
+            .map(|sv| match &sv.scalar {
+                Scalar::Str(s) => s.capacity(),
+                _ => 0,
+            })
+            .sum::<usize>()
+}
+
 impl TopK {
     pub fn new(limit: usize, offset: usize, order_by: Option<Vec<OrderSpec>>) -> Self {
         Self {
@@ -201,6 +214,32 @@ impl super::Operator for TopK {
     fn reset(&mut self) {
         self.buffer.clear();
         self.key_index.clear();
+    }
+
+    fn state_bytes(&self) -> usize {
+        // Both structures hold every row that reaches the operator, not just
+        // the `[offset, offset+limit)` window — `buffer` to keep them sorted,
+        // `key_index` so a retraction can find its sort key again. So an
+        // `ORDER BY x LIMIT 20` over a million-row table is two million-entry
+        // structures, per registered query, and the row key plus the sort key
+        // are each allocated twice over.
+        let buffer: usize = self
+            .buffer
+            .iter()
+            .map(|(sort_key, row_key)| {
+                std::mem::size_of::<(Vec<SortableValue>, String)>()
+                    + sortable_bytes(sort_key)
+                    + row_key.capacity()
+            })
+            .sum();
+        let index: usize = crate::size::map_table_bytes::<String, Vec<SortableValue>>(
+            self.key_index.capacity(),
+        ) + self
+            .key_index
+            .iter()
+            .map(|(row_key, sort_key)| row_key.capacity() + sortable_bytes(sort_key))
+            .sum::<usize>();
+        buffer + index
     }
 
     fn evaluate_key(

@@ -118,6 +118,10 @@ impl super::Operator for Join {
         self.left_state.clear();
         self.right_state.clear();
     }
+
+    fn state_bytes(&self) -> usize {
+        crate::size::zset_bytes(&self.left_state) + crate::size::zset_bytes(&self.right_state)
+    }
 }
 
 #[cfg(test)]
