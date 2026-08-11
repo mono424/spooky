@@ -1,4 +1,4 @@
-use crate::algebra::{Weight, ZSet};
+use crate::algebra::{RowKey, Weight, ZSet};
 use crate::circuit::row_table::RowTable;
 use crate::eval::value_ref::ValueRef;
 use crate::types::{make_key, raw_id, Sp00kyValue};
@@ -82,7 +82,7 @@ impl Collection {
         op: Operation,
         id: &str,
         data: Sp00kyValue,
-    ) -> (String, Weight) {
+    ) -> (RowKey, Weight) {
         let weight = op.weight();
         let normalized = raw_id(id);
         // Maintain the incremental XOR set-hash atomically with the row change:
@@ -141,9 +141,10 @@ impl Collection {
         self.rows.index_bytes()
     }
 
-    /// Approximate heap bytes held by `zset`. Reported apart from
-    /// [`rows_bytes`] because its keys are a second, independently allocated
-    /// `"table:id"` string per row on top of the raw id already in `rows`.
+    /// Approximate heap bytes held by `zset`.
+    ///
+    /// Only its bucket array: the keys are shared `Arc<str>` clones, so their
+    /// bytes are charged once rather than once per structure holding them.
     pub fn zset_bytes(&self) -> usize {
         crate::size::zset_bytes(&self.zset)
     }
@@ -169,7 +170,7 @@ pub struct Store {
     /// consults this overlay as a fallback; nothing else does. Populated before
     /// `apply_change` and cleared after the step. Never serialized.
     #[serde(skip)]
-    pub pending_deleted_rows: HashMap<String, Sp00kyValue>,
+    pub pending_deleted_rows: HashMap<RowKey, Sp00kyValue>,
 }
 
 impl Store {
@@ -198,7 +199,7 @@ impl Store {
         op: Operation,
         id: &str,
         data: Sp00kyValue,
-    ) -> (String, Weight) {
+    ) -> (RowKey, Weight) {
         self.ensure_collection(table).apply_mutation(op, id, data)
     }
 
@@ -206,7 +207,7 @@ impl Store {
     ///
     /// Convenience for callers holding a `&Change` (tests, mostly); it has to
     /// clone the body. Prefer [`apply_owned`] where the body is owned.
-    pub fn apply_change(&mut self, change: &Change) -> (String, Weight) {
+    pub fn apply_change(&mut self, change: &Change) -> (RowKey, Weight) {
         self.apply_owned(&change.table, change.op, &change.id, change.data.clone())
     }
 

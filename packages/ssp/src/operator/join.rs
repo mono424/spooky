@@ -1,4 +1,4 @@
-use crate::algebra::{ZSet, ZSetOps};
+use crate::algebra::{RowKey, ZSet, ZSetOps};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::{compare_values, hash_value, resolve_field};
 use crate::eval::value_ref::ValueRef;
@@ -46,7 +46,7 @@ impl Join {
         // Build index on the right side. The join field is held as a
         // `ValueRef` (Copy, borrowed from the store) rather than an owned
         // clone, so indexing the right side no longer copies a value per row.
-        let mut right_index: HashMap<u64, Vec<(&String, &i64, ValueRef<'_>)>> = HashMap::new();
+        let mut right_index: HashMap<u64, Vec<(&RowKey, &i64, ValueRef<'_>)>> = HashMap::new();
         for (r_key, r_weight) in right {
             let r_field = resolve_field(store.get_row_by_key(r_key), &condition.right_field);
             if !r_field.is_missing() {
@@ -133,7 +133,7 @@ mod tests {
     use serde_json::json;
 
     fn zset(items: &[(&str, i64)]) -> ZSet {
-        items.iter().map(|(k, w)| (k.to_string(), *w)).collect()
+        items.iter().map(|(k, w)| ((*k).into(), *w)).collect()
     }
 
     fn setup_store() -> Store {

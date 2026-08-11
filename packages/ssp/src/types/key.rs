@@ -4,9 +4,13 @@
 /// Strips the first colon-separated prefix from the ID to normalize it.
 /// This handles SurrealDB-style record IDs like "user:1" where the prefix
 /// is the record type.
-pub fn make_key(table: &str, id: &str) -> String {
+/// Returns a [`RowKey`], i.e. a shared `Arc<str>`. Every structure that later
+/// holds this key clones the same allocation instead of making its own copy.
+///
+/// [`RowKey`]: crate::algebra::RowKey
+pub fn make_key(table: &str, id: &str) -> crate::algebra::RowKey {
     let raw_id = id.split_once(':').map(|(_, rest)| rest).unwrap_or(id);
-    format!("{table}:{raw_id}")
+    format!("{table}:{raw_id}").into()
 }
 
 /// Extract the raw (stripped) portion of a record ID.
@@ -29,12 +33,12 @@ mod tests {
 
     #[test]
     fn make_key_simple() {
-        assert_eq!(make_key("user", "abc123"), "user:abc123");
+        assert_eq!(&*make_key("user", "abc123"), "user:abc123");
     }
 
     #[test]
     fn make_key_strips_existing_prefix() {
-        assert_eq!(make_key("user", "user:abc123"), "user:abc123");
+        assert_eq!(&*make_key("user", "user:abc123"), "user:abc123");
     }
 
     #[test]

@@ -182,7 +182,7 @@ mod tests {
     use serde_json::json;
 
     fn zset(items: &[(&str, i64)]) -> ZSet {
-        items.iter().map(|(k, w)| (k.to_string(), *w)).collect()
+        items.iter().map(|(k, w)| ((*k).into(), *w)).collect()
     }
 
     fn setup_store() -> Store {

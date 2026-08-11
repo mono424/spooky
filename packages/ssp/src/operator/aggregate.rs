@@ -1,4 +1,4 @@
-use crate::algebra::{ZSet, ZSetOps};
+use crate::algebra::{RowKey, ZSet, ZSetOps};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::resolve_field;
 use crate::types::{Path, Sp00kyValue};
@@ -30,7 +30,7 @@ pub struct Aggregate {
     pub group_by: Option<Vec<Path>>,
     pub funcs: Vec<AggregateFunc>,
     /// Per-group accumulated state.
-    group_state: HashMap<String, AggState>,
+    group_state: HashMap<RowKey, AggState>,
     /// Previous output (for computing output delta).
     prev_output: ZSet,
 }
@@ -46,9 +46,9 @@ impl Aggregate {
     }
 
     /// Compute a group key for a record.
-    fn group_key(&self, key: &str, store: &Store) -> String {
+    fn group_key(&self, key: &str, store: &Store) -> RowKey {
         match &self.group_by {
-            None => "__global__".to_string(),
+            None => "__global__".into(),
             Some(fields) => {
                 let row = store.get_row_by_key(key);
                 // `group_key_repr`, not `{:?}`. Group keys are opaque strings
@@ -60,7 +60,7 @@ impl Aggregate {
                     .iter()
                     .map(|f| resolve_field(row, f).group_key_repr())
                     .collect();
-                parts.join("|")
+                parts.join("|").into()
             }
         }
     }
@@ -80,7 +80,7 @@ impl Aggregate {
 impl super::Operator for Aggregate {
     fn snapshot(&self, inputs: &[&ZSet], store: &Store, _ctx: Option<&Sp00kyValue>) -> ZSet {
         let upstream = inputs[0];
-        let mut groups: HashMap<String, AggState> = HashMap::new();
+        let mut groups: HashMap<RowKey, AggState> = HashMap::new();
 
         for (key, &weight) in upstream {
             if weight <= 0 {
@@ -152,11 +152,11 @@ impl super::Operator for Aggregate {
     }
 
     fn state_bytes(&self) -> usize {
-        crate::size::map_table_bytes::<String, AggState>(self.group_state.capacity())
+        crate::size::map_table_bytes::<RowKey, AggState>(self.group_state.capacity())
             + self
                 .group_state
                 .iter()
-                .map(|(k, v)| k.capacity() + crate::size::vec_bytes::<f64>(v.sums.capacity()))
+                .map(|(k, v)| k.len() + crate::size::vec_bytes::<f64>(v.sums.capacity()))
                 .sum::<usize>()
             + crate::size::zset_bytes(&self.prev_output)
     }
@@ -170,7 +170,7 @@ mod tests {
     use serde_json::json;
 
     fn zset(items: &[(&str, i64)]) -> ZSet {
-        items.iter().map(|(k, w)| (k.to_string(), *w)).collect()
+        items.iter().map(|(k, w)| ((*k).into(), *w)).collect()
     }
 
     #[test]

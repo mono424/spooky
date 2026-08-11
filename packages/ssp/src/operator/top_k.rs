@@ -1,11 +1,26 @@
-use crate::algebra::ZSet;
+use crate::algebra::{RowKey, ZSet};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::resolve_field;
 use crate::eval::value_ref::ValueRef;
 use crate::operator::plan::OrderSpec;
 use crate::types::Sp00kyValue;
 use indexset::BTreeSet;
+use smallvec::SmallVec;
+use smol_str::SmolStr;
 use std::collections::HashMap;
+
+/// A row's full sort key: one [`SortableValue`] per `ORDER BY` field.
+///
+/// Inline for a single field and spilling beyond that. Single-field ordering
+/// is the overwhelmingly common case, and it now costs no heap allocation at
+/// all — where a `Vec` cost one per row, twice over (once in the sorted
+/// buffer, once in the reverse index).
+///
+/// Inline capacity 1 rather than 2 deliberately: `SortableValue` is 40 bytes,
+/// so reserving two slots costs 88 bytes inline on *every* key to save an
+/// allocation only multi-field sorts would make — measurably worse overall
+/// than spilling those.
+type SortKey = SmallVec<[SortableValue; 1]>;
 
 /// TopK operator with sorted buffer state (Z⁻¹).
 ///
@@ -23,9 +38,9 @@ pub struct TopK {
     pub order_by: Option<Vec<OrderSpec>>,
     /// All records seen so far, sorted. Each entry is (sort_key_parts, row_key).
     /// Using BTreeSet for automatic sorted order.
-    buffer: BTreeSet<(Vec<SortableValue>, String)>,
+    buffer: BTreeSet<(SortKey, RowKey)>,
     /// Reverse index: row_key → sort key parts (for removal)
-    key_index: HashMap<String, Vec<SortableValue>>,
+    key_index: HashMap<RowKey, SortKey>,
 }
 
 /// One field's sort key: an orderable scalar plus the field's direction.
@@ -44,12 +59,69 @@ pub struct SortableValue {
     descending: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// One orderable scalar.
+///
+/// Numbers keep their own type rather than being flattened into a fixed-point
+/// integer. The previous shape stored `(value * 1_000_000.0) as i64`, which
+/// was wrong at both ends of the range: the cast saturates, so any two values
+/// above ~9.2e12 compared *equal* and sorted arbitrarily, and anything below
+/// 1e-6 truncated to zero and tied with every other tiny value. Timestamps in
+/// microseconds and large counters both land in the broken range.
+///
+/// `Int` and `Float` compare numerically across the pair, matching
+/// `compare_values`, so `5` and `5.0` still order together.
+#[derive(Debug, Clone, PartialEq)]
 enum Scalar {
     Null,
     Bool(bool),
     Int(i64),
-    Str(String),
+    Float(f64),
+    /// `SmolStr` stores up to 22 bytes inline, which covers most sort keys
+    /// (an RFC3339 timestamp is 20) and avoids a heap allocation per row.
+    Str(SmolStr),
+}
+
+impl Eq for Scalar {}
+
+impl Scalar {
+    /// Rank across variants, for ordering values of different types.
+    fn rank(&self) -> u8 {
+        match self {
+            Scalar::Null => 0,
+            Scalar::Bool(_) => 1,
+            Scalar::Int(_) | Scalar::Float(_) => 2,
+            Scalar::Str(_) => 3,
+        }
+    }
+}
+
+impl PartialOrd for Scalar {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Scalar {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match self.rank().cmp(&other.rank()) {
+            Ordering::Equal => {}
+            non_equal => return non_equal,
+        }
+        match (self, other) {
+            (Scalar::Null, Scalar::Null) => Ordering::Equal,
+            (Scalar::Bool(a), Scalar::Bool(b)) => a.cmp(b),
+            (Scalar::Int(a), Scalar::Int(b)) => a.cmp(b),
+            // `total_cmp` rather than `partial_cmp`: a NaN sort key must still
+            // produce a total order or the BTreeSet's invariants break.
+            (Scalar::Float(a), Scalar::Float(b)) => a.total_cmp(b),
+            (Scalar::Int(a), Scalar::Float(b)) => (*a as f64).total_cmp(b),
+            (Scalar::Float(a), Scalar::Int(b)) => a.total_cmp(&(*b as f64)),
+            (Scalar::Str(a), Scalar::Str(b)) => a.cmp(b),
+            // Unreachable: equal ranks are covered above.
+            _ => Ordering::Equal,
+        }
+    }
 }
 
 impl PartialOrd for SortableValue {
@@ -77,25 +149,33 @@ impl SortableValue {
         let scalar = match val {
             ValueRef::Missing | ValueRef::Null => Scalar::Null,
             ValueRef::Bool(b) => Scalar::Bool(b),
-            v if v.as_f64().is_some() => {
-                // Use integer representation for consistent ordering
-                Scalar::Int((v.as_f64().unwrap() * 1_000_000.0) as i64)
-            }
-            ValueRef::Str(s) => Scalar::Str(s.to_string()),
+            ValueRef::Int(i) => Scalar::Int(i),
+            ValueRef::Float(f) => Scalar::Float(f),
+            ValueRef::Str(s) => Scalar::Str(s.into()),
+            // Containers have no meaningful order; they sort with nulls, as
+            // they always have.
             _ => Scalar::Null,
         };
         SortableValue { scalar, descending }
     }
 }
 
-/// Heap bytes held by one row's sort key: the `Vec` buffer plus any string
-/// scalars inside it.
-fn sortable_bytes(key: &[SortableValue]) -> usize {
-    crate::size::vec_bytes::<SortableValue>(key.len())
+/// Heap bytes held by one row's sort key.
+///
+/// `SmallVec` keeps up to two keys inline, and `SmolStr` keeps strings up to
+/// 22 bytes inline, so a typical single-field sort key now costs no heap at
+/// all.
+fn sortable_bytes(key: &SortKey) -> usize {
+    let spilled = if key.spilled() {
+        crate::size::vec_bytes::<SortableValue>(key.len())
+    } else {
+        0
+    };
+    spilled
         + key
             .iter()
             .map(|sv| match &sv.scalar {
-                Scalar::Str(s) => s.capacity(),
+                Scalar::Str(s) if s.len() > 22 => s.len(),
                 _ => 0,
             })
             .sum::<usize>()
@@ -112,7 +192,7 @@ impl TopK {
         }
     }
 
-    fn compute_sort_key(&self, key: &str, store: &Store) -> Vec<SortableValue> {
+    fn compute_sort_key(&self, key: &str, store: &Store) -> SortKey {
         let row = store.get_row_by_key(key);
         match &self.order_by {
             Some(orders) => orders
@@ -123,10 +203,13 @@ impl TopK {
                     SortableValue::from_value(val, desc)
                 })
                 .collect(),
-            None => vec![SortableValue {
-                scalar: Scalar::Str(key.to_string()),
-                descending: false,
-            }],
+            None => SmallVec::from_elem(
+                SortableValue {
+                    scalar: Scalar::Str(key.into()),
+                    descending: false,
+                },
+                1,
+            ),
         }
     }
 
@@ -135,7 +218,7 @@ impl TopK {
     /// Reads the window by rank via `get_index` (O(log n) per lookup on the
     /// Fenwick-indexed B-tree) rather than `iter().skip(offset)` (O(offset)), so
     /// the cost is O(limit · log n) — independent of how deep the window is.
-    fn current_window(&self) -> Vec<String> {
+    fn current_window(&self) -> Vec<RowKey> {
         let n = self.buffer.len();
         if self.offset >= n {
             return Vec::new();
@@ -150,7 +233,7 @@ impl TopK {
 impl super::Operator for TopK {
     fn snapshot(&self, inputs: &[&ZSet], store: &Store, _ctx: Option<&Sp00kyValue>) -> ZSet {
         let upstream = inputs[0];
-        let mut items: Vec<(Vec<SortableValue>, &String)> = upstream
+        let mut items: Vec<(SortKey, &RowKey)> = upstream
             .iter()
             .filter(|(_, &w)| w > 0)
             .map(|(key, _)| (self.compute_sort_key(key, store), key))
@@ -190,8 +273,8 @@ impl super::Operator for TopK {
 
         // Compute displacement delta
         let mut output_delta = HashMap::new();
-        let old_set: std::collections::HashSet<&String> = old_top_k.iter().collect();
-        let new_set: std::collections::HashSet<&String> = new_top_k.iter().collect();
+        let old_set: std::collections::HashSet<&RowKey> = old_top_k.iter().collect();
+        let new_set: std::collections::HashSet<&RowKey> = new_top_k.iter().collect();
 
         for key in &new_top_k {
             if !old_set.contains(key) {
@@ -227,19 +310,19 @@ impl super::Operator for TopK {
         let buffer: usize = self
             .buffer
             .iter()
-            .map(|(sort_key, row_key)| {
-                std::mem::size_of::<(Vec<SortableValue>, String)>()
-                    + sortable_bytes(sort_key)
-                    + row_key.capacity()
+            .map(|(sort_key, _)| {
+                std::mem::size_of::<(SortKey, RowKey)>() + sortable_bytes(sort_key)
             })
             .sum();
-        let index: usize = crate::size::map_table_bytes::<String, Vec<SortableValue>>(
-            self.key_index.capacity(),
-        ) + self
-            .key_index
-            .iter()
-            .map(|(row_key, sort_key)| row_key.capacity() + sortable_bytes(sort_key))
-            .sum::<usize>();
+        let index: usize =
+            crate::size::map_table_bytes::<RowKey, SortKey>(self.key_index.capacity())
+                + self
+                    .key_index
+                    .values()
+                    .map(sortable_bytes)
+                    .sum::<usize>();
+        // Row keys are shared `Arc<str>` clones of the ones the store already
+        // holds, so they are deliberately not counted again here.
         buffer + index
     }
 
@@ -271,7 +354,97 @@ mod tests {
     use serde_json::json;
 
     fn zset(items: &[(&str, i64)]) -> ZSet {
-        items.iter().map(|(k, w)| (k.to_string(), *w)).collect()
+        items.iter().map(|(k, w)| ((*k).into(), *w)).collect()
+    }
+
+    /// Sort keys used to be stored as `(value * 1_000_000.0) as i64`. That
+    /// cast saturates at `i64::MAX`, so every value above ~9.2e12 collapsed to
+    /// the same key and sorted arbitrarily. Epoch milliseconds are already
+    /// ~1.7e12 and epoch microseconds are ~1.7e15, so "order by a timestamp"
+    /// was squarely in the broken range.
+    #[test]
+    fn large_numbers_do_not_collapse_to_one_sort_key() {
+        let mut store = Store::new();
+        store.ensure_collection("events");
+        // Three distinct microsecond timestamps, all past the old saturation
+        // point.
+        let stamps = [1_700_000_000_000_000i64, 1_700_000_000_000_001, 1_700_000_000_000_002];
+        for (i, ts) in stamps.iter().enumerate() {
+            store.apply_change(&Change::create("events", &format!("e{i}"), json!({ "at": ts })));
+        }
+        let input = zset(&[("events:e0", 1), ("events:e1", 1), ("events:e2", 1)]);
+
+        let newest = TopK::new(1, 0, Some(vec![OrderSpec {
+            field: Path::new("at"),
+            direction: "DESC".into(),
+        }]))
+        .snapshot(&[&input], &store, None);
+        assert!(newest.is_present("events:e2"), "newest must win, got {newest:?}");
+
+        let oldest = TopK::new(1, 0, Some(vec![OrderSpec {
+            field: Path::new("at"),
+            direction: "ASC".into(),
+        }]))
+        .snapshot(&[&input], &store, None);
+        assert!(oldest.is_present("events:e0"), "oldest must win, got {oldest:?}");
+    }
+
+    /// The other end of the same bug: multiplying by 1e6 and truncating sent
+    /// everything below 1e-6 to zero, so small distinct values tied.
+    #[test]
+    fn small_numbers_do_not_truncate_to_one_sort_key() {
+        let mut store = Store::new();
+        store.ensure_collection("m");
+        for (i, v) in [1e-9f64, 2e-9, 3e-9].iter().enumerate() {
+            store.apply_change(&Change::create("m", &format!("r{i}"), json!({ "v": v })));
+        }
+        let input = zset(&[("m:r0", 1), ("m:r1", 1), ("m:r2", 1)]);
+        let top = TopK::new(1, 0, Some(vec![OrderSpec {
+            field: Path::new("v"),
+            direction: "DESC".into(),
+        }]))
+        .snapshot(&[&input], &store, None);
+        assert!(top.is_present("m:r2"), "largest small value must win, got {top:?}");
+    }
+
+    /// Integers and whole floats have to interleave correctly, matching how
+    /// `compare_values` treats them.
+    #[test]
+    fn ints_and_floats_order_together() {
+        let mut store = Store::new();
+        store.ensure_collection("n");
+        store.apply_change(&Change::create("n", "a", json!({ "v": 1 })));
+        store.apply_change(&Change::create("n", "b", json!({ "v": 2.5 })));
+        store.apply_change(&Change::create("n", "c", json!({ "v": 3 })));
+        let input = zset(&[("n:a", 1), ("n:b", 1), ("n:c", 1)]);
+        let top2 = TopK::new(2, 0, Some(vec![OrderSpec {
+            field: Path::new("v"),
+            direction: "DESC".into(),
+        }]))
+        .snapshot(&[&input], &store, None);
+        assert!(top2.is_present("n:c"));
+        assert!(top2.is_present("n:b"));
+        assert!(!top2.is_present("n:a"), "1 must not outrank 2.5");
+    }
+
+    /// A NaN sort key must not break the `BTreeSet`'s ordering invariants.
+    #[test]
+    fn nan_sort_keys_stay_totally_ordered() {
+        let mut store = Store::new();
+        store.ensure_collection("n");
+        store.apply_change(&Change::create("n", "a", json!({ "v": 1.0 })));
+        store.apply_change(&Change::create("n", "b", json!({ "v": 2.0 })));
+        let mut top = TopK::new(2, 0, Some(vec![OrderSpec {
+            field: Path::new("v"),
+            direction: "ASC".into(),
+        }]));
+        // Insert, then a NaN row, then read the window — must not panic and
+        // must still return a full window.
+        let d1 = zset(&[("n:a", 1), ("n:b", 1)]);
+        let _ = top.step(&[&d1], &store, None);
+        store.apply_change(&Change::create("n", "c", json!({ "v": f64::NAN })));
+        let _ = top.step(&[&zset(&[("n:c", 1)])], &store, None);
+        assert_eq!(top.buffer.len(), 3);
     }
 
     #[test]
@@ -492,7 +665,7 @@ mod tests {
             }]),
         );
         // Seed all rows in one delta (mirrors Circuit::run_initial_snapshot).
-        let delta: ZSet = items.into_iter().collect();
+        let delta: ZSet = items.into_iter().map(|(k, w)| (k.into(), w)).collect();
         let _ = top_k.step(&[&delta], &store, None);
         assert_eq!(top_k.buffer.len(), n);
 

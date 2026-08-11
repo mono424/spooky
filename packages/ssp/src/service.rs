@@ -399,7 +399,7 @@ mod start_window_register_before_ingest_tests {
         circuit.step(ChangeSet { changes });
 
         let view = circuit.get_view("_00_query:test").expect("view");
-        let mut recs: Vec<String> = view.cache.keys().cloned().collect();
+        let mut recs: Vec<String> = view.cache.keys().map(|k| k.to_string()).collect();
         recs.sort();
         eprintln!("len={} first={:?} last={:?}", recs.len(), recs.first(), recs.last());
         assert_eq!(recs.len(), 50, "window size");
@@ -477,7 +477,7 @@ mod link_traversal_permission_tests {
             .expect("view")
             .cache
             .keys()
-            .cloned()
+            .map(|k| k.to_string())
             .collect();
         recs.sort();
         recs

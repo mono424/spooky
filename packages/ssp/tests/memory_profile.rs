@@ -73,7 +73,7 @@ fn load_rows(n: usize) -> (Circuit, usize) {
 #[ignore = "allocates ~100MB and takes seconds; run with --ignored"]
 fn store_bytes_per_row_stays_under_budget() {
     const ROWS: usize = 50_000;
-    const MAX_BYTES_PER_ROW: f64 = 700.0;
+    const MAX_BYTES_PER_ROW: f64 = 640.0;
 
     let (circuit, json_bytes) = load_rows(ROWS);
     let report = circuit.size_report();
@@ -108,14 +108,14 @@ fn store_bytes_per_row_stays_under_budget() {
     );
 }
 
-/// The `zset` keys are a second `"table:id"` string per row, allocated
-/// separately from the raw id already in `rows`. Pinned so the `Arc<str>`
-/// interning phase has a number to beat.
+/// `zset` keys are now shared `Arc<str>` clones of the same allocation the
+/// rest of the circuit holds, so what is left here is the bucket array: 76
+/// B/row before interning, 33 after.
 #[test]
 #[ignore = "allocates ~100MB and takes seconds; run with --ignored"]
 fn zset_duplicate_key_cost_is_pinned() {
     const ROWS: usize = 50_000;
-    const MAX_ZSET_BYTES_PER_ROW: f64 = 90.0;
+    const MAX_ZSET_BYTES_PER_ROW: f64 = 45.0;
 
     let (circuit, _) = load_rows(ROWS);
     let table = &circuit.size_report().tables[0];
@@ -134,14 +134,17 @@ fn zset_duplicate_key_cost_is_pinned() {
 /// exceeds the row store outright, and it is invisible in the per-table
 /// numbers.
 ///
-/// Baseline measured 2026-08-11: **242 B/row/query**, against 2054 B/row for
-/// the shared store. So roughly eight windowed views over one table already
-/// cost as much as the table itself.
+/// Measured 149 B/row/query, down from 242: the row key is now shared with
+/// the store rather than allocated twice more here, the sort key is inline for
+/// single-field ordering, and short string keys sit inside a `SmolStr`.
+///
+/// Still O(table) per query, which is the real problem and needs an operator
+/// redesign rather than a smaller representation.
 #[test]
 #[ignore = "allocates ~100MB and takes seconds; run with --ignored"]
 fn topk_state_is_charged_per_query_over_the_whole_table() {
     const ROWS: usize = 50_000;
-    const MAX_BYTES_PER_ROW_PER_QUERY: f64 = 400.0;
+    const MAX_BYTES_PER_ROW_PER_QUERY: f64 = 175.0;
 
     let mut store = Store::new();
     store.ensure_collection("thread");
@@ -149,7 +152,7 @@ fn topk_state_is_charged_per_query_over_the_whole_table() {
     for i in 0..ROWS {
         let id = format!("{i:026}");
         store.apply_change(&Change::create("thread", &id, synthetic_row(i)));
-        delta.insert(format!("thread:{id}"), 1);
+        delta.insert(format!("thread:{id}").into(), 1);
     }
 
     // A window query: 20 rows out of 50k. State should be O(20); it is O(50k).

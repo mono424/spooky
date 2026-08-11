@@ -38,7 +38,7 @@ pub struct View {
     pub content_generation: u64,
     /// Subquery record tracking: child_key → (parent_key, alias).
     /// Tracks which subquery records are visible through parent records in the view.
-    pub subquery_cache: HashMap<String, (String, String)>,
+    pub subquery_cache: HashMap<crate::algebra::RowKey, (crate::algebra::RowKey, String)>,
     /// Authenticated user that owns this view (record-id form, e.g.
     /// `"user:abc"`). Empty when the registering call carried no
     /// `$auth.id`. Drives per-user `_00_list_ref_user_<id>` routing in
@@ -55,15 +55,15 @@ impl View {
     /// lives in its operators.
     pub fn state_bytes(&self) -> usize {
         crate::size::zset_bytes(&self.cache)
-            + crate::size::map_table_bytes::<String, (String, String)>(
+            + crate::size::map_table_bytes::<crate::algebra::RowKey, (crate::algebra::RowKey, String)>(
                 self.subquery_cache.capacity(),
             )
             + self
                 .subquery_cache
                 .iter()
-                .map(|(child, (parent, alias))| {
-                    child.capacity() + parent.capacity() + alias.capacity()
-                })
+                // Child and parent are shared `Arc<str>` row keys, counted
+                // once at the store rather than in every holder.
+                .map(|(_child, (_parent, alias))| alias.capacity())
                 .sum::<usize>()
             + self.params.as_ref().map_or(0, |p| p.heap_bytes())
     }
@@ -110,7 +110,7 @@ impl View {
     /// Compute a hash of the current cache state for change detection.
     /// Includes `content_generation` so the hash changes when subquery data changes.
     pub fn compute_hash(&self) -> String {
-        let mut keys: Vec<&String> = self.cache.keys().collect();
+        let mut keys: Vec<&crate::algebra::RowKey> = self.cache.keys().collect();
         keys.sort();
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

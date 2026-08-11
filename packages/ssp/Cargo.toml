@@ -1,6 +1,6 @@
 [package]
 name = "ssp"
-version = "0.0.1-canary.187"
+version = "0.0.1-canary.188"
 edition = "2021"
 
 [lib]
@@ -20,7 +20,7 @@ mmap-store = ["dep:memmap2"]
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 ulid = "1.2"
 anyhow = "1.0"

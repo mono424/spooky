@@ -2,7 +2,21 @@ use super::weight::Weight;
 use std::collections::HashMap;
 
 /// A row key is a string in the format "table:id".
-pub type RowKey = String;
+///
+/// Reference-counted rather than owned, because the same key is held by a lot
+/// of structures at once: the collection's membership Z-set, every view cache
+/// the row appears in, TopK's sorted buffer *and* its reverse index, and each
+/// join's integrated state. As a `String` that was an independent allocation
+/// per structure — a row visible in five of them paid for five copies of the
+/// same bytes.
+///
+/// Nothing about the call sites had to change for this to pay off: they were
+/// already cloning keys out of upstream Z-sets, and those clones are now
+/// refcount bumps.
+///
+/// `Arc<str>` (not `Rc`) because operators are `Send + Sync`, and not
+/// `Arc<String>` because that would add a second indirection for no gain.
+pub type RowKey = std::sync::Arc<str>;
 
 /// A Z-set: a map from keys to integer weights.
 ///
@@ -88,7 +102,7 @@ mod tests {
     use super::*;
 
     fn zset(items: &[(&str, i64)]) -> ZSet {
-        items.iter().map(|(k, w)| (k.to_string(), *w)).collect()
+        items.iter().map(|(k, w)| ((*k).into(), *w)).collect()
     }
 
     #[test]

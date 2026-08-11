@@ -43,15 +43,12 @@ pub fn vec_bytes<T>(capacity: usize) -> usize {
     capacity * std::mem::size_of::<T>()
 }
 
-/// Heap bytes held by a Z-set: the bucket array plus every key's string buffer.
-///
-/// Note what this captures: the key is a full `"table:id"` `String`, allocated
-/// independently in every Z-set a row appears in. A row visible in a
-/// collection's `zset`, a view's `cache`, and three operator states costs five
-/// separate copies of that string.
+/// Heap bytes held by a Z-set.
 pub fn zset_bytes(zset: &ZSet) -> usize {
-    map_table_bytes::<String, i64>(zset.capacity())
-        + zset.keys().map(|k| k.capacity()).sum::<usize>()
+    // Only the bucket array is charged here. The keys are `Arc<str>` clones of
+    // one shared allocation, so counting their bytes in every Z-set that holds
+    // them would multiply a cost that is now paid once.
+    map_table_bytes::<crate::algebra::RowKey, i64>(zset.capacity())
 }
 
 #[cfg(test)]
@@ -65,13 +62,19 @@ mod tests {
         assert_eq!(zset_bytes(&ZSet::new()), 0);
     }
 
+    /// Keys are shared `Arc<str>` clones, so a Z-set is charged for its bucket
+    /// array only — counting the key bytes again in every Z-set that holds a
+    /// row would multiply a cost that is now paid once.
     #[test]
-    fn zset_bytes_counts_keys_and_table() {
+    fn zset_bytes_charges_the_bucket_array_not_the_shared_keys() {
         let mut z = ZSet::new();
-        z.insert("thread:abcdefghij".to_string(), 1);
-        let bytes = zset_bytes(&z);
-        // Must exceed the key's own bytes: the bucket array is counted too.
-        assert!(bytes > "thread:abcdefghij".len());
+        z.insert("thread:abcdefghij".into(), 1);
+        assert!(zset_bytes(&z) > 0);
+
+        // A very long key must not change the reported size: it is shared.
+        let mut long = ZSet::new();
+        long.insert("thread:".to_string().repeat(50).into(), 1);
+        assert_eq!(zset_bytes(&z), zset_bytes(&long));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::algebra::ZSet;
+use crate::algebra::{RowKey, ZSet};
 use crate::circuit::graph::Graph;
 use crate::circuit::store::{Change, ChangeSet, Operation, Record, Store};
 use crate::circuit::view::{OutputFormat, View};
@@ -122,7 +122,7 @@ pub struct Circuit {
 fn compute_current_subquery_set(
     store: &Store,
     view: &View,
-) -> HashMap<String, (String, String)> {
+) -> HashMap<RowKey, (RowKey, String)> {
     let mut result = HashMap::new();
 
     let subquery_infos = view.plan.root.subquery_projection_info();
@@ -170,7 +170,7 @@ fn compute_current_subquery_set(
 
             if view.cache.contains_key(fk_value) {
                 let child_key = make_key(subquery_table, child_raw_id);
-                result.insert(child_key, (fk_value.to_string(), alias.clone()));
+                result.insert(child_key, (fk_value.into(), alias.clone()));
             }
         }
     }
@@ -197,7 +197,7 @@ fn compute_current_subquery_set(
 
         // Build index: parent's parent_field value → parent full key
         // Only for parent rows already in the result set (level-1 items)
-        let mut parent_field_index: HashMap<String, String> = HashMap::new();
+        let mut parent_field_index: HashMap<String, RowKey> = HashMap::new();
         for (parent_raw_id, parent_row_data) in parent_coll.rows.iter() {
             let parent_full_key = make_key(pt, parent_raw_id);
             if result.contains_key(&parent_full_key) {
@@ -225,8 +225,8 @@ fn compute_current_subquery_set(
 
 /// Diff two subquery sets and produce delta items.
 fn diff_subquery_sets(
-    old: &HashMap<String, (String, String)>,
-    new: &HashMap<String, (String, String)>,
+    old: &HashMap<RowKey, (RowKey, String)>,
+    new: &HashMap<RowKey, (RowKey, String)>,
     store: &Store,
 ) -> Vec<SubqueryDeltaItem> {
     let mut items = Vec::new();
@@ -235,8 +235,8 @@ fn diff_subquery_sets(
     for (key, (parent_key, alias)) in new {
         if !old.contains_key(key) {
             items.push(SubqueryDeltaItem {
-                id: key.clone(),
-                parent_key: parent_key.clone(),
+                id: key.to_string(),
+                parent_key: parent_key.to_string(),
                 alias: alias.clone(),
                 op: SubqueryOp::Add,
             });
@@ -247,8 +247,8 @@ fn diff_subquery_sets(
     for (key, (parent_key, alias)) in old {
         if !new.contains_key(key) {
             items.push(SubqueryDeltaItem {
-                id: key.clone(),
-                parent_key: parent_key.clone(),
+                id: key.to_string(),
+                parent_key: parent_key.to_string(),
                 alias: alias.clone(),
                 op: SubqueryOp::Remove,
             });
@@ -264,8 +264,8 @@ fn diff_subquery_sets(
             // when there's any change to subquery tables (the caller determines when to recompute)
             if old_version.is_some() {
                 items.push(SubqueryDeltaItem {
-                    id: key.clone(),
-                    parent_key: parent_key.clone(),
+                    id: key.to_string(),
+                    parent_key: parent_key.to_string(),
                     alias: alias.clone(),
                     op: SubqueryOp::Update,
                 });
@@ -469,7 +469,7 @@ impl Circuit {
         let mut table_deltas: HashMap<String, ZSet> = HashMap::new();
         let mut changed_tables: Vec<String> = Vec::new();
         // Track content-only updates (Operation::Update has weight 0)
-        let mut content_updates: HashMap<String, Vec<String>> = HashMap::new();
+        let mut content_updates: HashMap<String, Vec<RowKey>> = HashMap::new();
 
         // Consumed by value so the row body moves into the store instead of
         // being deep-copied on the way in. `changes` is not read after this
@@ -592,7 +592,7 @@ impl Circuit {
         let additions: Vec<String> = view_output
             .iter()
             .filter(|(_, &w)| w > 0)
-            .map(|(k, _)| k.clone())
+            .map(|(k, _)| k.to_string())
             .collect();
 
         view.apply_delta(&view_output);
@@ -603,15 +603,15 @@ impl Circuit {
         let subquery_items: Vec<SubqueryDeltaItem> = new_subquery_set
             .iter()
             .map(|(key, (parent_key, alias))| SubqueryDeltaItem {
-                id: key.clone(),
-                parent_key: parent_key.clone(),
+                id: key.to_string(),
+                parent_key: parent_key.to_string(),
                 alias: alias.clone(),
                 op: SubqueryOp::Add,
             })
             .collect();
         view.subquery_cache = new_subquery_set;
 
-        let records: Vec<String> = view.cache.keys().cloned().collect();
+        let records: Vec<String> = view.cache.keys().map(|k| k.to_string()).collect();
 
         Some(ViewDelta {
             query_id: query_id.to_string(),
@@ -630,7 +630,7 @@ impl Circuit {
         &mut self,
         query_id: &str,
         table_deltas: &HashMap<String, ZSet>,
-        content_updates: &HashMap<String, Vec<String>>,
+        content_updates: &HashMap<String, Vec<RowKey>>,
     ) -> Option<ViewDelta> {
         let graph = self.graphs.get_mut(query_id)?;
         let view = self.views.get_mut(query_id)?;
@@ -704,22 +704,24 @@ impl Circuit {
                     );
                 }
                 let now_matches = node_evals[graph.output_node];
-                let prev_cached = view.cache.get(key).copied().unwrap_or(0);
+                let prev_cached = view.cache.get(&**key).copied().unwrap_or(0);
                 let in_cache = prev_cached > 0;
-                if now_matches && !in_cache && !view_delta.contains_key(key) {
-                    view_delta.insert(key.clone(), 1);
-                } else if !now_matches && in_cache && !view_delta.contains_key(key) {
-                    view_delta.insert(key.clone(), -prev_cached);
+                if now_matches && !in_cache && !view_delta.contains_key(&**key) {
+                    view_delta.insert(key.clone().into(), 1);
+                } else if !now_matches && in_cache && !view_delta.contains_key(&**key) {
+                    view_delta.insert(key.clone().into(), -prev_cached);
                 }
             }
         }
 
         // Identify content-only updates: keys in the view cache whose data changed
         // but membership didn't (Operation::Update with weight 0).
-        let mut updates: Vec<String> = content_updates
+        let mut updates: Vec<RowKey> = content_updates
             .iter()
             .flat_map(|(_, keys)| keys.iter())
-            .filter(|key| view.cache.contains_key(*key) && !view_delta.contains_key(*key))
+            .filter(|key| {
+                view.cache.contains_key(&**key) && !view_delta.contains_key(&**key)
+            })
             .cloned()
             .collect();
 
@@ -750,14 +752,14 @@ impl Circuit {
         let additions: Vec<String> = view_delta
             .iter()
             .filter(|(k, &w)| w > 0 && !view.cache.contains_key(*k))
-            .map(|(k, _)| k.clone())
+            .map(|(k, _)| k.to_string())
             .collect();
         let removals: Vec<String> = view_delta
             .iter()
             .filter(|(k, &w)| {
                 w < 0 && view.cache.get(*k).map(|&old| old + w <= 0).unwrap_or(false)
             })
-            .map(|(k, _)| k.clone())
+            .map(|(k, _)| k.to_string())
             .collect();
 
         // Apply delta to view cache
@@ -787,13 +789,16 @@ impl Circuit {
             vec![]
         };
 
-        let records: Vec<String> = view.cache.keys().cloned().collect();
+        let records: Vec<String> = view.cache.keys().map(|k| k.to_string()).collect();
 
         Some(ViewDelta {
             query_id: query_id.to_string(),
             additions,
             removals,
-            updates,
+            // `ViewDelta` is the wire shape, so shared keys become owned here
+            // — at the one boundary that leaves the circuit, rather than
+            // throughout it.
+            updates: updates.iter().map(|k| k.to_string()).collect(),
             records,
             result_hash: view.last_hash.clone(),
             subquery_items,
@@ -907,7 +912,7 @@ struct QueryStateRef<'a> {
     cache: &'a ZSet,
     last_hash: &'a str,
     content_generation: u64,
-    subquery_cache: &'a HashMap<String, (String, String)>,
+    subquery_cache: &'a HashMap<RowKey, (RowKey, String)>,
     auth_id: &'a str,
 }
 
@@ -922,7 +927,7 @@ struct QueryState {
     last_hash: String,
     content_generation: u64,
     #[serde(default)]
-    subquery_cache: HashMap<String, (String, String)>,
+    subquery_cache: HashMap<RowKey, (RowKey, String)>,
     /// Owning user record id (e.g. `"user:abc"`). `default` so old
     /// snapshots without this field still deserialize (auth_id falls
     /// back to "" and the SSP routes those views to the global tables).
