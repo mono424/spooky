@@ -1,4 +1,5 @@
 use crate::algebra::{Weight, ZSet};
+use crate::eval::value_ref::ValueRef;
 use crate::types::{make_key, raw_id, Sp00kyValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -211,7 +212,16 @@ impl Store {
     }
 
     /// Get row data by zset key (format "table:id").
-    pub fn get_row_by_key(&self, key: &str) -> Option<&Sp00kyValue> {
+    ///
+    /// Returns [`ValueRef::Missing`] for an unparseable key, an unknown table,
+    /// or an absent row — the caller does not distinguish those cases.
+    pub fn get_row_by_key(&self, key: &str) -> ValueRef<'_> {
+        ValueRef::from_opt(self.get_row_owned(key))
+    }
+
+    /// Borrow of the stored row, for the few places that still need the owned
+    /// type (serialization, bulk conversion).
+    pub fn get_row_owned(&self, key: &str) -> Option<&Sp00kyValue> {
         let (table, id) = crate::types::parse_key(key)?;
         let coll = self.collections.get(table)?;
         // Try raw ID first, then with table prefix
@@ -222,16 +232,18 @@ impl Store {
     /// the current step (see [`pending_deleted_rows`]). Used ONLY by predicate
     /// evaluation so a delete's `-1` retraction can be tested against the WHERE
     /// clause even though the row is already gone from `collections`.
-    pub fn get_row_by_key_or_deleted(&self, key: &str) -> Option<&Sp00kyValue> {
-        self.get_row_by_key(key)
-            .or_else(|| self.pending_deleted_rows.get(key))
+    pub fn get_row_by_key_or_deleted(&self, key: &str) -> ValueRef<'_> {
+        ValueRef::from_opt(
+            self.get_row_owned(key)
+                .or_else(|| self.pending_deleted_rows.get(key)),
+        )
     }
 
     /// Stage a row's content before a `Delete` removes it, so predicate
     /// evaluation in this step can still read it. No-op if the row is absent.
     pub fn stage_deleted_row(&mut self, table: &str, id: &str) {
         let key = make_key(table, id);
-        if let Some(row) = self.get_row_by_key(&key).cloned() {
+        if let Some(row) = self.get_row_owned(&key).cloned() {
             self.pending_deleted_rows.insert(key, row);
         }
     }

@@ -51,13 +51,14 @@ impl Aggregate {
             None => "__global__".to_string(),
             Some(fields) => {
                 let row = store.get_row_by_key(key);
+                // `group_key_repr`, not `{:?}`. Group keys are opaque strings
+                // compared for equality and never persisted, so if their
+                // formatting changed — which swapping the value type behind
+                // `Debug` would do — rows would silently repartition into
+                // different groups and no test anywhere would fail.
                 let parts: Vec<String> = fields
                     .iter()
-                    .map(|f| {
-                        row.and_then(|r| resolve_field(Some(r), f))
-                            .map(|v| format!("{:?}", v))
-                            .unwrap_or_else(|| "null".to_string())
-                    })
+                    .map(|f| resolve_field(row, f).group_key_repr())
                     .collect();
                 parts.join("|")
             }
@@ -92,10 +93,7 @@ impl super::Operator for Aggregate {
             let row = store.get_row_by_key(key);
             for (i, func) in self.funcs.iter().enumerate() {
                 if let AggregateFunc::Sum { field } = func {
-                    let val = row
-                        .and_then(|r| resolve_field(Some(r), field))
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
+                    let val = resolve_field(row, field).as_f64().unwrap_or(0.0);
                     if state.sums.len() <= i {
                         state.sums.resize(i + 1, 0.0);
                     }
@@ -129,10 +127,7 @@ impl super::Operator for Aggregate {
             let row = store.get_row_by_key(key);
             for (i, func) in self.funcs.iter().enumerate() {
                 if let AggregateFunc::Sum { field } = func {
-                    let val = row
-                        .and_then(|r| resolve_field(Some(r), field))
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0);
+                    let val = resolve_field(row, field).as_f64().unwrap_or(0.0);
                     if state.sums.len() <= i {
                         state.sums.resize(i + 1, 0.0);
                     }

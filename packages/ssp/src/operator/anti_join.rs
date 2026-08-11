@@ -1,6 +1,7 @@
 use crate::algebra::{ZSet, ZSetOps};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::{compare_values, hash_value, resolve_field};
+use crate::eval::value_ref::ValueRef;
 use crate::operator::plan::JoinCondition;
 use crate::types::Sp00kyValue;
 use std::cmp::Ordering;
@@ -48,16 +49,17 @@ impl AntiJoin {
             return HashMap::new();
         }
 
-        let mut right_present: HashMap<u64, Vec<Sp00kyValue>> = HashMap::new();
+        let mut right_present: HashMap<u64, Vec<ValueRef<'_>>> = HashMap::new();
         for (r_key, &r_weight) in right {
             if r_weight <= 0 {
                 continue;
             }
-            if let Some(r_val) = store.get_row_by_key(r_key) {
-                if let Some(r_field) = resolve_field(Some(r_val), &condition.right_field) {
-                    let h = hash_value(r_field);
-                    right_present.entry(h).or_default().push(r_field.clone());
-                }
+            let r_field = resolve_field(store.get_row_by_key(r_key), &condition.right_field);
+            if !r_field.is_missing() {
+                right_present
+                    .entry(hash_value(r_field))
+                    .or_default()
+                    .push(r_field);
             }
         }
 
@@ -66,25 +68,25 @@ impl AntiJoin {
             if l_weight <= 0 {
                 continue;
             }
-            let row = match store.get_row_by_key(l_key) {
-                Some(r) => r,
-                None => continue,
-            };
-            let l_field = match resolve_field(Some(row), &condition.left_field) {
-                Some(v) => v,
-                None => {
-                    // Field absent on left row → no possible match → counts as
-                    // "anti": include with weight 1.
-                    out.insert(l_key.clone(), 1i64);
-                    continue;
-                }
-            };
+            // A missing ROW and a missing FIELD mean different things here, so
+            // they stay separate checks: no row at all is skipped entirely,
+            // whereas a row without the join field can never match and so
+            // counts as "anti".
+            let row = store.get_row_by_key(l_key);
+            if row.is_missing() {
+                continue;
+            }
+            let l_field = resolve_field(row, &condition.left_field);
+            if l_field.is_missing() {
+                out.insert(l_key.clone(), 1i64);
+                continue;
+            }
             let matched = right_present
                 .get(&hash_value(l_field))
                 .map(|cands| {
                     cands
                         .iter()
-                        .any(|m| compare_values(Some(l_field), Some(m)) == Ordering::Equal)
+                        .any(|m| compare_values(l_field, *m) == Ordering::Equal)
                 })
                 .unwrap_or(false);
             if !matched {
@@ -151,19 +153,22 @@ impl super::Operator for AntiJoin {
         // the membership re-evaluation pass calls evaluate_key). Anti-join
         // admits the key iff NO witness exists; a missing left field counts
         // as anti, mirroring anti_join().
-        let Some(l_val) = store.get_row_by_key(key) else {
+        // Note the two absences differ: no row rejects, a row missing the join
+        // field admits.
+        let row = store.get_row_by_key(key);
+        if row.is_missing() {
             return false;
-        };
-        let Some(l_field) = resolve_field(Some(l_val), &self.condition.left_field) else {
+        }
+        let l_field = resolve_field(row, &self.condition.left_field);
+        if l_field.is_missing() {
             return true;
-        };
+        }
         !self.right_state.iter().any(|(r_key, &w)| {
-            w > 0
-                && store
-                    .get_row_by_key(r_key)
-                    .and_then(|r_val| resolve_field(Some(r_val), &self.condition.right_field))
-                    .map(|r_field| compare_values(Some(l_field), Some(r_field)) == Ordering::Equal)
-                    .unwrap_or(false)
+            if w <= 0 {
+                return false;
+            }
+            let r_field = resolve_field(store.get_row_by_key(r_key), &self.condition.right_field);
+            !r_field.is_missing() && compare_values(l_field, r_field) == Ordering::Equal
         })
     }
 }

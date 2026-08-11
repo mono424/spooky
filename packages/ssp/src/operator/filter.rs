@@ -1,6 +1,7 @@
 use crate::algebra::ZSet;
 use crate::circuit::store::Store;
 use crate::eval::value_ops::{compare_values, resolve_field};
+use crate::eval::value_ref::ValueRef;
 use crate::operator::predicate::Predicate;
 use crate::types::{Path, Sp00kyValue};
 use serde_json::Value;
@@ -97,7 +98,15 @@ fn resolve_predicate_value(value: &Value, ctx: Option<&Sp00kyValue>) -> Option<S
                 path_str
             };
             let path = Path::new(effective_path);
-            resolve_field(Some(ctx), &path).cloned()
+            let resolved = resolve_field(ValueRef::from_value(ctx), &path);
+            // An unresolvable `$param` yields None so the caller fails closed,
+            // which is why this is not simply `to_owned_value()` (that maps
+            // Missing to Null and would compare as a real value).
+            if resolved.is_missing() {
+                None
+            } else {
+                Some(resolved.to_owned_value())
+            }
         } else {
             Some(Sp00kyValue::from(value.clone()))
         }
@@ -125,14 +134,11 @@ fn check_predicate_recursive(
             if field.segments().len() == 1 && field.segments()[0] == "id" {
                 return key.starts_with(prefix.as_str());
             }
-            if let Some(row) = store.get_row_by_key_or_deleted(key) {
-                if let Some(val) = resolve_field(Some(row), field) {
-                    if let Sp00kyValue::Str(s) = val {
-                        return s.starts_with(prefix.as_str());
-                    }
-                }
+            let row = store.get_row_by_key_or_deleted(key);
+            match resolve_field(row, field).as_str() {
+                Some(s) => s.starts_with(prefix.as_str()),
+                None => false,
             }
-            false
         }
         Predicate::Eq { field, value }
         | Predicate::Neq { field, value }
@@ -158,30 +164,24 @@ fn check_predicate_recursive(
             // the predicate targeted one — once per row, per predicate, per
             // step. Only the `id` branch needs to own anything, and only
             // because it synthesizes a value that isn't in the row.
-            let id_value;
-            let actual: Option<&Sp00kyValue> =
-                if field.segments().len() == 1 && field.segments()[0] == "id" {
-                    id_value = Sp00kyValue::Str(key.to_string());
-                    Some(&id_value)
-                } else {
-                    store
-                        .get_row_by_key_or_deleted(key)
-                        .and_then(|r| resolve_field(Some(r), field))
-                };
-
-            if let Some(actual) = actual {
-                let ord = compare_values(Some(actual), Some(&target));
-                match pred {
-                    Predicate::Eq { .. } => ord == Ordering::Equal,
-                    Predicate::Neq { .. } => ord != Ordering::Equal,
-                    Predicate::Gt { .. } => ord == Ordering::Greater,
-                    Predicate::Gte { .. } => ord != Ordering::Less,
-                    Predicate::Lt { .. } => ord == Ordering::Less,
-                    Predicate::Lte { .. } => ord != Ordering::Greater,
-                    _ => false,
-                }
+            let actual = if field.segments().len() == 1 && field.segments()[0] == "id" {
+                ValueRef::Str(key)
             } else {
-                false
+                resolve_field(store.get_row_by_key_or_deleted(key), field)
+            };
+
+            if actual.is_missing() {
+                return false;
+            }
+            let ord = compare_values(actual, ValueRef::from_value(&target));
+            match pred {
+                Predicate::Eq { .. } => ord == Ordering::Equal,
+                Predicate::Neq { .. } => ord != Ordering::Equal,
+                Predicate::Gt { .. } => ord == Ordering::Greater,
+                Predicate::Gte { .. } => ord != Ordering::Less,
+                Predicate::Lt { .. } => ord == Ordering::Less,
+                Predicate::Lte { .. } => ord != Ordering::Greater,
+                _ => false,
             }
         }
         Predicate::ParamEq { param, value }
@@ -201,7 +201,7 @@ fn check_predicate_recursive(
                 Some(v) => v,
                 None => return false,
             };
-            let ord = compare_values(Some(&left), Some(&right));
+            let ord = compare_values(ValueRef::from_value(&left), ValueRef::from_value(&right));
             match pred {
                 Predicate::ParamEq { .. } => ord == Ordering::Equal,
                 Predicate::ParamNeq { .. } => ord != Ordering::Equal,
@@ -221,7 +221,12 @@ fn check_predicate_recursive(
 fn resolve_param_lookup(param: &str, ctx: Option<&Sp00kyValue>) -> Option<Sp00kyValue> {
     let ctx = ctx?;
     let effective_path = param.strip_prefix("parent.").unwrap_or(param);
-    resolve_field(Some(ctx), &Path::new(effective_path)).cloned()
+    let resolved = resolve_field(ValueRef::from_value(ctx), &Path::new(effective_path));
+    if resolved.is_missing() {
+        None
+    } else {
+        Some(resolved.to_owned_value())
+    }
 }
 
 #[cfg(test)]

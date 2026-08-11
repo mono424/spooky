@@ -1,6 +1,7 @@
 use crate::algebra::ZSet;
 use crate::circuit::store::Store;
 use crate::eval::value_ops::resolve_field;
+use crate::eval::value_ref::ValueRef;
 use crate::operator::plan::OrderSpec;
 use crate::types::Sp00kyValue;
 use indexset::BTreeSet;
@@ -72,15 +73,15 @@ impl Ord for SortableValue {
 }
 
 impl SortableValue {
-    fn from_sp00ky(val: Option<&Sp00kyValue>, descending: bool) -> Self {
+    fn from_value(val: ValueRef<'_>, descending: bool) -> Self {
         let scalar = match val {
-            None | Some(Sp00kyValue::Null) => Scalar::Null,
-            Some(Sp00kyValue::Bool(b)) => Scalar::Bool(*b),
-            Some(v) if v.as_f64().is_some() => {
+            ValueRef::Missing | ValueRef::Null => Scalar::Null,
+            ValueRef::Bool(b) => Scalar::Bool(b),
+            v if v.as_f64().is_some() => {
                 // Use integer representation for consistent ordering
                 Scalar::Int((v.as_f64().unwrap() * 1_000_000.0) as i64)
             }
-            Some(Sp00kyValue::Str(s)) => Scalar::Str(s.clone()),
+            ValueRef::Str(s) => Scalar::Str(s.to_string()),
             _ => Scalar::Null,
         };
         SortableValue { scalar, descending }
@@ -117,9 +118,9 @@ impl TopK {
             Some(orders) => orders
                 .iter()
                 .map(|ord| {
-                    let val = row.and_then(|r| resolve_field(Some(r), &ord.field));
+                    let val = resolve_field(row, &ord.field);
                     let desc = ord.direction.eq_ignore_ascii_case("DESC");
-                    SortableValue::from_sp00ky(val, desc)
+                    SortableValue::from_value(val, desc)
                 })
                 .collect(),
             None => vec![SortableValue {

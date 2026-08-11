@@ -1,6 +1,7 @@
 use crate::algebra::{ZSet, ZSetOps};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::{compare_values, hash_value, resolve_field};
+use crate::eval::value_ref::ValueRef;
 use crate::operator::plan::JoinCondition;
 use crate::types::{Path, Sp00kyValue};
 use std::cmp::Ordering;
@@ -52,16 +53,19 @@ impl SemiJoin {
         // Build a set of distinct right-side join-field values that are
         // currently "live" (positive weight). Multiplicities on the right side
         // don't affect semi-join output, so this is a presence check.
-        let mut right_present: HashMap<u64, Vec<Sp00kyValue>> = HashMap::new();
+        // Borrowed join-field values rather than owned clones: this used to
+        // deep-copy the field of every live right-side row.
+        let mut right_present: HashMap<u64, Vec<ValueRef<'_>>> = HashMap::new();
         for (r_key, &r_weight) in right {
             if r_weight <= 0 {
                 continue;
             }
-            if let Some(r_val) = store.get_row_by_key(r_key) {
-                if let Some(r_field) = resolve_field(Some(r_val), &condition.right_field) {
-                    let h = hash_value(r_field);
-                    right_present.entry(h).or_default().push(r_field.clone());
-                }
+            let r_field = resolve_field(store.get_row_by_key(r_key), &condition.right_field);
+            if !r_field.is_missing() {
+                right_present
+                    .entry(hash_value(r_field))
+                    .or_default()
+                    .push(r_field);
             }
         }
 
@@ -74,17 +78,16 @@ impl SemiJoin {
             if l_weight <= 0 {
                 continue;
             }
-            if let Some(l_val) = store.get_row_by_key(l_key) {
-                if let Some(l_field) = resolve_field(Some(l_val), &condition.left_field) {
-                    let h = hash_value(l_field);
-                    if let Some(matches) = right_present.get(&h) {
-                        if matches
-                            .iter()
-                            .any(|m| compare_values(Some(l_field), Some(m)) == Ordering::Equal)
-                        {
-                            out.insert(l_key.clone(), 1i64);
-                        }
-                    }
+            let l_field = resolve_field(store.get_row_by_key(l_key), &condition.left_field);
+            if l_field.is_missing() {
+                continue;
+            }
+            if let Some(matches) = right_present.get(&hash_value(l_field)) {
+                if matches
+                    .iter()
+                    .any(|m| compare_values(l_field, *m) == Ordering::Equal)
+                {
+                    out.insert(l_key.clone(), 1i64);
                 }
             }
         }
@@ -162,19 +165,16 @@ impl super::Operator for SemiJoin {
         // row's join field against the integrated right-side state
         // (up to date: step() ran for every node before the membership
         // re-evaluation pass calls evaluate_key).
-        let Some(l_val) = store.get_row_by_key(key) else {
+        let l_field = resolve_field(store.get_row_by_key(key), &self.condition.left_field);
+        if l_field.is_missing() {
             return false;
-        };
-        let Some(l_field) = resolve_field(Some(l_val), &self.condition.left_field) else {
-            return false;
-        };
+        }
         self.right_state.iter().any(|(r_key, &w)| {
-            w > 0
-                && store
-                    .get_row_by_key(r_key)
-                    .and_then(|r_val| resolve_field(Some(r_val), &self.condition.right_field))
-                    .map(|r_field| compare_values(Some(l_field), Some(r_field)) == Ordering::Equal)
-                    .unwrap_or(false)
+            if w <= 0 {
+                return false;
+            }
+            let r_field = resolve_field(store.get_row_by_key(r_key), &self.condition.right_field);
+            !r_field.is_missing() && compare_values(l_field, r_field) == Ordering::Equal
         })
     }
 }

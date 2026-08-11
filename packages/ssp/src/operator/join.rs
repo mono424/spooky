@@ -1,6 +1,7 @@
 use crate::algebra::{ZSet, ZSetOps};
 use crate::circuit::store::Store;
 use crate::eval::value_ops::{compare_values, hash_value, resolve_field};
+use crate::eval::value_ref::ValueRef;
 use crate::operator::plan::JoinCondition;
 use crate::types::Sp00kyValue;
 use std::cmp::Ordering;
@@ -42,33 +43,32 @@ impl Join {
             return HashMap::new();
         }
 
-        // Build index on the right side
-        let mut right_index: HashMap<u64, Vec<(&String, &i64, &Sp00kyValue)>> = HashMap::new();
+        // Build index on the right side. The join field is held as a
+        // `ValueRef` (Copy, borrowed from the store) rather than an owned
+        // clone, so indexing the right side no longer copies a value per row.
+        let mut right_index: HashMap<u64, Vec<(&String, &i64, ValueRef<'_>)>> = HashMap::new();
         for (r_key, r_weight) in right {
-            if let Some(r_val) = store.get_row_by_key(r_key) {
-                if let Some(r_field) = resolve_field(Some(r_val), &condition.right_field) {
-                    let hash = hash_value(r_field);
-                    right_index
-                        .entry(hash)
-                        .or_default()
-                        .push((r_key, r_weight, r_field));
-                }
+            let r_field = resolve_field(store.get_row_by_key(r_key), &condition.right_field);
+            if !r_field.is_missing() {
+                right_index
+                    .entry(hash_value(r_field))
+                    .or_default()
+                    .push((r_key, r_weight, r_field));
             }
         }
 
         // Probe from the left side
         let mut out = HashMap::new();
         for (l_key, &l_weight) in left {
-            if let Some(l_val) = store.get_row_by_key(l_key) {
-                if let Some(l_field) = resolve_field(Some(l_val), &condition.left_field) {
-                    let hash = hash_value(l_field);
-                    if let Some(matches) = right_index.get(&hash) {
-                        for (_r_key, &r_weight, r_field) in matches {
-                            if compare_values(Some(l_field), Some(r_field)) == Ordering::Equal {
-                                let w = l_weight * r_weight;
-                                *out.entry(l_key.clone()).or_insert(0) += w;
-                            }
-                        }
+            let l_field = resolve_field(store.get_row_by_key(l_key), &condition.left_field);
+            if l_field.is_missing() {
+                continue;
+            }
+            if let Some(matches) = right_index.get(&hash_value(l_field)) {
+                for (_r_key, &r_weight, r_field) in matches {
+                    if compare_values(l_field, *r_field) == Ordering::Equal {
+                        let w = l_weight * r_weight;
+                        *out.entry(l_key.clone()).or_insert(0) += w;
                     }
                 }
             }

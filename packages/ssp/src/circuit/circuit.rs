@@ -148,14 +148,8 @@ fn compute_current_subquery_set(
         // because user.id ("user:xxx") isn't a key in a parent (e.g. thread) cache.
         if parent_key.child_field == "id" {
             for parent_full_key in view.cache.keys() {
-                let parent_row = match store.get_row_by_key(parent_full_key) {
-                    Some(r) => r,
-                    None => continue,
-                };
-                let child_full_key = match parent_row
-                    .get(&parent_key.parent_field)
-                    .and_then(|v| v.as_str())
-                {
+                let parent_row = store.get_row_by_key(parent_full_key);
+                let child_full_key = match parent_row.get(&parent_key.parent_field).as_str() {
                     Some(v) => v,
                     None => continue,
                 };
