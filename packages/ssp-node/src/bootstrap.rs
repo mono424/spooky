@@ -5,6 +5,7 @@
 //! scheduler's HTTP proxy, not the DB). This is the load [`crate::Runtime::bootstrap`]
 //! runs on a cold start when the `CircuitStore` has no usable snapshot.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -19,14 +20,62 @@ use crate::ports::Db;
 
 /// Keyset-paginated page query for the bootstrap scan (ordered by id, never
 /// OFFSET — lossy under concurrent writes).
-pub fn bootstrap_page_query(table: &str, page_size: usize, after_id: Option<&str>) -> String {
+///
+/// `omit` names fields the circuit must never hold — see
+/// [`ssp_protocol::OPAQUE_FIELD_COMMENT`]. Omitting them here is what keeps this
+/// scan consistent with the sp00ky ingest payload, which already drops them: a
+/// row loaded by bootstrap and the same row loaded by an ingest event must have
+/// the same key set, or the circuit's content hash diverges from the scheduler's
+/// the moment either happens.
+pub fn bootstrap_page_query(
+    table: &str,
+    page_size: usize,
+    after_id: Option<&str>,
+    omit: &BTreeSet<String>,
+) -> String {
+    let omit = ssp_protocol::omit_clause(omit);
     match after_id {
-        None => format!("SELECT * FROM {table} ORDER BY id LIMIT {page_size}"),
+        None => format!("SELECT *{omit} FROM {table} ORDER BY id LIMIT {page_size}"),
         Some(id) => {
             let raw = id.strip_prefix(&format!("{table}:")).unwrap_or(id);
-            format!("SELECT * FROM {table} WHERE id > type::record('{table}', '{raw}') ORDER BY id LIMIT {page_size}")
+            format!("SELECT *{omit} FROM {table} WHERE id > type::record('{table}', '{raw}') ORDER BY id LIMIT {page_size}")
         }
     }
+}
+
+/// Per-table metadata read out of `INFO FOR TABLE` in one pass: record-link
+/// targets (`field` → target table) and the opaque-field `OMIT` set.
+#[derive(Default)]
+struct TableFieldMeta {
+    link_targets: Vec<(String, String)>,
+    opaque: BTreeSet<String>,
+}
+
+/// Read `INFO FOR TABLE <table>` and split it into link targets + opaque fields.
+/// A failed read yields empty metadata rather than aborting the bootstrap; the
+/// caller logs it (a missing link map degrades reverse-link edges, it does not
+/// corrupt row content).
+async fn table_field_meta(db: &dyn Db, table: &str) -> anyhow::Result<TableFieldMeta> {
+    let info = q1(db, &format!("INFO FOR TABLE {}", table)).await?;
+    let opaque = ssp_protocol::opaque_fields_from_info(&info);
+    let link_targets = info
+        .get("fields")
+        .and_then(|f| f.as_object())
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|(name, def)| {
+                    def.as_str()
+                        .and_then(parse_link_target)
+                        .map(|target| (name.clone(), target))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(TableFieldMeta {
+        link_targets,
+        opaque,
+    })
 }
 
 /// Target table of a `DEFINE FIELD … TYPE record<X>` link (single, simple X).
@@ -156,42 +205,54 @@ pub async fn rebuild_from_db(
         }
     }
 
-    // 1c. Record-link map (field -> target table) from INFO FOR TABLE.
+    // 1c. Record-link map (field -> target table) and the per-table opaque-field
+    //     OMIT set, both from INFO FOR TABLE.
+    let mut opaque_by_table: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     {
         let mut resolved: Vec<(String, String, String)> = Vec::new();
         for table in &tables {
-            let info = match q1(db, &format!("INFO FOR TABLE {}", table)).await {
-                Ok(v) => v,
+            let meta = match table_field_meta(db, table).await {
+                Ok(m) => m,
                 Err(e) => {
                     warn!(target: "ssp::policy", table = %table, error = %e, "INFO FOR TABLE failed; skipping link map");
                     continue;
                 }
             };
-            let Some(fields) = info.get("fields").and_then(|f| f.as_object()) else {
-                continue;
-            };
-            for (field_name, def) in fields {
-                if let Some(target) = def.as_str().and_then(parse_link_target) {
-                    resolved.push((table.clone(), field_name.clone(), target));
-                }
+            if !meta.opaque.is_empty() {
+                info!(table = %table, fields = ?meta.opaque, "Omitting opaque fields from bootstrap scan");
+                opaque_by_table.insert(table.clone(), meta.opaque);
+            }
+            for (field_name, target) in meta.link_targets {
+                resolved.push((table.clone(), field_name, target));
             }
         }
-        if !resolved.is_empty() {
+        {
             let mut circuit = processor.write().await;
             for (table, field, target) in &resolved {
                 circuit.set_link_target(table.clone(), field.clone(), target.clone());
+            }
+            // Also give the circuit the set, so a registration that tries to
+            // filter/order on one of these fields is rejected rather than
+            // silently matching nothing.
+            for (table, fields) in &opaque_by_table {
+                circuit.set_opaque_fields(table.clone(), fields.clone());
             }
         }
     }
 
     // 2. Page each table's rows into the circuit store.
+    let no_omit = BTreeSet::new();
     for table in &tables {
+        let omit = opaque_by_table.get(table).unwrap_or(&no_omit);
         let mut record_count = 0usize;
         let mut after_id: Option<String> = None;
         loop {
-            let result = q1(db, &bootstrap_page_query(table, page_size, after_id.as_deref()))
-                .await
-                .with_context(|| format!("page-query {table}"))?;
+            let result = q1(
+                db,
+                &bootstrap_page_query(table, page_size, after_id.as_deref(), omit),
+            )
+            .await
+            .with_context(|| format!("page-query {table}"))?;
             let rows: Vec<Value> = match result {
                 Value::Array(arr) => arr,
                 _ => vec![],
@@ -265,6 +326,7 @@ pub async fn rebuild_from_db(
                 payload,
                 circuit.permissions(),
                 circuit.link_targets(),
+                circuit.opaque_fields(),
             )
         };
         match prep {
@@ -317,23 +379,30 @@ pub async fn catch_up_from_db(
             circuit.set_permission(name, extract_select_permission_text(def));
         }
     }
-    // Link targets are also dropped by `Circuit::restore` — re-seed them.
+    // Link targets are also dropped by `Circuit::restore` — re-seed them. Same
+    // pass collects the opaque-field OMIT set for the catch-up scan below.
+    let mut opaque_by_table: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (table, _) in &table_defs {
-        if let Ok(info) = q1(db, &format!("INFO FOR TABLE {}", table)).await {
-            if let Some(fields) = info.get("fields").and_then(|f| f.as_object()) {
-                let mut circuit = processor.write().await;
-                for (field_name, def) in fields {
-                    if let Some(target) = def.as_str().and_then(parse_link_target) {
-                        circuit.set_link_target(table.clone(), field_name.clone(), target);
-                    }
-                }
+        if let Ok(meta) = table_field_meta(db, table).await {
+            let mut circuit = processor.write().await;
+            if !meta.opaque.is_empty() {
+                circuit.set_opaque_fields(table.clone(), meta.opaque.clone());
+                opaque_by_table.insert(table.clone(), meta.opaque);
+            }
+            for (field_name, target) in meta.link_targets {
+                circuit.set_link_target(table.clone(), field_name, target);
             }
         }
     }
 
+    let no_omit = BTreeSet::new();
     for (table, _) in &table_defs {
         let since = point.max_row_version.get(table).copied().unwrap_or(-1);
-        let q = format!("SELECT * FROM {table} WHERE _00_rv > {since}");
+        // Must match `bootstrap_page_query`'s projection exactly: a row that
+        // arrives via catch-up and the same row via a full rebuild have to carry
+        // the same keys or the two produce different content hashes.
+        let omit = ssp_protocol::omit_clause(opaque_by_table.get(table).unwrap_or(&no_omit));
+        let q = format!("SELECT *{omit} FROM {table} WHERE _00_rv > {since}");
         let rows: Vec<Value> = match q1(db, &q).await? {
             Value::Array(arr) => arr,
             _ => vec![],
@@ -371,10 +440,23 @@ mod tests {
 
     #[test]
     fn page_query_uses_ordered_keyset_not_offset() {
-        assert_eq!(bootstrap_page_query("game", 200, None), "SELECT * FROM game ORDER BY id LIMIT 200");
-        let next = bootstrap_page_query("game", 200, Some("game:abc"));
+        let none = BTreeSet::new();
+        assert_eq!(
+            bootstrap_page_query("game", 200, None, &none),
+            "SELECT * FROM game ORDER BY id LIMIT 200"
+        );
+        let next = bootstrap_page_query("game", 200, Some("game:abc"), &none);
         assert_eq!(next, "SELECT * FROM game WHERE id > type::record('game', 'abc') ORDER BY id LIMIT 200");
         assert!(!next.contains("START"));
+    }
+
+    #[test]
+    fn page_query_omits_opaque_fields() {
+        let omit: BTreeSet<String> = ["secret_token"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            bootstrap_page_query("user", 50, None, &omit),
+            "SELECT * OMIT secret_token FROM user ORDER BY id LIMIT 50"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -1335,10 +1335,11 @@ mod bootstrap_pagination_tests {
     fn page_query_uses_ordered_keyset_not_offset() {
         // Regression guard: the bootstrap scan must NOT use OFFSET/START (lossy
         // under concurrent writes) and must resume by id keyset, ordered by id.
-        let first = bootstrap_page_query("game", 200, None);
+        let none = BTreeSet::new();
+        let first = bootstrap_page_query("game", 200, None, &none);
         assert_eq!(first, "SELECT * FROM game ORDER BY id LIMIT 200");
 
-        let next = bootstrap_page_query("game", 200, Some("game:abc"));
+        let next = bootstrap_page_query("game", 200, Some("game:abc"), &none);
         assert_eq!(
             next,
             "SELECT * FROM game WHERE id > type::record('game', 'abc') ORDER BY id LIMIT 200"
@@ -1347,6 +1348,24 @@ mod bootstrap_pagination_tests {
         // Neither page may fall back to offset pagination.
         assert!(!first.contains("START") && !next.contains("START"));
         assert!(first.contains("ORDER BY id") && next.contains("ORDER BY id"));
+    }
+
+    #[test]
+    fn page_query_omits_opaque_fields_on_both_pages() {
+        // Both pages must carry the SAME projection: a first page that keeps a
+        // field the resumed page drops would hash differently per page.
+        let omit: BTreeSet<String> = ["blob", "secret_token"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            bootstrap_page_query("game", 200, None, &omit),
+            "SELECT * OMIT blob, secret_token FROM game ORDER BY id LIMIT 200"
+        );
+        assert_eq!(
+            bootstrap_page_query("game", 200, Some("game:abc"), &omit),
+            "SELECT * OMIT blob, secret_token FROM game WHERE id > type::record('game', 'abc') ORDER BY id LIMIT 200"
+        );
     }
 
     // Walk a paginated scan over a table of `total` rows (ids 0..total) while a
@@ -1526,6 +1545,16 @@ async fn self_bootstrap_with_metadata(
     // without this every live query on an outbox table matches zero rows.
     // Best-effort: a failed INFO or an unparseable field just leaves that link
     // unresolved (its permission stays flat, i.e. today's behavior).
+    // The same pass collects each table's opaque-field set (fields marked
+    // `@nosync`/`@crdt`/`@opaque` on a DEFINE FIELD, which the CLI stamps with
+    // `COMMENT 'sp00ky:opaque'`). Read from `metadata_source` — always the
+    // upstream DB, which is the only side that carries the DDL — and applied as
+    // an `OMIT` to the row scan below. On this path `source` is the scheduler
+    // proxy, whose replica should already lack these fields; the OMIT still
+    // matters because a replica cloned before this change does hold them, and
+    // loading them here would put the circuit permanently out of step with the
+    // ingest payload's key set.
+    let mut opaque_by_table: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     {
         let mut resolved: Vec<(String, String, String)> = Vec::new();
         for table in &tables {
@@ -1536,6 +1565,15 @@ async fn self_bootstrap_with_metadata(
                     continue;
                 }
             };
+            let opaque = ssp_protocol::opaque_fields_from_info(&info);
+            if !opaque.is_empty() {
+                info!(
+                    target: "ssp::policy",
+                    table = %table, fields = ?opaque,
+                    "omitting opaque fields from bootstrap scan"
+                );
+                opaque_by_table.insert(table.clone(), opaque);
+            }
             let Some(fields) = info.get("fields").and_then(|f| f.as_object()) else {
                 continue;
             };
@@ -1545,7 +1583,7 @@ async fn self_bootstrap_with_metadata(
                 }
             }
         }
-        if !resolved.is_empty() {
+        {
             let mut circuit = processor.write().await;
             for (table, field, target) in &resolved {
                 info!(
@@ -1554,6 +1592,12 @@ async fn self_bootstrap_with_metadata(
                     "registered record-link target"
                 );
                 circuit.set_link_target(table.clone(), field.clone(), target.clone());
+            }
+            // Also give the circuit the set, so a registration that tries to
+            // filter/order on one of these fields is rejected rather than
+            // silently matching nothing.
+            for (table, fields) in &opaque_by_table {
+                circuit.set_opaque_fields(table.clone(), fields.clone());
             }
         }
     }
@@ -1564,13 +1608,15 @@ async fn self_bootstrap_with_metadata(
     // body. Paging keeps each round-trip bounded; the SSP still loads
     // everything into the circuit store but does so a chunk at a time.
     // `page_size` comes from NodeConfig (env: SPKY_SSP_BOOTSTRAP_PAGE_SIZE).
+    let no_omit = BTreeSet::new();
     for table in &tables {
+        let omit = opaque_by_table.get(table).unwrap_or(&no_omit);
         let mut record_count: usize = 0;
         // Keyset cursor: the highest `id` loaded so far. `None` = first page.
         let mut after_id: Option<String> = None;
         loop {
             let result = source
-                .query(&bootstrap_page_query(table, page_size, after_id.as_deref()))
+                .query(&bootstrap_page_query(table, page_size, after_id.as_deref(), omit))
                 .await
                 .with_context(|| format!("Failed to page-query table {}", table))?;
 
@@ -1694,6 +1740,7 @@ async fn self_bootstrap_with_metadata(
                 payload,
                 circuit.permissions(),
                 circuit.link_targets(),
+                circuit.opaque_fields(),
             )
         };
         match prep {

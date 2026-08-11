@@ -103,6 +103,16 @@ pub struct Circuit {
     /// (`assigned_to.owner.id = $auth.id`) into a `SemiJoin` — the target table
     /// isn't derivable from the field name. See `converter::LinkMap`.
     link_targets: HashMap<String, HashMap<String, String>>,
+    /// Per-table fields whose value this circuit deliberately does NOT hold:
+    /// `table -> {field}`, from the `sp00ky:opaque` marker on `DEFINE FIELD`
+    /// (`-- @nosync` / `-- @crdt` / `-- @opaque`). Loaded at boot from the same
+    /// `INFO FOR TABLE` pass that fills `link_targets`.
+    ///
+    /// Used to REJECT a registration that tries to filter, order, or join on one
+    /// of these fields. Without the check the query registers happily and then
+    /// matches nothing, because `resolve_field` returns `None` for the absent key
+    /// and the comparison silently evaluates false.
+    opaque_fields: HashMap<String, std::collections::BTreeSet<String>>,
 }
 
 /// Compute the full set of subquery records visible through the current view.
@@ -286,6 +296,7 @@ impl Circuit {
             dependency_map: HashMap::new(),
             permissions: HashMap::new(),
             link_targets: HashMap::new(),
+            opaque_fields: HashMap::new(),
         }
     }
 
@@ -318,6 +329,23 @@ impl Circuit {
             .entry(table.into())
             .or_default()
             .insert(field.into(), target.into());
+    }
+
+    /// Read-only access to the per-table opaque-field map (for rejecting a
+    /// registration that would evaluate a field this circuit does not hold).
+    pub fn opaque_fields(&self) -> &HashMap<String, std::collections::BTreeSet<String>> {
+        &self.opaque_fields
+    }
+
+    /// Register the set of opaque fields on `table`, from the `sp00ky:opaque`
+    /// markers in its `INFO FOR TABLE` output. Replaces any previous set so a
+    /// rediscover after a schema change cannot leave a stale entry behind.
+    pub fn set_opaque_fields(
+        &mut self,
+        table: impl Into<String>,
+        fields: std::collections::BTreeSet<String>,
+    ) {
+        self.opaque_fields.insert(table.into(), fields);
     }
 
     /// Bulk-load initial data into base collections.
@@ -854,8 +882,9 @@ impl Circuit {
             dependency_map: HashMap::new(),
             permissions: HashMap::new(),
             // Re-seeded from INFO FOR DB / INFO FOR TABLE after restore, same as
-            // `permissions` (neither is part of the serialized snapshot).
+            // `permissions` (none of the three is part of the serialized snapshot).
             link_targets: HashMap::new(),
+            opaque_fields: HashMap::new(),
         };
 
         for qs in state.queries {

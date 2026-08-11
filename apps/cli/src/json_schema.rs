@@ -648,4 +648,45 @@ DEFINE FIELD token ON TABLE secrets TYPE string;
             assert!(!s.contains("secrets"));
         }
     }
+
+    #[test]
+    fn nosync_field_is_omitted_but_opaque_field_is_emitted_with_its_flag() {
+        let schema = r#"
+DEFINE TABLE doc SCHEMALESS PERMISSIONS FULL;
+DEFINE FIELD title ON TABLE doc TYPE string;
+
+-- @nosync
+DEFINE FIELD import_batch ON TABLE doc TYPE string;
+
+-- @opaque
+DEFINE FIELD thumbnail ON TABLE doc TYPE bytes;
+"#;
+        let mut parser = SchemaParser::new();
+        parser.parse_file(schema).unwrap();
+
+        let js = JsonSchemaGenerator::new().generate(&parser);
+        let props = js
+            .definitions
+            .get("doc")
+            .and_then(|d| d.get("properties"))
+            .and_then(|p| p.as_object())
+            .expect("doc properties");
+
+        assert!(props.contains_key("title"));
+        assert!(
+            !props.contains_key("import_batch"),
+            "@nosync field must not reach generated types"
+        );
+        // @opaque is synced, so it MUST be generated — flagged so the query
+        // builder can reject filtering on it.
+        let thumbnail = props.get("thumbnail").expect("@opaque field must be kept");
+        assert!(
+            thumbnail.get("x-opaque").is_some(),
+            "@opaque field must carry x-opaque: {thumbnail}"
+        );
+        assert!(
+            thumbnail.get("x-is-bytes").is_some(),
+            "type metadata must still be emitted: {thumbnail}"
+        );
+    }
 }

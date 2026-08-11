@@ -26,6 +26,59 @@ import type {
 } from './table-schema';
 
 /**
+ * Reject a query clause that references an `-- @opaque` column.
+ *
+ * An `@opaque` value is synced down to the client but never held server-side, so
+ * the SSP has nothing to evaluate a predicate against. Left unchecked, the
+ * failure is silent and asymmetric: the local cache DOES hold the value, so the
+ * clause filters correctly on screen while the server-side membership set it is
+ * compared against was computed without it. The result reads as rows randomly
+ * appearing and vanishing rather than as an error, so fail loudly at the call
+ * site instead.
+ *
+ * `clause` names the offending API ('where', 'orderBy', …) for the message.
+ */
+function assertNotOpaque(
+  schema: SchemaStructure,
+  tableName: string,
+  clause: string,
+  fields: readonly string[]
+): void {
+  const table = schema.tables.find((t) => t.name === tableName);
+  if (!table) return;
+  for (const field of fields) {
+    // A nested path (`meta.secret`) is checked against its root, since the column
+    // flag lives on `meta`. Comparison operators use `{ field: { _op, _val } }`
+    // rather than a name suffix, so the key is always the bare column name.
+    const column: ColumnSchema | undefined =
+      table.columns[field] ?? table.columns[field.split('.')[0]];
+    if (column?.opaque) {
+      throw new Error(
+        `Cannot use '${field}' in ${clause}(): it is marked '-- @opaque' on ` +
+          `${tableName}, so the sync engine never stores its value and cannot ` +
+          `evaluate it. Read the field from query results instead, or remove ` +
+          `'-- @opaque' from the schema if you need to query on it.`
+      );
+    }
+  }
+}
+
+/** Every column name a `where` clause touches, including `_or` branches. */
+function whereFieldNames(conditions: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(conditions)) {
+    if (key === '_or') {
+      for (const branch of (value ?? []) as Record<string, unknown>[]) {
+        out.push(...whereFieldNames(branch ?? {}));
+      }
+      continue;
+    }
+    out.push(key);
+  }
+  return out;
+}
+
+/**
  * Parse a string ID to RecordId
  * - If it's in the format "table:id", use it as-is
  * - If it's just an ID without ":", prepend the table name
@@ -307,6 +360,12 @@ class SchemaAwareQueryModifierBuilderImpl<
   ) {}
 
   where(conditions: WhereInput<TableModel<GetTable<S, TableName>>>): this {
+    assertNotOpaque(
+      this.schema,
+      this.tableName,
+      'where',
+      whereFieldNames(conditions as Record<string, unknown>)
+    );
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -333,6 +392,7 @@ class SchemaAwareQueryModifierBuilderImpl<
     field: keyof TableModel<GetTable<S, TableName>> & string,
     direction: 'asc' | 'desc' = 'asc'
   ): this {
+    assertNotOpaque(this.schema, this.tableName, 'orderBy', [field]);
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,
@@ -430,6 +490,12 @@ export class QueryBuilder<
   where(
     conditions: WhereInput<TableModel<GetTable<S, TableName>>>
   ): QueryBuilder<S, TableName, R, RelatedFields, IsOne> {
+    assertNotOpaque(
+      this.schema,
+      this.tableName,
+      'where',
+      whereFieldNames(conditions as Record<string, unknown>)
+    );
     this.options.where = { ...this.options.where, ...conditions };
     return this;
   }
@@ -454,6 +520,7 @@ export class QueryBuilder<
     field: TableFieldNames<GetTable<S, TableName>>,
     direction: 'asc' | 'desc' = 'asc'
   ): QueryBuilder<S, TableName, R, RelatedFields, IsOne> {
+    assertNotOpaque(this.schema, this.tableName, 'orderBy', [field as string]);
     this.options.orderBy = {
       ...this.options.orderBy,
       [field]: direction,

@@ -8,7 +8,16 @@ pub struct FieldAnnotation {
 }
 
 /// Known annotation names. Unknown annotations produce a warning.
-const KNOWN_ANNOTATIONS: &[&str] = &["crdt", "cursor", "parent", "nosync"];
+const KNOWN_ANNOTATIONS: &[&str] = &["crdt", "cursor", "parent", "nosync", "opaque"];
+
+/// Field-name group shared by every `DEFINE FIELD` matcher here.
+///
+/// Deliberately wider than `\w+`: SurrealDB field names can be nested paths
+/// (`meta.secret`) or array projections (`tags.*`, `tags[*]`). With `\w+` the
+/// match failed outright on those, so an annotation above such a field was
+/// silently discarded — the author believed the field was excluded from sync
+/// while it was fully synced and fully code-generated.
+const FIELD_NAME_PATTERN: &str = r"[A-Za-z_][\w.*\[\]]*";
 
 pub fn has_annotation(annotations: &[FieldAnnotation], name: &str) -> bool {
     annotations.iter().any(|a| a.name == name)
@@ -63,9 +72,10 @@ pub fn extract_field_annotations(
     content: &str,
 ) -> BTreeMap<(String, String), Vec<FieldAnnotation>> {
     let annotation_re = Regex::new(r"^--\s*@([a-z][a-z0-9_]*)(?:\s+(.+?))?\s*$").unwrap();
-    let define_field_re =
-        Regex::new(r"(?i)DEFINE\s+FIELD\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(?:TABLE\s+)?(\w+)")
-            .unwrap();
+    let define_field_re = Regex::new(&format!(
+        r"(?i)DEFINE\s+FIELD\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?({FIELD_NAME_PATTERN})\s+ON\s+(?:TABLE\s+)?(\w+)"
+    ))
+    .unwrap();
 
     let mut result: BTreeMap<(String, String), Vec<FieldAnnotation>> = BTreeMap::new();
     let mut pending: Vec<FieldAnnotation> = Vec::new();
@@ -166,6 +176,59 @@ pub fn extract_field_annotations(
     }
 
     result
+}
+
+/// An annotation comment that attaches to nothing, as `(line_number, name)`.
+///
+/// `extract_field_annotations` and `extract_table_annotations` both drop
+/// annotations that aren't followed by a `DEFINE FIELD`/`DEFINE TABLE` — a blank
+/// line between the comment and the statement is enough. That silence is the
+/// dangerous part: the author sees `-- @nosync` in the schema and believes the
+/// field is server-only, while the generated code syncs it. Callers surface
+/// these as warnings.
+pub fn unattached_annotations(content: &str) -> Vec<(usize, String)> {
+    let annotation_re = Regex::new(r"^--\s*@([a-z][a-z0-9_]*)(?:\s+(.+?))?\s*$").unwrap();
+    let define_re = Regex::new(r"(?i)^DEFINE\s+(FIELD|TABLE)\s+").unwrap();
+
+    let mut out = Vec::new();
+    // Annotation comments seen since the last statement, as (line_no, name).
+    let mut pending: Vec<(usize, String)> = Vec::new();
+
+    for (idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("--") {
+            if let Some(caps) = annotation_re.captures(trimmed) {
+                pending.push((idx + 1, caps[1].to_string()));
+            }
+            continue;
+        }
+
+        // A blank line, or any statement that is not a DEFINE FIELD/TABLE,
+        // orphans whatever was pending.
+        if trimmed.is_empty() || !define_re.is_match(trimmed) {
+            out.append(&mut pending);
+            continue;
+        }
+
+        pending.clear();
+    }
+
+    // Trailing annotations at end of file attach to nothing either.
+    out.append(&mut pending);
+    out
+}
+
+/// Print a warning for every annotation comment that attaches to no statement.
+pub fn warn_unattached_annotations(content: &str) {
+    for (line, name) in unattached_annotations(content) {
+        eprintln!(
+            "  ⚠ Annotation @{} on line {} attaches to nothing — it must sit \
+             directly above a DEFINE FIELD or DEFINE TABLE (no blank line between). \
+             It is being ignored.",
+            name, line
+        );
+    }
 }
 
 /// Extract table-level annotations from raw .surql content.
@@ -393,6 +456,75 @@ DEFINE FIELD x ON TABLE thing TYPE string;
 "#;
         let result = extract_table_annotations(content);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_annotation_attaches_to_nested_field_path() {
+        // `\w+` could not match `meta.secret`, so the annotation was silently
+        // dropped and the field was synced despite being marked.
+        let content = r#"
+-- @opaque
+DEFINE FIELD meta.secret ON TABLE user TYPE string;
+"#;
+        let result = extract_field_annotations(content);
+        let anns = result
+            .get(&("user".to_string(), "meta.secret".to_string()))
+            .expect("nested field annotated");
+        assert_eq!(anns[0].name, "opaque");
+    }
+
+    #[test]
+    fn test_annotation_attaches_to_array_projection_field() {
+        let content = r#"
+-- @opaque
+DEFINE FIELD tags.* ON TABLE user TYPE string;
+"#;
+        let result = extract_field_annotations(content);
+        assert!(result
+            .get(&("user".to_string(), "tags.*".to_string()))
+            .is_some());
+    }
+
+    #[test]
+    fn test_unattached_annotation_is_reported() {
+        // Blank line orphans it; `extract_field_annotations` drops it silently.
+        let content = "-- @opaque\n\nDEFINE FIELD blob ON TABLE user TYPE bytes;\n";
+        assert!(extract_field_annotations(content).is_empty());
+        assert_eq!(
+            unattached_annotations(content),
+            vec![(1, "opaque".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_annotation_before_non_define_statement_is_reported() {
+        let content = "-- @opaque\nCREATE user:1 SET x = 1;\n";
+        assert_eq!(
+            unattached_annotations(content),
+            vec![(1, "opaque".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_trailing_annotation_at_eof_is_reported() {
+        let content = "DEFINE FIELD blob ON TABLE user TYPE bytes;\n-- @opaque\n";
+        assert_eq!(
+            unattached_annotations(content),
+            vec![(2, "opaque".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_properly_placed_annotations_are_not_reported() {
+        let content = "\
+-- @nosync
+DEFINE TABLE secrets SCHEMALESS;
+
+-- @opaque
+-- some prose about the field
+DEFINE FIELD blob ON TABLE user TYPE bytes;
+";
+        assert!(unattached_annotations(content).is_empty());
     }
 
     #[test]

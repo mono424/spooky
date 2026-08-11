@@ -62,12 +62,22 @@ fn json_kind(v: &Value) -> &'static str {
 /// no removal delta and clients' live queries go stale until reload. Keyset
 /// resumes from the last id seen, immune to shifts behind the cursor. Mirrors
 /// `bootstrap_page_query` in apps/ssp/src/lib.rs.
-fn keyset_page_query(table: &str, page_size: usize, after_id: Option<&str>) -> String {
+/// `omit` drops opaque columns from the projection — see
+/// [`Replica::opaque_fields`]. Every producer of a content hash must emit the
+/// identical `OMIT` list or their digests diverge, so the clause is rendered by
+/// the shared `ssp_protocol::omit_clause`.
+fn keyset_page_query(
+    table: &str,
+    page_size: usize,
+    after_id: Option<&str>,
+    omit: &BTreeSet<String>,
+) -> String {
+    let omit = ssp_protocol::omit_clause(omit);
     match after_id {
-        None => format!("SELECT * FROM {table} ORDER BY id LIMIT {page_size}"),
+        None => format!("SELECT *{omit} FROM {table} ORDER BY id LIMIT {page_size}"),
         Some(id) => {
             let raw = id.strip_prefix(&format!("{table}:")).unwrap_or(id);
-            format!("SELECT * FROM {table} WHERE id > type::record('{table}', '{raw}') ORDER BY id LIMIT {page_size}")
+            format!("SELECT *{omit} FROM {table} WHERE id > type::record('{table}', '{raw}') ORDER BY id LIMIT {page_size}")
         }
     }
 }
@@ -116,6 +126,10 @@ pub struct SpoolManifest {
     _dir: tempfile::TempDir,
     pub tables: Vec<SpooledTable>,
     pub views: Vec<Value>,
+    /// Opaque-field exclusions read from upstream during phase 1, carried across
+    /// to phase 2 so [`Replica::load_from_spool`] can adopt them. Phase 1 is a
+    /// static fn with no `&self`, so it cannot update the replica's map itself.
+    pub opaque_fields: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// Persistent replica backed by embedded SurrealDB with RocksDB
@@ -134,6 +148,23 @@ pub struct Replica {
     /// them ourselves and persist alongside the hashes so a fresh process
     /// can find them.
     known_tables: BTreeSet<String>,
+    /// Per-table fields that must never be held in the replica or counted in a
+    /// content hash: `DEFINE FIELD`s the CLI stamped `COMMENT 'sp00ky:opaque'`
+    /// for `-- @nosync` / `-- @crdt` / `-- @opaque` (see
+    /// [`ssp_protocol::OPAQUE_FIELD_COMMENT`]). Refreshed from upstream
+    /// `INFO FOR TABLE` on every clone and rediscover.
+    ///
+    /// Applied in two places, for two different reasons. On the clone
+    /// (`page_whole_table`) it stops the value entering the replica at all. On
+    /// the hash reads (`snapshot_rows`, `hash_one_table`) it makes the digest
+    /// ignore the column even when a row still carries it — which is what lets a
+    /// replica cloned *before* this change agree with a freshly bootstrapped SSP
+    /// without a forced re-clone.
+    ///
+    /// Not persisted: it is re-derived from upstream DDL, which is the only
+    /// authority. A fresh process with an empty map hashes as it always did
+    /// until the first discover repopulates it.
+    opaque_fields: BTreeMap<String, BTreeSet<String>>,
     /// Tables whose last hash attempt failed. Re-tried on the next
     /// `set_snapshot_state` so a transient error can't strand a table with a
     /// stale (or absent) hash indefinitely. Not persisted: a fresh process
@@ -186,6 +217,9 @@ impl Replica {
             snapshot_hashes,
             known_tables,
             dirty_hashes: BTreeSet::new(),
+            // Re-derived from upstream DDL on the first clone/rediscover; a
+            // fresh process starts with no exclusions.
+            opaque_fields: BTreeMap::new(),
             seq_cell: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(snapshot_seq)),
         })
     }
@@ -338,14 +372,24 @@ impl Replica {
         Ok(out)
     }
 
+    /// Opaque fields to `OMIT` when scanning `table`. Empty for a table with no
+    /// annotated fields, or before the first discovery has run.
+    fn omit_for(&self, table: &str) -> &BTreeSet<String> {
+        static EMPTY: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+        self.opaque_fields
+            .get(table)
+            .unwrap_or_else(|| EMPTY.get_or_init(BTreeSet::new))
+    }
+
     /// Read all rows of `table` from the replica as `(raw_id, value)` pairs, the
     /// id stripped of its `table:` prefix to match the SSP circuit's raw keys.
     /// Read-only; used both by `hash_one_table` and to seed the scheduler's
     /// catch-up projection when verifying a rejoining SSP.
     pub async fn snapshot_rows(&self, table: &str) -> Result<Vec<(String, Value)>> {
+        let omit = ssp_protocol::omit_clause(self.omit_for(table));
         let mut response = self
             .db
-            .query(format!("SELECT * FROM {}", table))
+            .query(format!("SELECT *{} FROM {}", omit, table))
             .await
             .with_context(|| format!("snapshot_rows: SELECT * FROM {} failed", table))?;
         let sdk_val: surrealdb::types::Value = response
@@ -389,7 +433,8 @@ impl Replica {
         let mut hasher = snapshot_hash::TableHasher::new();
         let mut after_id: Option<String> = None;
         loop {
-            let query = keyset_page_query(table, HASH_PAGE_SIZE, after_id.as_deref());
+            let query =
+                keyset_page_query(table, HASH_PAGE_SIZE, after_id.as_deref(), self.omit_for(table));
             let mut response = match self.db.query(&query).await {
                 Ok(r) => r,
                 Err(e) if is_missing_error(&e) => break,
@@ -488,6 +533,9 @@ impl Replica {
         let total_start = std::time::Instant::now();
 
         let tables = Self::discover_sync_tables(remote_db).await?;
+        // Refresh field-level exclusions before the clone reads a single row —
+        // the whole point is that these values never enter the replica.
+        self.opaque_fields = Self::discover_opaque_fields(remote_db, &tables).await;
 
         // Track which tables we are about to populate so the integrity-check
         // path can rediscover them after a restart (INFO FOR DB on the
@@ -515,7 +563,8 @@ impl Replica {
                 table_name,
             );
 
-            let records = Self::page_whole_table(remote_db, table_name).await?;
+            let records =
+                Self::page_whole_table(remote_db, table_name, self.omit_for(table_name)).await?;
             let count = records.len();
             let fetch_ms = table_start.elapsed().as_millis();
             let insert_start = std::time::Instant::now();
@@ -577,6 +626,10 @@ impl Replica {
     /// from the snapshot entirely — never cloned, never added to
     /// `known_tables`, never hashed. They remain in the main DB (still
     /// backed up); they just don't participate in sync.
+    ///
+    /// Field-level exclusions are discovered separately, by
+    /// [`Self::discover_opaque_fields`] — they need `INFO FOR TABLE`, which
+    /// `INFO FOR DB` does not include.
     async fn discover_sync_tables<C>(remote_db: &surrealdb::Surreal<C>) -> Result<Vec<String>>
     where
         C: surrealdb::Connection,
@@ -614,6 +667,43 @@ impl Replica {
         })
     }
 
+    /// Per-table opaque-field sets, read from upstream `INFO FOR TABLE`.
+    ///
+    /// Best-effort per table: a failed `INFO FOR TABLE` yields no exclusions for
+    /// that table rather than aborting the clone. The cost of missing one is a
+    /// hash mismatch that the existing verify/re-clone machinery already
+    /// handles; the cost of aborting is no replica at all.
+    async fn discover_opaque_fields<C>(
+        remote_db: &surrealdb::Surreal<C>,
+        tables: &[String],
+    ) -> BTreeMap<String, BTreeSet<String>>
+    where
+        C: surrealdb::Connection,
+    {
+        let mut out = BTreeMap::new();
+        for table in tables {
+            let info: Value = match remote_db.query(format!("INFO FOR TABLE {}", table)).await {
+                Ok(mut response) => match response.take::<surrealdb::types::Value>(0) {
+                    Ok(v) => v.into_json_value(),
+                    Err(e) => {
+                        warn!(table = %table, error = %e, "INFO FOR TABLE decode failed; no field exclusions");
+                        continue;
+                    }
+                },
+                Err(e) => {
+                    warn!(table = %table, error = %e, "INFO FOR TABLE failed; no field exclusions");
+                    continue;
+                }
+            };
+            let opaque = ssp_protocol::opaque_fields_from_info(&info);
+            if !opaque.is_empty() {
+                info!(table = %table, fields = ?opaque, "Excluding opaque fields from snapshot");
+                out.insert(table.clone(), opaque);
+            }
+        }
+        out
+    }
+
     /// Page a whole table out of the remote with a keyset cursor.
     ///
     /// Paging instead of one SELECT: the SurrealDB Rust SDK's WebSocket
@@ -641,13 +731,21 @@ impl Replica {
     async fn page_whole_table<C>(
         remote_db: &surrealdb::Surreal<C>,
         table_name: &str,
+        omit: &BTreeSet<String>,
     ) -> Result<Vec<Value>>
     where
         C: surrealdb::Connection,
     {
+        let omit_clause = ssp_protocol::omit_clause(omit);
         let target_page_bytes: usize = 32 * 1024 * 1024;
+        // Probe with the same projection the real pages use, or the auto-tuned
+        // page size is computed from a row size that includes columns the clone
+        // never fetches.
         let probe_row_bytes: Option<usize> = match remote_db
-            .query(format!("SELECT * FROM {} LIMIT 1", table_name))
+            .query(format!(
+                "SELECT *{} FROM {} LIMIT 1",
+                omit_clause, table_name
+            ))
             .await
         {
             Ok(mut r) => match r.take::<surrealdb::types::Value>(0) {
@@ -684,7 +782,7 @@ impl Replica {
         // Keyset cursor: the highest `id` paged so far (`None` = first page).
         let mut after_id: Option<String> = None;
         loop {
-            let query = keyset_page_query(table_name, page_size, after_id.as_deref());
+            let query = keyset_page_query(table_name, page_size, after_id.as_deref(), omit);
             trace!(table = %table_name, after_id = ?after_id, page_size, "remote page query: {}", query);
             let resp = remote_db.query(query).await;
             let page: Vec<Value> = match resp {
@@ -888,9 +986,12 @@ impl Replica {
             .with_context(|| format!("Failed to create spool dir under {:?}", spool_parent))?;
 
         let tables = Self::discover_sync_tables(remote_db).await?;
+        let opaque_fields = Self::discover_opaque_fields(remote_db, &tables).await;
+        let empty = BTreeSet::new();
         let mut spooled = Vec::with_capacity(tables.len());
         for (idx, table_name) in tables.iter().enumerate() {
-            let records = Self::page_whole_table(remote_db, table_name).await?;
+            let omit = opaque_fields.get(table_name).unwrap_or(&empty);
+            let records = Self::page_whole_table(remote_db, table_name, omit).await?;
             let count = records.len();
             let path = dir.path().join(format!("{}.jsonl", table_name));
             // Blocking pool: the serialize+write of a large table is real
@@ -927,6 +1028,7 @@ impl Replica {
             _dir: dir,
             tables: spooled,
             views,
+            opaque_fields,
         })
     }
 
@@ -935,6 +1037,9 @@ impl Replica {
     /// disk → local RocksDB only; hold the write lock for this, not for the
     /// network clone.
     pub async fn load_from_spool(&mut self, manifest: &SpoolManifest) -> Result<()> {
+        // Adopt phase 1's exclusions before any hash is computed off this data,
+        // so `hash_one_table` and the SSP's circuit agree on the key set.
+        self.opaque_fields = manifest.opaque_fields.clone();
         for spooled in &manifest.tables {
             let path = spooled.path.clone();
             let records = tokio::task::spawn_blocking(move || -> Result<Vec<Value>> {
@@ -1072,6 +1177,7 @@ impl Replica {
         self.snapshot_hashes.clear();
         self.known_tables.clear();
         self.dirty_hashes.clear();
+        self.opaque_fields.clear();
         info!(path = ?self.db_path, "Replica reset (REMOVE DATABASE)");
         Ok(())
     }
@@ -1112,6 +1218,14 @@ impl Replica {
         for t in &tables {
             self.known_tables.insert(t.clone());
         }
+
+        // A restored dump is an export of the MAIN database, so it carries the
+        // user's `DEFINE FIELD` statements — including the opaque markers. That
+        // makes the replica itself a usable source here, unlike on the clone
+        // path where the replica is schemaless.
+        let discovered = Self::discover_opaque_fields(&self.db, &tables).await;
+        self.opaque_fields = discovered;
+
         Ok(tables.len())
     }
 
@@ -1273,10 +1387,11 @@ mod tests {
         // Regression guard: replica bootstrap must page by id keyset, never by
         // OFFSET/START (lossy under the concurrent writes a live DB sees while
         // it's being paged). Mirrors the SSP bootstrap fix.
-        let first = keyset_page_query("game", 200, None);
+        let none = BTreeSet::new();
+        let first = keyset_page_query("game", 200, None, &none);
         assert_eq!(first, "SELECT * FROM game ORDER BY id LIMIT 200");
 
-        let next = keyset_page_query("game", 200, Some("game:abc"));
+        let next = keyset_page_query("game", 200, Some("game:abc"), &none);
         assert_eq!(
             next,
             "SELECT * FROM game WHERE id > type::record('game', 'abc') ORDER BY id LIMIT 200"
@@ -1284,6 +1399,27 @@ mod tests {
 
         assert!(!first.contains("START") && !next.contains("START"));
         assert!(first.contains("ORDER BY id") && next.contains("ORDER BY id"));
+    }
+
+    /// The clone pager must render a projection byte-identical to the SSP's
+    /// `bootstrap_page_query` — the two feed opposite sides of the same content
+    /// hash comparison. Both delegate the clause to `ssp_protocol::omit_clause`
+    /// (tested there); these literals pin the surrounding query shape, which is
+    /// duplicated across the two crates and can only be kept in step by hand.
+    #[test]
+    fn clone_pager_omit_projection_matches_the_ssp_bootstrap_shape() {
+        let omit: BTreeSet<String> = ["blob", "secret_token"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            keyset_page_query("user", 200, None, &omit),
+            "SELECT * OMIT blob, secret_token FROM user ORDER BY id LIMIT 200",
+        );
+        assert_eq!(
+            keyset_page_query("user", 200, Some("user:abc"), &omit),
+            "SELECT * OMIT blob, secret_token FROM user WHERE id > type::record('user', 'abc') ORDER BY id LIMIT 200",
+        );
     }
 
     async fn insert_thread(db: &Surreal<surrealdb::engine::local::Db>, title: &str) -> Result<()> {

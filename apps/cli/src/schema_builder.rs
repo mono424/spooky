@@ -178,6 +178,12 @@ pub fn build_server_schema(config: &SchemaBuilderConfig) -> Result<String> {
     // Done on the user portion only (before meta tables are appended).
     content = add_nosync_markers(&content, &raw_content);
 
+    // Same for the field-level exclusions (`@nosync`, `@crdt`, `@opaque` on a
+    // DEFINE FIELD): bake `COMMENT 'sp00ky:opaque'` so the scheduler replica and
+    // the SSP bootstrap can OMIT those columns from their row scans instead of
+    // cloning values the ingest payload deliberately drops.
+    content = add_opaque_field_markers(&content, &raw_content);
+
     // Process sp00ky config/backends
     let mut backend_processor = BackendProcessor::new();
     if let Some(config_path) = &config.config_path {
@@ -462,20 +468,90 @@ pub fn add_nosync_markers(content: &str, source: &str) -> String {
 /// Insert/merge the `sp00ky:nosync` marker into a single `DEFINE TABLE`
 /// statement string.
 fn inject_nosync_comment(stmt: &str) -> String {
+    inject_marker_comment(stmt, ssp_protocol::NOSYNC_TABLE_COMMENT)
+}
+
+/// Bake `COMMENT 'sp00ky:opaque'` onto every `DEFINE FIELD` whose value must
+/// never enter the sync machinery: field-level `-- @nosync`, `-- @crdt` and
+/// `-- @opaque`. All three already get skipped from the sp00ky ingest payload
+/// (`sp00ky.rs`); the marker is what lets the scheduler replica and the SSP
+/// bootstrap skip them too, via `INFO FOR TABLE` → `OMIT`.
+///
+/// Without it the exclusion is one-sided and the two producers drift apart
+/// permanently — see `ssp_protocol::OPAQUE_FIELD_COMMENT` for the mechanism.
+pub fn add_opaque_field_markers(content: &str, source: &str) -> String {
+    let opaque: std::collections::HashSet<(String, String)> =
+        annotations::extract_field_annotations(source)
+            .into_iter()
+            .filter(|(_, anns)| {
+                anns.iter()
+                    .any(|a| matches!(a.name.as_str(), "nosync" | "crdt" | "opaque"))
+            })
+            .map(|(key, _)| key)
+            .collect();
+    if opaque.is_empty() {
+        return content.to_string();
+    }
+
+    let define_field_re = Regex::new(
+        r"(?i)^\s*DEFINE\s+FIELD\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?([\w.*\[\]]+)\s+ON\s+(?:TABLE\s+)?(\w+)",
+    )
+    .expect("static regex");
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let is_opaque_field = define_field_re
+            .captures(lines[i])
+            .map(|c| opaque.contains(&(c[2].to_string(), c[1].to_string())))
+            .unwrap_or(false);
+
+        if is_opaque_field {
+            // Accumulate the (possibly multi-line) statement up to its `;`.
+            let mut stmt: Vec<String> = Vec::new();
+            while i < lines.len() {
+                stmt.push(lines[i].to_string());
+                if lines[i].contains(';') {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.push(inject_marker_comment(
+                &stmt.join("\n"),
+                ssp_protocol::OPAQUE_FIELD_COMMENT,
+            ));
+            continue;
+        }
+
+        out.push(lines[i].to_string());
+        i += 1;
+    }
+    out.join("\n")
+}
+
+/// Insert/merge a `sp00ky:*` marker into a single `DEFINE TABLE`/`DEFINE FIELD`
+/// statement string. Idempotent: a statement that already carries the marker is
+/// returned unchanged, and an unrelated existing `COMMENT` has the marker token
+/// appended to its text rather than gaining a second (invalid) COMMENT clause.
+///
+/// Placement matters. SurrealDB renders `COMMENT` *before* `PERMISSIONS` when it
+/// echoes a definition back through `INFO FOR TABLE`/`INFO FOR DB`, so appending
+/// the marker after a `PERMISSIONS` clause would make the deployed statement
+/// differ textually from the desired one on every subsequent deploy and
+/// `schema_diff` would report a phantom change forever. Insert before
+/// `PERMISSIONS` when present, otherwise before the terminating `;`.
+fn inject_marker_comment(stmt: &str, marker: &str) -> String {
     let comment_re = Regex::new(r#"(?is)COMMENT\s+(['"])(.*?)['"]"#).expect("static regex");
     if let Some(caps) = comment_re.captures(stmt) {
         let whole = caps.get(0).unwrap();
         let quote = &caps[1];
         let existing = &caps[2];
-        if existing.contains(ssp_protocol::NOSYNC_TABLE_COMMENT) {
+        if existing.contains(marker) {
             return stmt.to_string();
         }
-        let merged = format!(
-            "COMMENT {q}{existing} {marker}{q}",
-            q = quote,
-            existing = existing,
-            marker = ssp_protocol::NOSYNC_TABLE_COMMENT
-        );
+        let merged = format!("COMMENT {q}{existing} {marker}{q}", q = quote);
         let mut s = String::with_capacity(stmt.len() + merged.len());
         s.push_str(&stmt[..whole.start()]);
         s.push_str(&merged);
@@ -483,13 +559,20 @@ fn inject_nosync_comment(stmt: &str) -> String {
         return s;
     }
 
-    // No existing COMMENT — insert before the terminating ';'.
-    let marker = format!("COMMENT '{}'", ssp_protocol::NOSYNC_TABLE_COMMENT);
+    let clause = format!("COMMENT '{}'", marker);
+
+    // Before a PERMISSIONS clause, to match SurrealDB's own rendering order.
+    let permissions_re = Regex::new(r"(?i)\bPERMISSIONS\b").expect("static regex");
+    if let Some(m) = permissions_re.find(stmt) {
+        let (head, tail) = stmt.split_at(m.start());
+        return format!("{} {} {}", head.trim_end(), clause, tail.trim_start());
+    }
+
     if let Some(pos) = stmt.rfind(';') {
         let (head, tail) = stmt.split_at(pos);
-        format!("{} {}{}", head.trim_end(), marker, tail)
+        format!("{} {}{}", head.trim_end(), clause, tail)
     } else {
-        format!("{} {}", stmt.trim_end(), marker)
+        format!("{} {}", stmt.trim_end(), clause)
     }
 }
 
@@ -617,6 +700,81 @@ mod tests {
     fn no_markers_when_nothing_marked() {
         let src = "DEFINE TABLE a SCHEMALESS;\nDEFINE TABLE b SCHEMALESS;\n";
         assert_eq!(add_nosync_markers(src, src), src.to_string());
+    }
+
+    #[test]
+    fn marker_goes_before_permissions_to_match_surreal_rendering() {
+        // SurrealDB echoes `COMMENT` before `PERMISSIONS`. Emitting it after
+        // would make the deployed text differ from the desired text on every
+        // deploy and schema_diff would report a phantom change forever.
+        let src = "-- @nosync\nDEFINE TABLE secrets SCHEMALESS PERMISSIONS FOR select WHERE false;\n";
+        let out = add_nosync_markers(src, src);
+        assert!(
+            out.contains("SCHEMALESS COMMENT 'sp00ky:nosync' PERMISSIONS FOR select WHERE false;"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn opaque_marker_added_to_nosync_crdt_and_opaque_fields_only() {
+        let src = "\
+-- @nosync
+DEFINE FIELD secret_token ON TABLE user TYPE string;
+-- @crdt text
+DEFINE FIELD body ON TABLE user TYPE string;
+-- @opaque
+DEFINE FIELD blob ON TABLE user TYPE bytes;
+DEFINE FIELD email ON TABLE user TYPE string;
+";
+        let out = add_opaque_field_markers(src, src);
+        for field in ["secret_token", "body", "blob"] {
+            let line = out
+                .lines()
+                .find(|l| l.contains(&format!("FIELD {field} ")))
+                .unwrap_or_else(|| panic!("missing {field}"));
+            assert!(
+                line.contains("COMMENT 'sp00ky:opaque'"),
+                "{field} unmarked: {line}"
+            );
+        }
+        let email = out.lines().find(|l| l.contains("FIELD email ")).unwrap();
+        assert!(!email.contains("sp00ky:opaque"), "got: {email}");
+    }
+
+    #[test]
+    fn opaque_marker_is_idempotent_and_merges_existing_comment() {
+        let src = "-- @opaque\nDEFINE FIELD blob ON TABLE user TYPE bytes COMMENT 'binary payload';\n";
+        let once = add_opaque_field_markers(src, src);
+        let twice = add_opaque_field_markers(&once, src);
+        assert_eq!(once, twice);
+        assert_eq!(once.matches("COMMENT").count(), 1, "got: {once}");
+        assert!(once.contains("binary payload"));
+        assert!(once.contains("sp00ky:opaque"));
+    }
+
+    #[test]
+    fn opaque_marker_handles_multiline_field_and_nested_paths() {
+        let src = "\
+-- @opaque
+DEFINE FIELD meta.secret ON TABLE user
+    TYPE string
+    PERMISSIONS FULL;
+";
+        let out = add_opaque_field_markers(src, src);
+        assert!(out.contains("COMMENT 'sp00ky:opaque'"), "got: {out}");
+        // Marker lands before PERMISSIONS, and the statement is still one
+        // statement terminated by a single `;`.
+        assert_eq!(out.matches(';').count(), 1, "got: {out}");
+        assert!(
+            out.find("COMMENT").unwrap() < out.find("PERMISSIONS").unwrap(),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn no_opaque_markers_when_nothing_annotated() {
+        let src = "DEFINE FIELD a ON TABLE t TYPE string;\nDEFINE FIELD b ON TABLE t TYPE int;\n";
+        assert_eq!(add_opaque_field_markers(src, src), src.to_string());
     }
 
     #[test]

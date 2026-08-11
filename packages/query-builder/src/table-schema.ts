@@ -25,6 +25,18 @@ export interface ColumnSchema {
    * the runtime value is `ElementType[]` (e.g. `array<string>` → `string[]`).
    */
   readonly array?: boolean;
+  /**
+   * True for `-- @opaque` columns: the value IS synced to the client and can be
+   * read from a query result, but the sync engine never stores it server-side.
+   *
+   * That makes it unusable for anything the server has to evaluate — `where`,
+   * `orderBy`, joins, aggregates, table permissions — because the SSP has no
+   * value to evaluate against. A predicate on such a column would appear to work
+   * locally (the local cache does hold the value) while matching nothing
+   * server-side, so the query builder rejects it outright instead of letting the
+   * two diverge silently.
+   */
+  readonly opaque?: boolean;
 }
 
 /**

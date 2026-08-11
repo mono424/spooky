@@ -37,20 +37,24 @@ table or field is generated and synced.
 | Descriptor | Placement | Effect |
 | --- | --- | --- |
 | `-- @nosync` | above a `DEFINE TABLE` or `DEFINE FIELD` | Server-only table or field. Excluded from sync entirely (see below). |
+| `-- @opaque` | above a `DEFINE FIELD` | Field is synced to the client but never stored by the sync engine, so it can't be filtered or ordered on (see below). |
 | `-- @crdt text` | above a `DEFINE FIELD` | Marks a collaborative text field backed by a Loro CRDT. See [CRDT fields](/docs/client/crdt). |
 | `-- @cursor` | above a `DEFINE FIELD` (with `@crdt`) | Stores per-session cursors alongside the CRDT snapshot. |
 | `-- @parent` | suffix on a `DEFINE FIELD ... TYPE record<...>` | Marks the parent side of a relationship; written automatically from the auth context, never by client code. |
 
 <CodeBlock code={annotationsCode} lang="sql" />
 
+A descriptor must sit **directly above** its statement, with no blank line between. A marker that
+attaches to nothing is reported as a warning by `spky generate` rather than silently ignored.
+
 ### Keeping a table or field off the client (`@nosync`)
 
 Put `-- @nosync` on the line above a `DEFINE TABLE` or `DEFINE FIELD` to make it **server-only**. This is useful for audit
-logs, bookkeeping, internal secrets, or anything that should live in your database but never reach a browser.
+logs, bookkeeping, and internal data that should live in your database but not in your client's cache.
 
 <CodeBlock code={nosyncCode} lang="sql" />
 
-A `@nosync` table or field is:
+A `@nosync` **table** is:
 
 - **Omitted from generated types** (TypeScript / Dart / JSON Schema).
 - **Omitted from relations**: any `record<...>` field on another table pointing at a `@nosync` table is dropped
@@ -59,11 +63,48 @@ A `@nosync` table or field is:
 - **Excluded from the scheduler snapshot** and from SSP bootstrap.
 - **Still stored in the main database, and still included in backups.**
 
-<Warning title="Not the same as locking permissions">
-  `@nosync` is distinct from `PERMISSIONS FOR select WHERE false`. A permission-locked table or field is
-  still synced (it shows up in generated types and the snapshot, it just can't be read); `@nosync`
-  removes the table or field from sync altogether. Reach for `@nosync` when data should never leave the
-  server.
+A `@nosync` **field** is:
+
+- **Omitted from generated types** and from the client's local cache schema, so it never lands in the
+  local database and is stripped from synced records before they are written.
+- **Omitted from sync event payloads**, and **excluded from the scheduler replica and from SSP
+  bootstrap**, so no server-side component holds the value.
+- **Still stored in the main database, and still included in backups.**
+
+<Warning title="A field-level `@nosync` is not a read barrier">
+  `@nosync` controls what the *sync engine* stores, not what SurrealDB will return. A client's
+  down-sync issues a `SELECT` against your database, so a `@nosync` field's value still travels over
+  that connection before being discarded on arrival. For data that must never reach the client at all,
+  put the barrier in the database: `PERMISSIONS FOR select WHERE false` on the field, or keep the field
+  on a `@nosync` **table** (whose rows are never fetched). Use a field-level `@nosync` to keep
+  server-side bookkeeping out of your generated types and out of every client's cache, not to keep a
+  secret.
+</Warning>
+
+### Syncing a field without indexing it (`@opaque`)
+
+`-- @opaque` is the middle ground between a normal field and `@nosync`: the value **is** synced to the
+client and readable from query results, but no server-side component ever stores it. Good for large
+blobs and payloads you render but never query on: thumbnails, serialized editor state, attachments.
+
+<CodeBlock code={opaqueCode} lang="sql" />
+
+An `@opaque` field is:
+
+- **Present in generated types** and in the client's local cache, flagged `opaque: true` on the column.
+- **Read from your database on demand.** Sp00ky's sync payloads carry record ids and versions, not
+  field values, so the client fetches the row body from SurrealDB directly and picks the field up for
+  free. Writing only an `@opaque` field still bumps the record version, so subscribed clients refetch.
+- **Never held by the scheduler replica or an SSP**, which is the point: a multi-megabyte blob does not
+  need to sit in the sync engine's memory on every node to be delivered.
+
+<Warning title="`@opaque` fields can't be queried on">
+  Because no server-side component holds the value, it cannot be evaluated. Using an `@opaque` field in
+  `where`, `orderBy`, a join, or a table's `PERMISSIONS` expression is rejected: the query builder
+  throws, the SSP refuses the registration with a 400, and `spky deploy` fails on a schema whose
+  `PERMISSIONS` or `DEFINE INDEX` references one. This is deliberate — such a comparison would appear
+  to work against the local cache while matching nothing server-side, so rows would flicker in and out
+  instead of erroring.
 </Warning>
 
 ## Next
@@ -129,4 +170,16 @@ DEFINE FIELD at     ON TABLE audit_log TYPE datetime VALUE time::now();
 DEFINE TABLE user SCHEMALESS;
 DEFINE FIELD username ON TABLE user TYPE string;
 -- @nosync
-DEFINE FIELD secret_token ON TABLE user TYPE string;`;
+DEFINE FIELD import_batch_id ON TABLE user TYPE option<string>;`;
+
+export const opaqueCode = `DEFINE TABLE document SCHEMAFULL;
+DEFINE FIELD title      ON TABLE document TYPE string;
+DEFINE FIELD updated_at ON TABLE document TYPE datetime;
+
+-- @opaque
+DEFINE FIELD thumbnail ON TABLE document TYPE option<bytes>;
+
+-- Fine: title is a normal field.
+--   db.document.where({ title_contains: 'draft' }).orderBy('updated_at', 'desc')
+-- Throws: thumbnail is @opaque, the sync engine has no value to compare.
+--   db.document.where({ thumbnail: someBytes })`;

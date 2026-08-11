@@ -122,7 +122,17 @@ fn fetch_main_stats(
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
 
-        let select_q = format!("SELECT * FROM {}", table);
+        // Project out opaque fields (`@nosync`/`@crdt`/`@opaque` on a DEFINE
+        // FIELD) exactly as the scheduler replica and the SSP bootstrap do.
+        // Without this, `spky verify` reports main≠SSP for every table carrying
+        // such a field — a mismatch no re-clone can fix, because the two sides
+        // are correctly holding different key sets.
+        let table_info: Value =
+            surreal_query(&url, ns, db, user, pass, &format!("INFO FOR TABLE {}", table))
+                .unwrap_or(Value::Null);
+        let omit = ssp_protocol::omit_clause(&ssp_protocol::opaque_fields_from_info(&table_info));
+
+        let select_q = format!("SELECT *{} FROM {}", omit, table);
         let rows_val: Value = surreal_query(&url, ns, db, user, pass, &select_q)?;
         let pairs: Vec<(String, Value)> = rows_val
             .as_array()

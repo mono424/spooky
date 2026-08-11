@@ -139,6 +139,7 @@ impl Processor {
             config,
             self.circuit.permissions(),
             self.circuit.link_targets(),
+            self.circuit.opaque_fields(),
         )
         .map_err(|e| anyhow!("Registration failed: {}", e))?;
 

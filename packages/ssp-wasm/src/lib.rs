@@ -222,6 +222,7 @@ impl Sp00kyProcessor {
             config_val,
             self.circuit.permissions(),
             self.circuit.link_targets(),
+            self.circuit.opaque_fields(),
         )
         .map_err(|e| JsValue::from_str(&format!("Registration failed: {}", e)))?;
 

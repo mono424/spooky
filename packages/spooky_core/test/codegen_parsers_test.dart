@@ -44,6 +44,79 @@ void main() {
       expect(tables, isNot(contains('signup_code')));
     });
 
+    test('a field-level @nosync drops only that field, never the next table',
+        () {
+      // Regression: `pending` was cleared only by a DEFINE TABLE, so a
+      // field-level `-- @nosync` leaked forward and marked the FOLLOWING table
+      // as server-only — silently deleting `game` from the generated Dart types
+      // with no warning.
+      const surql = '''
+        DEFINE TABLE user SCHEMAFULL;
+        DEFINE FIELD email ON user TYPE string;
+        -- @nosync
+        DEFINE FIELD secret_token ON user TYPE string;
+        DEFINE TABLE game SCHEMAFULL;
+        DEFINE FIELD title ON game TYPE string;
+      ''';
+      final tables = parseSchema(surql);
+      expect(tables.map((t) => t.name), ['user', 'game']);
+      final user = tables.firstWhere((t) => t.name == 'user');
+      expect(user.fields.map((f) => f.name), ['email']);
+      final game = tables.firstWhere((t) => t.name == 'game');
+      expect(game.fields.map((f) => f.name), ['title']);
+    });
+
+    test('a blank line orphans an annotation instead of leaking it forward', () {
+      const surql = '''
+        -- @nosync
+
+        DEFINE TABLE game SCHEMAFULL;
+      ''';
+      expect(parseSchema(surql).map((t) => t.name), ['game']);
+    });
+
+    test('@opaque keeps the field and flags it', () {
+      const surql = '''
+        DEFINE TABLE user SCHEMAFULL;
+        DEFINE FIELD email ON user TYPE string;
+        -- @opaque
+        DEFINE FIELD avatar_blob ON user TYPE option<bytes>;
+      ''';
+      final user = parseSchema(surql).single;
+      expect(user.fields.map((f) => f.name), ['email', 'avatar_blob']);
+      expect(user.fields.firstWhere((f) => f.name == 'email').opaque, isFalse);
+      expect(
+          user.fields.firstWhere((f) => f.name == 'avatar_blob').opaque, isTrue);
+    });
+
+    test('non-annotation prose between marker and field still attaches', () {
+      const surql = '''
+        DEFINE TABLE user SCHEMAFULL;
+        -- @nosync
+        -- the API token, never leaves the server
+        DEFINE FIELD secret_token ON user TYPE string;
+        DEFINE FIELD email ON user TYPE string;
+      ''';
+      final user = parseSchema(surql).single;
+      expect(user.fields.map((f) => f.name), ['email']);
+    });
+
+    test('stripServerOnlyFields removes the field and its annotation block', () {
+      const surql = '''DEFINE TABLE user SCHEMAFULL;
+DEFINE FIELD email ON user TYPE string;
+-- @nosync
+-- the API token
+DEFINE FIELD secret_token ON user TYPE string;
+DEFINE TABLE game SCHEMAFULL;''';
+      final out = stripServerOnlyFields(surql);
+      expect(out, isNot(contains('secret_token')));
+      // The orphan must go too, or re-parsing the embedded schema would mark
+      // `game` as nosync and drop it.
+      expect(out, isNot(contains('@nosync')));
+      expect(out, contains('DEFINE TABLE game'));
+      expect(parseSchema(out).map((t) => t.name), ['user', 'game']);
+    });
+
     test('excludes a table carrying the materialized sp00ky:nosync COMMENT', () {
       const surql = '''
         DEFINE TABLE user SCHEMAFULL;

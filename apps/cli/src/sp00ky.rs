@@ -1,7 +1,18 @@
 use crate::annotations::has_annotation;
 use crate::backend::DeployMode;
-use crate::parser::{FieldType, TableSchema};
+use crate::parser::{FieldDefinition, FieldType, TableSchema};
 use std::collections::BTreeMap;
+
+/// Fields whose value must never enter the sync machinery: `@crdt`, `@nosync`
+/// and `@opaque` on a `DEFINE FIELD`. Excluded from the ingest event payload
+/// here and from the replica/bootstrap row scans via the `sp00ky:opaque` marker
+/// baked on by `schema_builder::add_opaque_field_markers`. The two must agree —
+/// see the call site for what happens when they don't.
+fn is_excluded_field(field_def: &FieldDefinition) -> bool {
+    ["crdt", "nosync", "opaque"]
+        .iter()
+        .any(|name| has_annotation(&field_def.annotations, name))
+}
 
 /// Generate Sp00ky events for data hashing and graph synchronization
 // ... imports ...
@@ -139,14 +150,26 @@ pub fn generate_sp00ky_events(
 
         for field_name in all_fields {
             let field_def = table.fields.get(field_name).unwrap();
-            // Skip @crdt fields from the ingest payload. Their value is a
-            // raw LoroDoc snapshot (TYPE bytes) and JSON has no native
-            // bytes encoding, so SurrealDB's http::post would either drop
-            // the field or shape-shift it depending on transport. The SSP
-            // doesn't filter or join on CRDT contents anyway — its job is
-            // membership tracking — so omitting them keeps the payload
-            // clean and saves bandwidth on every keystroke debounce push.
-            if has_annotation(&field_def.annotations, "crdt") || has_annotation(&field_def.annotations, "nosync") {
+            // Skip fields whose value must never enter the sync machinery.
+            //
+            // `@crdt`: the value is a raw LoroDoc snapshot (TYPE bytes) and JSON
+            // has no native bytes encoding, so SurrealDB's http::post would
+            // either drop the field or shape-shift it depending on transport.
+            // `@nosync`: server-only, also absent from the client schema.
+            // `@opaque`: synced to the client (which reads it straight from
+            // SurrealDB) but deliberately not held server-side.
+            //
+            // In all three cases the SSP's job is membership tracking, not
+            // content storage, so omitting them keeps the payload clean and
+            // saves bandwidth on every keystroke debounce push.
+            //
+            // The same three classes get `COMMENT 'sp00ky:opaque'` baked onto
+            // their DEFINE FIELD (see `schema_builder::add_opaque_field_markers`),
+            // which is what makes the scheduler replica and the SSP bootstrap
+            // scan omit them too. Both halves are required: skipping here while
+            // the bootstrap still loads the column leaves the circuit and the
+            // replica permanently disagreeing about the row's key set.
+            if is_excluded_field(field_def) {
                 continue;
             }
             match field_def.field_type {
@@ -209,9 +232,8 @@ pub fn generate_sp00ky_events(
 
         for field_name in all_fields_del {
             let field_def = table.fields.get(field_name).unwrap();
-            // See the matching skip in the mutation event above for why
-            // CRDT bytes don't go through the JSON ingest payload.
-            if has_annotation(&field_def.annotations, "crdt") || has_annotation(&field_def.annotations, "nosync") {
+            // See the matching skip in the mutation event above.
+            if is_excluded_field(field_def) {
                 continue;
             }
             match field_def.field_type {
@@ -556,5 +578,54 @@ DEFINE FIELD token ON TABLE secrets TYPE string;
                 "@nosync table must not appear in any ingest payload"
             );
         }
+    }
+
+    /// Every field-level exclusion must be absent from BOTH ingest payloads,
+    /// while `_00_rv` survives. `_00_rv` is what makes the SSP bump the record
+    /// version so subscribed clients refetch the row and pick the new value up
+    /// from SurrealDB — drop it and an `@opaque`-only write becomes invisible.
+    #[test]
+    fn excluded_fields_are_absent_from_ingest_payloads_but_rv_survives() {
+        use crate::parser::SchemaParser;
+        let schema = r#"
+DEFINE TABLE doc SCHEMALESS PERMISSIONS FULL;
+DEFINE FIELD title ON TABLE doc TYPE string;
+
+-- @nosync
+DEFINE FIELD import_batch ON TABLE doc TYPE string;
+
+-- @opaque
+DEFINE FIELD thumbnail ON TABLE doc TYPE bytes;
+
+-- @crdt text
+DEFINE FIELD body ON TABLE doc TYPE string;
+"#;
+        let mut parser = SchemaParser::new();
+        parser.parse_file(schema).unwrap();
+
+        let out = generate_sp00ky_events(
+            &parser.tables,
+            schema,
+            false,
+            &DeployMode::Singlenode,
+            None,
+            None,
+        );
+
+        for excluded in ["import_batch", "thumbnail", "body"] {
+            assert!(
+                !out.contains(&format!("{excluded}: $after.")),
+                "{excluded} must not be in $plain_after:\n{out}"
+            );
+            assert!(
+                !out.contains(&format!("{excluded}: $before.")),
+                "{excluded} must not be in $plain_before:\n{out}"
+            );
+        }
+        assert!(out.contains("title: $after.title"), "got:\n{out}");
+        assert!(
+            out.contains("_00_rv: (SELECT VALUE version FROM ONLY _00_version"),
+            "the record version must still be stamped:\n{out}"
+        );
     }
 }

@@ -232,6 +232,7 @@ impl TestHarness {
                 payload,
                 circuit.permissions(),
                 circuit.link_targets(),
+                circuit.opaque_fields(),
             )
             .expect("Failed to prepare view registration")
         };
@@ -1130,6 +1131,7 @@ mod permission_register_tests {
                 payload,
                 circuit.permissions(),
                 circuit.link_targets(),
+                circuit.opaque_fields(),
             )
             .expect("registration with valid permission must succeed")
         };
@@ -1198,6 +1200,7 @@ mod permission_register_tests {
             payload,
             circuit.permissions(),
             circuit.link_targets(),
+            circuit.opaque_fields(),
         );
         let err = match result {
             Ok(_) => panic!("expected Err, got Ok"),

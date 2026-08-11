@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod snapshot_hash;
 
@@ -67,6 +67,70 @@ pub const NOSYNC_TABLE_COMMENT: &str = "sp00ky:nosync";
 /// the `@nosync` marker and must be excluded from sync.
 pub fn define_str_is_nosync(define_table: &str) -> bool {
     define_table.contains(NOSYNC_TABLE_COMMENT)
+}
+
+/// Marker baked into the `COMMENT` of a `DEFINE FIELD` whose VALUE must never
+/// enter the sync machinery — the field-level counterpart of
+/// [`NOSYNC_TABLE_COMMENT`]. The CLI emits it for all three exclusion classes
+/// (`-- @nosync`, `-- @crdt` and `-- @opaque` on a field), because the runtime
+/// treatment is identical in every case: the value is never held in the
+/// scheduler replica, never held in an SSP circuit row, and therefore never
+/// part of an integrity hash.
+///
+/// This marker is what makes those exclusions *symmetric*. The sp00ky ingest
+/// events already omit these fields from their payload, but until the marker
+/// existed nothing told the replica clone or the SSP bootstrap `SELECT *` to
+/// skip them. The result was permanent drift: the replica applies an update
+/// with `UPDATE … MERGE` (so a field absent from the payload keeps its cloned
+/// value forever) while the circuit replaces the whole row (so the field
+/// disappears). The two sides then hash differently for the rest of the
+/// deployment. Readers turn this marker into an `OMIT` list, so the value never
+/// reaches either side and the hashes agree by construction.
+pub const OPAQUE_FIELD_COMMENT: &str = "sp00ky:opaque";
+
+/// True when a `DEFINE FIELD ...` string (as returned by `INFO FOR TABLE`)
+/// carries the opaque marker and must be projected out of every row scan.
+pub fn define_str_is_opaque(define_field: &str) -> bool {
+    define_field.contains(OPAQUE_FIELD_COMMENT)
+}
+
+/// Field names to `OMIT` from row scans of `table`, read out of an
+/// `INFO FOR TABLE` response's `fields` map.
+///
+/// `id` and any `_00_*` name can never be omitted, whatever the schema says:
+/// `id` is the row key every consumer joins on, and `_00_rv` carries the
+/// record version that drives catch-up. A marker on either is a schema bug, so
+/// it is ignored rather than honored.
+///
+/// Nested paths (`meta.secret`) are returned verbatim. SurrealDB's `OMIT`
+/// accepts an idiom, so `OMIT meta.secret` removes just that leaf. A name that
+/// does not exist on the table is harmless — `OMIT` on an absent field is a
+/// no-op, not an error.
+pub fn opaque_fields_from_info(info_for_table: &serde_json::Value) -> BTreeSet<String> {
+    let Some(fields) = info_for_table.get("fields").and_then(|f| f.as_object()) else {
+        return BTreeSet::new();
+    };
+    fields
+        .iter()
+        .filter(|(name, _)| name.as_str() != "id" && !name.starts_with("_00_"))
+        .filter(|(_, define)| define.as_str().is_some_and(define_str_is_opaque))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Render an `OMIT` clause for a `SELECT` over `fields`, e.g. `" OMIT a, b"`.
+/// Empty when there is nothing to omit, so callers can splice it into a query
+/// string unconditionally. Shared so every producer (scheduler replica, SSP
+/// bootstrap, `spky verify`) emits a byte-identical projection — a difference
+/// between them is exactly the drift this marker exists to prevent.
+pub fn omit_clause(fields: &BTreeSet<String>) -> String {
+    if fields.is_empty() {
+        return String::new();
+    }
+    format!(
+        " OMIT {}",
+        fields.iter().cloned().collect::<Vec<_>>().join(", ")
+    )
 }
 
 /// `_00_*` meta tables that DO participate in sync: server-written rows the
@@ -261,5 +325,71 @@ mod tests {
     fn empty_auth_id_keeps_legacy_global_fallback() {
         assert_eq!(list_ref_table_for(RefMode::Dedicated, ""), "_00_list_ref");
         assert_eq!(list_ref_table_for(RefMode::Single, ""), "_00_list_ref");
+    }
+
+    /// Shape taken verbatim from a real `INFO FOR TABLE` on SurrealDB 3.1.2 —
+    /// note that the engine renders `COMMENT` before `PERMISSIONS`.
+    fn info_fixture() -> Value {
+        serde_json::json!({
+            "events": {},
+            "fields": {
+                "blob": "DEFINE FIELD blob ON user TYPE none | bytes COMMENT 'sp00ky:opaque' PERMISSIONS FULL",
+                "email": "DEFINE FIELD email ON user TYPE string PERMISSIONS FULL",
+                "meta.secret": "DEFINE FIELD meta.secret ON user TYPE string COMMENT 'sp00ky:opaque' PERMISSIONS FULL",
+                "secret_token": "DEFINE FIELD secret_token ON user TYPE string COMMENT 'audit trail sp00ky:opaque' PERMISSIONS FULL"
+            },
+            "indexes": {},
+            "lives": {},
+            "tables": {}
+        })
+    }
+
+    #[test]
+    fn opaque_fields_read_marker_from_field_defines() {
+        let got = opaque_fields_from_info(&info_fixture());
+        // `secret_token` proves a merged comment (marker appended to existing
+        // text) is still detected.
+        assert_eq!(
+            got.iter().cloned().collect::<Vec<_>>(),
+            vec!["blob", "meta.secret", "secret_token"]
+        );
+    }
+
+    #[test]
+    fn opaque_fields_never_include_id_or_reserved_names() {
+        // A marker on `id` or `_00_rv` is a schema bug: omitting either breaks
+        // every consumer (row key, catch-up version). Ignore rather than honor.
+        let info = serde_json::json!({
+            "fields": {
+                "id": "DEFINE FIELD id ON user TYPE record COMMENT 'sp00ky:opaque'",
+                "_00_rv": "DEFINE FIELD _00_rv ON user TYPE int COMMENT 'sp00ky:opaque'",
+                "blob": "DEFINE FIELD blob ON user TYPE bytes COMMENT 'sp00ky:opaque'"
+            }
+        });
+        assert_eq!(
+            opaque_fields_from_info(&info).iter().cloned().collect::<Vec<_>>(),
+            vec!["blob"]
+        );
+    }
+
+    #[test]
+    fn opaque_fields_tolerate_missing_or_malformed_info() {
+        assert!(opaque_fields_from_info(&Value::Null).is_empty());
+        assert!(opaque_fields_from_info(&serde_json::json!({})).is_empty());
+        assert!(opaque_fields_from_info(&serde_json::json!({ "fields": [] })).is_empty());
+    }
+
+    #[test]
+    fn omit_clause_is_empty_when_nothing_to_omit() {
+        assert_eq!(omit_clause(&BTreeSet::new()), "");
+    }
+
+    #[test]
+    fn omit_clause_is_sorted_and_comma_separated() {
+        // Sorted output is not cosmetic: every producer must emit a
+        // byte-identical projection or their hashes drift.
+        let fields: BTreeSet<String> =
+            ["secret_token", "blob"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(omit_clause(&fields), " OMIT blob, secret_token");
     }
 }

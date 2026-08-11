@@ -363,6 +363,7 @@ impl CodeGenerator {
                                     .filter(|s| !s.is_empty());
                                 let has_cursor = col_def.get("x-cursor").is_some();
                                 let is_parent = col_def.get("x-parent").is_some();
+                                let is_opaque = col_def.get("x-opaque").is_some();
 
                                 let clean_col_name = col_name.replace("`", "");
 
@@ -377,6 +378,7 @@ impl CodeGenerator {
                                     is_datetime,
                                     crdt_variant,
                                     is_parent,
+                                    is_opaque,
                                 ) {
                                     tables_lines.push(line);
                                 }
@@ -396,6 +398,13 @@ impl CodeGenerator {
                                 }
                                 if has_cursor {
                                     flags.push("cursor: true".to_string());
+                                }
+                                // `@opaque`: synced to the client, but the server
+                                // never holds the value, so it can never be
+                                // filtered/ordered on. The query builder rejects
+                                // it at runtime using this flag.
+                                if is_opaque {
+                                    flags.push("opaque: true".to_string());
                                 }
                                 // `array<T>`: `col_type` is already the element
                                 // type (via map_json_schema_type_to_value_type),
@@ -612,10 +621,11 @@ impl CodeGenerator {
         is_datetime: bool,
         crdt_variant: Option<&str>,
         is_parent: bool,
+        is_opaque: bool,
     ) -> Vec<String> {
         // Skip JSDoc for plain columns to keep generated files compact —
         // only emit when there's something semantically interesting to say.
-        if !is_record_id && !is_datetime && crdt_variant.is_none() && !is_parent {
+        if !is_record_id && !is_datetime && crdt_variant.is_none() && !is_parent && !is_opaque {
             return Vec::new();
         }
 
@@ -645,6 +655,12 @@ impl CodeGenerator {
         if is_parent {
             lines.push("         *".to_string());
             lines.push("         * `@parent` — auto-populated server-side from the auth context. Do not write from client code.".to_string());
+        }
+        if is_opaque {
+            lines.push("         *".to_string());
+            lines.push("         * `@opaque` — synced to the client and readable here, but the sync".to_string());
+            lines.push("         * engine never stores the value server-side. It cannot be used in".to_string());
+            lines.push("         * `where`, `orderBy`, joins, or table permissions; doing so throws.".to_string());
         }
 
         lines.push("         */".to_string());

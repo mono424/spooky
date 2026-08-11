@@ -32,3 +32,47 @@ pub enum Predicate {
     And { predicates: Vec<Predicate> },
     Or { predicates: Vec<Predicate> },
 }
+
+impl Predicate {
+    /// Root segment of every row field this predicate reads.
+    ///
+    /// `Param*` variants are excluded: they compare a registration parameter
+    /// against a literal and never touch the row. Nested paths contribute only
+    /// their head (`meta.secret` → `meta`), which is where a column-level marker
+    /// lives.
+    pub fn field_roots(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        self.collect_field_roots(&mut out);
+        out
+    }
+
+    fn collect_field_roots(&self, out: &mut Vec<String>) {
+        let push = |out: &mut Vec<String>, path: &Path| {
+            if let Some(root) = path.segments().first() {
+                out.push(root.to_string());
+            }
+        };
+        match self {
+            Predicate::Eq { field, .. }
+            | Predicate::Neq { field, .. }
+            | Predicate::Gt { field, .. }
+            | Predicate::Gte { field, .. }
+            | Predicate::Lt { field, .. }
+            | Predicate::Lte { field, .. }
+            | Predicate::Prefix { field, .. } => push(out, field),
+            Predicate::And { predicates } | Predicate::Or { predicates } => {
+                for p in predicates {
+                    p.collect_field_roots(out);
+                }
+            }
+            Predicate::True
+            | Predicate::False
+            | Predicate::ParamEq { .. }
+            | Predicate::ParamNeq { .. }
+            | Predicate::ParamGt { .. }
+            | Predicate::ParamGte { .. }
+            | Predicate::ParamLt { .. }
+            | Predicate::ParamLte { .. } => {}
+        }
+    }
+}

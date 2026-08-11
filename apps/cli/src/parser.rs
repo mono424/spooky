@@ -67,8 +67,33 @@ pub struct FieldDefinition {
     pub is_record_id: bool,
     pub select_permission: Option<String>,
     pub should_strip: bool, // True if field should be excluded from client
+    /// `-- @opaque`: the value IS synced to the client (it stays in the client
+    /// schema and in generated types, unlike `should_strip`) but it is never
+    /// held in an SSP circuit row or the scheduler replica, so it can never be
+    /// used for server-side filtering, ordering, joins or permissions.
+    ///
+    /// Kept separate from `should_strip` precisely because the two differ only
+    /// on the client side; both are excluded server-side.
+    pub opaque: bool,
     #[serde(skip)]
     pub annotations: Vec<FieldAnnotation>, // Parsed from -- @name value comments
+}
+
+impl FieldDefinition {
+    /// True when the sync machinery never holds this field's VALUE: `-- @nosync`,
+    /// `-- @crdt` or `-- @opaque`. These are excluded from the ingest payload and
+    /// from the replica/circuit row scans, so nothing server-side can evaluate
+    /// them.
+    ///
+    /// Deliberately NOT the same as `should_strip`. `should_strip` is also set by
+    /// `PERMISSIONS FOR select WHERE false`, which hides a field from the CLIENT
+    /// schema while the server keeps the value and the SSP can still filter on it
+    /// perfectly well. Conflating the two would reject valid schemas.
+    pub fn excluded_from_sync(&self) -> bool {
+        ["nosync", "crdt", "opaque"]
+            .iter()
+            .any(|name| crate::annotations::has_annotation(&self.annotations, name))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +110,53 @@ pub enum FieldType {
     Record(String),
     Option(Box<FieldType>),
     Any,
+}
+
+/// True when `expr` reads `field` as a row field.
+///
+/// Whole-identifier match only, so `secret` does not match `secret_token` or
+/// `x.secret`. `$field` / `$auth.field` are parameters, not row fields, so a
+/// `$`-prefixed occurrence does not count. String literals are stripped first so
+/// `WHERE kind = 'secret'` is not mistaken for a field reference.
+fn expression_references_field(expr: &str, field: &str) -> bool {
+    let without_literals = {
+        let mut out = String::with_capacity(expr.len());
+        let mut quote: Option<char> = None;
+        for c in expr.chars() {
+            match quote {
+                Some(q) => {
+                    if c == q {
+                        quote = None;
+                    }
+                }
+                None => {
+                    if c == '\'' || c == '"' {
+                        quote = Some(c);
+                    } else {
+                        out.push(c);
+                    }
+                }
+            }
+        }
+        out
+    };
+
+    let bytes = without_literals.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    for (idx, _) in without_literals.match_indices(field) {
+        let before = idx.checked_sub(1).map(|i| bytes[i]);
+        let after = bytes.get(idx + field.len()).copied();
+        // A preceding `.` or `$` means this is a path segment or a parameter,
+        // not a bare reference to this table's field.
+        if before.is_some_and(|b| is_ident(b) || b == b'.' || b == b'$') {
+            continue;
+        }
+        if after.is_some_and(is_ident) {
+            continue;
+        }
+        return true;
+    }
+    false
 }
 
 pub struct SchemaParser {
@@ -133,6 +205,10 @@ impl SchemaParser {
             }
         }
 
+        // A marker that attaches to nothing is worse than no marker: the author
+        // reads `-- @nosync` in the schema and believes the field is server-only.
+        crate::annotations::warn_unattached_annotations(content);
+
         for ((table_name, field_name), anns) in crate::annotations::extract_field_annotations(content) {
             if let Some(table) = self.tables.get_mut(&table_name) {
                 if let Some(field) = table.fields.get_mut(&field_name) {
@@ -140,11 +216,142 @@ impl SchemaParser {
                     if crate::annotations::has_annotation(&anns, "nosync") {
                         field.should_strip = true;
                     }
+                    if crate::annotations::has_annotation(&anns, "opaque") {
+                        field.opaque = true;
+                    }
                 }
             }
         }
 
+        // Stripping a parent object field without stripping its declared
+        // children leaves `DEFINE FIELD meta.secret` in the client schema
+        // pointing at a `meta` that no longer exists — a column that can only
+        // ever be empty, since `cleanRecord` drops the whole `meta` key.
+        self.propagate_strip_to_child_paths();
+
+        self.validate_excluded_field_usage(content)?;
+
         Ok(())
+    }
+
+    /// Reject a schema that asks the server to evaluate a field whose value the
+    /// sync machinery deliberately does not hold (`-- @nosync`, `-- @crdt`,
+    /// `-- @opaque` on a `DEFINE FIELD`).
+    ///
+    /// Two placements are rejected:
+    ///
+    /// 1. A table `PERMISSIONS` expression. This is the severe one. The SSP
+    ///    AND-folds the select permission into every scan of the table, and
+    ///    `resolve_field` returns `None` for a key the circuit does not hold, so
+    ///    the predicate evaluates false for every row — the whole table reads as
+    ///    empty, and the client treats absent membership as deleted.
+    /// 2. A `DEFINE INDEX ... FIELDS` list naming a stripped field. The index
+    ///    would survive into the client schema pointing at a column
+    ///    `filter_schema_for_client` removed; a `UNIQUE` index over a column
+    ///    every cached row leaves unset then collides on the second row.
+    ///
+    /// The SSP enforces (1) again at registration time, but only for a query
+    /// that actually reaches it. Failing at deploy is what makes it a schema
+    /// error the author sees immediately rather than an empty list in the app.
+    fn validate_excluded_field_usage(&self, content: &str) -> Result<()> {
+        use regex::Regex;
+
+        let mut problems: Vec<String> = Vec::new();
+
+        for (table_name, table) in &self.tables {
+            let excluded: Vec<&String> = table
+                .fields
+                .iter()
+                .filter(|(_, f)| f.excluded_from_sync())
+                .map(|(name, _)| name)
+                .collect();
+            if excluded.is_empty() {
+                continue;
+            }
+
+            for (action, expr) in &table.table_permissions {
+                for field in &excluded {
+                    if expression_references_field(expr, field) {
+                        problems.push(format!(
+                            "  • table '{table_name}': PERMISSIONS FOR {action} references \
+                             '{field}', which is excluded from sync (@nosync/@crdt/@opaque). \
+                             The sync engine has no value to compare, so this rule matches \
+                             NO rows and the whole table reads as empty on every client."
+                        ));
+                    }
+                }
+            }
+        }
+
+        // `DEFINE INDEX ... [ON TABLE] t FIELDS|COLUMNS a, b`
+        let index_re = Regex::new(
+            r"(?is)DEFINE\s+INDEX\s+(?:OVERWRITE\s+|IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(?:TABLE\s+)?(\w+)\s+(?:FIELDS|COLUMNS)\s+([^;]+)",
+        )
+        .expect("static regex");
+        for caps in index_re.captures_iter(content) {
+            let (index_name, table_name) = (&caps[1], &caps[2]);
+            let Some(table) = self.tables.get(table_name) else {
+                continue;
+            };
+            for raw in caps[3].split(',') {
+                // Trim trailing index modifiers (`UNIQUE`, `SEARCH ANALYZER ...`).
+                let field = raw.trim().split_whitespace().next().unwrap_or("").trim();
+                if field.is_empty() {
+                    continue;
+                }
+                let root = field.split('.').next().unwrap_or(field);
+                if let Some(def) = table.fields.get(field).or_else(|| table.fields.get(root)) {
+                    if def.should_strip || def.opaque {
+                        problems.push(format!(
+                            "  • index '{index_name}' on '{table_name}' indexes '{field}', \
+                             which is excluded from sync (@nosync/@opaque). Remove the field \
+                             from the index, or the annotation from the field."
+                        ));
+                    }
+                }
+            }
+        }
+
+        if problems.is_empty() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "Schema references fields that are excluded from sync:\n{}",
+            problems.join("\n")
+        )
+    }
+
+    /// Propagate `should_strip` / `opaque` from a parent field to every nested
+    /// path declared beneath it (`meta` → `meta.secret`, `meta.a.b`).
+    ///
+    /// Field names are flat keys in `TableSchema::fields`, so `meta` and
+    /// `meta.secret` are independent entries and an annotation on the parent
+    /// says nothing about the child.
+    fn propagate_strip_to_child_paths(&mut self) {
+        for table in self.tables.values_mut() {
+            let parents: Vec<(String, bool, bool)> = table
+                .fields
+                .iter()
+                .filter(|(_, f)| f.should_strip || f.opaque)
+                .map(|(name, f)| (name.clone(), f.should_strip, f.opaque))
+                .collect();
+
+            for (parent, strip, opaque) in parents {
+                let prefix = format!("{}.", parent);
+                let children: Vec<String> = table
+                    .fields
+                    .keys()
+                    .filter(|name| name.starts_with(&prefix))
+                    .cloned()
+                    .collect();
+                for child in children {
+                    if let Some(field) = table.fields.get_mut(&child) {
+                        field.should_strip |= strip;
+                        field.opaque |= opaque;
+                    }
+                }
+            }
+        }
     }
 
     /// Remove DEFINE EVENT statements from the schema content
@@ -405,6 +612,7 @@ impl SchemaParser {
                     is_record_id,
                     select_permission: select_permission.clone(),
                     should_strip,
+                    opaque: false,
                     annotations: Vec::new(),
                 };
 
@@ -615,10 +823,194 @@ impl SchemaParser {
                     is_record_id: false,
                     select_permission: None,
                     should_strip: false,
+                    opaque: false,
                     annotations: Vec::new(),
                 },
             );
         }
         params
+    }
+}
+
+#[cfg(test)]
+mod excluded_field_usage_tests {
+    use super::*;
+
+    fn parse(content: &str) -> Result<SchemaParser> {
+        let mut p = SchemaParser::new();
+        p.parse_file(content)?;
+        Ok(p)
+    }
+
+    #[test]
+    fn opaque_field_in_select_permission_is_rejected() {
+        // The severe case: the SSP AND-folds this into every scan of `user`, and
+        // it has no value to compare, so the table reads as empty everywhere.
+        let err = parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FOR select WHERE secret_token = 'x';
+-- @opaque
+DEFINE FIELD secret_token ON TABLE user TYPE string;
+",
+        )
+        .err()
+        .expect("must reject");
+        let msg = err.to_string();
+        assert!(msg.contains("secret_token"), "got: {msg}");
+        assert!(msg.contains("PERMISSIONS FOR select"), "got: {msg}");
+    }
+
+    #[test]
+    fn nosync_and_crdt_fields_in_permissions_are_also_rejected() {
+        for annotation in ["-- @nosync", "-- @crdt text"] {
+            let schema = format!(
+                "\
+DEFINE TABLE doc SCHEMAFULL PERMISSIONS FOR select WHERE body != NONE;
+{annotation}
+DEFINE FIELD body ON TABLE doc TYPE string;
+"
+            );
+            assert!(parse(&schema).is_err(), "{annotation} should be rejected");
+        }
+    }
+
+    #[test]
+    fn a_select_denied_field_in_permissions_is_allowed() {
+        // `PERMISSIONS FOR select WHERE false` also sets `should_strip`, but the
+        // SERVER still holds the value and the SSP can filter on it — only the
+        // client schema drops it. Rejecting this would break valid schemas.
+        parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FOR select WHERE internal_flag = true;
+DEFINE FIELD internal_flag ON TABLE user TYPE bool PERMISSIONS FOR select WHERE false;
+",
+        )
+        .expect("must be allowed");
+    }
+
+    #[test]
+    fn a_similarly_named_field_does_not_trip_the_check() {
+        // Whole-identifier match only: `secret` must not match `secret_token`.
+        parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FOR select WHERE secret_token = 'x';
+-- @opaque
+DEFINE FIELD secret ON TABLE user TYPE string;
+DEFINE FIELD secret_token ON TABLE user TYPE string;
+",
+        )
+        .expect("must be allowed");
+    }
+
+    #[test]
+    fn a_string_literal_matching_the_field_name_does_not_trip_the_check() {
+        parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FOR select WHERE kind = 'blob';
+-- @opaque
+DEFINE FIELD blob ON TABLE user TYPE bytes;
+DEFINE FIELD kind ON TABLE user TYPE string;
+",
+        )
+        .expect("literal must not count as a field reference");
+    }
+
+    #[test]
+    fn a_param_of_the_same_name_does_not_trip_the_check() {
+        parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FOR select WHERE $blob != NONE;
+-- @opaque
+DEFINE FIELD blob ON TABLE user TYPE bytes;
+",
+        )
+        .expect("$param must not count as a field reference");
+    }
+
+    #[test]
+    fn indexing_an_excluded_field_is_rejected() {
+        let err = parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;
+-- @opaque
+DEFINE FIELD blob ON TABLE user TYPE bytes;
+DEFINE INDEX idx_blob ON TABLE user FIELDS blob UNIQUE;
+",
+        )
+        .err()
+        .expect("must reject");
+        assert!(err.to_string().contains("idx_blob"), "got: {err}");
+    }
+
+    #[test]
+    fn indexing_a_client_stripped_field_is_also_rejected() {
+        // A select-denied field IS removed from the client schema, so an index on
+        // it dangles there even though the server keeps the value.
+        let err = parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;
+DEFINE FIELD hidden ON TABLE user TYPE string PERMISSIONS FOR select WHERE false;
+DEFINE INDEX idx_hidden ON TABLE user FIELDS hidden;
+",
+        )
+        .err()
+        .expect("must reject");
+        assert!(err.to_string().contains("idx_hidden"), "got: {err}");
+    }
+
+    #[test]
+    fn indexing_an_ordinary_field_is_allowed() {
+        parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;
+DEFINE FIELD email ON TABLE user TYPE string;
+-- @opaque
+DEFINE FIELD blob ON TABLE user TYPE bytes;
+DEFINE INDEX idx_email ON TABLE user FIELDS email UNIQUE;
+",
+        )
+        .expect("must be allowed");
+    }
+
+    #[test]
+    fn opaque_does_not_strip_the_field_from_the_client() {
+        // The defining difference between @opaque and @nosync.
+        let p = parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;
+-- @opaque
+DEFINE FIELD blob ON TABLE user TYPE bytes;
+-- @nosync
+DEFINE FIELD secret_token ON TABLE user TYPE string;
+",
+        )
+        .expect("parses");
+        let fields = &p.tables.get("user").expect("user table").fields;
+        let blob = fields.get("blob").expect("blob field");
+        assert!(blob.opaque, "blob must be opaque");
+        assert!(!blob.should_strip, "@opaque must NOT strip from the client");
+        let secret = fields.get("secret_token").expect("secret_token field");
+        assert!(secret.should_strip, "@nosync must strip from the client");
+        assert!(!secret.opaque, "@nosync is not @opaque on the client side");
+        // Both are excluded server-side, which is what the marker keys on.
+        assert!(blob.excluded_from_sync() && secret.excluded_from_sync());
+    }
+
+    #[test]
+    fn stripping_a_parent_field_strips_its_declared_children() {
+        let p = parse(
+            "\
+DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;
+-- @nosync
+DEFINE FIELD meta ON TABLE user TYPE object;
+DEFINE FIELD meta.secret ON TABLE user TYPE string;
+",
+        )
+        .expect("parses");
+        let fields = &p.tables.get("user").expect("user table").fields;
+        assert!(
+            fields.get("meta.secret").expect("child field").should_strip,
+            "child of a stripped parent must be stripped too"
+        );
     }
 }

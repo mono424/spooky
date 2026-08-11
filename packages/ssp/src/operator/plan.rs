@@ -160,6 +160,97 @@ impl OperatorPlan {
         }
     }
 
+    /// Every `(table, field_root)` pair this plan asks the circuit to EVALUATE:
+    /// filter predicates, join keys, ORDER BY keys, and subquery parent keys.
+    ///
+    /// Projections are deliberately excluded. A projected field is passed
+    /// through untouched (`operator/map.rs` ignores the projection list), so
+    /// selecting a field the circuit does not hold is harmless — the client reads
+    /// the value from SurrealDB, not from here. Evaluating one is not harmless:
+    /// `eval::value_ops::resolve_field` returns `None` for an absent key, which
+    /// silently makes the comparison false and drops the row from membership.
+    /// That is what this list exists to reject at registration time.
+    ///
+    /// The table attributed to a field is the first table scanned in the subtree
+    /// the field belongs to — exact for the single-scan case, and for joins each
+    /// side is walked with its own table.
+    pub fn evaluated_field_refs(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        self.collect_evaluated_field_refs(&mut out);
+        let mut seen = std::collections::HashSet::new();
+        out.retain(|pair| seen.insert(pair.clone()));
+        out
+    }
+
+    fn collect_evaluated_field_refs(&self, out: &mut Vec<(String, String)>) {
+        // Table a field mentioned in THIS node's clauses belongs to.
+        let owner = |plan: &OperatorPlan| plan.referenced_tables().first().cloned();
+
+        match self {
+            OperatorPlan::Scan { .. } => {}
+            OperatorPlan::Filter { input, predicate } => {
+                if let Some(table) = owner(input) {
+                    for field in predicate.field_roots() {
+                        out.push((table.clone(), field));
+                    }
+                }
+                input.collect_evaluated_field_refs(out);
+            }
+            OperatorPlan::Limit {
+                input, order_by, ..
+            } => {
+                if let (Some(table), Some(specs)) = (owner(input), order_by.as_ref()) {
+                    for spec in specs {
+                        if let Some(root) = spec.field.segments().first() {
+                            out.push((table.clone(), root.to_string()));
+                        }
+                    }
+                }
+                input.collect_evaluated_field_refs(out);
+            }
+            OperatorPlan::Distinct { input } => input.collect_evaluated_field_refs(out),
+            OperatorPlan::Project { input, projections } => {
+                input.collect_evaluated_field_refs(out);
+                for proj in projections {
+                    if let Projection::Subquery {
+                        plan, parent_key, ..
+                    } = proj
+                    {
+                        // The child key is read off the child row and the parent
+                        // key off the parent row, so they belong to different
+                        // tables. Both are evaluated to build `_00_list_ref`
+                        // edges.
+                        if let Some(key) = parent_key {
+                            if let Some(child_table) = owner(plan) {
+                                out.push((child_table, key.child_field.clone()));
+                            }
+                            if let Some(parent_table) = owner(input) {
+                                out.push((parent_table, key.parent_field.clone()));
+                            }
+                        }
+                        plan.collect_evaluated_field_refs(out);
+                    }
+                }
+            }
+            OperatorPlan::Join { left, right, on }
+            | OperatorPlan::SemiJoin { left, right, on }
+            | OperatorPlan::AntiJoin { left, right, on } => {
+                if let (Some(lt), Some(root)) = (owner(left), on.left_field.segments().first()) {
+                    out.push((lt, root.to_string()));
+                }
+                if let (Some(rt), Some(root)) = (owner(right), on.right_field.segments().first()) {
+                    out.push((rt, root.to_string()));
+                }
+                left.collect_evaluated_field_refs(out);
+                right.collect_evaluated_field_refs(out);
+            }
+            OperatorPlan::Union { left, right } => {
+                left.collect_evaluated_field_refs(out);
+                right.collect_evaluated_field_refs(out);
+            }
+        }
+    }
+
     /// Collect table names referenced only inside `Projection::Subquery` plans.
     /// This set may overlap with primary (main-pipeline) tables.
     pub fn subquery_tables(&self) -> Vec<String> {

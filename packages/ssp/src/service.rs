@@ -1,7 +1,7 @@
 use crate::{converter, permission_inject, sanitizer};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use web_time::Instant;
 
 pub mod view {
@@ -28,6 +28,7 @@ pub mod view {
         config: Value,
         permissions: &HashMap<String, String>,
         links: &HashMap<String, HashMap<String, String>>,
+        opaque_fields: &HashMap<String, BTreeSet<String>>,
     ) -> Result<DbspRegistrationData> {
         use crate::circuit::view::OutputFormat;
         use crate::operator::plan::{OperatorPlan, QueryPlan};
@@ -122,6 +123,12 @@ pub mod view {
             links,
         )?;
 
+        // Reject AFTER permission injection, so a permission expression that
+        // itself touches an opaque field is caught too — that is the dangerous
+        // case, because it silently empties the view for every caller rather than
+        // for the one who wrote the query.
+        reject_opaque_field_evaluation(&root_op, opaque_fields)?;
+
         let parse_ms = parse_start.elapsed().as_secs_f64() * 1000.0;
 
         let plan = QueryPlan {
@@ -147,6 +154,160 @@ pub mod view {
             format,
             parse_ms,
         })
+    }
+
+    /// Fail registration when the plan would evaluate a field the circuit does
+    /// not hold (`sp00ky:opaque`: `-- @nosync`, `-- @crdt`, `-- @opaque`).
+    ///
+    /// Failing loudly here is the whole point. The alternative is not "the query
+    /// doesn't work" but "the query returns nothing, forever, with no error":
+    /// `resolve_field` yields `None` for the absent key, the comparison
+    /// evaluates false, and the row never enters the membership set. When the
+    /// offending predicate came from a table permission, every caller of that
+    /// table sees an empty result and the rows read as deleted.
+    fn reject_opaque_field_evaluation(
+        root: &crate::operator::plan::OperatorPlan,
+        opaque_fields: &HashMap<String, BTreeSet<String>>,
+    ) -> Result<()> {
+        if opaque_fields.is_empty() {
+            return Ok(());
+        }
+        for (table, field) in root.evaluated_field_refs() {
+            if opaque_fields
+                .get(&table)
+                .is_some_and(|fields| fields.contains(&field))
+            {
+                return Err(anyhow!(
+                    "Field '{table}.{field}' cannot be used in WHERE, ORDER BY, a join, \
+                     or a table permission: it is marked @opaque/@nosync/@crdt, so the sync \
+                     engine never stores its value and any comparison against it would \
+                     silently match nothing"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod opaque_field_gate_tests {
+    use super::view::prepare_registration_dbsp;
+    use serde_json::json;
+    use std::collections::{BTreeSet, HashMap};
+
+    fn opaque(table: &str, fields: &[&str]) -> HashMap<String, BTreeSet<String>> {
+        let mut m = HashMap::new();
+        m.insert(
+            table.to_string(),
+            fields.iter().map(|s| s.to_string()).collect(),
+        );
+        m
+    }
+
+    fn payload(surql: &str) -> serde_json::Value {
+        json!({
+            "id": "_00_query:t",
+            "surql": surql,
+            "params": {},
+            "clientId": "c", "ttl": "10m", "lastActiveAt": "",
+        })
+    }
+
+    /// Registration is default-deny for a table with no registered
+    /// PERMISSIONS, which would fail every case here before the opaque gate is
+    /// even reached.
+    fn allow(table: &str) -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        m.insert(table.to_string(), "true".to_string());
+        m
+    }
+
+    #[test]
+    fn where_on_opaque_field_is_rejected() {
+        let err = prepare_registration_dbsp(
+            payload("SELECT * FROM user WHERE secret_token = 'x';"),
+            &allow("user"),
+            &HashMap::new(),
+            &opaque("user", &["secret_token"]),
+        )
+        .err().expect("must reject");
+        assert!(err.to_string().contains("user.secret_token"), "got: {err}");
+    }
+
+    #[test]
+    fn order_by_on_opaque_field_is_rejected() {
+        let err = prepare_registration_dbsp(
+            payload("SELECT * FROM user ORDER BY secret_token asc LIMIT 10;"),
+            &allow("user"),
+            &HashMap::new(),
+            &opaque("user", &["secret_token"]),
+        )
+        .err().expect("must reject");
+        assert!(err.to_string().contains("user.secret_token"), "got: {err}");
+    }
+
+    #[test]
+    fn opaque_field_in_a_table_permission_is_rejected() {
+        // The dangerous case: nothing in the user's query mentions the field, so
+        // without this gate every caller of `user` silently sees zero rows.
+        let mut perms = HashMap::new();
+        perms.insert("user".to_string(), "secret_token = 'x'".to_string());
+        let err = prepare_registration_dbsp(
+            payload("SELECT * FROM user;"),
+            &perms,
+            &HashMap::new(),
+            &opaque("user", &["secret_token"]),
+        )
+        .err().expect("must reject");
+        assert!(err.to_string().contains("user.secret_token"), "got: {err}");
+    }
+
+    #[test]
+    fn projecting_an_opaque_field_is_allowed() {
+        // Projections are pass-through — the client reads the value from
+        // SurrealDB, not from the circuit — so selecting it must still work.
+        // This is the whole point of @opaque as distinct from @nosync.
+        prepare_registration_dbsp(
+            payload("SELECT id, secret_token FROM user;"),
+            &allow("user"),
+            &HashMap::new(),
+            &opaque("user", &["secret_token"]),
+        )
+        .expect("projection must be allowed");
+    }
+
+    #[test]
+    fn select_star_is_allowed() {
+        prepare_registration_dbsp(
+            payload("SELECT * FROM user;"),
+            &allow("user"),
+            &HashMap::new(),
+            &opaque("user", &["secret_token"]),
+        )
+        .expect("SELECT * must be allowed");
+    }
+
+    #[test]
+    fn a_non_opaque_predicate_on_the_same_table_still_registers() {
+        prepare_registration_dbsp(
+            payload("SELECT * FROM user WHERE email = 'a@b.c';"),
+            &allow("user"),
+            &HashMap::new(),
+            &opaque("user", &["secret_token"]),
+        )
+        .expect("unrelated predicate must be allowed");
+    }
+
+    #[test]
+    fn an_opaque_field_on_a_different_table_does_not_block() {
+        // Field names are not globally unique; the gate must key on (table, field).
+        prepare_registration_dbsp(
+            payload("SELECT * FROM user WHERE secret_token = 'x';"),
+            &allow("user"),
+            &HashMap::new(),
+            &opaque("other_table", &["secret_token"]),
+        )
+        .expect("must not block a same-named field on another table");
     }
 }
 
@@ -186,7 +347,7 @@ mod start_window_isolation_tests {
             "params": { "database": "game_database:c1" },
             "clientId": "c", "ttl": "10m", "lastActiveAt": "", "format": "streaming"
         });
-        let data = prepare_registration_dbsp(payload, &perms, &HashMap::new()).expect("prep");
+        let data = prepare_registration_dbsp(payload, &perms, &HashMap::new(), &HashMap::new()).expect("prep");
         let update = circuit
             .add_query_with_auth(data.plan, data.safe_params, Some(OutputFormat::Streaming), String::new())
             .expect("delta");
@@ -221,7 +382,7 @@ mod start_window_register_before_ingest_tests {
             "params": { "database": "game_database:c1" },
             "clientId": "c", "ttl": "10m", "lastActiveAt": "", "format": "streaming"
         });
-        let data = prepare_registration_dbsp(payload, &perms, &HashMap::new()).expect("prep");
+        let data = prepare_registration_dbsp(payload, &perms, &HashMap::new(), &HashMap::new()).expect("prep");
         circuit.add_query_with_auth(data.plan, data.safe_params, Some(OutputFormat::Streaming), String::new());
 
         let changes: Vec<Change> = (0..160u32)
@@ -304,7 +465,7 @@ mod link_traversal_permission_tests {
             "clientId": "c", "ttl": "10m", "lastActiveAt": "", "format": "streaming",
         });
 
-        let data = prepare_registration_dbsp(payload, &perms, links).expect("prep");
+        let data = prepare_registration_dbsp(payload, &perms, links, &HashMap::new()).expect("prep");
         circuit.add_query_with_auth(
             data.plan,
             data.safe_params,

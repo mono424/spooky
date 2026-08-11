@@ -578,3 +578,94 @@ describe('Subquery Filtering', () => {
     );
   });
 });
+
+// An `-- @opaque` column is synced to the client but never stored server-side,
+// so nothing on the server can evaluate a predicate against it. The failure mode
+// without a guard is silent and asymmetric: the LOCAL cache does hold the value,
+// so the clause filters correctly on screen while the server-side membership set
+// it is reconciled against was computed without it — rows appear and vanish
+// instead of erroring. Fail at the call site instead.
+const opaqueSchema = {
+  tables: [
+    {
+      name: 'document' as const,
+      columns: {
+        id: { type: 'string' as const, optional: false },
+        title: { type: 'string' as const, optional: false },
+        thumbnail: {
+          type: 'Uint8Array' as const,
+          optional: true,
+          bytes: true,
+          opaque: true,
+        },
+        meta: { type: 'json' as const, optional: true, opaque: true },
+      },
+      primaryKey: ['id'] as const,
+    },
+  ],
+  relationships: [],
+  backends: {},
+} as const;
+
+describe('@opaque column guards', () => {
+  const qb = () => new QueryBuilder(opaqueSchema, 'document');
+
+  it('rejects an opaque column in where()', () => {
+    expect(() => qb().where({ thumbnail: null } as never)).toThrow(/thumbnail/);
+    expect(() => qb().where({ thumbnail: null } as never)).toThrow(/@opaque/);
+  });
+
+  it('rejects an opaque column used with a comparison operator object', () => {
+    expect(() =>
+      qb().where({ thumbnail: { _op: '!=', _val: null } } as never)
+    ).toThrow(/@opaque/);
+  });
+
+  it('rejects an opaque column inside an _or branch', () => {
+    expect(() =>
+      qb().where({
+        _or: [{ title: 'a' }, { thumbnail: null }],
+      } as never)
+    ).toThrow(/thumbnail/);
+  });
+
+  it('rejects a nested path rooted at an opaque column', () => {
+    expect(() => qb().where({ 'meta.secret': 'x' } as never)).toThrow(/@opaque/);
+  });
+
+  it('rejects an opaque column in orderBy()', () => {
+    expect(() => qb().orderBy('thumbnail' as never)).toThrow(/@opaque/);
+  });
+
+  it('allows a normal column in where() and orderBy()', () => {
+    expect(() => qb().where({ title: 'a' }).orderBy('title')).not.toThrow();
+  });
+
+  it('allows selecting an opaque column', () => {
+    // Projection is the whole point of @opaque: the value IS delivered, the
+    // client just cannot ask the server to filter on it.
+    expect(() => qb().select('id', 'thumbnail' as never)).not.toThrow();
+  });
+
+  it('does not reject an opaque column name on a different table', () => {
+    // The flag is per (table, column); names are not globally unique.
+    const multi = {
+      tables: [
+        ...opaqueSchema.tables,
+        {
+          name: 'other' as const,
+          columns: {
+            id: { type: 'string' as const, optional: false },
+            thumbnail: { type: 'string' as const, optional: false },
+          },
+          primaryKey: ['id'] as const,
+        },
+      ],
+      relationships: [],
+      backends: {},
+    } as const;
+    expect(() =>
+      new QueryBuilder(multi, 'other').where({ thumbnail: 'x' } as never)
+    ).not.toThrow();
+  });
+});

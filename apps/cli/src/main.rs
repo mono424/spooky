@@ -1465,6 +1465,13 @@ impl ConnectionArgs {
     }
 }
 
+/// A `-- @name` / `-- @name value` annotation comment line. Matches the pattern
+/// `annotations::extract_field_annotations` recognizes, so the two agree on what
+/// counts as an annotation attached to the following statement.
+static ANNOTATION_COMMENT_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^--\s*@([a-z][a-z0-9_]*)(?:\s+(.+?))?\s*$").expect("static regex")
+});
+
 /// Filter schema content to remove field definitions with FOR select WHERE false
 /// and make all fields (except 'id') nullable by wrapping their types in option<>
 fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<String> {
@@ -1483,6 +1490,31 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
         .map(|(n, _)| n.as_str())
         .collect();
 
+    // Dropping a statement must also drop the annotation comment attached to it.
+    // Left behind, the orphan re-attaches to whatever statement follows and marks
+    // THAT one instead — a stray `-- @nosync` above a `DEFINE TABLE` deletes the
+    // whole table from the generated types. It also leaks the removed field's
+    // name into the shipped client schema.
+    //
+    // Pops the whole contiguous comment block, but only when it contains an
+    // annotation. That covers `-- @nosync` / `-- prose` / `DEFINE FIELD`, where
+    // popping annotation lines alone would stop at the prose and strand the
+    // marker. A comment block with no annotation is left alone, so ordinary
+    // documentation above a permission-stripped field survives.
+    let pop_attached_annotations = |result: &mut Vec<String>| {
+        let block_start = result
+            .iter()
+            .rposition(|l| !l.trim().starts_with("--"))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let has_annotation = result[block_start..]
+            .iter()
+            .any(|l| ANNOTATION_COMMENT_RE.is_match(l.trim()));
+        if has_annotation {
+            result.truncate(block_start);
+        }
+    };
+
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim();
@@ -1495,6 +1527,7 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                         "  → Removing @nosync table target '{}' from client schema",
                         target
                     );
+                    pop_attached_annotations(&mut result);
                     while i < lines.len() {
                         if let Some(idx) = lines[i].find(';') {
                             let after_semicolon = &lines[i][idx + 1..];
@@ -1524,6 +1557,7 @@ fn filter_schema_for_client(content: &str, parser: &SchemaParser) -> Result<Stri
                                 "  → Removing field '{}' from table '{}' in client schema",
                                 field_name, table_name
                             );
+                            pop_attached_annotations(&mut result);
                             while i < lines.len() {
                                 if let Some(idx) = lines[i].find(';') {
                                     // Check if there is content after the semicolon
@@ -3691,5 +3725,88 @@ mod client_schema_value_strip_tests {
             out.contains("DEFINE FIELD created_at ON TABLE comment TYPE option<datetime>"),
             "created_at field must remain (sans VALUE); got:\n{out}"
         );
+    }
+
+    fn client_schema(src: &str) -> String {
+        let mut parser = SchemaParser::new();
+        parser.parse_file(src).unwrap();
+        filter_schema_for_client(src, &parser).unwrap()
+    }
+
+    #[test]
+    fn nosync_field_and_its_annotation_are_both_removed() {
+        // The orphan matters as much as the field: a stray `-- @nosync` in the
+        // client schema re-attaches to the next statement. The Dart parser marks
+        // the following DEFINE TABLE server-only and drops that whole table from
+        // generated types.
+        let out = client_schema(
+            "DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;\n\
+             DEFINE FIELD email ON TABLE user TYPE string;\n\
+             -- @nosync\n\
+             DEFINE FIELD secret_token ON TABLE user TYPE string;\n\
+             DEFINE TABLE game SCHEMAFULL PERMISSIONS FULL;\n",
+        );
+        assert!(!out.contains("secret_token"), "field must be gone:\n{out}");
+        assert!(!out.contains("@nosync"), "orphan comment must be gone:\n{out}");
+        assert!(out.contains("DEFINE TABLE game"), "game must survive:\n{out}");
+        assert!(out.contains("email"), "email must survive:\n{out}");
+    }
+
+    #[test]
+    fn a_whole_annotation_comment_block_is_removed_with_the_field() {
+        // `-- @nosync` / prose / DEFINE FIELD: popping only annotation lines
+        // would stop at the prose and strand the marker.
+        let out = client_schema(
+            "DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;\n\
+             -- @nosync\n\
+             -- the API token, server-side bookkeeping only\n\
+             DEFINE FIELD secret_token ON TABLE user TYPE string;\n\
+             DEFINE TABLE game SCHEMAFULL PERMISSIONS FULL;\n",
+        );
+        assert!(!out.contains("@nosync"), "got:\n{out}");
+        assert!(!out.contains("API token"), "got:\n{out}");
+        assert!(out.contains("DEFINE TABLE game"), "got:\n{out}");
+    }
+
+    #[test]
+    fn plain_prose_above_a_permission_stripped_field_is_kept() {
+        // Only annotation blocks are popped, so ordinary documentation attached
+        // to a `FOR select WHERE false` field is not collateral damage.
+        let out = client_schema(
+            "DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;\n\
+             -- internal bookkeeping flag\n\
+             DEFINE FIELD flag ON TABLE user TYPE bool PERMISSIONS FOR select WHERE false;\n",
+        );
+        assert!(!out.contains("DEFINE FIELD flag"), "got:\n{out}");
+        assert!(out.contains("internal bookkeeping flag"), "got:\n{out}");
+    }
+
+    #[test]
+    fn opaque_field_stays_in_the_client_schema() {
+        // The defining difference from @nosync: @opaque is synced, so the client
+        // needs the local column to store it in.
+        let out = client_schema(
+            "DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;\n\
+             -- @opaque\n\
+             DEFINE FIELD blob ON TABLE user TYPE bytes;\n",
+        );
+        assert!(
+            out.contains("DEFINE FIELD blob ON TABLE user TYPE option<bytes>"),
+            "@opaque field must remain, nullable-wrapped:\n{out}"
+        );
+    }
+
+    #[test]
+    fn nosync_table_removal_also_drops_its_annotation() {
+        let out = client_schema(
+            "DEFINE TABLE user SCHEMAFULL PERMISSIONS FULL;\n\
+             -- @nosync\n\
+             DEFINE TABLE audit_log SCHEMALESS;\n\
+             DEFINE FIELD action ON TABLE audit_log TYPE string;\n\
+             DEFINE TABLE game SCHEMAFULL PERMISSIONS FULL;\n",
+        );
+        assert!(!out.contains("audit_log"), "got:\n{out}");
+        assert!(!out.contains("@nosync"), "orphan comment must be gone:\n{out}");
+        assert!(out.contains("DEFINE TABLE game"), "got:\n{out}");
     }
 }

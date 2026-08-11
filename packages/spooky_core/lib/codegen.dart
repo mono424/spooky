@@ -10,6 +10,7 @@ export 'src/codegen/schema_parser.dart'
         parseSchema,
         parseProject,
         parseAccesses,
+        stripServerOnlyFields,
         TableDef,
         FieldDef,
         AccessDef,

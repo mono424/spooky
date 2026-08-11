@@ -442,7 +442,12 @@ String generateDartSource(String surql,
   buf.writeln();
   buf.writeln(emitSchemaMap(tables, parsed.accesses));
   buf.writeln();
-  buf.writeln('const surqlSchema = r\'\'\'\n$surql\'\'\';');
+  // The embedded schema defines the CLIENT's local cache tables, so a
+  // server-only field must not appear in it: the local table would carry a
+  // column the client never receives a value for. `cleanRecord`'s Dart
+  // equivalent filters on the generated schema map, which already omits the
+  // field, so the column could only ever be null.
+  buf.writeln('const surqlSchema = r\'\'\'\n${stripServerOnlyFields(surql)}\'\'\';');
   buf.writeln();
   buf.writeln(emitModels(tables));
   buf.writeln();

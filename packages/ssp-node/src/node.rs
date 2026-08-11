@@ -750,6 +750,7 @@ impl SspNode {
                 payload,
                 circuit.permissions(),
                 circuit.link_targets(),
+                circuit.opaque_fields(),
             ) {
                 Ok(d) => d,
                 Err(e) => {

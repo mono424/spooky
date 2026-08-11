@@ -7,6 +7,7 @@ class FieldDef {
     required this.isRecord,
     required this.isDateTime,
     this.recordTable,
+    this.opaque = false,
   });
 
   /// Field name as declared (kept as-is, e.g. snake_case).
@@ -21,6 +22,11 @@ class FieldDef {
 
   /// For `record<x>`, the referenced table (`x`); null for bare `record`.
   final String? recordTable;
+
+  /// `-- @opaque`: synced to the client and readable, but the sync engine never
+  /// stores the value, so it cannot be used for server-side filtering or
+  /// ordering. Contrast `-- @nosync`, which removes the field entirely.
+  final bool opaque;
 }
 
 /// A parsed table from a `DEFINE TABLE` statement, with its fields.
@@ -34,14 +40,24 @@ final _defineTable = RegExp(
     r'^DEFINE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+|OVERWRITE\s+)?([A-Za-z_][A-Za-z0-9_]*)',
     caseSensitive: false);
 
-// `@nosync` table marker. Source schemas carry it as a `-- @nosync` comment
-// line preceding the DEFINE TABLE; once the CLI materializes it, the server
-// DEFINE TABLE carries a `COMMENT 'sp00ky:nosync'` clause instead.
+// `@nosync` marker. Source schemas carry it as a `-- @nosync` comment line
+// preceding the DEFINE TABLE (or DEFINE FIELD); once the CLI materializes it,
+// the server DEFINE TABLE carries a `COMMENT 'sp00ky:nosync'` clause instead.
 final _nosyncComment = RegExp(r'--\s*@nosync\b', caseSensitive: false);
 const _nosyncTableComment = 'sp00ky:nosync';
 
+// `@opaque`: the field IS synced to the client (unlike `@nosync`), but the sync
+// engine never stores its value, so it cannot be filtered or ordered on.
+final _opaqueComment = RegExp(r'--\s*@opaque\b', caseSensitive: false);
+
 final _defineField = RegExp(
-    r'^DEFINE\s+FIELD\s+(?:IF\s+NOT\s+EXISTS\s+|OVERWRITE\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+ON\s+(?:TABLE\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+TYPE\s+(.*)$',
+    r'^DEFINE\s+FIELD\s+(?:IF\s+NOT\s+EXISTS\s+|OVERWRITE\s+)?([A-Za-z_][A-Za-z0-9_.*\[\]]*)\s+ON\s+(?:TABLE\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+TYPE\s+(.*)$',
+    caseSensitive: false);
+
+// Line-anchored variants used when scanning the RAW schema for annotation
+// comments, where a statement has not yet been isolated by splitting on `;`.
+final _defineFieldLine = RegExp(
+    r'^DEFINE\s+FIELD\s+(?:IF\s+NOT\s+EXISTS\s+|OVERWRITE\s+)?([A-Za-z_][A-Za-z0-9_.*\[\]]*)\s+ON\s+(?:TABLE\s+)?([A-Za-z_][A-Za-z0-9_]*)',
     caseSensitive: false);
 
 // Clause keywords that can follow the TYPE expression in a DEFINE FIELD.
@@ -173,11 +189,13 @@ List<TableDef> parseSchema(String surql) {
     return t;
   }
 
-  // Collect `-- @nosync` tables from the original text first: that marker is a
-  // comment line preceding the DEFINE TABLE, so it must be read before comments
-  // are stripped. (The materialized `COMMENT 'sp00ky:nosync'` form survives
-  // stripping and is handled in the main loop below.)
-  nosync.addAll(_nosyncTablesFromComments(surql));
+  // Collect `-- @nosync` / `-- @opaque` annotations from the original text
+  // first: they are comment lines preceding their statement, so they must be
+  // read before comments are stripped. (The materialized
+  // `COMMENT 'sp00ky:nosync'` form survives stripping and is handled in the main
+  // loop below.)
+  final annotations = _annotationsFromComments(surql);
+  nosync.addAll(annotations.nosyncTables);
 
   // Strip line comments BEFORE splitting on `;`. A `;` inside a `--` comment
   // (e.g. "owner of this broadcast (the publisher; = relay stream id)") would
@@ -208,35 +226,133 @@ List<TableDef> parseSchema(String surql) {
       final fieldName = fieldMatch.group(1)!;
       final tableName = fieldMatch.group(2)!;
       if (nosync.contains(tableName)) continue;
+      final key = '$tableName.$fieldName';
+      // A `-- @nosync` FIELD is server-only: drop it, but keep the table. The
+      // materialized server form carries `COMMENT 'sp00ky:opaque'`, which the
+      // Rust CLI also stamps on `@crdt`/`@opaque` fields — so that marker alone
+      // cannot be used to decide this, and only the comment form is honored.
+      if (annotations.nosyncFields.contains(key)) continue;
       final typeExpr = _extractType(fieldMatch.group(3)!);
-      tableFor(tableName).fields.add(_buildField(fieldName, typeExpr));
+      tableFor(tableName).fields.add(_buildField(
+            fieldName,
+            typeExpr,
+            opaque: annotations.opaqueFields.contains(key),
+          ));
     }
   }
 
   return [for (final name in order) tables[name]!];
 }
 
-/// Tables marked with a `-- @nosync` comment line immediately preceding their
-/// `DEFINE TABLE`. Scanned on the raw schema (before comment stripping).
-Set<String> _nosyncTablesFromComments(String surql) {
-  final result = <String>{};
-  var pending = false;
+/// `-- @nosync` / `-- @opaque` annotations, resolved to the statement each one
+/// precedes. Scanned on the raw schema, before comment stripping.
+class _CommentAnnotations {
+  final Set<String> nosyncTables = {};
+  /// `"<table>.<field>"` keys, matching how the main loop looks them up.
+  final Set<String> nosyncFields = {};
+  final Set<String> opaqueFields = {};
+}
+
+/// Resolve annotation comments to the `DEFINE TABLE` / `DEFINE FIELD` that
+/// follows them.
+///
+/// The pending flags MUST be cleared by any statement, not just a matching one.
+/// Clearing only on `DEFINE TABLE` (as this did) let a field-level `-- @nosync`
+/// leak forward to the next `DEFINE TABLE` in the file, which was then dropped
+/// from the generated types entirely — a whole table silently missing from the
+/// Dart client, with no warning. A blank line clears too, mirroring
+/// `annotations.rs` on the Rust side so both parsers agree on attachment.
+_CommentAnnotations _annotationsFromComments(String surql) {
+  final result = _CommentAnnotations();
+  var pendingNosync = false;
+  var pendingOpaque = false;
+
   for (final line in surql.split('\n')) {
-    if (_nosyncComment.hasMatch(line)) {
-      pending = true;
+    final trimmed = line.trim();
+
+    if (trimmed.startsWith('--')) {
+      if (_nosyncComment.hasMatch(trimmed)) pendingNosync = true;
+      if (_opaqueComment.hasMatch(trimmed)) pendingOpaque = true;
+      // A non-annotation comment does not clear pending, so prose between the
+      // marker and the statement is allowed.
       continue;
     }
-    final m = _defineTable.firstMatch(line.trimLeft());
-    if (m != null) {
-      if (pending) result.add(m.group(1)!);
-      pending = false;
+
+    if (trimmed.isEmpty) {
+      pendingNosync = false;
+      pendingOpaque = false;
+      continue;
     }
+
+    final table = _defineTable.firstMatch(trimmed);
+    if (table != null) {
+      if (pendingNosync) result.nosyncTables.add(table.group(1)!);
+      pendingNosync = false;
+      pendingOpaque = false;
+      continue;
+    }
+
+    final field = _defineFieldLine.firstMatch(trimmed);
+    if (field != null) {
+      final key = '${field.group(2)!}.${field.group(1)!}';
+      if (pendingNosync) result.nosyncFields.add(key);
+      if (pendingOpaque) result.opaqueFields.add(key);
+      pendingNosync = false;
+      pendingOpaque = false;
+      continue;
+    }
+
+    // Any other statement orphans the annotation.
+    pendingNosync = false;
+    pendingOpaque = false;
   }
   return result;
 }
 
 String _stripComments(String s) =>
     s.replaceAll(RegExp(r'--.*'), '').replaceAll(RegExp(r'#.*'), '');
+
+/// Remove `-- @nosync` fields (and the annotation comment that marked them) from
+/// a schema, for embedding as the client's local cache DDL.
+///
+/// Only single-line `DEFINE FIELD ...;` statements are handled, which is the form
+/// the marker attaches to; a multi-line definition is left in place rather than
+/// risking a mangled statement. The annotation comment must go along with the
+/// field: an orphan `-- @nosync` re-attaches to the next `DEFINE TABLE` and would
+/// drop that whole table on the next parse.
+String stripServerOnlyFields(String surql) {
+  final lines = surql.split('\n');
+  final out = <String>[];
+  final annotations = _annotationsFromComments(surql);
+  if (annotations.nosyncFields.isEmpty) return surql;
+
+  for (final line in lines) {
+    final trimmed = line.trim();
+    final field = _defineFieldLine.firstMatch(trimmed);
+    if (field != null && trimmed.endsWith(';')) {
+      final key = '${field.group(2)!}.${field.group(1)!}';
+      if (annotations.nosyncFields.contains(key)) {
+        // Drop the contiguous comment block that introduced this field, but only
+        // if it holds an annotation — otherwise ordinary prose above an
+        // unrelated statement could be eaten. Dropping the whole block (not just
+        // the annotation lines) is what handles
+        // `-- @nosync` / `-- prose` / `DEFINE FIELD`, where stopping at the prose
+        // would strand the marker and mis-mark the next statement.
+        var blockStart = out.length;
+        while (blockStart > 0 && out[blockStart - 1].trim().startsWith('--')) {
+          blockStart--;
+        }
+        final hasAnnotation = out
+            .sublist(blockStart)
+            .any((l) => RegExp(r'^--\s*@[a-z]').hasMatch(l.trim()));
+        if (hasAnnotation) out.removeRange(blockStart, out.length);
+        continue;
+      }
+    }
+    out.add(line);
+  }
+  return out.join('\n');
+}
 
 /// Trim trailing clause keywords (ASSERT/DEFAULT/...) off the TYPE expression.
 String _extractType(String afterType) {
@@ -246,7 +362,7 @@ String _extractType(String afterType) {
   return typePart.trim();
 }
 
-FieldDef _buildField(String name, String typeExpr) {
+FieldDef _buildField(String name, String typeExpr, {bool opaque = false}) {
   var type = typeExpr.trim();
   var optional = false;
 
@@ -278,5 +394,6 @@ FieldDef _buildField(String name, String typeExpr) {
     isRecord: isRecord,
     isDateTime: isDateTime,
     recordTable: recordTable,
+    opaque: opaque,
   );
 }
