@@ -963,7 +963,10 @@ impl SspNode {
         };
 
         let start = crate::now_epoch_ms();
-        let clean = ssp::sanitizer::normalize_record(payload.record.clone());
+        // Borrowed: `payload.record` is read again further down (job routing,
+        // heartbeat seq, owner, job timing), so it has to survive. Cloning it
+        // first meant building the tree twice, on every ingested record.
+        let clean = ssp::sanitizer::normalize_record_ref(&payload.record);
         let db = self.platform.db.as_ref();
 
         // Pre-emptively create / drop the user's dedicated tables so the

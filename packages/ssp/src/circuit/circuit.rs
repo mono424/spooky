@@ -1,6 +1,6 @@
 use crate::algebra::ZSet;
 use crate::circuit::graph::Graph;
-use crate::circuit::store::{ChangeSet, Operation, Record, Store};
+use crate::circuit::store::{Change, ChangeSet, Operation, Record, Store};
 use crate::circuit::view::{OutputFormat, View};
 use crate::operator::QueryPlan;
 use crate::types::{make_key, raw_id, Sp00kyValue};
@@ -357,11 +357,10 @@ impl Circuit {
             // Maintain the catch-up XOR accumulator for this fresh insert. `load`
             // is initial bulk data (fresh collections), so there is no prior
             // value to XOR out — same chokepoint guarantee as `apply_mutation`.
-            ssp_protocol::snapshot_hash::xor_in(
-                &mut coll.catchup_xor,
-                normalized,
-                &serde_json::Value::from(record.data.clone()),
-            );
+            // Digested straight off the value rather than through a throwaway
+            // `serde_json::Value` clone, which on a bootstrap meant one full
+            // extra copy of every row in the database.
+            coll.xor_in_row(normalized, &record.data);
             coll.rows.insert(normalized.to_string(), record.data);
             coll.zset.insert(key, 1);
         }
@@ -479,31 +478,32 @@ impl Circuit {
         // Track content-only updates (Operation::Update has weight 0)
         let mut content_updates: HashMap<String, Vec<String>> = HashMap::new();
 
-        for change in &changes.changes {
+        // Consumed by value so the row body moves into the store instead of
+        // being deep-copied on the way in. `changes` is not read after this
+        // loop.
+        for change in changes.changes {
+            let Change { table, op, id, data } = change;
             // Capture a row about to be deleted so Filter/Scan predicate
             // evaluation can still read it this step — otherwise the `-1`
             // retraction is tested against a missing row, the predicate fails,
             // and a deleted row lingers in every filtered view. The overlay is
             // cleared after stepping (below); `apply_change` still removes the
             // row from the collection so the subquery/join path sees it gone.
-            if change.op == Operation::Delete {
-                self.store.stage_deleted_row(&change.table, &change.id);
+            if op == Operation::Delete {
+                self.store.stage_deleted_row(&table, &id);
             }
-            let (key, weight) = self.store.apply_change(change);
+            let (key, weight) = self.store.apply_owned(&table, op, &id, data);
             if weight != 0 {
-                let delta = table_deltas.entry(change.table.clone()).or_default();
+                let delta = table_deltas.entry(table.clone()).or_default();
                 *delta.entry(key).or_insert(0) += weight;
             }
             // Track content updates (data changed but membership unchanged)
-            if change.op == Operation::Update {
-                let key = make_key(&change.table, &change.id);
-                content_updates
-                    .entry(change.table.clone())
-                    .or_default()
-                    .push(key);
+            if op == Operation::Update {
+                let key = make_key(&table, &id);
+                content_updates.entry(table.clone()).or_default().push(key);
             }
-            if !changed_tables.contains(&change.table) {
-                changed_tables.push(change.table.clone());
+            if !changed_tables.contains(&table) {
+                changed_tables.push(table);
             }
         }
 
@@ -1278,7 +1278,6 @@ mod tests {
     use super::*;
     use crate::algebra::ZSetOps;
     use crate::operator::plan::{OperatorPlan, OrderSpec, Projection};
-    use crate::circuit::store::Change;
     use crate::types::Path;
     use serde_json::json;
 

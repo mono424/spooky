@@ -18,6 +18,12 @@ pub struct Collection {
     /// [`reseed_catchup_xor`].
     #[serde(skip)]
     pub catchup_xor: [u8; 32],
+    /// Reusable canonicalization buffer for digest computation. Kept on the
+    /// collection so a bulk re-seed (or a steady stream of mutations) reuses
+    /// one allocation instead of one per row. Never serialized; carries no
+    /// state between calls beyond its capacity.
+    #[serde(skip)]
+    scratch: Vec<u8>,
 }
 
 impl Collection {
@@ -27,6 +33,7 @@ impl Collection {
             zset: HashMap::new(),
             rows: HashMap::new(),
             catchup_xor: ssp_protocol::snapshot_hash::xor_empty(),
+            scratch: Vec::new(),
         }
     }
 
@@ -35,10 +42,41 @@ impl Collection {
     /// `apply_mutation` maintenance didn't run.
     pub fn reseed_catchup_xor(&mut self) {
         let mut acc = ssp_protocol::snapshot_hash::xor_empty();
+        let mut scratch = std::mem::take(&mut self.scratch);
         for (id, val) in &self.rows {
-            ssp_protocol::snapshot_hash::xor_in(&mut acc, id, &serde_json::Value::from(val.clone()));
+            let digest = val.record_digest_into(id, &mut scratch);
+            ssp_protocol::snapshot_hash::xor_digest(&mut acc, &digest);
         }
+        self.scratch = scratch;
         self.catchup_xor = acc;
+    }
+
+    /// Digest of the row currently stored under `id`, if any.
+    ///
+    /// Takes `&mut self` only to borrow `scratch`; the rows are not modified.
+    fn stored_digest(&mut self, id: &str) -> Option<[u8; 32]> {
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let digest = self
+            .rows
+            .get(id)
+            .map(|row| row.record_digest_into(id, &mut scratch));
+        self.scratch = scratch;
+        digest
+    }
+
+    /// Fold a row into the catch-up accumulator without storing it. For bulk
+    /// loads, where there is never a prior value to XOR out.
+    pub fn xor_in_row(&mut self, id: &str, value: &Sp00kyValue) {
+        let digest = self.incoming_digest(id, value);
+        ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &digest);
+    }
+
+    /// Digest of a value that is about to be stored under `id`.
+    fn incoming_digest(&mut self, id: &str, value: &Sp00kyValue) -> [u8; 32] {
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let digest = value.record_digest_into(id, &mut scratch);
+        self.scratch = scratch;
+        digest
     }
 
     /// Apply a mutation to this collection. Returns (zset_key, weight).
@@ -53,31 +91,24 @@ impl Collection {
         // Maintain the incremental XOR set-hash atomically with the row change:
         // XOR out the prior value (if any), XOR in the new value. Done here, the
         // single row-mutation chokepoint, so the accumulator cannot miss an op.
-        let prior = self.rows.get(normalized).cloned();
+        //
+        // Both digests are taken straight off the values via the canonical
+        // writer. The previous shape deep-cloned the stored row, then built a
+        // throwaway `serde_json::Value` tree from each of the prior and the
+        // incoming value (and `record_digest` cloned again internally) — five
+        // full copies of a row body to update 32 bytes of accumulator, on
+        // every single mutation.
+        let prior_digest = self.stored_digest(normalized);
+        if let Some(d) = prior_digest {
+            ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &d);
+        }
         match op {
             Operation::Create | Operation::Update => {
-                if let Some(ref p) = prior {
-                    ssp_protocol::snapshot_hash::xor_out(
-                        &mut self.catchup_xor,
-                        normalized,
-                        &serde_json::Value::from(p.clone()),
-                    );
-                }
-                ssp_protocol::snapshot_hash::xor_in(
-                    &mut self.catchup_xor,
-                    normalized,
-                    &serde_json::Value::from(data.clone()),
-                );
+                let d = self.incoming_digest(normalized, &data);
+                ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &d);
                 self.rows.insert(normalized.to_string(), data);
             }
             Operation::Delete => {
-                if let Some(ref p) = prior {
-                    ssp_protocol::snapshot_hash::xor_out(
-                        &mut self.catchup_xor,
-                        normalized,
-                        &serde_json::Value::from(p.clone()),
-                    );
-                }
                 self.rows.remove(normalized);
             }
         }
@@ -156,10 +187,27 @@ impl Store {
         self.collections.get(name)
     }
 
-    /// Apply a Change to the store. Returns (zset_key, weight).
+    /// Apply a mutation whose row body is already owned. Returns
+    /// (zset_key, weight).
+    ///
+    /// The hot ingest path uses this so the incoming body moves into the
+    /// collection; [`apply_change`] clones because it only has a borrow.
+    pub fn apply_owned(
+        &mut self,
+        table: &str,
+        op: Operation,
+        id: &str,
+        data: Sp00kyValue,
+    ) -> (String, Weight) {
+        self.ensure_collection(table).apply_mutation(op, id, data)
+    }
+
+    /// Apply a borrowed Change to the store. Returns (zset_key, weight).
+    ///
+    /// Convenience for callers holding a `&Change` (tests, mostly); it has to
+    /// clone the body. Prefer [`apply_owned`] where the body is owned.
     pub fn apply_change(&mut self, change: &Change) -> (String, Weight) {
-        let coll = self.ensure_collection(&change.table);
-        coll.apply_mutation(change.op, &change.id, change.data.clone())
+        self.apply_owned(&change.table, change.op, &change.id, change.data.clone())
     }
 
     /// Get row data by zset key (format "table:id").

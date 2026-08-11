@@ -82,6 +82,120 @@ impl Sp00kyValue {
         matches!(self, Sp00kyValue::Null)
     }
 
+    /// Whether this value would become JSON `null` on the way to a
+    /// `serde_json::Value`.
+    ///
+    /// `Null` obviously does. So does a **non-finite `Float`**:
+    /// `Number::from_f64` rejects NaN and the infinities, and
+    /// `From<f64> for Value` falls back to `Value::Null`. That distinction is
+    /// load-bearing — the hash pipeline drops null-valued top-level keys, so a
+    /// field holding `NaN` is stripped from the digest today, and a writer
+    /// that treated it as a number would change every such row's hash.
+    fn is_json_null(&self) -> bool {
+        match self {
+            Sp00kyValue::Null => true,
+            Sp00kyValue::Float(f) => !f.is_finite(),
+            _ => false,
+        }
+    }
+
+    /// Append this value's canonical JSON to `out` — objects with keys in
+    /// lexicographic order, arrays in order, primitives formatted by
+    /// `serde_json`.
+    ///
+    /// Byte-identical to `ssp_protocol::snapshot_hash::canonical_json` applied
+    /// to `serde_json::Value::from(self.clone())`, without building that
+    /// intermediate tree.
+    pub fn write_canonical(&self, out: &mut Vec<u8>) {
+        use ssp_protocol::snapshot_hash as sh;
+        match self {
+            Sp00kyValue::Null => out.extend_from_slice(b"null"),
+            Sp00kyValue::Bool(true) => out.extend_from_slice(b"true"),
+            Sp00kyValue::Bool(false) => out.extend_from_slice(b"false"),
+            Sp00kyValue::Int(i) => sh::write_json_i64(*i, out),
+            Sp00kyValue::Float(f) => sh::write_json_f64(*f, out),
+            Sp00kyValue::Str(s) => sh::write_json_string(s, out),
+            Sp00kyValue::Array(items) => {
+                out.push(b'[');
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(b',');
+                    }
+                    v.write_canonical(out);
+                }
+                out.push(b']');
+            }
+            Sp00kyValue::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                out.push(b'{');
+                for (i, k) in keys.iter().enumerate() {
+                    if i > 0 {
+                        out.push(b',');
+                    }
+                    sh::write_json_string(k, out);
+                    out.push(b':');
+                    map[*k].write_canonical(out);
+                }
+                out.push(b'}');
+            }
+        }
+    }
+
+    /// Append the canonical JSON of this value **as a record**: the same
+    /// output as [`write_canonical`], except that at the top level reserved
+    /// `_00_*` keys and null-valued keys are dropped and an `id` string is
+    /// normalized.
+    ///
+    /// Mirrors `strip_reserved_keys` + `canonical_json`. The stripping is
+    /// top-level only — nested objects keep their `_00_*` and null entries,
+    /// matching the replica's `SELECT *`, which drops only undefined
+    /// *top-level* fields.
+    pub fn write_canonical_record(&self, out: &mut Vec<u8>) {
+        use ssp_protocol::snapshot_hash as sh;
+        let Sp00kyValue::Object(map) = self else {
+            // Non-objects pass through unstripped, as in `strip_reserved_keys`.
+            return self.write_canonical(out);
+        };
+        let mut keys: Vec<&String> = map
+            .iter()
+            .filter(|(k, v)| !sh::is_reserved_key(k) && !v.is_json_null())
+            .map(|(k, _)| k)
+            .collect();
+        keys.sort();
+        out.push(b'{');
+        for (i, k) in keys.iter().enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            sh::write_json_string(k, out);
+            out.push(b':');
+            let value = &map[*k];
+            // The row's own `id` carries the same escaping ambiguity as the
+            // record key, so it gets the same normalization.
+            if k.as_str() == "id" {
+                if let Sp00kyValue::Str(s) = value {
+                    sh::write_json_string(&sh::normalize_record_id(s), out);
+                    continue;
+                }
+            }
+            value.write_canonical(out);
+        }
+        out.push(b'}');
+    }
+
+    /// This row's digest — the unit of the catch-up XOR set-hash.
+    ///
+    /// Equal to `ssp_protocol::snapshot_hash::record_digest(raw_id,
+    /// &Value::from(self.clone()))`, but computed straight off the stored
+    /// value. `scratch` is a caller-owned buffer reused across rows so a bulk
+    /// re-seed does not allocate per row.
+    pub fn record_digest_into(&self, raw_id: &str, scratch: &mut Vec<u8>) -> [u8; 32] {
+        scratch.clear();
+        self.write_canonical_record(scratch);
+        ssp_protocol::snapshot_hash::digest_from_canonical(raw_id, scratch)
+    }
+
     /// Approximate heap bytes owned by this value, excluding the enum's own
     /// inline size (the parent's slot already accounts for that).
     ///

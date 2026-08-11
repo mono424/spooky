@@ -212,6 +212,71 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Canonical-JSON writer primitives.
+//
+// These let a caller emit canonical bytes for a value tree that is NOT a
+// `serde_json::Value` — notably the SSP circuit's `Sp00kyValue` — without
+// first converting it into one. That conversion was deep-copying every row
+// body on every mutation purely to feed the hash.
+//
+// Each primitive delegates its actual formatting to `serde_json` rather than
+// reimplementing it, so escaping and float formatting stay identical to
+// `canonical_json` by construction rather than by inspection. Anything that
+// diverges here fails the scheduler's integrity check and crash-loops the SSP,
+// so "identical by construction" is the only acceptable standard.
+// ---------------------------------------------------------------------------
+
+/// Write a JSON string literal (quotes + escaping) exactly as `canonical_json`
+/// would for a `Value::String`, including for object keys.
+pub fn write_json_string(s: &str, out: &mut Vec<u8>) {
+    serde_json::to_writer(&mut *out, s).expect("string serialization is infallible");
+}
+
+/// Write a JSON integer.
+pub fn write_json_i64(i: i64, out: &mut Vec<u8>) {
+    serde_json::to_writer(&mut *out, &i).expect("integer serialization is infallible");
+}
+
+/// Write a JSON float, reproducing what a `serde_json::Value` round trip does
+/// with one: **non-finite floats become `null`**, because `Number::from_f64`
+/// rejects them and `Value::from(f64)` falls back to `Value::Null`. A writer
+/// that emitted `NaN` here would diverge from every previously computed hash.
+pub fn write_json_f64(f: f64, out: &mut Vec<u8>) {
+    match serde_json::Number::from_f64(f) {
+        Some(n) => serde_json::to_writer(&mut *out, &n).expect("number serialization is infallible"),
+        None => out.extend_from_slice(b"null"),
+    }
+}
+
+/// Digest a record from canonical bytes the caller already produced. Same
+/// framing as [`record_digest`], which is defined in terms of this.
+pub fn digest_from_canonical(raw_id: &str, canonical: &[u8]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(raw_id.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(canonical);
+    *hasher.finalize().as_bytes()
+}
+
+/// XOR a precomputed digest into an accumulator. Self-inverse, so this both
+/// adds and removes — see [`xor_in`] / [`xor_out`].
+///
+/// Lets a caller that has already stored a record's digest update the
+/// accumulator without re-canonicalizing (or even decoding) the row.
+pub fn xor_digest(acc: &mut [u8; 32], digest: &[u8; 32]) {
+    for (a, b) in acc.iter_mut().zip(digest.iter()) {
+        *a ^= *b;
+    }
+}
+
+/// Whether a top-level key is dropped before hashing — the reserved `_00_*`
+/// prefix. Exposed so a foreign value tree can apply the same rule without
+/// duplicating the literal.
+pub fn is_reserved_key(key: &str) -> bool {
+    key.starts_with("_00_")
+}
+
 /// Compare two per-table hash maps and return the tables that disagree.
 /// A table missing on one side counts as a mismatch (paired with
 /// `empty_table_hash()` on the missing side).
@@ -268,19 +333,12 @@ pub struct TableHashMismatch {
 /// content yields an identical digest on the SSP circuit and the scheduler.
 pub fn record_digest(raw_id: &str, value: &Value) -> [u8; 32] {
     let stripped = strip_reserved_keys(value.clone());
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(raw_id.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(&canonical_json(&stripped));
-    *hasher.finalize().as_bytes()
+    digest_from_canonical(raw_id, &canonical_json(&stripped))
 }
 
 /// XOR a record's digest into an accumulator (add the record to the set).
 pub fn xor_in(acc: &mut [u8; 32], raw_id: &str, value: &Value) {
-    let d = record_digest(raw_id, value);
-    for (a, b) in acc.iter_mut().zip(d.iter()) {
-        *a ^= *b;
-    }
+    xor_digest(acc, &record_digest(raw_id, value));
 }
 
 /// Remove a record from the accumulator. XOR is self-inverse, so this is the

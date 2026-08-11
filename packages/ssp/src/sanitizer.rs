@@ -294,6 +294,53 @@ pub fn fix_surql_json(s: &str) -> String {
     sanitize_query(s).unwrap_or_else(|_| String::new())
 }
 
+/// Borrowing counterpart to [`normalize_record`], for callers that still need
+/// the original afterwards.
+///
+/// Those callers were writing `normalize_record(record.clone())`, which built
+/// the tree twice: once for the clone, once for the rebuild that
+/// `normalize_record` performs on every object and array regardless. Reading
+/// through a reference produces the same output for one construction and no
+/// clone.
+///
+/// The owned version is kept rather than forwarded to this one, because it
+/// genuinely benefits from ownership on the leaf paths — a scalar or a
+/// non-record string is moved through untouched instead of being copied.
+pub fn normalize_record_ref(record: &Value) -> Value {
+    match record {
+        Value::String(s) => {
+            if (s.starts_with('{') && s.ends_with('}')) || (s.starts_with('[') && s.ends_with(']'))
+            {
+                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                    return normalize_record(parsed);
+                }
+            }
+            Value::String(s.clone())
+        }
+        Value::Object(map) => {
+            if map.len() == 2 && map.contains_key("tb") && map.contains_key("id") {
+                let tb = map.get("tb").and_then(|v| v.as_str());
+                let id = map.get("id");
+                if let (Some(tb_str), Some(id_val)) = (tb, id) {
+                    let id_str = match id_val {
+                        Value::String(s) => s.clone(),
+                        Value::Number(n) => n.to_string(),
+                        _ => id_val.to_string(),
+                    };
+                    return Value::String(format!("{}:{}", tb_str, id_str));
+                }
+            }
+            let mut new_map = serde_json::Map::new();
+            for (k, v) in map {
+                new_map.insert(k.clone(), normalize_record_ref(v));
+            }
+            Value::Object(new_map)
+        }
+        Value::Array(arr) => Value::Array(arr.iter().map(normalize_record_ref).collect()),
+        other => (*other).clone(),
+    }
+}
+
 pub fn normalize_record(record: Value) -> Value {
     match record {
         Value::String(s) => {
@@ -338,4 +385,53 @@ pub fn parse_params(params: Value) -> Option<Value> {
         return Some(val);
     }
     None
+}
+
+#[cfg(test)]
+mod normalize_ref_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The borrowed and owned normalizers must agree exactly — the borrowed
+    /// one exists only to avoid a clone, never to change behaviour.
+    #[track_caller]
+    fn assert_same(v: Value) {
+        assert_eq!(
+            normalize_record_ref(&v),
+            normalize_record(v.clone()),
+            "borrowed normalize diverged for {v}"
+        );
+    }
+
+    #[test]
+    fn agrees_on_scalars_and_containers() {
+        assert_same(json!(null));
+        assert_same(json!(5));
+        assert_same(json!(5.5));
+        assert_same(json!(true));
+        assert_same(json!("plain string"));
+        assert_same(json!([]));
+        assert_same(json!({}));
+        assert_same(json!({ "a": 1, "b": [1, 2, { "c": 3 }] }));
+    }
+
+    #[test]
+    fn agrees_on_record_id_collapsing() {
+        // The `{tb, id}` shape collapses to "tb:id" at any depth.
+        assert_same(json!({ "tb": "user", "id": "abc" }));
+        assert_same(json!({ "tb": "user", "id": 7 }));
+        assert_same(json!({ "owner": { "tb": "user", "id": "abc" } }));
+        assert_same(json!([{ "tb": "user", "id": "abc" }]));
+        // A three-key object is NOT a record id.
+        assert_same(json!({ "tb": "user", "id": "abc", "extra": 1 }));
+    }
+
+    #[test]
+    fn agrees_on_embedded_json_strings() {
+        assert_same(json!("{\"tb\":\"user\",\"id\":\"abc\"}"));
+        assert_same(json!("[1,2,3]"));
+        // Looks like JSON but is not — must stay a string.
+        assert_same(json!("{not json}"));
+        assert_same(json!("{"));
+    }
 }

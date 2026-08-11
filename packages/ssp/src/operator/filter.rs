@@ -76,6 +76,16 @@ impl super::Operator for Filter {
 }
 
 /// Resolve a predicate value, handling $param references.
+///
+/// Called per row, per predicate, per step, and allocates every time: a
+/// literal is converted out of `serde_json::Value` afresh, and a `$param`
+/// reference builds a `Path` (a `Vec<String>`) before cloning what it
+/// resolves to. Both results are row-independent — the literal is fixed at
+/// plan time and `ctx` is fixed per view — so this is pure repeated work.
+///
+/// Hoisting it needs a compiled predicate tree carrying pre-converted
+/// operands, which is deferred to the `ValueRef` migration that rewrites these
+/// call sites anyway.
 fn resolve_predicate_value(value: &Value, ctx: Option<&Sp00kyValue>) -> Option<Sp00kyValue> {
     if let Some(obj) = value.as_object() {
         if let Some(param_path) = obj.get("$param") {
@@ -141,16 +151,26 @@ fn check_predicate_recursive(
             // so a parent-filtered detail query registers an empty view and its
             // reverse subqueries — e.g. `comments` — never sync). Mirror the
             // `Prefix` branch above and compare against the key directly.
-            let actual = if field.segments().len() == 1 && field.segments()[0] == "id" {
-                Some(Sp00kyValue::Str(key.to_string()))
-            } else {
-                store
-                    .get_row_by_key_or_deleted(key)
-                    .and_then(|r| resolve_field(Some(r), field).cloned())
-            };
+            //
+            // The resolved field is BORROWED, not cloned. `compare_values`
+            // only needs a reference, and the previous `.cloned()` deep-copied
+            // whatever the path landed on — a whole nested object or array if
+            // the predicate targeted one — once per row, per predicate, per
+            // step. Only the `id` branch needs to own anything, and only
+            // because it synthesizes a value that isn't in the row.
+            let id_value;
+            let actual: Option<&Sp00kyValue> =
+                if field.segments().len() == 1 && field.segments()[0] == "id" {
+                    id_value = Sp00kyValue::Str(key.to_string());
+                    Some(&id_value)
+                } else {
+                    store
+                        .get_row_by_key_or_deleted(key)
+                        .and_then(|r| resolve_field(Some(r), field))
+                };
 
             if let Some(actual) = actual {
-                let ord = compare_values(Some(&actual), Some(&target));
+                let ord = compare_values(Some(actual), Some(&target));
                 match pred {
                     Predicate::Eq { .. } => ord == Ordering::Equal,
                     Predicate::Neq { .. } => ord != Ordering::Equal,
