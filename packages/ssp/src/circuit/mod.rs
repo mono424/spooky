@@ -1,3 +1,6 @@
+pub mod arena;
+pub mod row_codec;
+pub mod row_table;
 pub mod store;
 pub mod graph;
 pub mod view;

@@ -310,7 +310,7 @@ fn incremental_accumulator_matches_the_value_path() {
     let expected = ssp_protocol::snapshot_hash::xor_table_hash(
         coll.rows
             .iter()
-            .map(|(id, v)| (id.clone(), Value::from(v.clone()))),
+            .map(|(id, v)| (id.to_string(), Value::from(v.to_owned_value()))),
     );
     assert_eq!(
         ssp_protocol::snapshot_hash::xor_acc_to_hex(&coll.catchup_xor),
@@ -404,5 +404,107 @@ fn randomized_corpus_matches() {
         let v = gen(&mut next, 0);
         let id = if i % 7 == 0 { "⟨t⟩:1" } else { "t1" };
         assert_equivalent(id, v);
+    }
+}
+
+/// The digest must survive the flat row encoding.
+///
+/// Rows are stored as flat bytes with their digest written into the record
+/// header at insert time, so nothing recomputes a digest from decoded bytes.
+/// This checks the whole path — encode, store, read the header back — against
+/// the `serde_json::Value` pipeline the scheduler compares against.
+#[test]
+fn stored_rows_keep_the_value_path_digest() {
+    use ssp::circuit::store::{Change, Store};
+
+    let shapes = [
+        json!({ "plain": 1 }),
+        json!({ "_00_rv": 3, "kept": "x", "gone": Value::Null }),
+        json!({ "id": "⟨thread⟩:abc", "nested": { "_00_rv": 9, "deep": [1, Value::Null] } }),
+        json!({ "unicode é 🎃": "世界", "ctrl\n": "a\tb", "": "empty key" }),
+        json!({ "nums": [i64::MIN, i64::MAX, 0], "f": 5.0, "i": 5 }),
+        json!({ "empty_obj": {}, "empty_arr": [], "empty_str": "" }),
+    ];
+
+    let mut store = Store::new();
+    store.ensure_collection("t");
+    for (i, shape) in shapes.iter().enumerate() {
+        let id = format!("r{i}");
+        store.apply_change(&Change::create("t", &id, shape.clone()));
+
+        let expected = record_digest(
+            &id,
+            &Value::from(Sp00kyValue::from(shape.clone())),
+        );
+        assert_eq!(
+            store.get_collection("t").unwrap().rows.digest_of(&id),
+            Some(expected),
+            "stored digest diverged for {shape}"
+        );
+    }
+
+    // And the table hash over flat-stored rows still matches hash_table.
+    let coll = store.get_collection("t").unwrap();
+    let pairs: Vec<(String, Value)> = coll
+        .rows
+        .iter()
+        .map(|(id, v)| (id.to_string(), Value::from(v.to_owned_value())))
+        .collect();
+    let expected = ssp_protocol::snapshot_hash::hash_table(pairs);
+    let mut hasher = ssp_protocol::snapshot_hash::TableHasher::new();
+    for (id, v) in coll.rows.iter() {
+        hasher.add(id, Value::from(v.to_owned_value()));
+    }
+    assert_eq!(hasher.finish(), expected);
+}
+
+/// A row read back out of flat storage must be byte-identical to what went in.
+/// Randomized, because the hand-written shapes above cannot enumerate the
+/// combinations.
+#[test]
+fn flat_storage_round_trip_is_lossless() {
+    use ssp::circuit::store::{Change, Store};
+
+    let mut rng: u64 = 0x51ce_0000_0000_0003;
+    let mut next = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng
+    };
+
+    fn gen(next: &mut impl FnMut() -> u64, depth: u32) -> Value {
+        let keys = ["a", "z", "_00_rv", "id", "n", "with \"q\"", "é", ""];
+        match next() % if depth >= 3 { 7 } else { 9 } {
+            0 => Value::Null,
+            1 => Value::Bool(next() % 2 == 0),
+            2 => json!(next() as i64),
+            3 => json!(i64::MIN + (next() % 1000) as i64),
+            4 => json!((next() % 1000) as f64 / 8.0),
+            5 => json!(format!("s{}", next() % 100)),
+            6 => json!("⟨thread⟩:abc"),
+            7 => Value::Array((0..(next() % 4)).map(|_| gen(next, depth + 1)).collect()),
+            _ => Value::Object(
+                (0..(next() % 6))
+                    .map(|_| {
+                        let k = keys[(next() % keys.len() as u64) as usize].to_string();
+                        (k, gen(next, depth + 1))
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    let mut store = Store::new();
+    store.ensure_collection("t");
+    for i in 0..1000 {
+        // Only objects are valid rows; wrap whatever was generated.
+        let shape = json!({ "body": gen(&mut next, 0), "n": i });
+        let id = format!("r{i}");
+        let expected = Sp00kyValue::from(shape.clone());
+        store.apply_change(&Change::create("t", &id, shape.clone()));
+
+        let got = store.get_collection("t").unwrap().rows.get(&id).to_owned_value();
+        assert_eq!(got, expected, "flat round trip changed {shape}");
     }
 }

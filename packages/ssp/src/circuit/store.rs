@@ -1,4 +1,5 @@
 use crate::algebra::{Weight, ZSet};
+use crate::circuit::row_table::RowTable;
 use crate::eval::value_ref::ValueRef;
 use crate::types::{make_key, raw_id, Sp00kyValue};
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,11 @@ pub struct Collection {
     /// Z-set tracking record membership and weights.
     pub zset: ZSet,
     /// Actual record data, keyed by raw record ID (without table prefix).
-    pub rows: HashMap<String, Sp00kyValue>,
+    ///
+    /// Flat-encoded behind an index rather than a map of parsed values — see
+    /// [`RowTable`]. Serializes to the same shape as the `HashMap` it replaced,
+    /// so existing snapshots still load.
+    pub rows: RowTable,
     /// Incremental XOR set-hash of `rows`, maintained in lockstep with every
     /// mutation (see `apply_mutation`) so it can never drift from the actual
     /// rows. The scheduler reconstructs the same hash at the catch-up cut to
@@ -32,7 +37,7 @@ impl Collection {
         Self {
             name,
             zset: HashMap::new(),
-            rows: HashMap::new(),
+            rows: RowTable::new(),
             catchup_xor: ssp_protocol::snapshot_hash::xor_empty(),
             scratch: Vec::new(),
         }
@@ -41,35 +46,25 @@ impl Collection {
     /// Recompute the incremental XOR accumulator from the current rows. Call
     /// after a bulk load (`Circuit::load`) or a deserialize, where the per-row
     /// `apply_mutation` maintenance didn't run.
+    ///
+    /// Reads each row's stored digest rather than re-canonicalizing it, so a
+    /// re-seed is now a walk of 32-byte header reads.
     pub fn reseed_catchup_xor(&mut self) {
         let mut acc = ssp_protocol::snapshot_hash::xor_empty();
-        let mut scratch = std::mem::take(&mut self.scratch);
-        for (id, val) in &self.rows {
-            let digest = val.record_digest_into(id, &mut scratch);
-            ssp_protocol::snapshot_hash::xor_digest(&mut acc, &digest);
+        let ids: Vec<&str> = self.rows.keys().collect();
+        for id in ids {
+            if let Some(digest) = self.rows.digest_of(id) {
+                ssp_protocol::snapshot_hash::xor_digest(&mut acc, &digest);
+            }
         }
-        self.scratch = scratch;
         self.catchup_xor = acc;
     }
 
-    /// Digest of the row currently stored under `id`, if any.
-    ///
-    /// Takes `&mut self` only to borrow `scratch`; the rows are not modified.
-    fn stored_digest(&mut self, id: &str) -> Option<[u8; 32]> {
-        let mut scratch = std::mem::take(&mut self.scratch);
-        let digest = self
-            .rows
-            .get(id)
-            .map(|row| row.record_digest_into(id, &mut scratch));
-        self.scratch = scratch;
-        digest
-    }
-
-    /// Fold a row into the catch-up accumulator without storing it. For bulk
-    /// loads, where there is never a prior value to XOR out.
-    pub fn xor_in_row(&mut self, id: &str, value: &Sp00kyValue) {
-        let digest = self.incoming_digest(id, value);
-        ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &digest);
+    /// Digest of a value about to be stored under `id`, via the canonical
+    /// writer. Exposed so a bulk load can canonicalize once and reuse the
+    /// result for both the accumulator and the record header.
+    pub fn digest_for(&mut self, id: &str, value: &Sp00kyValue) -> [u8; 32] {
+        self.incoming_digest(id, value)
     }
 
     /// Digest of a value that is about to be stored under `id`.
@@ -93,21 +88,19 @@ impl Collection {
         // XOR out the prior value (if any), XOR in the new value. Done here, the
         // single row-mutation chokepoint, so the accumulator cannot miss an op.
         //
-        // Both digests are taken straight off the values via the canonical
-        // writer. The previous shape deep-cloned the stored row, then built a
-        // throwaway `serde_json::Value` tree from each of the prior and the
-        // incoming value (and `record_digest` cloned again internally) — five
-        // full copies of a row body to update 32 bytes of accumulator, on
-        // every single mutation.
-        let prior_digest = self.stored_digest(normalized);
-        if let Some(d) = prior_digest {
+        // The outgoing digest is read from the stored row's header — 32 bytes
+        // at a fixed offset, no decode. The incoming one is computed once by
+        // the canonical writer and handed to the row store, which keeps it in
+        // the record it writes. So a mutation canonicalizes exactly once and
+        // copies the body exactly once.
+        if let Some(d) = self.rows.digest_of(normalized) {
             ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &d);
         }
         match op {
             Operation::Create | Operation::Update => {
                 let d = self.incoming_digest(normalized, &data);
                 ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &d);
-                self.rows.insert(normalized.to_string(), data);
+                self.rows.insert(normalized, &data, &d);
             }
             Operation::Delete => {
                 self.rows.remove(normalized);
@@ -126,19 +119,25 @@ impl Collection {
     }
 
     /// Look up a row by its raw ID.
-    pub fn get_row(&self, id: &str) -> Option<&Sp00kyValue> {
+    pub fn get_row(&self, id: &str) -> ValueRef<'_> {
         self.rows.get(raw_id(id))
     }
 
-    /// Approximate heap bytes held by `rows`: the bucket array, every raw-id
-    /// key, and every row body.
+    /// Whether a row exists under this raw ID.
+    pub fn has_row(&self, id: &str) -> bool {
+        self.rows.contains_key(raw_id(id))
+    }
+
+    /// Approximate heap bytes held by `rows`: the id index, the encoded row
+    /// bytes, and the field-name dictionary.
     pub fn rows_bytes(&self) -> usize {
-        crate::size::map_table_bytes::<String, Sp00kyValue>(self.rows.capacity())
-            + self
-                .rows
-                .iter()
-                .map(|(id, row)| id.capacity() + row.heap_bytes())
-                .sum::<usize>()
+        self.rows.heap_bytes()
+    }
+
+    /// Heap held by the row index alone. Broken out because it is the part
+    /// that stays O(rows) and resident no matter how the bodies are stored.
+    pub fn index_bytes(&self) -> usize {
+        self.rows.index_bytes()
     }
 
     /// Approximate heap bytes held by `zset`. Reported apart from
@@ -149,12 +148,11 @@ impl Collection {
     }
 
     /// Get the version of a record from its `_00_rv` field.
+    ///
+    /// Read from the record header, where the encoder lifts it, rather than by
+    /// resolving a field out of the body.
     pub fn get_record_version(&self, id: &str) -> Option<i64> {
-        self.rows
-            .get(raw_id(id))?
-            .get("_00_rv")?
-            .as_f64()
-            .map(|n| n as i64)
+        self.rows.rv_of(raw_id(id))
     }
 }
 
@@ -216,16 +214,19 @@ impl Store {
     /// Returns [`ValueRef::Missing`] for an unparseable key, an unknown table,
     /// or an absent row — the caller does not distinguish those cases.
     pub fn get_row_by_key(&self, key: &str) -> ValueRef<'_> {
-        ValueRef::from_opt(self.get_row_owned(key))
-    }
-
-    /// Borrow of the stored row, for the few places that still need the owned
-    /// type (serialization, bulk conversion).
-    pub fn get_row_owned(&self, key: &str) -> Option<&Sp00kyValue> {
-        let (table, id) = crate::types::parse_key(key)?;
-        let coll = self.collections.get(table)?;
+        let Some((table, id)) = crate::types::parse_key(key) else {
+            return ValueRef::Missing;
+        };
+        let Some(coll) = self.collections.get(table) else {
+            return ValueRef::Missing;
+        };
         // Try raw ID first, then with table prefix
-        coll.rows.get(id).or_else(|| coll.rows.get(key))
+        let by_raw = coll.rows.get(id);
+        if by_raw.is_missing() {
+            coll.rows.get(key)
+        } else {
+            by_raw
+        }
     }
 
     /// Like [`get_row_by_key`], but falls back to a row staged for deletion in
@@ -233,18 +234,26 @@ impl Store {
     /// evaluation so a delete's `-1` retraction can be tested against the WHERE
     /// clause even though the row is already gone from `collections`.
     pub fn get_row_by_key_or_deleted(&self, key: &str) -> ValueRef<'_> {
-        ValueRef::from_opt(
-            self.get_row_owned(key)
-                .or_else(|| self.pending_deleted_rows.get(key)),
-        )
+        let live = self.get_row_by_key(key);
+        if live.is_missing() {
+            ValueRef::from_opt(self.pending_deleted_rows.get(key))
+        } else {
+            live
+        }
     }
 
     /// Stage a row's content before a `Delete` removes it, so predicate
     /// evaluation in this step can still read it. No-op if the row is absent.
+    ///
+    /// This is the one place that materializes a stored row: the overlay
+    /// outlives the row's bytes within the step, so it has to own its copy.
+    /// It holds at most the rows deleted in a single step.
     pub fn stage_deleted_row(&mut self, table: &str, id: &str) {
         let key = make_key(table, id);
-        if let Some(row) = self.get_row_owned(&key).cloned() {
-            self.pending_deleted_rows.insert(key, row);
+        let row = self.get_row_by_key(&key);
+        if !row.is_missing() {
+            let owned = row.to_owned_value();
+            self.pending_deleted_rows.insert(key, owned);
         }
     }
 

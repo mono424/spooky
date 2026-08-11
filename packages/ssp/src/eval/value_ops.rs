@@ -1,4 +1,4 @@
-use crate::eval::value_ref::{ObjRef, SeqRef, ValueRef};
+use crate::eval::value_ref::ValueRef;
 use crate::types::{Path, Sp00kyValue};
 use std::cmp::Ordering;
 
@@ -75,8 +75,11 @@ pub fn hash_value(value: ValueRef<'_>) -> u64 {
         ValueRef::Int(n) => (n as f64).to_bits().hash(&mut hasher),
         ValueRef::Float(n) => n.to_bits().hash(&mut hasher),
         ValueRef::Str(s) => s.hash(&mut hasher),
-        ValueRef::Arr(SeqRef::Mem(_)) => 2u8.hash(&mut hasher),
-        ValueRef::Obj(ObjRef::Mem(_)) => 3u8.hash(&mut hasher),
+        // Containers hash by kind only, as they always have: join keys are
+        // scalars in practice, and hashing contents would cost a full walk on
+        // the hot path for no matches gained.
+        ValueRef::Arr(_) => 2u8.hash(&mut hasher),
+        ValueRef::Obj(_) => 3u8.hash(&mut hasher),
     }
     hasher.finish()
 }

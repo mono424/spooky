@@ -162,8 +162,8 @@ fn compute_current_subquery_set(
             continue;
         }
 
-        for (child_raw_id, row_data) in &collection.rows {
-            let fk_value = match row_data.get(&parent_key.child_field).and_then(|v| v.as_str()) {
+        for (child_raw_id, row_data) in collection.rows.iter() {
+            let fk_value = match row_data.get(&parent_key.child_field).as_str() {
                 Some(v) => v,
                 None => continue,
             };
@@ -198,25 +198,21 @@ fn compute_current_subquery_set(
         // Build index: parent's parent_field value → parent full key
         // Only for parent rows already in the result set (level-1 items)
         let mut parent_field_index: HashMap<String, String> = HashMap::new();
-        for (parent_raw_id, parent_row_data) in &parent_coll.rows {
+        for (parent_raw_id, parent_row_data) in parent_coll.rows.iter() {
             let parent_full_key = make_key(pt, parent_raw_id);
             if result.contains_key(&parent_full_key) {
-                if let Some(val) = parent_row_data
-                    .get(&parent_key.parent_field)
-                    .and_then(|v| v.as_str())
-                {
+                if let Some(val) = parent_row_data.get(&parent_key.parent_field).as_str() {
                     parent_field_index.insert(val.to_string(), parent_full_key);
                 }
             }
         }
 
         // For each child row, check if child.child_field matches a parent's field value
-        for (child_raw_id, row_data) in &collection.rows {
-            let child_value =
-                match row_data.get(&parent_key.child_field).and_then(|v| v.as_str()) {
-                    Some(v) => v,
-                    None => continue,
-                };
+        for (child_raw_id, row_data) in collection.rows.iter() {
+            let child_value = match row_data.get(&parent_key.child_field).as_str() {
+                Some(v) => v,
+                None => continue,
+            };
             if let Some(parent_full_key) = parent_field_index.get(child_value) {
                 let child_key = make_key(subquery_table, child_raw_id);
                 result.insert(child_key, (parent_full_key.clone(), alias.clone()));
@@ -354,8 +350,11 @@ impl Circuit {
             // Digested straight off the value rather than through a throwaway
             // `serde_json::Value` clone, which on a bootstrap meant one full
             // extra copy of every row in the database.
-            coll.xor_in_row(normalized, &record.data);
-            coll.rows.insert(normalized.to_string(), record.data);
+            // One canonicalization, whose digest is then handed straight to
+            // the row store to be written into the record header.
+            let digest = coll.digest_for(normalized, &record.data);
+            ssp_protocol::snapshot_hash::xor_digest(&mut coll.catchup_xor, &digest);
+            coll.rows.insert(normalized, &record.data, &digest);
             coll.zset.insert(key, 1);
         }
     }
@@ -1132,8 +1131,8 @@ impl Circuit {
             .iter()
             .map(|(name, coll)| {
                 let mut hasher = ssp_protocol::snapshot_hash::TableHasher::new();
-                for (id, val) in &coll.rows {
-                    hasher.add(id, serde_json::Value::from(val.clone()));
+                for (id, val) in coll.rows.iter() {
+                    hasher.add(id, serde_json::Value::from(val.to_owned_value()));
                 }
                 (name.clone(), hasher.finish())
             })
@@ -1147,7 +1146,7 @@ impl Circuit {
         self.store
             .collections
             .get(table)
-            .map(|c| c.get_row(id).is_some())
+            .map(|c| c.has_row(id))
             .unwrap_or(false)
     }
 
@@ -1170,15 +1169,7 @@ impl Circuit {
             .collections
             .iter()
             .map(|(name, coll)| {
-                let max = coll
-                    .rows
-                    .values()
-                    .filter_map(|v| match v.get("_00_rv") {
-                        Some(Sp00kyValue::Int(rv)) => Some(*rv),
-                        _ => None,
-                    })
-                    .max()
-                    .unwrap_or(-1);
+                let max = coll.rows.max_rv().unwrap_or(-1);
                 (name.clone(), max)
             })
             .collect()
@@ -1245,16 +1236,17 @@ impl Circuit {
         let Some(coll) = self.store.collections.get(table) else {
             return (Vec::new(), false);
         };
-        let mut ids: Vec<&String> = coll.rows.keys().collect();
+        let mut ids: Vec<&str> = coll.rows.keys().collect();
         ids.sort_unstable();
         let truncated = ids.len() > limit;
         let rows = ids
             .into_iter()
             .take(limit)
-            .filter_map(|id| {
-                coll.rows
-                    .get(id)
-                    .map(|val| (id.clone(), serde_json::Value::from(val.clone())))
+            .map(|id| {
+                (
+                    id.to_string(),
+                    serde_json::Value::from(coll.rows.get(id).to_owned_value()),
+                )
             })
             .collect();
         (rows, truncated)
@@ -1312,7 +1304,7 @@ mod tests {
         let pairs: Vec<(String, serde_json::Value)> = coll
             .rows
             .iter()
-            .map(|(id, val)| (id.clone(), serde_json::Value::from(val.clone())))
+            .map(|(id, val)| (id.to_string(), serde_json::Value::from(val.to_owned_value())))
             .collect();
         let expected = ssp_protocol::snapshot_hash::hash_table(pairs);
 
@@ -1425,6 +1417,80 @@ mod tests {
         let twice = Circuit::restore(&restored.save().unwrap()).unwrap();
         assert_eq!(twice.compute_table_hashes(), circuit.compute_table_hashes());
         assert_eq!(twice.view_count(), circuit.view_count());
+    }
+
+    /// A snapshot written before the flat row encoding must still restore.
+    ///
+    /// The rows are stored as flat bytes in memory but serialize to the shape
+    /// the old `HashMap<String, Sp00kyValue>` produced, so the encoding never
+    /// reaches disk and no snapshot migration is needed.
+    #[test]
+    fn restores_a_snapshot_written_before_the_flat_encoding() {
+        // Captured from the pre-flat-encoding serializer: rows are externally
+        // tagged `Sp00kyValue`, and `catchup_xor`/`scratch` were already skipped.
+        let legacy = r#"{
+            "store": {
+                "collections": {
+                    "thread": {
+                        "name": "thread",
+                        "zset": { "thread:t0": 1, "thread:t1": 1 },
+                        "rows": {
+                            "t0": {"Object":{"title":{"Str":"first"},"_00_rv":{"Int":1}}},
+                            "t1": {"Object":{"title":{"Str":"second"},"_00_rv":{"Int":4}}}
+                        }
+                    }
+                }
+            },
+            "queries": []
+        }"#;
+
+        let mut circuit = Circuit::restore(legacy).expect("legacy snapshot must restore");
+        assert_eq!(circuit.table_record_counts(), vec![("thread".into(), 2)]);
+        assert_eq!(
+            circuit.store.get_row_by_key("thread:t0").get("title").as_str(),
+            Some("first")
+        );
+        // `_00_rv` was lifted into the record header on load, not left behind.
+        assert_eq!(circuit.max_row_versions()["thread"], 4);
+
+        // The restored rows must hash the same as if they had been ingested.
+        let mut fresh = Circuit::new();
+        fresh.store.ensure_collection("thread");
+        fresh.store.apply_change(&Change::create(
+            "thread",
+            "t0",
+            json!({ "title": "first", "_00_rv": 1 }),
+        ));
+        fresh.store.apply_change(&Change::create(
+            "thread",
+            "t1",
+            json!({ "title": "second", "_00_rv": 4 }),
+        ));
+        assert_eq!(circuit.compute_table_hashes(), fresh.compute_table_hashes());
+
+        // And the catch-up accumulator agrees once re-seeded, as bootstrap does.
+        circuit.reseed_catchup_hashes();
+        assert_eq!(
+            circuit.compute_catchup_hashes(),
+            fresh.compute_catchup_hashes()
+        );
+    }
+
+    /// An unreadable snapshot must surface as an error so the runtime falls
+    /// back to a full rebuild, rather than silently restoring a partial store.
+    #[test]
+    fn unreadable_snapshots_error_rather_than_half_restore() {
+        for bad in [
+            "",
+            "not json at all",
+            r#"{"store":{"collections":{}}}"#, // missing `queries`
+            r#"{"store":{"collections":{"t":{"name":"t","zset":{},"rows":{"a":"not a value"}}}},"queries":[]}"#,
+        ] {
+            assert!(
+                Circuit::restore(bad).is_err(),
+                "expected {bad:?} to be rejected so the caller rebuilds"
+            );
+        }
     }
 
     /// The dump is capped and sorted so the caller can tell "not examined"

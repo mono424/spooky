@@ -61,16 +61,19 @@ fn load_rows(n: usize) -> (Circuit, usize) {
     (circuit, json_bytes)
 }
 
-/// Baseline measured 2026-08-11 on the parsed-`Sp00kyValue` store:
-/// **~2054 B/row against ~327 B of source JSON, a 6.3x blowup.**
+/// Baseline on the flat-encoded store, measured 2026-08-11: **624 B/row
+/// against ~327 B of source JSON, a 1.9x blowup**, down from 2054 B/row and
+/// 6.3x on the parsed-`Sp00kyValue` store it replaced. Confirmed against real
+/// RSS on 200k rows: 508 MB peak before, 175 MB after.
 ///
-/// The threshold sits just above that. Lower it as the representation work
-/// lands; the flat-encoding phase should take it under ~450.
+/// Of what remains, ~76 B/row is the duplicated `"table:id"` zset key and the
+/// rest is split between the encoded bodies and the id index. The index is the
+/// floor — it stays O(rows) and resident no matter how the bodies are stored.
 #[test]
 #[ignore = "allocates ~100MB and takes seconds; run with --ignored"]
 fn store_bytes_per_row_stays_under_budget() {
     const ROWS: usize = 50_000;
-    const MAX_BYTES_PER_ROW: f64 = 2_200.0;
+    const MAX_BYTES_PER_ROW: f64 = 700.0;
 
     let (circuit, json_bytes) = load_rows(ROWS);
     let report = circuit.size_report();

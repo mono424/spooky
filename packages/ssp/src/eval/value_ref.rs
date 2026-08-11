@@ -25,6 +25,7 @@
 //!
 //! [`compare_values`]: crate::eval::compare_values
 
+use crate::circuit::row_codec::FieldDict;
 use crate::types::Sp00kyValue;
 use std::collections::HashMap;
 
@@ -47,12 +48,56 @@ pub enum ValueRef<'a> {
 #[derive(Clone, Copy, Debug)]
 pub enum ObjRef<'a> {
     Mem(&'a HashMap<String, Sp00kyValue>),
+    Flat(FlatRef<'a>),
 }
 
 /// Borrowed array, by backend.
 #[derive(Clone, Copy, Debug)]
 pub enum SeqRef<'a> {
     Mem(&'a [Sp00kyValue]),
+    Flat(FlatRef<'a>),
+}
+
+/// A flat-encoded value plus the dictionary needed to read its field names.
+#[derive(Clone, Copy, Debug)]
+pub struct FlatRef<'a> {
+    pub bytes: &'a [u8],
+    pub dict: &'a FieldDict,
+}
+
+impl<'a> FlatRef<'a> {
+    /// Interpret encoded bytes, mapping an unknown or truncated tag to
+    /// [`ValueRef::Missing`].
+    ///
+    /// Absence rather than an error is the right answer here: once these bytes
+    /// can come from a file, unreadable input has to degrade to a missing
+    /// value the same way an absent field does, never to a panic.
+    pub fn value(self) -> ValueRef<'a> {
+        use crate::circuit::row_codec as codec;
+        let Some(&tag) = self.bytes.first() else {
+            return ValueRef::Missing;
+        };
+        match tag {
+            codec::TAG_NULL => ValueRef::Null,
+            codec::TAG_FALSE => ValueRef::Bool(false),
+            codec::TAG_TRUE => ValueRef::Bool(true),
+            codec::TAG_INT => match self.bytes.get(1..9).and_then(|b| b.try_into().ok()) {
+                Some(b) => ValueRef::Int(i64::from_le_bytes(b)),
+                None => ValueRef::Missing,
+            },
+            codec::TAG_FLOAT => match self.bytes.get(1..9).and_then(|b| b.try_into().ok()) {
+                Some(b) => ValueRef::Float(f64::from_bits(u64::from_le_bytes(b))),
+                None => ValueRef::Missing,
+            },
+            codec::TAG_STR => match codec::str_bytes(self.bytes) {
+                Some(s) => ValueRef::Str(s),
+                None => ValueRef::Missing,
+            },
+            codec::TAG_ARR => ValueRef::Arr(SeqRef::Flat(self)),
+            codec::TAG_OBJ => ValueRef::Obj(ObjRef::Flat(self)),
+            _ => ValueRef::Missing,
+        }
+    }
 }
 
 impl<'a> ValueRef<'a> {
@@ -124,7 +169,37 @@ impl<'a> ValueRef<'a> {
     pub fn get(self, key: &str) -> ValueRef<'a> {
         match self {
             ValueRef::Obj(ObjRef::Mem(map)) => ValueRef::from_opt(map.get(key)),
+            ValueRef::Obj(ObjRef::Flat(flat)) => {
+                // A name the dictionary has never seen cannot be on any row of
+                // this table, so the lookup short-circuits before touching the
+                // entry table at all.
+                let Some(id) = flat.dict.id_of(key) else {
+                    return ValueRef::Missing;
+                };
+                match crate::circuit::row_codec::obj_lookup(flat.bytes, id) {
+                    Some(bytes) => FlatRef {
+                        bytes,
+                        dict: flat.dict,
+                    }
+                    .value(),
+                    None => ValueRef::Missing,
+                }
+            }
             _ => ValueRef::Missing,
+        }
+    }
+
+    /// Number of entries, for an object or array. Zero otherwise.
+    fn container_len(self) -> usize {
+        use crate::circuit::row_codec as codec;
+        match self {
+            ValueRef::Obj(ObjRef::Mem(map)) => map.len(),
+            ValueRef::Arr(SeqRef::Mem(items)) => items.len(),
+            ValueRef::Obj(ObjRef::Flat(f)) => {
+                codec::obj_parts(f.bytes).map_or(0, |p| p.count)
+            }
+            ValueRef::Arr(SeqRef::Flat(f)) => codec::arr_parts(f.bytes).map_or(0, |(n, _)| n),
+            _ => 0,
         }
     }
 
@@ -158,6 +233,7 @@ impl<'a> ValueRef<'a> {
     /// Materialize an owned copy. Allocates — only for callers that genuinely
     /// need ownership.
     pub fn to_owned_value(self) -> Sp00kyValue {
+        use crate::circuit::row_codec as codec;
         match self {
             ValueRef::Missing | ValueRef::Null => Sp00kyValue::Null,
             ValueRef::Bool(b) => Sp00kyValue::Bool(b),
@@ -166,6 +242,11 @@ impl<'a> ValueRef<'a> {
             ValueRef::Str(s) => Sp00kyValue::Str(s.to_string()),
             ValueRef::Arr(SeqRef::Mem(items)) => Sp00kyValue::Array(items.to_vec()),
             ValueRef::Obj(ObjRef::Mem(map)) => Sp00kyValue::Object(map.clone()),
+            ValueRef::Arr(SeqRef::Flat(f)) | ValueRef::Obj(ObjRef::Flat(f)) => {
+                // Undecodable bytes become Null rather than propagating an
+                // error, matching how `Missing` materializes.
+                codec::decode_value(f.bytes, f.dict).unwrap_or(Sp00kyValue::Null)
+            }
         }
     }
 
@@ -186,15 +267,18 @@ impl<'a> ValueRef<'a> {
             ValueRef::Int(i) => format!("i:{i}"),
             ValueRef::Float(f) => format!("f:{f}"),
             ValueRef::Str(s) => format!("s:{s}"),
-            ValueRef::Arr(SeqRef::Mem(items)) => format!("a:{}", items.len()),
-            ValueRef::Obj(ObjRef::Mem(map)) => format!("o:{}", map.len()),
+            ValueRef::Arr(_) => format!("a:{}", self.container_len()),
+            ValueRef::Obj(_) => format!("o:{}", self.container_len()),
         }
     }
 }
 
+/// `ValueRef` is passed by value on the hottest path in the circuit, so its
+/// size is a real cost. The flat backend needs a slice (16 bytes) plus a
+/// dictionary reference (8), which sets the floor at 24 for the payload.
 const _: () = assert!(
     std::mem::size_of::<ValueRef<'_>>() <= 32,
-    "ValueRef is passed by value on the hottest path in the circuit; keep it small"
+    "ValueRef grew past two cache-line-friendly words; check what was added"
 );
 
 #[cfg(test)]
