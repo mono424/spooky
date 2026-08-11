@@ -118,3 +118,13 @@ mod tests {
         }
     }
 }
+
+/// Bucket-array cost for a `hashbrown::HashTable<T>`, which stores `T` alone
+/// with no separate key.
+pub fn map_table_bytes_for<T>(capacity: usize) -> usize {
+    if capacity == 0 {
+        return 0;
+    }
+    let buckets = (capacity * 8 / 7).max(1).next_power_of_two();
+    buckets * (std::mem::size_of::<T>() + 1)
+}

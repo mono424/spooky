@@ -152,16 +152,53 @@ pub struct MmapArena {
     dead: u64,
 }
 
-/// One mapped segment, plus how much of it has actually been written.
+/// One segment, plus how much of it has actually been written.
 ///
 /// The written length is what makes a read past the data return empty rather
 /// than the mapping's zero fill — matching `HeapArena`, where a shorter buffer
 /// simply has no such offset.
+///
+/// A segment is normally a file mapping. It falls back to plain memory when
+/// one cannot be created — a full or read-only filesystem — because the
+/// alternative is refusing the write, and a refused write is a row that
+/// silently vanishes from the store. That is not a visible failure: it is
+/// wrong query results, then a table-hash mismatch against the scheduler,
+/// then `exit(2)`. Trading the page-cache benefit for correctness is the only
+/// acceptable direction.
 #[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
 #[derive(Debug)]
 struct Seg {
-    map: memmap2::MmapMut,
+    store: SegStore,
     written: usize,
+}
+
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+#[derive(Debug)]
+enum SegStore {
+    Mapped(memmap2::MmapMut),
+    /// Fallback when the filesystem will not give us a mapping.
+    Memory(Vec<u8>),
+}
+
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+impl Seg {
+    fn bytes(&self) -> &[u8] {
+        match &self.store {
+            SegStore::Mapped(m) => m,
+            SegStore::Memory(v) => v,
+        }
+    }
+
+    fn bytes_mut(&mut self) -> &mut [u8] {
+        match &mut self.store {
+            SegStore::Mapped(m) => m,
+            SegStore::Memory(v) => v,
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.bytes().len()
+    }
 }
 
 #[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
@@ -222,8 +259,20 @@ impl MmapArena {
         // mapping — the one way a file mapping can fault on access.
         let map = unsafe { memmap2::MmapMut::map_mut(&file)? };
         let _ = std::fs::remove_file(&path);
-        self.segments.push(Seg { map, written: 0 });
+        self.segments.push(Seg {
+            store: SegStore::Mapped(map),
+            written: 0,
+        });
         Ok(())
+    }
+
+    /// Add a plain-memory segment. Used only when a mapping cannot be made.
+    fn push_memory_segment(&mut self, min_bytes: usize) {
+        let size = min_bytes.max(self.segment_bytes);
+        self.segments.push(Seg {
+            store: SegStore::Memory(vec![0u8; size]),
+            written: 0,
+        });
     }
 
     /// Whether `dir` can actually be written to.
@@ -259,20 +308,23 @@ impl Arena for MmapArena {
         let room = self
             .segments
             .last()
-            .map_or(0, |s| s.map.len().saturating_sub(s.written));
+            .map_or(0, |s| s.capacity().saturating_sub(s.written));
         if bytes.len() > room {
-            // Retire the current segment and map another. If that fails (a
-            // full or read-only filesystem), the row would otherwise be lost
-            // silently, so surface it as a zero span and let `get` report the
-            // row as absent — the same shape a corrupt index takes.
-            if self.map_segment(bytes.len()).is_err() {
-                return Span { seg: 0, off: 0, len: 0 };
+            // Retire the current segment and add another. A mapping is
+            // preferred; memory is the fallback, because the one thing this
+            // must never do is drop the write. See `Seg`.
+            if let Err(e) = self.map_segment(bytes.len()) {
+                tracing::warn!(
+                    error = %e,
+                    "Could not extend the file-backed row arena — continuing in memory"
+                );
+                self.push_memory_segment(bytes.len());
             }
         }
         let seg = self.segments.len() - 1;
         let s = &mut self.segments[seg];
         let off = s.written;
-        s.map[off..off + bytes.len()].copy_from_slice(bytes);
+        s.bytes_mut()[off..off + bytes.len()].copy_from_slice(bytes);
         s.written += bytes.len();
         self.live += bytes.len() as u64;
         Span {
@@ -291,12 +343,12 @@ impl Arena for MmapArena {
         };
         let start = span.off as usize;
         let end = start.saturating_add(span.len as usize);
-        // Bounded by what was written, not by the mapping: a stale span into
-        // a re-created segment must read empty, not its zero fill.
+        // Bounded by what was written, not by the segment's capacity: a stale
+        // span into a re-created segment must read empty, not its zero fill.
         if end > seg.written {
             return &[];
         }
-        seg.map.get(start..end).unwrap_or(&[])
+        seg.bytes().get(start..end).unwrap_or(&[])
     }
 
     fn free(&mut self, span: Span) {
@@ -314,7 +366,7 @@ impl Arena for MmapArena {
     }
 
     fn capacity_bytes(&self) -> u64 {
-        self.segments.iter().map(|s| s.map.len() as u64).sum()
+        self.segments.iter().map(|s| s.capacity() as u64).sum()
     }
 
     fn clear(&mut self) {
@@ -527,6 +579,32 @@ mod mmap_tests {
 
         assert_eq!(a.get(span_a), b"written by A", "A's mapping was clobbered");
         assert_eq!(b.get(span_b), b"written by B, longer");
+    }
+
+    /// A row must never be dropped because the filesystem is full or
+    /// read-only: the arena falls back to memory rather than refusing the
+    /// write. A refused write is not a visible failure — it is a row silently
+    /// missing from the store.
+    #[test]
+    fn an_unusable_directory_falls_back_to_memory_rather_than_dropping_writes() {
+        let dir = tmpdir("nofs");
+        let mut a = MmapArena::create(&dir, "t", 64 * 1024).unwrap();
+        // Make further segment creation impossible by removing the directory
+        // and putting a regular file in its place.
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::write(&dir, b"not a directory").unwrap();
+
+        // Write far past the first segment. Every span must still read back.
+        let mut spans = Vec::new();
+        for i in 0..200u32 {
+            let payload = vec![(i % 251) as u8; 1000];
+            spans.push((a.append(&payload), payload));
+        }
+        for (span, expected) in &spans {
+            assert_ne!(span.len, 0, "no append may be dropped");
+            assert_eq!(a.get(*span), expected.as_slice(), "span {span:?} lost");
+        }
+        let _ = std::fs::remove_file(&dir);
     }
 
     #[test]

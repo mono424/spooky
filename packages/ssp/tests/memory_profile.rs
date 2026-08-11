@@ -66,14 +66,14 @@ fn load_rows(n: usize) -> (Circuit, usize) {
 /// 6.3x on the parsed-`Sp00kyValue` store it replaced. Confirmed against real
 /// RSS on 200k rows: 508 MB peak before, 175 MB after.
 ///
-/// Of what remains, ~76 B/row is the duplicated `"table:id"` zset key and the
-/// rest is split between the encoded bodies and the id index. The index is the
-/// floor — it stays O(rows) and resident no matter how the bodies are stored.
+/// Of what remains, the encoded bodies dominate. The id index is broken out
+/// separately by [`index_is_the_anonymous_floor`], because it is the part that
+/// cannot become reclaimable page cache.
 #[test]
 #[ignore = "allocates ~100MB and takes seconds; run with --ignored"]
 fn store_bytes_per_row_stays_under_budget() {
     const ROWS: usize = 50_000;
-    const MAX_BYTES_PER_ROW: f64 = 640.0;
+    const MAX_BYTES_PER_ROW: f64 = 620.0;
 
     let (circuit, json_bytes) = load_rows(ROWS);
     let report = circuit.size_report();
@@ -87,6 +87,10 @@ fn store_bytes_per_row_stays_under_budget() {
     eprintln!(
         "rows_bytes      : {:.0} B/row",
         table.rows_bytes as f64 / ROWS as f64
+    );
+    eprintln!(
+        "  of which index: {:.0} B/row (anonymous; the floor)",
+        table.index_bytes as f64 / ROWS as f64
     );
     eprintln!(
         "zset_bytes      : {:.0} B/row",
@@ -173,6 +177,37 @@ fn topk_state_is_charged_per_query_over_the_whole_table() {
         per_row <= MAX_BYTES_PER_ROW_PER_QUERY,
         "TopK state grew to {per_row:.0} B/row/query, over the \
          {MAX_BYTES_PER_ROW_PER_QUERY:.0} B budget"
+    );
+}
+
+/// The row index is the floor: O(rows), and anonymous memory, so unlike the
+/// encoded bodies it cannot become reclaimable page cache however the arena is
+/// backed. Everything else about the store can be moved off the heap; this
+/// cannot, so it is pinned on its own.
+///
+/// Measured 69 B/row before, 17 after. The index used to own a `Box<str>` copy
+/// of every id; it now stores a 12-byte slot and nothing else, and the id
+/// itself lives in the arena record — which moves those bytes to where they
+/// *can* be reclaimed.
+#[test]
+#[ignore = "allocates ~100MB and takes seconds; run with --ignored"]
+fn index_is_the_anonymous_floor() {
+    const ROWS: usize = 50_000;
+    const MAX_INDEX_BYTES_PER_ROW: f64 = 25.0;
+
+    let (circuit, _) = load_rows(ROWS);
+    let table = &circuit.size_report().tables[0];
+    let per_row = table.index_bytes as f64 / ROWS as f64;
+
+    eprintln!("index           : {per_row:.0} B/row");
+    assert!(
+        table.index_bytes < table.rows_bytes,
+        "the index must be a fraction of the row bytes, not the bulk of them"
+    );
+    assert!(
+        per_row <= MAX_INDEX_BYTES_PER_ROW,
+        "index grew to {per_row:.0} B/row, over the {MAX_INDEX_BYTES_PER_ROW:.0} B budget — \
+         this is the term that cannot be paged out"
     );
 }
 

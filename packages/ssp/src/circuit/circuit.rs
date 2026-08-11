@@ -814,8 +814,14 @@ impl Circuit {
 pub struct TableSize {
     pub table: String,
     pub rows: usize,
-    /// Row bodies plus their raw-id keys.
+    /// Row bodies, their ids, and the id index.
     pub rows_bytes: usize,
+    /// The id index alone, broken out of `rows_bytes`.
+    ///
+    /// This is the floor: it is O(rows) and it is anonymous memory, so unlike
+    /// the encoded bodies it cannot become reclaimable page cache no matter
+    /// where those bodies live. Reported separately so it stays visible.
+    pub index_bytes: usize,
     /// Membership Z-set. Separate from `rows_bytes` because its keys are a
     /// second `"table:id"` string per row on top of the raw id in `rows`.
     pub zset_bytes: usize,
@@ -1079,6 +1085,7 @@ impl Circuit {
                 table: name.clone(),
                 rows: coll.rows.len(),
                 rows_bytes: coll.rows_bytes(),
+                index_bytes: coll.index_bytes(),
                 zset_bytes: coll.zset_bytes(),
             })
             .collect();

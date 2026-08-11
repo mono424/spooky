@@ -702,6 +702,7 @@ impl SspNode {
                 "table": t.table,
                 "rows": t.rows,
                 "rows_bytes": t.rows_bytes,
+                "index_bytes": t.index_bytes,
                 "zset_bytes": t.zset_bytes,
                 "total_bytes": t.total_bytes(),
                 "bytes_per_row": t.bytes_per_row(),

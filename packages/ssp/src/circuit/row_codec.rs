@@ -12,8 +12,16 @@
 //! ```text
 //! [u8; 32] digest    blake3 of the canonical form, computed once at write time
 //! [i64]    rv        `_00_rv` lifted out of the body; RV_ABSENT when there is none
+//! [varint] id_len
+//! [bytes]  id        the raw record id, i.e. the row's own key
 //! [value]            tag-prefixed, see below
 //! ```
+//!
+//! The id lives in the record so the index does not have to own a copy of it.
+//! That moves one string allocation per row out of anonymous memory and into
+//! the arena — which, when the arena is file-backed, is reclaimable page cache
+//! instead. It is also what lets a lookup verify a hash match against the real
+//! key rather than trusting the hash.
 //!
 //! Values are tag-prefixed and little-endian:
 //!
@@ -71,7 +79,9 @@ pub const RV_ABSENT: i64 = i64::MIN;
 
 pub const DIGEST_LEN: usize = 32;
 pub const RV_OFFSET: usize = DIGEST_LEN;
-pub const HEADER_LEN: usize = DIGEST_LEN + 8;
+/// Offset of the id's length prefix. The value region follows the id, so its
+/// position is record-dependent — use [`record_value`].
+pub const ID_OFFSET: usize = DIGEST_LEN + 8;
 
 /// Per-table field-name dictionary.
 ///
@@ -174,6 +184,7 @@ fn read_varint(bytes: &[u8]) -> Option<(u64, usize)> {
 /// canonical writer, which is the thing pinned against the `serde_json`
 /// pipeline.
 pub fn encode_record(
+    id: &str,
     value: &Sp00kyValue,
     digest: &[u8; DIGEST_LEN],
     dict: &mut FieldDict,
@@ -186,6 +197,8 @@ pub fn encode_record(
         _ => RV_ABSENT,
     };
     out.extend_from_slice(&rv.to_le_bytes());
+    write_varint(id.len() as u64, out);
+    out.extend_from_slice(id.as_bytes());
     encode_value(value, dict, out);
 }
 
@@ -259,9 +272,22 @@ pub fn record_rv(record: &[u8]) -> Option<i64> {
     (raw != RV_ABSENT).then_some(raw)
 }
 
-/// The encoded value region of a record.
+/// The raw record id stored in a record.
+///
+/// This is the authority a lookup compares against: the index is keyed by a
+/// hash, and a hash match is only a candidate until the id itself agrees.
+pub fn record_id(record: &[u8]) -> Option<&str> {
+    let (len, n) = read_varint(record.get(ID_OFFSET..)?)?;
+    let start = ID_OFFSET + n;
+    std::str::from_utf8(record.get(start..start + len as usize)?).ok()
+}
+
+/// The encoded value region of a record, which follows the id.
 pub fn record_value(record: &[u8]) -> &[u8] {
-    record.get(HEADER_LEN..).unwrap_or(&[])
+    let Some((len, n)) = record.get(ID_OFFSET..).and_then(read_varint) else {
+        return &[];
+    };
+    record.get(ID_OFFSET + n + len as usize..).unwrap_or(&[])
 }
 
 // --- structural reads ---
@@ -430,7 +456,7 @@ mod tests {
         let sv = Sp00kyValue::from(j.clone());
         let mut dict = FieldDict::new();
         let mut buf = Vec::new();
-        encode_record(&sv, &[7u8; DIGEST_LEN], &mut dict, &mut buf);
+        encode_record("r1", &sv, &[7u8; DIGEST_LEN], &mut dict, &mut buf);
         let decoded = decode_value(record_value(&buf), &dict).expect("decodes");
         assert_eq!(decoded, sv, "round trip changed {j}");
         assert_eq!(record_digest(&buf), Some(&[7u8; DIGEST_LEN]));
@@ -464,7 +490,7 @@ mod tests {
             let sv = Sp00kyValue::Float(f);
             let mut dict = FieldDict::new();
             let mut buf = Vec::new();
-            encode_record(&sv, &[0u8; DIGEST_LEN], &mut dict, &mut buf);
+            encode_record("r1", &sv, &[0u8; DIGEST_LEN], &mut dict, &mut buf);
             let back = decode_value(record_value(&buf), &dict).unwrap();
             match back {
                 Sp00kyValue::Float(g) => {
@@ -496,8 +522,8 @@ mod tests {
         assert_ne!(i, f);
         let mut dict = FieldDict::new();
         let (mut a, mut b) = (Vec::new(), Vec::new());
-        encode_record(&i, &[0; DIGEST_LEN], &mut dict, &mut a);
-        encode_record(&f, &[0; DIGEST_LEN], &mut dict, &mut b);
+        encode_record("a", &i, &[0; DIGEST_LEN], &mut dict, &mut a);
+        encode_record("b", &f, &[0; DIGEST_LEN], &mut dict, &mut b);
         assert_eq!(decode_value(record_value(&a), &dict).unwrap(), i);
         assert_eq!(decode_value(record_value(&b), &dict).unwrap(), f);
     }
@@ -507,6 +533,7 @@ mod tests {
         let mut dict = FieldDict::new();
         let mut buf = Vec::new();
         encode_record(
+            "r1",
             &Sp00kyValue::from(json!({ "_00_rv": 42, "x": 1 })),
             &[0; DIGEST_LEN],
             &mut dict,
@@ -515,6 +542,7 @@ mod tests {
         assert_eq!(record_rv(&buf), Some(42));
 
         encode_record(
+            "r1",
             &Sp00kyValue::from(json!({ "x": 1 })),
             &[0; DIGEST_LEN],
             &mut dict,
@@ -526,6 +554,7 @@ mod tests {
         // which counts only ints so the resume point cannot advance past rows
         // catch-up still needs.
         encode_record(
+            "r1",
             &Sp00kyValue::from(json!({ "_00_rv": 5.0 })),
             &[0; DIGEST_LEN],
             &mut dict,
@@ -541,7 +570,7 @@ mod tests {
         }));
         let mut dict = FieldDict::new();
         let mut buf = Vec::new();
-        encode_record(&sv, &[0; DIGEST_LEN], &mut dict, &mut buf);
+        encode_record("r1", &sv, &[0; DIGEST_LEN], &mut dict, &mut buf);
         let value = record_value(&buf);
 
         for name in ["alpha", "beta", "gamma", "delta", "epsilon"] {
@@ -566,7 +595,7 @@ mod tests {
         dict.intern("b");
         dict.intern("m");
         let mut buf = Vec::new();
-        encode_record(&sv, &[0; DIGEST_LEN], &mut dict, &mut buf);
+        encode_record("r1", &sv, &[0; DIGEST_LEN], &mut dict, &mut buf);
         let value = record_value(&buf);
         let mut prev = None;
         for i in 0..4 {
@@ -603,7 +632,7 @@ mod tests {
         let sv = Sp00kyValue::from(json!({ "a": [1, 2, 3], "b": "text" }));
         let mut dict = FieldDict::new();
         let mut buf = Vec::new();
-        encode_record(&sv, &[0; DIGEST_LEN], &mut dict, &mut buf);
+        encode_record("r1", &sv, &[0; DIGEST_LEN], &mut dict, &mut buf);
         // Every prefix must be handled without panicking. Once the arena is
         // file-backed these bytes are untrusted input.
         for cut in 0..buf.len() {
