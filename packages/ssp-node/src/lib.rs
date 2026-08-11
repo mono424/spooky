@@ -48,6 +48,8 @@ pub use ports::{
     NoopTelemetry, OutboundRequest, OutboundResponse, ResumePoint, Scheduler, Spawner, Telemetry,
     TimerKind,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use ports::DiskCircuitStore;
 pub use timers::TimerMux;
 
 /// Milliseconds since the Unix epoch, portable across native and wasm

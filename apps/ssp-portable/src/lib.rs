@@ -9,7 +9,7 @@
 //! `hyper` swapped for `fetch` and [`DiskCircuitStore`] swapped for DO storage.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -23,8 +23,8 @@ use tokio::sync::{mpsc, RwLock};
 
 use ssp::circuit::Circuit;
 use ssp_node::ports::{
-    CancelHandle, CancelWatch, CircuitStore, CircuitStoreError, Db, DbError, HttpClient, HttpError,
-    LocalBoxFuture, OutboundRequest, OutboundResponse, ResumePoint, Scheduler, Spawner, TimerKind,
+    CancelHandle, CancelWatch, Db, DbError, HttpClient, HttpError,
+    LocalBoxFuture, OutboundRequest, OutboundResponse, Scheduler, Spawner, TimerKind,
 };
 use ssp_node::{ApiBody, ApiRequest, Method, NoopTelemetry, Platform, Runtime, SspNode, SspStatus};
 use surrealdb::engine::local::Db as MemEngine;
@@ -122,57 +122,9 @@ impl Spawner for TokioSpawner {
     }
 }
 
-/// `CircuitStore` backed by a single JSON file on disk (`snapshot.json`),
-/// written atomically (temp + rename). This is the seam a DO fills with its
-/// own storage API; the on-disk shape is deliberately trivial.
-pub struct DiskCircuitStore {
-    path: PathBuf,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct DiskSnapshot {
-    blob: String,
-    point: ResumePoint,
-}
-
-impl DiskCircuitStore {
-    pub fn new(dir: impl AsRef<Path>) -> Self {
-        Self { path: dir.as_ref().join("snapshot.json") }
-    }
-}
-
-#[async_trait::async_trait]
-impl CircuitStore for DiskCircuitStore {
-    async fn save(&self, blob: &str, point: &ResumePoint) -> Result<(), CircuitStoreError> {
-        let snap = DiskSnapshot { blob: blob.to_string(), point: point.clone() };
-        let bytes = serde_json::to_vec(&snap)
-            .map_err(|e| CircuitStoreError::Transport(e.to_string()))?;
-        let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, &bytes).map_err(|e| CircuitStoreError::Transport(e.to_string()))?;
-        std::fs::rename(&tmp, &self.path)
-            .map_err(|e| CircuitStoreError::Transport(e.to_string()))?;
-        Ok(())
-    }
-    async fn load(&self) -> Result<(String, ResumePoint), CircuitStoreError> {
-        let bytes = match std::fs::read(&self.path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(CircuitStoreError::NotFound)
-            }
-            Err(e) => return Err(CircuitStoreError::Transport(e.to_string())),
-        };
-        let snap: DiskSnapshot = serde_json::from_slice(&bytes)
-            .map_err(|e| CircuitStoreError::Corrupt(e.to_string()))?;
-        Ok((snap.blob, snap.point))
-    }
-    async fn clear(&self) -> Result<(), CircuitStoreError> {
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(CircuitStoreError::Transport(e.to_string())),
-        }
-    }
-}
+/// Re-exported from `ssp-node` so the server, this host and the tests all
+/// exercise one implementation instead of parallel copies that can drift.
+pub use ssp_node::DiskCircuitStore;
 
 // --- Host --------------------------------------------------------------------
 

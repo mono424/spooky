@@ -1,14 +1,18 @@
 [package]
 name = "ssp"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 edition = "2021"
 
 [lib]
 crate-type = ["rlib"]
 
 [features]
-default = ["parallel", "mimalloc"]
+default = ["parallel", "mimalloc", "mmap-store"]
 parallel = ["dep:rayon"]
+# File-backed row arena. Enabling the feature only makes the implementation
+# available; whether it is used is a runtime decision (see `MmapArena::open`),
+# because some deployment substrates have no writable disk at all.
+mmap-store = ["dep:memmap2"]
 # mimalloc as the global allocator (native, non-wasm). Kept on by default for
 # the server/CLI, but disabled by the Dart FFI build: mimalloc's per-thread
 # init/teardown segfaults inside a dylib loaded into the Dart VM's multi-isolate
@@ -43,6 +47,10 @@ web-time = "1.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mimalloc = { version = "0.1.48", optional = true }
+# Only exists off wasm32, so `mmap-store` being in the default feature set is
+# harmless for the browser, Durable Object and Dart FFI builds — they compile
+# the HeapArena path regardless.
+memmap2 = { version = "0.9", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

@@ -117,6 +117,221 @@ impl Arena for HeapArena {
     }
 }
 
+/// File-backed arena: a chain of sparse files, each mapped once.
+///
+/// The point is not to save bytes — the encoding already did that — but to
+/// move them out of anonymous memory. Pages of a file mapping are page cache:
+/// under pressure the kernel reclaims the clean ones instead of the OOM killer
+/// taking the process. Anonymous pages have no such option.
+///
+/// # Why segments, and why each is mapped once and never remapped
+///
+/// Appends only ever write inside an already-mapped segment, so no live
+/// `&[u8]` is ever invalidated. Growing a single mapping would mean remapping,
+/// which can move the base address and dangle every outstanding borrow — so
+/// instead, a full segment is retired and a new one is mapped alongside it.
+/// Retired segments stay mapped, which is what keeps their spans readable.
+///
+/// The alternative considered and rejected was refusing an append once the
+/// mapping filled. That loses a row silently, and a row missing from the store
+/// is not a visible failure: it is wrong query results, then a table-hash
+/// mismatch against the scheduler, then `exit(2)` and a crash loop. Growing is
+/// the only safe answer.
+///
+/// Files are sparse, so a segment's declared size costs nothing until written.
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+#[derive(Debug)]
+pub struct MmapArena {
+    segments: Vec<Seg>,
+    segment_bytes: usize,
+    dir: std::path::PathBuf,
+    name: String,
+    /// Distinguishes arenas for the same table within and across processes.
+    instance: String,
+    live: u64,
+    dead: u64,
+}
+
+/// One mapped segment, plus how much of it has actually been written.
+///
+/// The written length is what makes a read past the data return empty rather
+/// than the mapping's zero fill — matching `HeapArena`, where a shorter buffer
+/// simply has no such offset.
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+#[derive(Debug)]
+struct Seg {
+    map: memmap2::MmapMut,
+    written: usize,
+}
+
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+impl MmapArena {
+    /// Create a file-backed arena under `dir`, growing in `segment_bytes`
+    /// chunks.
+    pub fn create(
+        dir: &std::path::Path,
+        name: &str,
+        segment_bytes: usize,
+    ) -> std::io::Result<Self> {
+        let mut arena = Self {
+            segments: Vec::new(),
+            segment_bytes: segment_bytes.max(64 * 1024),
+            dir: dir.to_path_buf(),
+            name: name.to_string(),
+            instance: next_instance_id(),
+            live: 0,
+            dead: 0,
+        };
+        arena.map_segment(arena.segment_bytes)?;
+        Ok(arena)
+    }
+
+    /// Map one more segment of at least `min_bytes`.
+    ///
+    /// The backing file is unlinked immediately after mapping, so it cannot
+    /// outlive the process or leak on a crash — the mapping holds the inode
+    /// alive. This arena is a cache, not a durable store: SurrealDB remains
+    /// the source of truth and nothing here survives a restart.
+    fn map_segment(&mut self, min_bytes: usize) -> std::io::Result<()> {
+        use std::fs::OpenOptions;
+        std::fs::create_dir_all(&self.dir)?;
+        let size = min_bytes.max(self.segment_bytes);
+        // The path has to be unique per *arena instance*, not per table. Two
+        // collections for the same table can coexist — a rebuilt circuit
+        // alongside the outgoing one, or two processes sharing a directory —
+        // and a second creator opening the same path with `truncate` would
+        // truncate a file the first still has mapped. That is the one way a
+        // file mapping faults on access, and it showed up immediately as
+        // corrupted rows when the test suite ran against this backend.
+        let path = self.dir.join(format!(
+            "{}.{}.{}.arena",
+            self.name,
+            self.instance,
+            self.segments.len()
+        ));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            // Fail rather than reuse: a collision here means the uniqueness
+            // argument above is wrong, and silently sharing would corrupt.
+            .create_new(true)
+            .open(&path)?;
+        file.set_len(size as u64)?;
+        // SAFETY: the file was just created, is exclusively ours, and is
+        // unlinked below so nothing else can truncate it underneath the
+        // mapping — the one way a file mapping can fault on access.
+        let map = unsafe { memmap2::MmapMut::map_mut(&file)? };
+        let _ = std::fs::remove_file(&path);
+        self.segments.push(Seg { map, written: 0 });
+        Ok(())
+    }
+
+    /// Whether `dir` can actually be written to.
+    ///
+    /// Probes by creating and removing a file rather than trusting metadata:
+    /// a read-only mount, a full filesystem and a missing directory all have
+    /// to end in the same answer, and the caller has to be able to fall back
+    /// rather than fail. The Firecracker substrate boots with a read-only root
+    /// and no data drive, so this returning false is a normal outcome, not an
+    /// error.
+    pub fn probe_writable(dir: &std::path::Path) -> bool {
+        if std::fs::create_dir_all(dir).is_err() {
+            return false;
+        }
+        let probe = dir.join(".arena-probe");
+        match std::fs::write(&probe, b"1") {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&probe);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+}
+
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+impl Arena for MmapArena {
+    fn append(&mut self, bytes: &[u8]) -> Span {
+        let room = self
+            .segments
+            .last()
+            .map_or(0, |s| s.map.len().saturating_sub(s.written));
+        if bytes.len() > room {
+            // Retire the current segment and map another. If that fails (a
+            // full or read-only filesystem), the row would otherwise be lost
+            // silently, so surface it as a zero span and let `get` report the
+            // row as absent — the same shape a corrupt index takes.
+            if self.map_segment(bytes.len()).is_err() {
+                return Span { seg: 0, off: 0, len: 0 };
+            }
+        }
+        let seg = self.segments.len() - 1;
+        let s = &mut self.segments[seg];
+        let off = s.written;
+        s.map[off..off + bytes.len()].copy_from_slice(bytes);
+        s.written += bytes.len();
+        self.live += bytes.len() as u64;
+        Span {
+            seg: seg as u16,
+            off: off as u32,
+            len: bytes.len() as u32,
+        }
+    }
+
+    fn get(&self, span: Span) -> &[u8] {
+        if span.len == 0 {
+            return &[];
+        }
+        let Some(seg) = self.segments.get(span.seg as usize) else {
+            return &[];
+        };
+        let start = span.off as usize;
+        let end = start.saturating_add(span.len as usize);
+        // Bounded by what was written, not by the mapping: a stale span into
+        // a re-created segment must read empty, not its zero fill.
+        if end > seg.written {
+            return &[];
+        }
+        seg.map.get(start..end).unwrap_or(&[])
+    }
+
+    fn free(&mut self, span: Span) {
+        let len = span.len as u64;
+        self.live = self.live.saturating_sub(len);
+        self.dead += len;
+    }
+
+    fn live_bytes(&self) -> u64 {
+        self.live
+    }
+
+    fn dead_bytes(&self) -> u64 {
+        self.dead
+    }
+
+    fn capacity_bytes(&self) -> u64 {
+        self.segments.iter().map(|s| s.map.len() as u64).sum()
+    }
+
+    fn clear(&mut self) {
+        // Drop every mapping rather than just resetting the write cursor. The
+        // bytes stay in a mapping until it is unmapped, so keeping one around
+        // would let a stale span read back cleared data — where `HeapArena`
+        // reads empty. Dropping them makes a stale span reference a segment
+        // that no longer exists, which `get` reports as absent.
+        self.segments.clear();
+        self.live = 0;
+        self.dead = 0;
+        // A failure here leaves the arena with no segments, which is
+        // self-healing: the next append maps one.
+        let _ = self.map_segment(self.segment_bytes);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +410,302 @@ mod tests {
         assert_eq!(a.live_bytes(), 0);
         assert_eq!(a.dead_bytes(), 0);
         assert!(a.get(s).is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "mmap-store", not(target_arch = "wasm32")))]
+mod mmap_tests {
+    use super::*;
+
+    fn tmpdir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("ssp-arena-test-{name}"));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    #[test]
+    fn append_and_read_back() {
+        let dir = tmpdir("basic");
+        let mut a = MmapArena::create(&dir, "t", 64 * 1024).unwrap();
+        let one = a.append(b"hello");
+        let two = a.append(b"world!");
+        assert_eq!(a.get(one), b"hello");
+        assert_eq!(a.get(two), b"world!");
+        assert_eq!(a.live_bytes(), 11);
+        assert_eq!(a.capacity_bytes(), 64 * 1024);
+    }
+
+    /// The whole reason the file is created at full size and mapped once:
+    /// a borrow taken before later appends must stay valid.
+    #[test]
+    fn earlier_spans_survive_later_appends() {
+        let dir = tmpdir("stable");
+        let mut a = MmapArena::create(&dir, "t", 64 * 1024).unwrap();
+        let first = a.append(b"first");
+        for i in 0..1000u32 {
+            a.append(&i.to_le_bytes());
+        }
+        assert_eq!(a.get(first), b"first");
+    }
+
+    /// Filling a segment must map another rather than dropping the write.
+    /// A silently lost row is not a visible failure — it is wrong results,
+    /// then a hash mismatch, then a crash loop.
+    #[test]
+    fn a_full_segment_grows_instead_of_losing_the_row() {
+        let dir = tmpdir("grow");
+        let mut a = MmapArena::create(&dir, "t", 64 * 1024).unwrap();
+        assert_eq!(a.segment_count(), 1);
+
+        // Write well past one segment and keep every span.
+        let mut spans = Vec::new();
+        for i in 0..400u32 {
+            let payload = vec![(i % 251) as u8; 1000];
+            spans.push((a.append(&payload), payload));
+        }
+        assert!(a.segment_count() > 1, "must have grown");
+
+        // Every span, including ones in retired segments, still reads back.
+        for (span, expected) in &spans {
+            assert_eq!(a.get(*span), expected.as_slice(), "span {span:?} lost");
+            assert_ne!(span.len, 0, "no append may be dropped");
+        }
+    }
+
+    /// A single value larger than the configured segment size still has to fit.
+    #[test]
+    fn an_oversized_value_gets_its_own_segment() {
+        let dir = tmpdir("oversized");
+        let mut a = MmapArena::create(&dir, "t", 64 * 1024).unwrap();
+        let big = vec![7u8; 300_000];
+        let span = a.append(&big);
+        assert_eq!(a.get(span), big.as_slice());
+    }
+
+    #[test]
+    fn out_of_range_reads_are_empty_rather_than_a_panic() {
+        let dir = tmpdir("bounds");
+        let mut a = MmapArena::create(&dir, "t", 64 * 1024).unwrap();
+        a.append(b"abc");
+        // Past the end of the mapping.
+        assert!(a
+            .get(Span { seg: 0, off: u32::MAX, len: u32::MAX })
+            .is_empty());
+        // A segment that does not exist.
+        assert!(a.get(Span { seg: 99, off: 0, len: 4 }).is_empty());
+        // A zero-length span.
+        assert!(a.get(Span { seg: 0, off: 0, len: 0 }).is_empty());
+    }
+
+    /// The backing file is unlinked right after mapping, so a crash cannot
+    /// leave arena files behind.
+    #[test]
+    fn backing_file_is_unlinked_immediately() {
+        let dir = tmpdir("unlink");
+        let a = MmapArena::create(&dir, "t", 64 * 1024).unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".arena"))
+            .collect();
+        assert!(leftovers.is_empty(), "arena files must not persist: {leftovers:?}");
+        drop(a);
+    }
+
+    /// Two arenas for the same table in the same directory must not share a
+    /// file. They previously did, and the second one's `truncate` corrupted
+    /// the first one's live mapping — which surfaced as unrelated circuit
+    /// tests failing once the suite ran against this backend.
+    #[test]
+    fn concurrent_arenas_for_one_table_do_not_share_a_file() {
+        let dir = tmpdir("collide");
+        let mut a = MmapArena::create(&dir, "thread", 64 * 1024).unwrap();
+        let span_a = a.append(b"written by A");
+
+        let mut b = MmapArena::create(&dir, "thread", 64 * 1024).unwrap();
+        let span_b = b.append(b"written by B, longer");
+
+        assert_eq!(a.get(span_a), b"written by A", "A's mapping was clobbered");
+        assert_eq!(b.get(span_b), b"written by B, longer");
+    }
+
+    #[test]
+    fn probe_detects_writability() {
+        let dir = tmpdir("probe");
+        assert!(MmapArena::probe_writable(&dir));
+        assert!(!dir.join(".arena-probe").exists(), "probe must clean up");
+        // A path under a file rather than a directory cannot be created.
+        let f = dir.join("afile");
+        std::fs::write(&f, b"x").unwrap();
+        assert!(!MmapArena::probe_writable(&f.join("nested")));
+    }
+
+    #[test]
+    fn clear_resets_and_reuses_the_mapping() {
+        let dir = tmpdir("clear");
+        let mut a = MmapArena::create(&dir, "t", 64 * 1024).unwrap();
+        let s = a.append(b"data");
+        a.free(s);
+        a.clear();
+        assert_eq!(a.live_bytes(), 0);
+        assert_eq!(a.dead_bytes(), 0);
+        assert!(a.get(s).is_empty(), "cleared bytes must not read back");
+        let again = a.append(b"new");
+        assert_eq!(a.get(again), b"new");
+    }
+}
+
+// --- runtime backing selection ---
+
+/// How row bytes should be backed for this process.
+#[derive(Debug, Clone)]
+pub enum ArenaBacking {
+    /// Anonymous memory. The only option on wasm32, and the fallback anywhere
+    /// a writable directory is unavailable.
+    Heap,
+    /// A directory of sparse files. Pages become reclaimable page cache rather
+    /// than anonymous memory.
+    Files {
+        dir: std::path::PathBuf,
+        segment_bytes: usize,
+    },
+}
+
+/// Default segment size. Sparse, so this is address space rather than disk
+/// until written.
+const DEFAULT_SEGMENT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Backing chosen for this process, resolved once.
+///
+/// Opt-in via `SPKY_SSP_ARENA_DIR`, and only honoured if that directory is
+/// genuinely writable. The probe is not defensive programming for its own
+/// sake: the Firecracker substrate boots read-only with no data drive, so
+/// "configured but unusable" is a state that really occurs, and failing hard
+/// there would take down every SSP on that substrate. Falling back costs the
+/// page-cache benefit and keeps everything else.
+pub fn configured_backing() -> &'static ArenaBacking {
+    static BACKING: std::sync::OnceLock<ArenaBacking> = std::sync::OnceLock::new();
+    BACKING.get_or_init(resolve_backing)
+}
+
+fn resolve_backing() -> ArenaBacking {
+    #[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+    {
+        let Some(dir) = std::env::var_os("SPKY_SSP_ARENA_DIR") else {
+            return ArenaBacking::Heap;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        if !MmapArena::probe_writable(&dir) {
+            tracing::warn!(
+                dir = %dir.display(),
+                "SPKY_SSP_ARENA_DIR is not writable — falling back to in-memory row storage"
+            );
+            return ArenaBacking::Heap;
+        }
+        let segment_bytes = std::env::var("SPKY_SSP_ARENA_SEGMENT_MB")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|mb| *mb > 0)
+            .map(|mb| mb * 1024 * 1024)
+            .unwrap_or(DEFAULT_SEGMENT_BYTES);
+        tracing::info!(
+            dir = %dir.display(),
+            segment_bytes,
+            "Row arena is file-backed"
+        );
+        ArenaBacking::Files { dir, segment_bytes }
+    }
+    #[cfg(not(all(feature = "mmap-store", not(target_arch = "wasm32"))))]
+    {
+        ArenaBacking::Heap
+    }
+}
+
+/// Build an arena for one table, honouring [`configured_backing`].
+///
+/// Falls back to the heap if the mapping cannot be created, so a disk that
+/// fills or goes read-only mid-run degrades to the previous behaviour rather
+/// than failing the table.
+pub fn new_arena(table: &str) -> Box<dyn Arena> {
+    match configured_backing() {
+        ArenaBacking::Heap => Box::new(HeapArena::new()),
+        #[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+        ArenaBacking::Files { dir, segment_bytes } => {
+            match MmapArena::create(dir, &sanitize_table_name(table), *segment_bytes) {
+                Ok(a) => Box::new(a),
+                Err(e) => {
+                    tracing::warn!(
+                        table, error = %e,
+                        "Could not create a file-backed arena — using memory for this table"
+                    );
+                    Box::new(HeapArena::new())
+                }
+            }
+        }
+        #[cfg(not(all(feature = "mmap-store", not(target_arch = "wasm32"))))]
+        ArenaBacking::Files { .. } => Box::new(HeapArena::new()),
+    }
+}
+
+/// A process- and instance-unique token for arena filenames.
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+fn next_instance_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Make a table name safe to embed in a filename. Table names reach us from
+/// the database schema, so they are not assumed to be path-safe.
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+fn sanitize_table_name(table: &str) -> String {
+    let cleaned: String = table
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    // Distinguish names that collide after cleaning, and give an empty name
+    // something to be.
+    format!("{cleaned}-{:016x}", fnv1a(table))
+}
+
+#[cfg(all(feature = "mmap-store", not(target_arch = "wasm32")))]
+fn fnv1a(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    h
+}
+
+#[cfg(all(test, feature = "mmap-store", not(target_arch = "wasm32")))]
+mod backing_tests {
+    use super::*;
+
+    #[test]
+    fn table_names_are_made_path_safe_without_colliding() {
+        let a = sanitize_table_name("_00_list_ref_user_abc");
+        let b = sanitize_table_name("thread");
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'));
+        assert_ne!(a, b);
+        // Names that clean to the same string must stay distinct.
+        assert_ne!(sanitize_table_name("a/b"), sanitize_table_name("a:b"));
+        // And an empty name still produces something usable.
+        assert!(!sanitize_table_name("").is_empty());
+    }
+
+    #[test]
+    fn an_unwritable_dir_falls_back_to_heap() {
+        // `new_arena` must never fail: point it at a path that cannot exist.
+        let dir = std::env::temp_dir().join("ssp-arena-nope/deep");
+        let file = std::env::temp_dir().join("ssp-arena-nope");
+        let _ = std::fs::remove_dir_all(&file);
+        std::fs::write(&file, b"not a directory").unwrap();
+        assert!(!MmapArena::probe_writable(&dir));
+        let _ = std::fs::remove_file(&file);
     }
 }

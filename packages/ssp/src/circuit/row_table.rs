@@ -42,10 +42,19 @@ impl Default for RowTable {
 
 impl RowTable {
     pub fn new() -> Self {
+        Self::with_arena(Box::new(HeapArena::new()))
+    }
+
+    /// Build a table over a caller-supplied arena.
+    ///
+    /// The seam that lets the row bytes live somewhere other than the heap —
+    /// a file mapping, on platforms that have one — without any operator or
+    /// codec change.
+    pub fn with_arena(arena: Box<dyn Arena>) -> Self {
         Self {
             dict: FieldDict::new(),
             index: FxHashMap::default(),
-            arena: Box::new(HeapArena::new()),
+            arena,
             scratch: Vec::new(),
         }
     }

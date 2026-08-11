@@ -76,6 +76,97 @@ impl CircuitStore for NoopCircuitStore {
     }
 }
 
+/// `CircuitStore` backed by a single JSON file, written atomically
+/// (temp file + rename) so a crash mid-write leaves the previous snapshot
+/// intact rather than a truncated one.
+///
+/// Lives here rather than in a shell so the server and the portable host share
+/// one implementation; the Durable Object shell fills the same seam with its
+/// own storage API.
+///
+/// The snapshot is a cache, not a source of truth: SurrealDB is. A snapshot
+/// that is missing, stale or unreadable simply costs a full rebuild, which is
+/// what every caller already handles.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct DiskCircuitStore {
+    path: std::path::PathBuf,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DiskSnapshot {
+    blob: String,
+    point: ResumePoint,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DiskCircuitStore {
+    pub fn new(dir: impl AsRef<std::path::Path>) -> Self {
+        Self {
+            path: dir.as_ref().join("snapshot.json"),
+        }
+    }
+
+    /// Whether `dir` is usable for snapshots.
+    ///
+    /// Checked rather than assumed because a configured-but-unwritable
+    /// directory is a real deployment state (a read-only root, a missing
+    /// volume), and the right response is to run without snapshots rather
+    /// than to fail startup.
+    pub fn probe_writable(dir: &std::path::Path) -> bool {
+        if std::fs::create_dir_all(dir).is_err() {
+            return false;
+        }
+        let probe = dir.join(".snapshot-probe");
+        match std::fs::write(&probe, b"1") {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&probe);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait::async_trait]
+impl CircuitStore for DiskCircuitStore {
+    async fn save(&self, blob: &str, point: &ResumePoint) -> Result<(), CircuitStoreError> {
+        let snap = DiskSnapshot {
+            blob: blob.to_string(),
+            point: point.clone(),
+        };
+        let bytes =
+            serde_json::to_vec(&snap).map_err(|e| CircuitStoreError::Transport(e.to_string()))?;
+        let tmp = self.path.with_extension("tmp");
+        std::fs::write(&tmp, &bytes).map_err(|e| CircuitStoreError::Transport(e.to_string()))?;
+        std::fs::rename(&tmp, &self.path)
+            .map_err(|e| CircuitStoreError::Transport(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn load(&self) -> Result<(String, ResumePoint), CircuitStoreError> {
+        let bytes = match std::fs::read(&self.path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(CircuitStoreError::NotFound)
+            }
+            Err(e) => return Err(CircuitStoreError::Transport(e.to_string())),
+        };
+        let snap: DiskSnapshot = serde_json::from_slice(&bytes)
+            .map_err(|e| CircuitStoreError::Corrupt(e.to_string()))?;
+        Ok((snap.blob, snap.point))
+    }
+
+    async fn clear(&self) -> Result<(), CircuitStoreError> {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(CircuitStoreError::Transport(e.to_string())),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

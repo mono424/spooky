@@ -3885,7 +3885,7 @@ checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
 
 [[package]]
 name = "maintenance"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3994,6 +3994,15 @@ name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
+
+[[package]]
+name = "memmap2"
+version = "0.9.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "miette"
@@ -6265,7 +6274,7 @@ dependencies = [
 
 [[package]]
 name = "scheduler"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6785,7 +6794,7 @@ dependencies = [
 
 [[package]]
 name = "sp00ky-cli"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6849,7 +6858,7 @@ dependencies = [
 
 [[package]]
 name = "ssp"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "anyhow",
  "blake3",
@@ -6857,6 +6866,7 @@ dependencies = [
  "indexmap 2.14.0",
  "indexset",
  "lazy_static",
+ "memmap2",
  "mimalloc",
  "nom",
  "rayon",
@@ -6875,7 +6885,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-ffi"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "anyhow",
  "libc",
@@ -6886,7 +6896,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-node"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6911,7 +6921,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-portable"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6934,7 +6944,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-protocol"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "blake3",
  "serde",
@@ -6943,7 +6953,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-server"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6979,7 +6989,7 @@ dependencies = [
 
 [[package]]
 name = "ssp-wasm"
-version = "0.0.1-canary.186"
+version = "0.0.1-canary.187"
 dependencies = [
  "getrandom 0.2.17",
  "getrandom 0.3.4",

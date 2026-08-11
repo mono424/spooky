@@ -172,9 +172,21 @@ pub fn load_config() -> Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(15),
-        // VM holds the circuit in memory for its lifetime — no periodic
-        // checkpoint (its CircuitStore is noop). Ephemeral hosts set this.
-        checkpoint_interval_secs: None,
+        // Only meaningful alongside a real `CircuitStore`; with the noop store
+        // a checkpoint writes nothing, so leaving this unset when snapshots
+        // are off avoids paying for a serialization no one reads.
+        //
+        // Arming it used to be unsafe at any interval: `Circuit::save` cloned
+        // the entire store before serializing it, so a checkpoint on a large
+        // circuit was an OOM generator inside a capped container. It no longer
+        // clones, and rows are flat-encoded, so the peak is now roughly the
+        // JSON text itself.
+        checkpoint_interval_secs: std::env::var_os("SPKY_SSP_SNAPSHOT_DIR").map(|_| {
+            std::env::var("SPKY_SSP_CHECKPOINT_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(300)
+        }),
         max_snapshot_age_secs: 3600,
     }
 }

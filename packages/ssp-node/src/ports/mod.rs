@@ -22,6 +22,8 @@ mod telemetry;
 pub use artifacts::{ArtifactError, ArtifactMeta, ArtifactStore};
 pub use backend_health::{BackendCounts, BackendHealth, BackendSpec};
 pub use circuit_store::{CircuitStore, CircuitStoreError, NoopCircuitStore, ResumePoint};
+#[cfg(not(target_arch = "wasm32"))]
+pub use circuit_store::DiskCircuitStore;
 pub use db::{Db, DbError};
 pub use http::{CancelHandle, CancelWatch, HttpClient, HttpError, OutboundRequest, OutboundResponse};
 pub use scheduler::{Scheduler, TimerKind};

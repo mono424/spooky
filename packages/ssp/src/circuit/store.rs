@@ -34,10 +34,11 @@ pub struct Collection {
 
 impl Collection {
     pub fn new(name: String) -> Self {
+        let rows = RowTable::with_arena(crate::circuit::arena::new_arena(&name));
         Self {
             name,
             zset: HashMap::new(),
-            rows: RowTable::new(),
+            rows,
             catchup_xor: ssp_protocol::snapshot_hash::xor_empty(),
             scratch: Vec::new(),
         }
