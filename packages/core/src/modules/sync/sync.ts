@@ -1751,11 +1751,19 @@ export class Sp00kySync<S extends SchemaStructure> {
 
   // Eager teardown of a deregistered query's remote `_00_query` view (opt-in,
   // e.g. a viewport-windowed list cancelling an off-screen window). Query ids
-  // are a deterministic hash of (surql+params), so a DELETE racing a scroll-back
-  // re-register (same id) could nuke a freshly-recreated view — hence two
-  // guards: abort if a subscriber reappeared BEFORE the delete; re-register if
-  // one reappears DURING the delete's network await. Tolerant of a
-  // missing/already-gone query (no throw).
+  // are a deterministic hash of (surql+params), so a release racing a
+  // scroll-back re-register (same id) could nuke a freshly-recreated view —
+  // hence two guards: abort if a subscriber reappeared BEFORE the release;
+  // re-register if one reappears DURING the release's network await. Tolerant
+  // of a missing/already-gone query (no throw).
+  //
+  // Releases via `fn::query::unsubscribe` rather than deleting the row
+  // outright. A `_00_query` row can be shared by several sessions of the same
+  // user, so a bare `DELETE` would tear the view — and every `_00_list_ref`
+  // edge hanging off it — out from under other live tabs. The function drops
+  // only this session from `subscribers` and deletes the row when it was the
+  // last one. (The old `DELETE $id` was harmless in practice only because the
+  // table granted no delete permission and it silently affected zero rows.)
   private async cleanupQuery(queryHash: string) {
     const queryState = this.dataModule.getQueryByHash(queryHash);
     if (!queryState) return; // already torn down / never registered
@@ -1763,10 +1771,14 @@ export class Sp00kySync<S extends SchemaStructure> {
     // Re-subscribed before the queued cleanup ran → keep everything as-is.
     if (this.dataModule.hasSubscribers(queryHash)) return;
 
-    await this.remote.query(`DELETE $id`, { id: queryState.config.id });
+    await this.remote.query('fn::query::unsubscribe($id)', {
+      id: queryState.config.id,
+    });
 
-    // Re-subscribed while we awaited the DELETE → the remote view is now gone
-    // but a subscriber needs it; recreate it instead of leaving a zombie.
+    // Re-subscribed while we awaited the release → re-register. Covers both
+    // outcomes: if we were the last subscriber the remote view is gone and this
+    // recreates it, and if it survived for other sessions this re-adds us to
+    // `subscribers` so our heartbeats keep counting.
     if (this.dataModule.hasSubscribers(queryHash)) {
       this.enqueueDownEvent({ type: 'register', payload: { hash: queryHash } });
       return;

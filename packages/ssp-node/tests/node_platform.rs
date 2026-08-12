@@ -709,6 +709,52 @@ async fn registering_onto_another_identitys_view_is_refused() {
     assert_eq!(h.node.processor.read().await.view_count(), 1);
 }
 
+// A registration that asserts NO identity must join, not be refused.
+//
+// This is a production regression, not a hypothetical: `fn::query::register`
+// sends `<string>($auth.id OR '')`, so any re-registration issued while the
+// session's auth is not yet established carries ''. After a SurrealDB restart
+// every client re-registered mid-reconnect with '', every one was refused 409,
+// and the views never came back — the page rendered "not found" for data the
+// user could see a moment earlier. Refuse only a genuine identity CONFLICT.
+#[tokio::test]
+async fn registering_without_an_asserted_identity_joins_instead_of_being_refused() {
+    let h = build(HarnessOpts::default()).await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "true");
+    }
+
+    let register = |auth: &str, client: &str| {
+        json!({
+            "id": "v1",
+            "surql": "SELECT * FROM thread",
+            "clientId": client,
+            "ttl": "30m",
+            "lastActiveAt": "2024-01-01T00:00:00Z",
+            "params": { "auth": { "id": auth } }
+        })
+    };
+
+    let r = h.node.route(authed(Method::Post, "/view/register", register("user:alice", "tab-a"))).await.unwrap();
+    assert_eq!(r.status, 200);
+
+    // The reconnect case: same query, no identity asserted.
+    let r = h.node.route(authed(Method::Post, "/view/register", register("", "tab-a"))).await.unwrap();
+    assert_eq!(r.status, 200, "empty auth must join, got {:?}", json_of(&r));
+
+    // Still one shared view, and `auth_id` was not clobbered to ''.
+    assert_eq!(h.node.processor.read().await.view_count(), 1);
+    let row: Option<serde_json::Value> = h
+        .raw_db
+        .query("SELECT auth_id FROM ONLY _00_query:v1")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    assert_eq!(row.unwrap()["auth_id"], "user:alice");
+}
+
 #[tokio::test]
 async fn view_register_rejects_when_not_ready() {
     let h = build(HarnessOpts { status: SspStatus::Bootstrapping, ..Default::default() }).await;

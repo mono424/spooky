@@ -912,9 +912,16 @@ class Sp00kySync {
   Future<void> _cleanupQuery(String queryHash) async {
     final queryState = _dataModule.getQueryByHash(queryHash);
     if (queryState == null) throw StateError('Query to register not found');
-    await _remote.query('DELETE \$id', {'id': queryState.config.id});
-    // Free the local DBSP view + in-memory state now that the remote `_00_query`
-    // row is gone (TS `cleanupQuery` -> `finalizeDeregister`).
+    // Release rather than delete: a `_00_query` row can be shared by several
+    // sessions of the same user, so a bare `DELETE` would tear the view - and
+    // every `_00_list_ref` edge hanging off it - out from under other live
+    // tabs. `fn::query::unsubscribe` drops only this session from
+    // `subscribers` and deletes the row when it was the last one.
+    await _remote.query('fn::query::unsubscribe(\$id)',
+        {'id': queryState.config.id});
+    // Free the local DBSP view + in-memory state. Unconditional: this client no
+    // longer wants the query regardless of whether the remote row survived for
+    // another session (TS `cleanupQuery` -> `finalizeDeregister`).
     _dataModule.finalizeDeregister(queryHash);
   }
 

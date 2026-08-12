@@ -872,8 +872,22 @@ impl SspNode {
             // forged. Refuse rather than adopt it: the view's plan was
             // permission-injected for the OTHER user's identity, so serving it
             // here would hand them that user's rows.
+            //
+            // An EMPTY `auth_id` is not such a caller and must not be refused.
+            // It means the registration asserted no identity at all, which
+            // happens routinely: `fn::query::register` sends
+            // `<string>($auth.id OR '')`, so any re-registration issued while
+            // the session's auth is not (yet) established carries ''. Observed
+            // in production after a SurrealDB restart — every client re-registered
+            // with '' mid-reconnect, every one was refused 409, and their views
+            // never came back, which rendered as "not found" on a page that had
+            // been working. Treat '' as "no assertion" and let it join; the
+            // stored `auth_id` is write-once and the plan keeps the original
+            // identity's permission injection either way, and the per-user
+            // `_00_list_ref_user_<uid>` table still gates what can actually be
+            // read back.
             if let Some(existing) = existing_auth {
-                if existing != auth_id {
+                if !auth_id.is_empty() && !existing.is_empty() && existing != auth_id {
                     warn!(
                         target: "ssp::edges",
                         view_id = %incantation_id,
@@ -899,7 +913,11 @@ impl SspNode {
             // one identity while routed to the other's table.
             //
             // `ttl` is max-wins so a subscriber asking for a shorter TTL
-            // cannot shorten a view another tab is depending on.
+            // cannot shorten a view another tab is depending on. The bare `ttl`
+            // reads below are correct: the field is `TYPE duration`, so
+            // `<datetime> + ttl` is valid arithmetic. (`$ttl` the PARAMETER is
+            // a string off the register payload, hence the explicit
+            // `<duration>` cast on that side only.)
             let stmt = "UPDATE type::record($id) SET clientId = <string>$clientId, \
                         lastActiveAt = <datetime>$lastActiveAt, \
                         ttl = (IF <duration>$ttl > ttl { <duration>$ttl } ELSE { ttl }), \
