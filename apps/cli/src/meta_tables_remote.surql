@@ -1,20 +1,68 @@
 -- ==================================================
 -- SPOOKY INCANTATION
 -- The Registry of active Live Queries (Incantations).
--- Scoped per session: `clientId` is set from `session::id()` server-side
--- in `fn::query::register`, so a record-token caller only sees the
--- incantations that originated from their current session. The SSP runs
--- as root and bypasses these table-level rules.
+--
+-- Scoped per USER, not per session — one row is SHARED by every tab, window
+-- and device of that user. This mirrors `_00_list_ref` below, which was moved
+-- off session scoping for the same reason; `_00_query` was the straggler.
+--
+-- Session scoping (`clientId = session::id()`) actively broke a user with two
+-- tabs open. The second tab's registration overwrites `clientId`, after which
+-- the first tab can no longer read its own row: its `rowCount` probe returns
+-- NONE, so it cannot tell "no results" from "edges still flushing" and latches
+-- an empty list; and its `fn::query::heartbeat` UPDATE matches zero rows and
+-- returns success, so the TTL refresh becomes a SILENT no-op. When the winning
+-- tab closes, nothing refreshes `lastActiveAt`, the sweep deletes the row AND
+-- every edge, and the surviving tab goes blank.
+--
+-- The anon branch mirrors `_00_list_ref_anon` (see ssp-node/src/tables.rs): a
+-- logged-out session has `$auth = NONE` and cannot be gated on `$auth.id`, and
+-- an anon row only ever describes a query whose results are already reachable
+-- through that world-readable table.
+--
+-- `$auth.id != NONE` guards the cast so the rule evaluates cleanly for an
+-- anonymous caller instead of erroring.
+--
+-- `delete` is granted deliberately: the row DELETE is the only trigger wired
+-- to `/view/unregister` (see the _00_dbsp_cleanup event below), so without it
+-- the sole working teardown is the TTL sweep. The refcount that decides
+-- whether a delete is safe lives in `fn::query::unsubscribe`, not here.
+--
+-- The SSP runs as root and bypasses all of this.
 -- ==================================================
 
 DEFINE TABLE OVERWRITE _00_query SCHEMALESS
-    PERMISSIONS FOR select, create, update WHERE clientId = <string>session::id();
+    PERMISSIONS
+      FOR select, create, update, delete
+        WHERE auth_id = 'anon'
+           OR ($auth.id != NONE AND auth_id = <string>$auth.id);
 
 -- The raw query string (for re-hydration/debugging)
 DEFINE FIELD OVERWRITE surql ON TABLE _00_query TYPE option<string>;
 
--- The client id
+-- The session that registered most recently. No longer a permission key (see
+-- the table rule above) — kept because every `_00_list_ref` edge copies it off
+-- this row, and for observability.
 DEFINE FIELD OVERWRITE clientId ON TABLE _00_query TYPE option<string>;
+
+-- Who is currently watching this shared incantation: one entry per WebSocket
+-- session, `{ id: <session::id()>, seenAt: <datetime> }`.
+--
+-- ADVISORY, not authoritative. It gates only the EAGER release path
+-- (`fn::query::unsubscribe`): the last subscriber to leave deletes the row and
+-- with it the view and every edge. `lastActiveAt` below remains the SOLE
+-- authority for the TTL sweep, because a client that crashes never removes its
+-- entry — gating expiry on an empty array would pin a view forever.
+--
+-- Self-pruning: every writer drops entries older than this row's own `ttl` in
+-- the same statement that appends its own, so the array is bounded by the
+-- sessions active within one TTL window rather than by reconnect count.
+--
+-- Deliberately NOT `subscribers[*] ... FLEXIBLE`: SurrealDB rejects FLEXIBLE
+-- on a SCHEMALESS table, and this one is SCHEMALESS. A bare array<object>
+-- already accepts arbitrary keys here — pinned by
+-- tests/surrealdb/shared_query_semantics.test.ts.
+DEFINE FIELD OVERWRITE subscribers ON TABLE _00_query TYPE array<object> DEFAULT [];
 
 -- The auth user id that registered this query. The SSP propagates it
 -- onto each `_00_list_ref` row so live-query delivery can be gated on

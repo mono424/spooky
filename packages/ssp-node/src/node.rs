@@ -851,10 +851,63 @@ impl SspNode {
         let meta_str = |k: &str| data.metadata.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
 
         if view_existed {
-            info!(target: "ssp::edges", view_id = %incantation_id, "View already existed - updating metadata only");
-            // Refresh clientId/lastActiveAt/auth_id on the _00_query row.
+            // A second (or tenth) session subscribing to a view that already
+            // exists. This is the SHARED path and it is deliberately
+            // metadata-only: calling `add_query_with_auth` again would
+            // `views.insert` over the live view, discarding its cache and
+            // subquery state, and push the query id onto the dependency map a
+            // second time so every ingest stepped it twice.
+            //
+            // The joiner does not need a re-publish. It reads current
+            // membership itself with a SELECT over `_00_list_ref*`, and the
+            // `rowCount` written below on the cold path is what lets it tell
+            // "no results" from "edges still flushing".
+            let existing_auth = {
+                let circuit = self.processor.read().await;
+                circuit.get_view(&data.plan.id).map(|v| v.auth_id.clone())
+            };
+
+            // Query ids are derived from (surql, params, auth), so a caller
+            // arriving at someone else's view means the id was guessed or
+            // forged. Refuse rather than adopt it: the view's plan was
+            // permission-injected for the OTHER user's identity, so serving it
+            // here would hand them that user's rows.
+            if let Some(existing) = existing_auth {
+                if existing != auth_id {
+                    warn!(
+                        target: "ssp::edges",
+                        view_id = %incantation_id,
+                        existing = %existing,
+                        attempted = %auth_id,
+                        "Refusing to share a view across identities"
+                    );
+                    return Some(err_json(
+                        409,
+                        "auth_mismatch",
+                        "This query id belongs to a different identity",
+                    ));
+                }
+            }
+
+            info!(target: "ssp::edges", view_id = %incantation_id, "View already existed - joining as an additional subscriber");
+            // Record this session as a watcher and refresh liveness.
+            //
+            // `auth_id` is deliberately NOT written here: it is write-once,
+            // set by whoever created the row. The in-memory `View.auth_id`
+            // has no setter, so letting a later registrant change the stored
+            // value would desynchronize the two — edges would be stamped with
+            // one identity while routed to the other's table.
+            //
+            // `ttl` is max-wins so a subscriber asking for a shorter TTL
+            // cannot shorten a view another tab is depending on.
             let stmt = "UPDATE type::record($id) SET clientId = <string>$clientId, \
-                        auth_id = <string>$authId, lastActiveAt = <datetime>$lastActiveAt";
+                        lastActiveAt = <datetime>$lastActiveAt, \
+                        ttl = (IF <duration>$ttl > ttl { <duration>$ttl } ELSE { ttl }), \
+                        subscribers = array::append( \
+                            array::filter(subscribers ?? [], |$s| \
+                                <string>$s.id != $sid \
+                                AND <datetime>$s.seenAt + ttl > time::now()), \
+                            { id: $sid, seenAt: time::now() })";
             if let Err(e) = self
                 .platform
                 .db
@@ -863,7 +916,8 @@ impl SspNode {
                     &[
                         ("id", json!(incantation_id)),
                         ("clientId", json!(meta_str("clientId"))),
-                        ("authId", json!(auth_id)),
+                        ("sid", json!(meta_str("clientId"))),
+                        ("ttl", json!(meta_str("ttl"))),
                         ("lastActiveAt", json!(meta_str("lastActiveAt"))),
                     ],
                 )
@@ -901,10 +955,18 @@ impl SspNode {
 
         // createdAt is DEFAULT time::now() READONLY (set only on insert);
         // counters default to 0 if absent.
+        // The creating session is also the first subscriber. `$ttl` is used
+        // rather than the `ttl` field because both are being set in this same
+        // statement and the field's value is not yet observable.
         let stmt = "UPSERT type::record($id) SET clientId = <string>$clientId, \
                     auth_id = <string>$authId, surql = <string>$surql, params = $params, \
                     ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt, \
-                    registrationTime = <float>$registrationTime, rowCount = <int>$rowCount";
+                    registrationTime = <float>$registrationTime, rowCount = <int>$rowCount, \
+                    subscribers = array::append( \
+                        array::filter(subscribers ?? [], |$s| \
+                            <string>$s.id != $sid \
+                            AND <datetime>$s.seenAt + <duration>$ttl > time::now()), \
+                        { id: $sid, seenAt: time::now() })";
         if let Err(e) = self
             .platform
             .db
@@ -913,6 +975,7 @@ impl SspNode {
                 &[
                     ("id", json!(incantation_id)),
                     ("clientId", json!(meta_str("clientId"))),
+                    ("sid", json!(meta_str("clientId"))),
                     ("authId", json!(auth_id)),
                     ("surql", json!(meta_str("sql"))),
                     ("params", params),
@@ -1302,7 +1365,30 @@ pub async fn ttl_cleanup_sweep(
     telemetry: &dyn Telemetry,
     ref_mode: ssp_protocol::RefMode,
 ) -> usize {
+    // Drop subscriber entries that have gone stale, so a row that is
+    // heartbeated rarely does not accumulate dead sessions between writes.
+    // Purely hygiene: it never expires a row, only prunes the advisory array.
+    if let Err(e) = db
+        .query(
+            "UPDATE _00_query SET subscribers = array::filter(subscribers, |$s| \
+                 <datetime>$s.seenAt + ttl > time::now()) \
+             WHERE array::len(subscribers ?? []) > 0",
+            &[],
+        )
+        .await
+    {
+        warn!("TTL sweep: pruning stale subscribers failed: {}", e);
+    }
+
     // Expired queries as "<id>|<auth_id>" strings (scalar String reads cleanly).
+    //
+    // Deliberately keyed on `lastActiveAt`, NOT on an empty `subscribers`
+    // array. A view is shared, so any live subscriber's heartbeat refreshes
+    // this one timestamp — "nobody heartbeated within one TTL" is exactly
+    // "nobody is watching". A client that crashes never removes its entry, so
+    // gating expiry on emptiness instead would let one dead tab pin a view
+    // (and its ~45MB of operator state) forever. The subscriber set only ever
+    // gates the eager release path in `fn::query::unsubscribe`.
     let rows: Vec<String> = match db
         .query(
             "SELECT VALUE (<string>id + '|' + <string>(auth_id OR '')) \

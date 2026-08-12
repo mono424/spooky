@@ -610,6 +610,105 @@ async fn view_register_then_unregister_roundtrip() {
     assert!(!h.node.view_metrics.read().await.contains_key("v1"));
 }
 
+/// Two sessions of the SAME user registering the same query id must SHARE one
+/// view, not fight over it. This is the two-tab bug: the second registration
+/// used to overwrite `auth_id` and `clientId` wholesale, after which the first
+/// tab could no longer read or heartbeat its own `_00_query` row.
+#[tokio::test]
+async fn second_session_joins_an_existing_view_instead_of_replacing_it() {
+    let h = build(HarnessOpts::default()).await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "true");
+    }
+
+    let register = |client: &str| {
+        json!({
+            "id": "v1",
+            "surql": "SELECT * FROM thread",
+            "clientId": client,
+            "ttl": "30m",
+            "lastActiveAt": "2024-01-01T00:00:00Z",
+            "params": { "auth": { "id": "user:alice" } }
+        })
+    };
+
+    let r = h.node.route(authed(Method::Post, "/view/register", register("tab-a"))).await.unwrap();
+    assert_eq!(r.status, 200, "first register: {:?}", json_of(&r));
+    assert_eq!(h.node.processor.read().await.view_count(), 1);
+
+    // Second tab, same user, same query.
+    let r = h.node.route(authed(Method::Post, "/view/register", register("tab-b"))).await.unwrap();
+    assert_eq!(r.status, 200, "second register: {:?}", json_of(&r));
+
+    // Still ONE view: the second registration must not have replaced it (which
+    // would silently discard the live view's cache and double the dependency
+    // map) nor added a second one.
+    assert_eq!(
+        h.node.processor.read().await.view_count(),
+        1,
+        "a second subscriber must share the view, not create or replace one"
+    );
+
+    // Both sessions are recorded on the one shared row.
+    let subs: Vec<serde_json::Value> = h
+        .raw_db
+        .query("SELECT VALUE subscribers FROM ONLY _00_query:v1")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    let ids: Vec<&str> = subs.iter().filter_map(|s| s.get("id")?.as_str()).collect();
+    assert_eq!(ids.len(), 2, "each session records itself: {subs:?}");
+    assert!(ids.contains(&"tab-a") && ids.contains(&"tab-b"), "got {ids:?}");
+
+    // auth_id is write-once: the in-memory View.auth_id has no setter, so
+    // letting the joiner rewrite the stored value would desynchronize the two
+    // and route edges to one identity while stamping them with the other.
+    let auth: Option<String> = h
+        .raw_db
+        .query("SELECT VALUE auth_id FROM ONLY _00_query:v1")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
+    assert_eq!(auth.as_deref(), Some("user:alice"));
+}
+
+/// A query id that resolves to another identity's view must be refused, not
+/// adopted. Ids are derived from (surql, params, auth), so arriving at someone
+/// else's is either a guess or a forgery — and that view's plan was
+/// permission-injected for THEIR identity, so serving it would leak their rows.
+#[tokio::test]
+async fn registering_onto_another_identitys_view_is_refused() {
+    let h = build(HarnessOpts::default()).await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "true");
+    }
+
+    let register = |auth: &str| {
+        json!({
+            "id": "v1",
+            "surql": "SELECT * FROM thread",
+            "clientId": "c1",
+            "ttl": "30m",
+            "lastActiveAt": "2024-01-01T00:00:00Z",
+            "params": { "auth": { "id": auth } }
+        })
+    };
+
+    let r = h.node.route(authed(Method::Post, "/view/register", register("user:alice"))).await.unwrap();
+    assert_eq!(r.status, 200);
+
+    let r = h.node.route(authed(Method::Post, "/view/register", register("user:mallory"))).await.unwrap();
+    assert_eq!(r.status, 409, "expected auth_mismatch, got {:?}", json_of(&r));
+    assert_eq!(json_of(&r)["code"], "auth_mismatch");
+
+    // Alice's view is untouched.
+    assert_eq!(h.node.processor.read().await.view_count(), 1);
+}
+
 #[tokio::test]
 async fn view_register_rejects_when_not_ready() {
     let h = build(HarnessOpts { status: SspStatus::Bootstrapping, ..Default::default() }).await;
