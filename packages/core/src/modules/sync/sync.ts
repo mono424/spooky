@@ -424,6 +424,14 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.selfHealAttempts = 0;
   }
 
+  /**
+   * Release a deregistered query's remote view immediately instead of leaving
+   * it to the TTL sweep. Off by default; see the reasoning in
+   * {@link cleanupQuery}. Kept as a field rather than deleted so the eager path
+   * can be re-enabled in a test once the subquery-body repair path exists.
+   */
+  private readonly releaseQueriesEagerly = false;
+
   constructor(
     private local: LocalStore,
     private remote: RemoteDatabaseService,
@@ -1771,17 +1779,41 @@ export class Sp00kySync<S extends SchemaStructure> {
     // Re-subscribed before the queued cleanup ran → keep everything as-is.
     if (this.dataModule.hasSubscribers(queryHash)) return;
 
-    await this.remote.query('fn::query::unsubscribe($id)', {
-      id: queryState.config.id,
-    });
+    // EAGER REMOTE RELEASE IS DISABLED. Deliberate, and not a leak: the TTL
+    // sweep reclaims the row and its edges on `lastActiveAt + ttl`, which is the
+    // ONLY reclamation that has ever actually run in production.
+    //
+    // Until canary.190 `_00_query` granted no delete permission, so the bare
+    // `DELETE $id` this used to issue affected zero rows. .190 granted delete
+    // and .191 wired `fn::query::unsubscribe`, which made teardown real for the
+    // first time -- and the guards above are best-effort by construction
+    // (`hasSubscribers` can be momentarily false during a rebind or a windowed
+    // list re-flow). Every misfire that had been silently inert for months
+    // became a live delete of the row AND every `_00_list_ref` edge on it.
+    //
+    // That matches a report of chat suddenly rendering raw record ids instead
+    // of users, with the message list re-flowing underneath. Server state was
+    // measured intact at the time (`rowCount` equalled the actual edge count on
+    // every row), so the damage is on the client side of a teardown, not in the
+    // materialization.
+    //
+    // Re-enable only together with a repair path that can re-fetch subquery
+    // child bodies whose `subqueryRemoteArray` entry claims they are already
+    // synced -- otherwise a torn-down-and-recreated view never restores the
+    // related records it dropped, because the idempotence check skips them.
+    if (this.releaseQueriesEagerly) {
+      await this.remote.query('fn::query::unsubscribe($id)', {
+        id: queryState.config.id,
+      });
 
-    // Re-subscribed while we awaited the release → re-register. Covers both
-    // outcomes: if we were the last subscriber the remote view is gone and this
-    // recreates it, and if it survived for other sessions this re-adds us to
-    // `subscribers` so our heartbeats keep counting.
-    if (this.dataModule.hasSubscribers(queryHash)) {
-      this.enqueueDownEvent({ type: 'register', payload: { hash: queryHash } });
-      return;
+      // Re-subscribed while we awaited the release → re-register. Covers both
+      // outcomes: if we were the last subscriber the remote view is gone and
+      // this recreates it, and if it survived for other sessions this re-adds
+      // us to `subscribers` so our heartbeats keep counting.
+      if (this.dataModule.hasSubscribers(queryHash)) {
+        this.enqueueDownEvent({ type: 'register', payload: { hash: queryHash } });
+        return;
+      }
     }
 
     // No subscribers throughout → safe to free the local view + state.

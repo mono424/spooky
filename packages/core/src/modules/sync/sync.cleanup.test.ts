@@ -47,15 +47,26 @@ function makeSync(opts: { hasSubscribers?: boolean[] } = {}) {
 describe('cleanupQuery — releasing a possibly-shared view', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('releases through fn::query::unsubscribe, never a bare DELETE', async () => {
-    const { remote, run, queryId } = makeSync();
+  it('does not touch the remote view at all; the TTL sweep reclaims it', async () => {
+    // Eager release is deliberately disabled. It was inert for months (the
+    // table granted no delete permission), and making it real turned every
+    // best-effort guard misfire into a live delete of the row and all its
+    // edges. TTL remains the only reclamation that has actually run.
+    const { remote, run } = makeSync();
 
     await run('h1');
 
-    expect(remote.query).toHaveBeenCalledWith('fn::query::unsubscribe($id)', {
-      id: queryId,
-    });
-    // The regression that would blank other tabs' lists.
+    expect(remote.query).not.toHaveBeenCalled();
+  });
+
+  it('never issues a bare DELETE', async () => {
+    // Belt and braces: if the eager path is ever re-enabled, it must go through
+    // the refcounted `fn::query::unsubscribe`, never a raw DELETE, which would
+    // tear the view out from under other sessions sharing the row.
+    const { remote, run } = makeSync();
+
+    await run('h1');
+
     const sql = remote.query.mock.calls.map((c: any[]) => c[0]).join('\n');
     expect(sql).not.toMatch(/\bDELETE\b/i);
   });
@@ -80,21 +91,19 @@ describe('cleanupQuery — releasing a possibly-shared view', () => {
     expect(finalizeDeregister).not.toHaveBeenCalled();
   });
 
-  it('re-registers if a subscriber reappeared during the release await', async () => {
-    // Someone scrolled back / re-subscribed while the round trip was in flight.
-    // Re-registering covers both outcomes: recreate the view if we were the
-    // last subscriber, or re-add ourselves to `subscribers` if it survived.
-    const { finalizeDeregister, enqueueDownEvent, run } = makeSync({
+  it('still frees local state when a subscriber reappears mid-cleanup', async () => {
+    // With no remote round trip there is no window to lose a re-subscribe in,
+    // so this collapses to the ordinary local free. The remote view survives
+    // regardless (TTL owns it), which is precisely why the reappearing
+    // subscriber is safe: a re-register finds the row still there.
+    const { remote, finalizeDeregister, run } = makeSync({
       hasSubscribers: [false, true],
     });
 
     await run('h1');
 
-    expect(enqueueDownEvent).toHaveBeenCalledWith({
-      type: 'register',
-      payload: { hash: 'h1' },
-    });
-    expect(finalizeDeregister).not.toHaveBeenCalled();
+    expect(remote.query).not.toHaveBeenCalled();
+    expect(finalizeDeregister).toHaveBeenCalledWith('h1');
   });
 
   it('is tolerant of an already torn-down query', async () => {

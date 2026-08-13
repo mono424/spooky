@@ -912,16 +912,18 @@ class Sp00kySync {
   Future<void> _cleanupQuery(String queryHash) async {
     final queryState = _dataModule.getQueryByHash(queryHash);
     if (queryState == null) throw StateError('Query to register not found');
-    // Release rather than delete: a `_00_query` row can be shared by several
-    // sessions of the same user, so a bare `DELETE` would tear the view - and
-    // every `_00_list_ref` edge hanging off it - out from under other live
-    // tabs. `fn::query::unsubscribe` drops only this session from
-    // `subscribers` and deletes the row when it was the last one.
-    await _remote.query('fn::query::unsubscribe(\$id)',
-        {'id': queryState.config.id});
-    // Free the local DBSP view + in-memory state. Unconditional: this client no
-    // longer wants the query regardless of whether the remote row survived for
-    // another session (TS `cleanupQuery` -> `finalizeDeregister`).
+    // Eager remote release is DISABLED, matching TS `cleanupQuery` (see the
+    // long note there). The TTL sweep reclaims the row and its edges on
+    // `lastActiveAt + ttl`, which is the only reclamation that has ever
+    // actually run: before canary.190 `_00_query` granted no delete permission,
+    // so the bare `DELETE $id` this used to issue affected zero rows.
+    //
+    // Dart is the riskier client to re-enable this on, because it has none of
+    // the TS guards - no `hasSubscribers` check before or after the release,
+    // and no `serverRowCount`/`emptyReads` protection - so a cleanup firing on
+    // a query still in view would delete the row with nothing to catch it.
+    //
+    // Only free the local view + in-memory state (TS `finalizeDeregister`).
     _dataModule.finalizeDeregister(queryHash);
   }
 
