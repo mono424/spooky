@@ -16,6 +16,15 @@ pub mod view {
         /// Time (ms) spent converting/parsing the surql into a plan and
         /// injecting permissions. Surfaced to DevTools as the SSP "parse" phase.
         pub parse_ms: f64,
+        /// Identity of the COMPUTATION this registration performs: the injected
+        /// plan plus the value of every param that plan dereferences. Two
+        /// registrations sharing this may share one operator graph.
+        ///
+        /// Computed here because this is the only place holding both the
+        /// post-injection plan and `safe_params`. See `crate::merge_key` for why
+        /// the plan alone is not sufficient (plans reference params, they never
+        /// bake them, so two different users produce identical plans).
+        pub merge_key: String,
     }
 
     /// Prepares a view registration request using DBSP types.
@@ -136,6 +145,11 @@ pub mod view {
             root: root_op,
         };
 
+        // Deliberately over `plan.root` (post-injection) rather than the raw
+        // surql: the permission filters are part of the computation, and a
+        // schema change that alters injection must produce a different key.
+        let merge_key = crate::merge_key::compute(&plan.root, safe_params.as_ref());
+
         let metadata = json!({
             "id": id,
             "clientId": client_id,
@@ -153,6 +167,7 @@ pub mod view {
             metadata,
             format,
             parse_ms,
+            merge_key,
         })
     }
 

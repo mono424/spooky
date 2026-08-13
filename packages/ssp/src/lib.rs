@@ -5,6 +5,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod converter;
+pub mod merge_key;
 pub mod permission_inject;
 pub mod sanitizer;
 pub mod service;
