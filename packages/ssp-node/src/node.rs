@@ -42,6 +42,9 @@ pub struct SspNode {
     /// Bearer secret for authenticated routes (`NodeConfig.auth_secret`).
     pub auth_secret: String,
     pub ref_mode: ssp_protocol::RefMode,
+    /// Share one operator graph across registrations computing the same thing
+    /// (`NodeConfig.merge_views`, env `SPKY_SSP_MERGE_VIEWS`).
+    pub merge_views: bool,
     /// The shell binary's version string (surfaced via `/version` + `/info`).
     pub version: &'static str,
     /// Upstream SurrealDB server version, queried once at startup by the shell.
@@ -769,7 +772,12 @@ impl SspNode {
         };
         {
             let mut circuit = self.processor.write().await;
-            circuit.remove_query(&payload.id);
+            // Release rather than destroy: this graph may be shared with other
+            // registrations computing the same thing, and tearing it down would
+            // blank their lists. `detach_subscriber` removes it only when this
+            // was the last holder. With merging disabled there is never more
+            // than one holder, so this is exactly `remove_query`.
+            circuit.detach_subscriber(&payload.id);
         }
         self.view_metrics.write().await.remove(&payload.id);
         self.platform.telemetry.gauge_add("view_count", -1);
@@ -949,14 +957,52 @@ impl SspNode {
         debug!("Registering view: {}", data.plan.id);
 
         let register_start = web_time::Instant::now();
+        // Does another registration already compute exactly this? If so, attach
+        // to its graph instead of building an identical one. `merge_key` is the
+        // injected plan plus the params that plan dereferences, so an attach
+        // provably yields the same rows (see `ssp::merge_key`).
+        //
+        // Everything below this point is shared with the cold path on purpose:
+        // a joiner needs the same `_00_query` row write (notably `rowCount`,
+        // which is how the client tells "no results" from "edges still
+        // flushing") and the same initial edge publish.
+        let merge_owner = if self.merge_views {
+            let circuit = self.processor.read().await;
+            circuit
+                .owner_for_merge_key(&data.merge_key)
+                .filter(|owner| *owner != data.plan.id)
+                .map(|owner| owner.to_string())
+        } else {
+            None
+        };
+
         let update = {
             let mut circuit = self.processor.write().await;
-            circuit.add_query_with_auth(
-                data.plan.clone(),
-                data.safe_params,
-                Some(OutputFormat::Streaming),
-                auth_id.clone(),
-            )
+            match &merge_owner {
+                Some(owner) => {
+                    info!(
+                        target: "ssp::edges",
+                        view_id = %incantation_id,
+                        owner = %owner,
+                        "Sharing an existing operator graph for an identical computation"
+                    );
+                    circuit.attach_subscriber(owner, data.plan.id.clone(), auth_id.clone())
+                }
+                None => {
+                    let delta = circuit.add_query_with_auth(
+                        data.plan.clone(),
+                        data.safe_params,
+                        Some(OutputFormat::Streaming),
+                        auth_id.clone(),
+                    );
+                    // Claim the key only once the graph exists, or a later
+                    // registration would attach to nothing.
+                    if self.merge_views {
+                        circuit.claim_merge_key(data.merge_key.clone(), data.plan.id.clone());
+                    }
+                    delta
+                }
+            }
         };
         let registration_time_ms = register_start.elapsed().as_secs_f64() * 1000.0;
         self.platform.telemetry.gauge_add("view_count", 1);
@@ -1495,7 +1541,11 @@ async fn cleanup_expired_query(
         error!(query_id = %query_id, error = %e, "TTL cleanup: edge delete failed");
     }
 
-    processor.write().await.remove_query(query_id);
+    // Release, don't destroy: an expired row is one holder leaving, and the
+    // graph may still be serving other registrations of the same computation.
+    // Each holder has its own `_00_query` row and so its own `lastActiveAt`,
+    // which is what makes per-row expiry the right granularity here.
+    processor.write().await.detach_subscriber(query_id);
     telemetry.gauge_add("view_count", -1);
     telemetry.counter("ttl_cleanup", 1);
     info!(query_id = %query_id, "TTL cleanup: query expired and removed");

@@ -145,6 +145,8 @@ struct HarnessOpts {
     job_tables: Vec<(&'static str, &'static str)>, // (table, base_url)
     backend_counts: Option<BackendCounts>,
     ref_mode: ssp_protocol::RefMode,
+    /// Share one operator graph across registrations computing the same thing.
+    merge_views: bool,
     circuit_store: Option<Arc<dyn ssp_node::CircuitStore>>,
     /// Wire the declarative-schedule engine (as a standalone VM node does).
     schedules: bool,
@@ -157,6 +159,7 @@ impl Default for HarnessOpts {
             job_tables: vec![],
             backend_counts: None,
             ref_mode: ssp_protocol::RefMode::Single,
+            merge_views: false,
             circuit_store: None,
             schedules: false,
         }
@@ -260,6 +263,7 @@ async fn build(opts: HarnessOpts) -> Harness {
         ssp_id: "test-ssp".to_string(),
         auth_secret: SECRET.to_string(),
         ref_mode: opts.ref_mode,
+        merge_views: opts.merge_views,
         version: "9.9.9-test",
         surrealdb_version: "mem-test".to_string(),
         advertise_ip: Some("10.0.0.7".to_string()),
@@ -1230,4 +1234,121 @@ async fn cluster_mode_builds_no_schedule_engine() {
         "cluster mode leaves ticking to the scheduler service"
     );
     assert!(ssp_node::schedules::build_engine(true, db, JobControl::new()).is_some());
+}
+
+// --- Merged views ------------------------------------------------------------
+//
+// Two registrations that compute the same thing must share ONE operator graph
+// (the ~45MB), while keeping their own `_00_query` row and their own edges.
+// The teardown cases are the reason this is gated behind a flag: releasing one
+// holder must not destroy a graph another is still reading.
+
+fn merge_register(id: &str, auth: &str) -> Value {
+    json!({
+        "id": id,
+        "surql": "SELECT * FROM thread",
+        "clientId": id,
+        "ttl": "30m",
+        "lastActiveAt": "2024-01-01T00:00:00Z",
+        "params": { "auth": { "id": auth } }
+    })
+}
+
+async fn merging_harness() -> Harness {
+    let h = build(HarnessOpts { merge_views: true, ..Default::default() }).await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "true");
+    }
+    h
+}
+
+#[tokio::test]
+async fn two_registrations_of_one_computation_share_one_graph() {
+    let h = merging_harness().await;
+
+    for id in ["_00_query:a", "_00_query:b"] {
+        let r = h.node.route(authed(Method::Post, "/view/register", merge_register(id, "user:alice"))).await.unwrap();
+        assert_eq!(r.status, 200, "register {id}: {:?}", json_of(&r));
+    }
+
+    // The whole point: one DAG, not two.
+    assert_eq!(h.node.processor.read().await.graph_count(), 1);
+
+    // Both rows exist independently, and the joiner got a rowCount so it can
+    // tell "no results" from "edges still flushing".
+    for id in ["a", "b"] {
+        let row: Option<Value> = h.raw_db
+            .query(format!("SELECT rowCount FROM ONLY _00_query:{id}"))
+            .await.unwrap().take(0).unwrap();
+        assert!(row.is_some(), "row {id} should exist");
+    }
+}
+
+#[tokio::test]
+async fn a_different_identity_does_not_share_an_auth_scoped_graph() {
+    // Same surql, but the permission dereferences $auth.id, so the merge key
+    // differs and each identity gets its own graph. A shared graph here would
+    // serve one user the other's rows.
+    let h = build(HarnessOpts { merge_views: true, ..Default::default() }).await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "author.id = $auth.id");
+    }
+
+    for (id, auth) in [("_00_query:a", "user:alice"), ("_00_query:b", "user:bob")] {
+        let r = h.node.route(authed(Method::Post, "/view/register", merge_register(id, auth))).await.unwrap();
+        assert_eq!(r.status, 200, "register {id}: {:?}", json_of(&r));
+    }
+
+    assert_eq!(h.node.processor.read().await.graph_count(), 2, "identities must not share");
+}
+
+#[tokio::test]
+async fn releasing_one_holder_leaves_the_shared_graph_for_the_other() {
+    // THE regression this whole change exists to avoid: before refcounting,
+    // the first tab to leave destroyed the graph and blanked the other's list.
+    let h = merging_harness().await;
+    for id in ["_00_query:a", "_00_query:b"] {
+        h.node.route(authed(Method::Post, "/view/register", merge_register(id, "user:alice"))).await.unwrap();
+    }
+    assert_eq!(h.node.processor.read().await.graph_count(), 1);
+
+    // The OWNER leaves first, which is the harder direction.
+    let r = h.node.route(authed(Method::Post, "/view/unregister", json!({ "id": "_00_query:a" }))).await.unwrap();
+    assert_eq!(r.status, 200);
+
+    assert_eq!(
+        h.node.processor.read().await.graph_count(), 1,
+        "graph must survive while another registration still holds it"
+    );
+}
+
+#[tokio::test]
+async fn releasing_the_last_holder_removes_the_shared_graph() {
+    let h = merging_harness().await;
+    for id in ["_00_query:a", "_00_query:b"] {
+        h.node.route(authed(Method::Post, "/view/register", merge_register(id, "user:alice"))).await.unwrap();
+    }
+    for id in ["_00_query:a", "_00_query:b"] {
+        h.node.route(authed(Method::Post, "/view/unregister", json!({ "id": id }))).await.unwrap();
+    }
+    assert_eq!(
+        h.node.processor.read().await.graph_count(), 0,
+        "nothing holds it any more; the memory must actually come back"
+    );
+}
+
+#[tokio::test]
+async fn merging_disabled_keeps_one_graph_per_registration() {
+    // Default path. Proves the flag genuinely gates the behaviour change.
+    let h = build(HarnessOpts::default()).await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "true");
+    }
+    for id in ["_00_query:a", "_00_query:b"] {
+        h.node.route(authed(Method::Post, "/view/register", merge_register(id, "user:alice"))).await.unwrap();
+    }
+    assert_eq!(h.node.processor.read().await.graph_count(), 2);
 }

@@ -116,6 +116,10 @@ pub struct Circuit {
     /// listed in its own vector; an absent or empty entry means "not shared",
     /// which is what keeps every path below a no-op while merging is disabled.
     subscribers: HashMap<String, Vec<Subscriber>>,
+    /// Owners whose own `_00_query` row is gone but whose graph is still
+    /// serving subscribers. They stop receiving deltas of their own; edges
+    /// pointed at a deleted row would dangle.
+    detached_owners: std::collections::HashSet<String>,
     /// Per-table raw `PERMISSIONS FOR select WHERE <expr>` text, loaded from
     /// SurrealDB at boot. The registration pipeline routes each scan's
     /// permission through the same converter that handles user queries and
@@ -310,6 +314,7 @@ impl Circuit {
             dependency_map: HashMap::new(),
             merge_index: HashMap::new(),
             subscribers: HashMap::new(),
+            detached_owners: std::collections::HashSet::new(),
             permissions: HashMap::new(),
             link_targets: HashMap::new(),
             opaque_fields: HashMap::new(),
@@ -1035,6 +1040,7 @@ impl Circuit {
             dependency_map: HashMap::new(),
             merge_index: HashMap::new(),
             subscribers: HashMap::new(),
+            detached_owners: std::collections::HashSet::new(),
             permissions: HashMap::new(),
             // Re-seeded from INFO FOR DB / INFO FOR TABLE after restore, same as
             // `permissions` (none of the three is part of the serialized snapshot).
@@ -1156,6 +1162,65 @@ impl Circuit {
         self.subscribers.get(owner).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
+    /// Owner whose graph `query_id` is attached to, if it is a subscriber.
+    fn owner_of(&self, query_id: &str) -> Option<String> {
+        self.subscribers
+            .iter()
+            .find(|(_, subs)| subs.iter().any(|s| s.query_id == query_id))
+            .map(|(owner, _)| owner.clone())
+    }
+
+    /// Release one registration's claim on a shared graph.
+    ///
+    /// Returns `true` when this was the LAST holder and the graph was actually
+    /// removed, so callers can keep `view_count` and teardown side effects in
+    /// step. Returns `false` when others still depend on it.
+    ///
+    /// This is what makes merging safe to enable. Without it both teardown
+    /// paths (`/view/unregister` and the TTL sweep) call `remove_query`
+    /// unconditionally, so the first tab to leave would destroy a graph its
+    /// siblings are still reading and their lists would go blank.
+    ///
+    /// An OWNER that leaves does not drop the graph while subscribers remain;
+    /// it is marked detached so it stops receiving deltas of its own (its
+    /// `_00_query` row is gone, so edges pointed at it would dangle) while its
+    /// graph keeps serving everyone else.
+    pub fn detach_subscriber(&mut self, query_id: &str) -> bool {
+        if let Some(owner) = self.owner_of(query_id) {
+            if let Some(subs) = self.subscribers.get_mut(&owner) {
+                subs.retain(|s| s.query_id != query_id);
+            }
+            return self.drop_graph_if_unused(&owner);
+        }
+
+        if self.views.contains_key(query_id) {
+            self.detached_owners.insert(query_id.to_string());
+            return self.drop_graph_if_unused(query_id);
+        }
+
+        false
+    }
+
+    /// Remove `owner`'s graph once nothing holds it: the owner itself has
+    /// detached AND no subscribers remain.
+    fn drop_graph_if_unused(&mut self, owner: &str) -> bool {
+        let has_subscribers = self
+            .subscribers
+            .get(owner)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if has_subscribers || !self.detached_owners.contains(owner) {
+            return false;
+        }
+        self.remove_query(owner);
+        self.subscribers.remove(owner);
+        self.detached_owners.remove(owner);
+        // Drop the merge-key claim too, or the next registration of this
+        // computation attaches to a graph that no longer exists.
+        self.merge_index.retain(|_, v| v != owner);
+        true
+    }
+
     /// Number of distinct operator graphs. Diverges from `view_count` only
     /// while merging is enabled, and the gap IS the memory saved.
     pub fn graph_count(&self) -> usize {
@@ -1170,9 +1235,13 @@ impl Circuit {
     /// the shells that bypass batching entirely (`ssp-cf`, `ssp-portable` drop
     /// the edge receiver and write inline).
     fn fan_out(&self, delta: ViewDelta) -> Vec<ViewDelta> {
+        let detached = self.detached_owners.contains(&delta.query_id);
         let subs = match self.subscribers.get(&delta.query_id) {
             Some(s) if !s.is_empty() => s,
-            _ => return vec![delta],
+            // Not shared: unchanged behaviour, unless the owner itself is gone
+            // and we are only keeping the graph alive for nobody (transient,
+            // `drop_graph_if_unused` removes it).
+            _ => return if detached { vec![] } else { vec![delta] },
         };
         let mut out = Vec::with_capacity(subs.len() + 1);
         for s in subs {
@@ -1182,7 +1251,10 @@ impl Circuit {
                 ..delta.clone()
             });
         }
-        out.push(delta);
+        // A detached owner has no `_00_query` row left to hang edges off.
+        if !detached {
+            out.push(delta);
+        }
         out
     }
 

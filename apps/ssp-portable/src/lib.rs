@@ -215,6 +215,9 @@ fn build_node(
         ssp_id: "portable-ssp".to_string(),
         auth_secret: secret.to_string(),
         ref_mode: ssp_protocol::RefMode::Single,
+        // Merged views are a server-side memory optimisation; this shell
+        // registers one view per client, so leave it off.
+        merge_views: false,
         version: env!("CARGO_PKG_VERSION"),
         surrealdb_version: "portable-mem".to_string(),
         advertise_ip: None,

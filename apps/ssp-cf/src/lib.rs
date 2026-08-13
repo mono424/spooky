@@ -386,6 +386,9 @@ fn build_node(platform: Platform, cfg: &NodeConfigCf) -> SspNode {
     SspNode {
         platform,
         status: Arc::new(RwLock::new(SspStatus::Bootstrapping)),
+        // Merged views are a server-side memory optimisation; this shell
+        // registers one view per client, so leave it off.
+        merge_views: false,
         processor: Arc::new(RwLock::new(Circuit::new())),
         job_config,
         job_control,

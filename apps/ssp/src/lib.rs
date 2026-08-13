@@ -795,6 +795,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         ssp_id: config.ssp_id.clone(),
         auth_secret: config.auth_secret.clone(),
         ref_mode: config.ref_mode,
+        merge_views: config.merge_views,
         version: env!("CARGO_PKG_VERSION"),
         surrealdb_version: surrealdb_version.clone(),
         advertise_ip,
