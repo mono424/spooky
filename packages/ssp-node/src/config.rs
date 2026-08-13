@@ -46,6 +46,15 @@ pub struct NodeConfig {
     /// Coalescing window (ms) for query edge-update writes to `_00_list_ref`.
     /// `0` disables batching (each update flushes immediately).
     pub query_update_throttle_ms: u64,
+    /// Share ONE operator graph between registrations that compute the same
+    /// thing, instead of building an identical DAG per registered query id.
+    /// Env: `SPKY_SSP_MERGE_VIEWS`, default `false`.
+    ///
+    /// Off by default on purpose. Merging is decided by
+    /// `ssp::merge_key::compute`, and the failure mode of a wrong key is not a
+    /// crash but two identities sharing a row set, so it is enabled per tenant
+    /// after `graph_count` vs `view_count` has been observed on real traffic.
+    pub merge_views: bool,
     /// Bearer secret for the authenticated route group. Empty accepts any
     /// bearer (dev only). Env: `SPKY_AUTH_SECRET`.
     pub auth_secret: String,

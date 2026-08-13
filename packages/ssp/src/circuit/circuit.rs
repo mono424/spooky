@@ -84,6 +84,19 @@ pub struct ViewDelta {
 /// Maintains a set of base collections (tables) and registered queries.
 /// When input changes arrive via `step()`, the circuit incrementally
 /// updates all affected materialized views and returns their deltas.
+/// A registration sharing another registration's operator graph.
+///
+/// Carries exactly the two things a `ViewDelta` needs to be re-pointed at a
+/// different client: which `_00_query` row the edges hang off (`query_id`) and
+/// which `_00_list_ref*` table they are written to (`auth_id`). Everything else
+/// a delta holds is a property of the computation, which is shared by
+/// definition, so nothing else needs to be per-subscriber.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subscriber {
+    pub query_id: String,
+    pub auth_id: String,
+}
+
 pub struct Circuit {
     pub store: Store,
     /// One operator DAG per registered query.
@@ -92,6 +105,17 @@ pub struct Circuit {
     views: HashMap<String, View>,
     /// Routing: table_name → [query_id].
     dependency_map: HashMap<String, Vec<String>>,
+    /// `merge_key` → the query id that OWNS the graph for that computation.
+    ///
+    /// Registrations whose `merge_key` matches an existing entry attach as
+    /// subscribers instead of building a second identical DAG. See
+    /// `crate::merge_key` for why the key is the plan plus the params it
+    /// dereferences, and never the plan alone.
+    merge_index: HashMap<String, String>,
+    /// Owner query id → the OTHER query ids sharing its graph. The owner is not
+    /// listed in its own vector; an absent or empty entry means "not shared",
+    /// which is what keeps every path below a no-op while merging is disabled.
+    subscribers: HashMap<String, Vec<Subscriber>>,
     /// Per-table raw `PERMISSIONS FOR select WHERE <expr>` text, loaded from
     /// SurrealDB at boot. The registration pipeline routes each scan's
     /// permission through the same converter that handles user queries and
@@ -284,6 +308,8 @@ impl Circuit {
             graphs: HashMap::new(),
             views: HashMap::new(),
             dependency_map: HashMap::new(),
+            merge_index: HashMap::new(),
+            subscribers: HashMap::new(),
             permissions: HashMap::new(),
             link_targets: HashMap::new(),
             opaque_fields: HashMap::new(),
@@ -523,7 +549,10 @@ impl Circuit {
         let mut results = Vec::new();
         for query_id in affected_queries {
             if let Some(delta) = self.step_query(&query_id, &table_deltas, &content_updates) {
-                results.push(delta);
+                // One computation, one step, then one delta per subscriber.
+                // With no subscribers this is `vec![delta]`, so the unmerged
+                // path is byte-identical to before.
+                results.extend(self.fan_out(delta));
             }
         }
         timings.circuit_step_ms = ms_since(t_step);
@@ -1004,6 +1033,8 @@ impl Circuit {
             graphs: HashMap::new(),
             views: HashMap::new(),
             dependency_map: HashMap::new(),
+            merge_index: HashMap::new(),
+            subscribers: HashMap::new(),
             permissions: HashMap::new(),
             // Re-seeded from INFO FOR DB / INFO FOR TABLE after restore, same as
             // `permissions` (none of the three is part of the serialized snapshot).
@@ -1052,6 +1083,109 @@ impl Circuit {
     // --- Accessor methods ---
 
     /// Number of registered views.
+    /// The query id owning the graph for `merge_key`, if one is registered.
+    ///
+    /// `None` means this computation is not resident and the caller must take
+    /// the cold path. Returns the owner even if it has no subscribers yet.
+    pub fn owner_for_merge_key(&self, merge_key: &str) -> Option<&str> {
+        self.merge_index.get(merge_key).map(|s| s.as_str())
+    }
+
+    /// Claim `merge_key` for `query_id`, so later registrations of the same
+    /// computation attach to it instead of building a second graph.
+    ///
+    /// Call this ONLY after the graph exists (i.e. after `add_query_*`), and
+    /// only when merging is enabled: an entry here with no graph behind it
+    /// would send every later registration down the attach path to nowhere.
+    pub fn claim_merge_key(&mut self, merge_key: String, query_id: String) {
+        self.merge_index.insert(merge_key, query_id);
+    }
+
+    /// Attach `query_id` to `owner`'s graph and return the delta that
+    /// publishes the CURRENT membership to the new subscriber.
+    ///
+    /// The joiner needs a full snapshot rather than the next incremental delta,
+    /// because its `_00_list_ref` rows do not exist yet. Everything in the
+    /// returned delta is read from the owner's already-computed view, so this
+    /// costs a clone rather than a re-evaluation, which is the entire point of
+    /// merging.
+    ///
+    /// Idempotent: re-attaching an existing subscriber refreshes nothing and
+    /// returns the snapshot again, which is safe because edge writes are
+    /// `RELATE`/`UPDATE` on a deterministic key.
+    pub fn attach_subscriber(
+        &mut self,
+        owner: &str,
+        query_id: String,
+        auth_id: String,
+    ) -> Option<ViewDelta> {
+        let view = self.views.get(owner)?;
+
+        let records: Vec<String> = view.cache.keys().map(|k| k.to_string()).collect();
+        let subquery_items: Vec<SubqueryDeltaItem> = view
+            .subquery_cache
+            .iter()
+            .map(|(child, (parent, alias))| SubqueryDeltaItem {
+                id: child.to_string(),
+                parent_key: parent.to_string(),
+                alias: alias.clone(),
+                op: SubqueryOp::Add,
+            })
+            .collect();
+        let delta = ViewDelta {
+            query_id: query_id.clone(),
+            additions: records.clone(),
+            removals: vec![],
+            updates: vec![],
+            records,
+            result_hash: view.last_hash.clone(),
+            subquery_items,
+            auth_id: auth_id.clone(),
+        };
+
+        let subs = self.subscribers.entry(owner.to_string()).or_default();
+        if !subs.iter().any(|s| s.query_id == query_id) {
+            subs.push(Subscriber { query_id, auth_id });
+        }
+
+        Some(delta)
+    }
+
+    /// Subscribers sharing `owner`'s graph, excluding the owner itself.
+    pub fn subscribers_of(&self, owner: &str) -> &[Subscriber] {
+        self.subscribers.get(owner).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Number of distinct operator graphs. Diverges from `view_count` only
+    /// while merging is enabled, and the gap IS the memory saved.
+    pub fn graph_count(&self) -> usize {
+        self.graphs.len()
+    }
+
+    /// Re-point one computed delta at every subscriber sharing the graph.
+    ///
+    /// A delta's content is a property of the computation, so subscribers differ
+    /// only in `query_id` and `auth_id`. Fanning out HERE rather than in the edge
+    /// batcher keeps `build_edge_batch` untouched and, more importantly, covers
+    /// the shells that bypass batching entirely (`ssp-cf`, `ssp-portable` drop
+    /// the edge receiver and write inline).
+    fn fan_out(&self, delta: ViewDelta) -> Vec<ViewDelta> {
+        let subs = match self.subscribers.get(&delta.query_id) {
+            Some(s) if !s.is_empty() => s,
+            _ => return vec![delta],
+        };
+        let mut out = Vec::with_capacity(subs.len() + 1);
+        for s in subs {
+            out.push(ViewDelta {
+                query_id: s.query_id.clone(),
+                auth_id: s.auth_id.clone(),
+                ..delta.clone()
+            });
+        }
+        out.push(delta);
+        out
+    }
+
     pub fn view_count(&self) -> usize {
         self.views.len()
     }

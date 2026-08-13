@@ -154,6 +154,12 @@ pub fn load_config() -> Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(100),
+        merge_views: std::env::var("SPKY_SSP_MERGE_VIEWS")
+            .map(|v| {
+                let v = v.trim().to_ascii_lowercase();
+                v == "1" || v == "true"
+            })
+            .unwrap_or(false),
         auth_secret: std::env::var("SPKY_AUTH_SECRET").unwrap_or_default(),
         // 200 was safe but slow: each page is a WHERE+ORDER BY+LIMIT pass over
         // the scheduler's replica (~0.3-0.6s on a 156k-row table), so a big
