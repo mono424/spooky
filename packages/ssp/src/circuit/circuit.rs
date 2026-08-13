@@ -431,6 +431,13 @@ impl Circuit {
         let mut timings = RegTimings::default();
 
         let t_plan = Instant::now();
+        // Normalise here rather than trusting callers: registrations arrive
+        // spelled `_00_query:<hash>` from a live client and `<hash>` from every
+        // DB-derived path, and one query under two keys means two graphs. See
+        // [`crate::canonical_query_id`]. The plan carries the canonical id
+        // onward so `ViewDelta.query_id` and the snapshot agree with the map.
+        let mut plan = plan;
+        plan.id = crate::canonical_query_id(&plan.id);
         let query_id = plan.id.clone();
         let referenced_tables = plan.root.referenced_tables();
         let format = format.unwrap_or_default();
@@ -471,6 +478,9 @@ impl Circuit {
 
     /// Remove a registered query.
     pub fn remove_query(&mut self, query_id: &str) {
+        // Callers reach this from both spellings — `/view/unregister` carries
+        // whatever the client sent, the TTL sweep carries the bare key.
+        let query_id = &crate::canonical_query_id(query_id);
         self.graphs.remove(query_id);
         self.views.remove(query_id);
 
@@ -571,7 +581,9 @@ impl Circuit {
 
     /// Get a reference to a view's state.
     pub fn get_view(&self, query_id: &str) -> Option<&View> {
-        self.views.get(query_id)
+        self.views
+            .get(query_id)
+            .or_else(|| self.views.get(&crate::canonical_query_id(query_id)))
     }
 
     /// Run initial evaluation for a newly registered query.
@@ -1049,6 +1061,12 @@ impl Circuit {
         };
 
         for qs in state.queries {
+            // Snapshots written before ids were canonicalised hold the
+            // `_00_query:<hash>` spelling for anything a live client had
+            // registered. Re-key on the way in, or a restored view stays
+            // invisible to the sweep and to the client that owns it.
+            let mut qs = qs;
+            qs.plan.id = crate::canonical_query_id(&qs.plan.id);
             let query_id = qs.plan.id.clone();
             let referenced_tables = qs.plan.root.referenced_tables();
             let params_sv = qs.params.map(Sp00kyValue::from);
@@ -1104,7 +1122,8 @@ impl Circuit {
     /// only when merging is enabled: an entry here with no graph behind it
     /// would send every later registration down the attach path to nowhere.
     pub fn claim_merge_key(&mut self, merge_key: String, query_id: String) {
-        self.merge_index.insert(merge_key, query_id);
+        self.merge_index
+            .insert(merge_key, crate::canonical_query_id(&query_id));
     }
 
     /// Attach `query_id` to `owner`'s graph and return the delta that
@@ -1125,6 +1144,8 @@ impl Circuit {
         query_id: String,
         auth_id: String,
     ) -> Option<ViewDelta> {
+        let owner = &crate::canonical_query_id(owner);
+        let query_id = crate::canonical_query_id(&query_id);
         let view = self.views.get(owner)?;
 
         let records: Vec<String> = view.cache.keys().map(|k| k.to_string()).collect();
@@ -1186,9 +1207,10 @@ impl Circuit {
     /// `_00_query` row is gone, so edges pointed at it would dangle) while its
     /// graph keeps serving everyone else.
     pub fn detach_subscriber(&mut self, query_id: &str) -> bool {
+        let query_id = &crate::canonical_query_id(query_id);
         if let Some(owner) = self.owner_of(query_id) {
             if let Some(subs) = self.subscribers.get_mut(&owner) {
-                subs.retain(|s| s.query_id != query_id);
+                subs.retain(|s| s.query_id != *query_id);
             }
             return self.drop_graph_if_unused(&owner);
         }

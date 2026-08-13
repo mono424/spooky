@@ -763,12 +763,15 @@ impl SspNode {
             return Some(err_json(422, "bad_body", "invalid unregister payload"));
         };
         debug!("Unregistering view: {}", payload.id);
+        // Circuit keys are the bare `<hash>` (see `ssp::canonical_query_id`);
+        // callers may send either spelling. `view_metrics` is keyed the same.
+        let view_key = ssp::canonical_query_id(&payload.id);
 
         // Look up the auth_id from the View before removing it, so the edge
         // cleanup targets the right per-user `_00_list_ref_user_<id>`.
         let auth_id = {
             let circuit = self.processor.read().await;
-            circuit.get_view(&payload.id).map(|v| v.auth_id.clone()).unwrap_or_default()
+            circuit.get_view(&view_key).map(|v| v.auth_id.clone()).unwrap_or_default()
         };
         {
             let mut circuit = self.processor.write().await;
@@ -777,9 +780,9 @@ impl SspNode {
             // blank their lists. `detach_subscriber` removes it only when this
             // was the last holder. With merging disabled there is never more
             // than one holder, so this is exactly `remove_query`.
-            circuit.detach_subscriber(&payload.id);
+            circuit.detach_subscriber(&view_key);
         }
-        self.view_metrics.write().await.remove(&payload.id);
+        self.view_metrics.write().await.remove(&view_key);
         self.platform.telemetry.gauge_add("view_count", -1);
 
         // Delete all edges for this incantation via the Db port.
@@ -828,6 +831,14 @@ impl SspNode {
                 }
             }
         };
+        // A live client's id arrives as `_00_query:<hash>` (SurrealDB
+        // stringifies a record id with its table), while boot re-registration
+        // and the TTL sweep speak the bare `<hash>`. Canonicalise once here so
+        // the circuit lookup, the merge index and `view_metrics` all agree —
+        // the circuit enforces this too, but only the value we carry downstream
+        // makes the comparisons below correct. See `ssp::canonical_query_id`.
+        let mut data = data;
+        data.plan.id = ssp::canonical_query_id(&data.plan.id);
 
         // Auth identity for per-user routing (anon remap when enabled).
         let auth_id = {

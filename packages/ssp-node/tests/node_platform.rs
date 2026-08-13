@@ -913,6 +913,94 @@ async fn ingest_steps_circuit_for_registered_view() {
     assert_eq!(json_of(&dbg)["cache_size"].as_u64(), Some(1), "circuit stepped: {:?}", json_of(&dbg));
 }
 
+// One query must occupy ONE circuit slot however its id was spelled.
+//
+// A live client's id reaches the SSP through `fn::query::register` as
+// `<string>$config.id`, and SurrealDB stringifies a record id WITH its table,
+// so it arrives as `_00_query:<hash>`. Boot re-registration from `_00_query`
+// (`bootstrap.rs`) and the TTL sweep both strip that prefix and speak the bare
+// `<hash>`. Keying the circuit on whichever string turned up filed one query
+// under two keys: after a restart without a snapshot the reconnecting client
+// missed its own restored view and built a SECOND operator graph over the same
+// rows, and both then sat in `dependency_map` and stepped on every ingest.
+#[tokio::test]
+async fn the_two_spellings_of_a_query_id_share_one_view_and_one_graph() {
+    let h = build(HarnessOpts::default()).await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "true");
+    }
+
+    let register = |id: &str| {
+        json!({
+            "id": id,
+            "surql": "SELECT * FROM thread",
+            "clientId": "tab-a",
+            "ttl": "30m",
+            "lastActiveAt": "2024-01-01T00:00:00Z",
+            "params": { "auth": { "id": "user:alice" } }
+        })
+    };
+
+    // The boot / sweep spelling…
+    let r = h.node.route(authed(Method::Post, "/view/register", register("v1"))).await.unwrap();
+    assert_eq!(r.status, 200);
+    // …then the live-client spelling of the SAME query.
+    let r = h
+        .node
+        .route(authed(Method::Post, "/view/register", register("_00_query:v1")))
+        .await
+        .unwrap();
+    assert_eq!(r.status, 200, "prefixed id must join, got {:?}", json_of(&r));
+
+    let c = h.node.processor.read().await;
+    assert_eq!(c.view_count(), 1, "one query, one view");
+    assert_eq!(c.graph_count(), 1, "one query, one operator graph");
+}
+
+// The TTL sweep must reclaim the in-memory view of a query a LIVE client
+// registered, not just its row.
+//
+// The sweep reads `_00_query`, strips the `_00_query:` prefix and hands the
+// bare key to the circuit. While live registrations were keyed by the prefixed
+// spelling, that lookup never matched: the row and its edges went away while
+// the operator graph (the ~45 MB this whole area exists to bound) stayed
+// resident for the life of the process. Worse, a later re-registration found
+// the orphan, took the "already exists" path, and so never republished the
+// membership the sweep had just deleted.
+#[tokio::test]
+async fn ttl_sweep_reclaims_a_view_registered_under_the_prefixed_id() {
+    use ssp_node::Runtime;
+    let h = build(HarnessOpts { ref_mode: ssp_protocol::RefMode::Single, ..Default::default() }).await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "true");
+    }
+
+    let reg = json!({
+        "id": "_00_query:v1",
+        "surql": "SELECT * FROM thread",
+        "clientId": "tab-a",
+        "ttl": "30m",
+        "lastActiveAt": "2024-01-01T00:00:00Z",
+        "params": { "auth": { "id": "user:alice" } }
+    });
+    assert_eq!(h.node.route(authed(Method::Post, "/view/register", reg)).await.unwrap().status, 200);
+    assert_eq!(h.node.processor.read().await.view_count(), 1);
+
+    // Expire it the way the sweep sees it.
+    h.raw_db
+        .query("UPDATE _00_query:v1 SET ttl = 1s, lastActiveAt = time::now() - 1h")
+        .await
+        .unwrap();
+
+    Runtime::new(Arc::clone(&h.node)).on_timer(TimerKind::TtlCleanup).await;
+
+    let c = h.node.processor.read().await;
+    assert_eq!(c.view_count(), 0, "swept view released from the circuit");
+    assert_eq!(c.graph_count(), 0, "…and its operator graph with it");
+}
+
 #[tokio::test]
 async fn on_timer_ttl_cleanup_sweeps_and_rearms() {
     use ssp_node::Runtime;
