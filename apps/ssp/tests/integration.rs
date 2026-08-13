@@ -181,6 +181,7 @@ impl TestHarness {
                     ssp_id: "test-ssp".to_string(),
                     auth_secret: AUTH_SECRET.to_string(),
                     ref_mode: ssp_protocol::RefMode::Single,
+                    merge_views: false,
                     version: env!("CARGO_PKG_VERSION"),
                     surrealdb_version: String::new(),
                     advertise_ip: None,

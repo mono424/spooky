@@ -91,7 +91,7 @@ pub struct ViewDelta {
 /// which `_00_list_ref*` table they are written to (`auth_id`). Everything else
 /// a delta holds is a property of the computation, which is shared by
 /// definition, so nothing else needs to be per-subscriber.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Subscriber {
     pub query_id: String,
     pub auth_id: String,
@@ -120,6 +120,13 @@ pub struct Circuit {
     /// serving subscribers. They stop receiving deltas of their own; edges
     /// pointed at a deleted row would dangle.
     detached_owners: std::collections::HashSet<String>,
+    /// Whether registrations computing the same thing may share one graph.
+    ///
+    /// Deliberately NOT part of the snapshot: it is configuration
+    /// (`SPKY_SSP_MERGE_VIEWS`), not state, so a restore must not resurrect the
+    /// setting a snapshot happened to be written under. The shell re-applies it
+    /// after every circuit construction.
+    merge_views: bool,
     /// Per-table raw `PERMISSIONS FOR select WHERE <expr>` text, loaded from
     /// SurrealDB at boot. The registration pipeline routes each scan's
     /// permission through the same converter that handles user queries and
@@ -315,6 +322,7 @@ impl Circuit {
             merge_index: HashMap::new(),
             subscribers: HashMap::new(),
             detached_owners: std::collections::HashSet::new(),
+            merge_views: false,
             permissions: HashMap::new(),
             link_targets: HashMap::new(),
             opaque_fields: HashMap::new(),
@@ -966,6 +974,17 @@ struct QueryStateRef<'a> {
     content_generation: u64,
     subquery_cache: &'a HashMap<RowKey, (RowKey, String)>,
     auth_id: &'a str,
+    /// Registrations sharing this view's graph. Empty for an unshared view,
+    /// which is every view while merging is disabled.
+    subscribers: &'a [Subscriber],
+    /// This view's own `_00_query` row is gone but its graph still serves
+    /// subscribers. Without persisting it, a restart would resume publishing
+    /// deltas at a deleted row.
+    detached: bool,
+    /// The computation this view's graph is registered under, so a
+    /// registration arriving after the restart still finds it. Empty when the
+    /// view holds no claim (merging was disabled when it registered).
+    merge_key: &'a str,
 }
 
 /// Serializable snapshot of a single query's state.
@@ -985,6 +1004,15 @@ struct QueryState {
     /// back to "" and the SSP routes those views to the global tables).
     #[serde(default)]
     auth_id: String,
+    /// Merge bookkeeping. All three default, so a snapshot written before
+    /// merging existed restores as an unshared view holding no claim — which
+    /// is exactly what it was.
+    #[serde(default)]
+    subscribers: Vec<Subscriber>,
+    #[serde(default)]
+    detached: bool,
+    #[serde(default)]
+    merge_key: String,
 }
 
 impl Circuit {
@@ -993,10 +1021,29 @@ impl Circuit {
     /// The operator DAG (which contains trait objects) is NOT serialized.
     /// Instead, we serialize the query plans and rebuild graphs on restore.
     pub fn save(&self) -> serde_json::Result<String> {
+        // owner → merge_key, inverted once rather than scanned per view. The
+        // key is persisted rather than recomputed on restore: recomputing needs
+        // the params to round-trip through `Sp00kyValue` unchanged, and a
+        // number that came back as a float would silently produce a different
+        // key and un-merge the view.
+        let claims: HashMap<&str, &str> = self
+            .merge_index
+            .iter()
+            .map(|(key, owner)| (owner.as_str(), key.as_str()))
+            .collect();
+        const NO_SUBSCRIBERS: &[Subscriber] = &[];
+
         let queries: Vec<QueryStateRef<'_>> = self
             .views
             .values()
             .map(|view| QueryStateRef {
+                subscribers: self
+                    .subscribers
+                    .get(&view.query_id)
+                    .map(|s| s.as_slice())
+                    .unwrap_or(NO_SUBSCRIBERS),
+                detached: self.detached_owners.contains(&view.query_id),
+                merge_key: claims.get(view.query_id.as_str()).copied().unwrap_or(""),
                 plan: &view.plan,
                 params: view
                     .params
@@ -1053,6 +1100,7 @@ impl Circuit {
             merge_index: HashMap::new(),
             subscribers: HashMap::new(),
             detached_owners: std::collections::HashSet::new(),
+            merge_views: false,
             permissions: HashMap::new(),
             // Re-seeded from INFO FOR DB / INFO FOR TABLE after restore, same as
             // `permissions` (none of the three is part of the serialized snapshot).
@@ -1099,6 +1147,30 @@ impl Circuit {
                     .or_default()
                     .push(query_id.clone());
             }
+
+            // Rebuild the merge bookkeeping. Without this a restart silently
+            // un-merges: the subscribers vanish (they own no view of their own,
+            // so nothing else in the snapshot mentions them) and every one of
+            // them stops receiving deltas while its `_00_query` row and
+            // heartbeat carry on as if it were live.
+            if !qs.subscribers.is_empty() {
+                circuit.subscribers.insert(
+                    query_id.clone(),
+                    qs.subscribers
+                        .into_iter()
+                        .map(|s| Subscriber {
+                            query_id: crate::canonical_query_id(&s.query_id),
+                            auth_id: s.auth_id,
+                        })
+                        .collect(),
+                );
+            }
+            if qs.detached {
+                circuit.detached_owners.insert(query_id.clone());
+            }
+            if !qs.merge_key.is_empty() {
+                circuit.merge_index.insert(qs.merge_key, query_id.clone());
+            }
         }
 
         Ok(circuit)
@@ -1113,6 +1185,19 @@ impl Circuit {
     /// the cold path. Returns the owner even if it has no subscribers yet.
     pub fn owner_for_merge_key(&self, merge_key: &str) -> Option<&str> {
         self.merge_index.get(merge_key).map(|s| s.as_str())
+    }
+
+    /// Whether this circuit may share one graph between registrations that
+    /// compute the same thing. See the field docs for why it is not snapshotted.
+    pub fn merge_views(&self) -> bool {
+        self.merge_views
+    }
+
+    /// Apply the shell's `SPKY_SSP_MERGE_VIEWS` setting. Must be re-applied
+    /// after every `Circuit::new` / `Circuit::restore`, since neither carries
+    /// configuration.
+    pub fn set_merge_views(&mut self, enabled: bool) {
+        self.merge_views = enabled;
     }
 
     /// Claim `merge_key` for `query_id`, so later registrations of the same
@@ -1247,6 +1332,13 @@ impl Circuit {
     /// while merging is enabled, and the gap IS the memory saved.
     pub fn graph_count(&self) -> usize {
         self.graphs.len()
+    }
+
+    /// Registrations attached to someone else's graph. `graph_count +
+    /// subscriber_count` is the number of live registrations, so the gap
+    /// against `graph_count` is the sharing actually achieved.
+    pub fn subscriber_count(&self) -> usize {
+        self.subscribers.values().map(|s| s.len()).sum()
     }
 
     /// Re-point one computed delta at every subscriber sharing the graph.
@@ -1657,6 +1749,90 @@ mod tests {
         let twice = Circuit::restore(&restored.save().unwrap()).unwrap();
         assert_eq!(twice.compute_table_hashes(), circuit.compute_table_hashes());
         assert_eq!(twice.view_count(), circuit.view_count());
+    }
+
+    /// A snapshot must carry the merge bookkeeping, not just the views.
+    ///
+    /// Subscribers own no view of their own — that IS the memory saving — so
+    /// nothing else in the snapshot mentions them. Dropping them on restore
+    /// would silently un-merge the tenant: each subscriber's `_00_query` row
+    /// and heartbeat carry on looking healthy while it never receives another
+    /// delta, which reads as a list frozen at whatever it held before the
+    /// restart.
+    #[test]
+    fn a_snapshot_carries_subscribers_the_merge_claim_and_detachment() {
+        let mut circuit = Circuit::new();
+        circuit.store.ensure_collection("thread");
+        circuit
+            .store
+            .apply_change(&Change::create("thread", "t1", json!({ "title": "a" })));
+
+        circuit.add_query(scan_query("owner", "thread"), None, None);
+        circuit.claim_merge_key("mk1:deadbeef".to_string(), "owner".to_string());
+        // Two joiners, one of which arrives spelled with its table prefix.
+        circuit.attach_subscriber("owner", "sub1".to_string(), "user:alice".to_string());
+        circuit.attach_subscriber(
+            "owner",
+            "_00_query:sub2".to_string(),
+            "user:bob".to_string(),
+        );
+
+        let restored = Circuit::restore(&circuit.save().unwrap()).unwrap();
+
+        assert_eq!(
+            restored.subscribers_of("owner"),
+            &[
+                Subscriber { query_id: "sub1".into(), auth_id: "user:alice".into() },
+                Subscriber { query_id: "sub2".into(), auth_id: "user:bob".into() },
+            ],
+            "subscribers restore, canonicalised"
+        );
+        assert_eq!(
+            restored.owner_for_merge_key("mk1:deadbeef"),
+            Some("owner"),
+            "the claim restores, so a later registration of the same \
+             computation still attaches instead of building a second graph"
+        );
+        // Merging is configuration, not state: a restore must not resurrect
+        // whatever the snapshot was written under.
+        assert!(!restored.merge_views(), "policy is re-applied by the shell");
+
+        // A delta still reaches all three.
+        let mut restored = restored;
+        let ids: Vec<String> = restored
+            .step(ChangeSet {
+                changes: vec![Change::create("thread", "t2", json!({ "title": "b" }))],
+            })
+            .into_iter()
+            .map(|d| d.query_id)
+            .collect();
+        assert_eq!(ids.len(), 3, "owner + 2 subscribers, got {ids:?}");
+        for want in ["owner", "sub1", "sub2"] {
+            assert!(ids.iter().any(|id| id == want), "{want} missing from {ids:?}");
+        }
+    }
+
+    /// A detached owner keeps its graph serving subscribers but must not
+    /// resume publishing to its own deleted `_00_query` row after a restart.
+    #[test]
+    fn a_snapshot_keeps_a_detached_owner_detached() {
+        let mut circuit = Circuit::new();
+        circuit.store.ensure_collection("thread");
+        circuit.add_query(scan_query("owner", "thread"), None, None);
+        circuit.attach_subscriber("owner", "sub1".to_string(), "user:alice".to_string());
+        // The owner's own row went away; the graph stays for sub1.
+        assert!(!circuit.detach_subscriber("owner"), "graph outlives its owner");
+
+        let mut restored = Circuit::restore(&circuit.save().unwrap()).unwrap();
+
+        let ids: Vec<String> = restored
+            .step(ChangeSet {
+                changes: vec![Change::create("thread", "t1", json!({ "title": "a" }))],
+            })
+            .into_iter()
+            .map(|d| d.query_id)
+            .collect();
+        assert_eq!(ids, vec!["sub1".to_string()], "owner must stay detached");
     }
 
     /// A snapshot written before the flat row encoding must still restore.

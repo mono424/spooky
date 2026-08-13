@@ -155,6 +155,9 @@ impl Runtime {
         let node = &self.node;
         let db = node.platform.db.as_ref();
         let page_size = node.bootstrap_page_size;
+        // Boot re-registration merges too, so the policy has to be in the
+        // circuit before `rebuild_from_db` starts registering into it.
+        node.apply_circuit_policy().await;
 
         match node.platform.circuit_store.load().await {
             Ok((blob, point)) => {
@@ -178,6 +181,8 @@ impl Runtime {
                 match Circuit::restore(&blob) {
                     Ok(restored) => {
                         *node.processor.write().await = restored;
+                        // The restored circuit is a fresh object; re-apply.
+                        node.apply_circuit_policy().await;
                         crate::bootstrap::catch_up_from_db(db, &node.processor, &point).await?;
                         Ok(())
                     }

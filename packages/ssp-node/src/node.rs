@@ -248,9 +248,20 @@ impl SspNode {
     /// Fresh rebuild-from-DB into a new circuit. Shares the cold-start REBUILD
     /// path ([`crate::bootstrap::rebuild_from_db`]) so schema discovery, view
     /// re-registration from `_00_query`, and reseed all match bootstrap.
+    /// Push this node's configuration into the circuit.
+    ///
+    /// The circuit carries the merge policy so both the live register path and
+    /// boot re-registration read ONE source, but neither `Circuit::new` nor
+    /// `Circuit::restore` carries configuration — so this must run after every
+    /// circuit construction, before anything registers into it.
+    pub async fn apply_circuit_policy(&self) {
+        self.processor.write().await.set_merge_views(self.merge_views);
+    }
+
     pub async fn reload(&self) -> anyhow::Result<()> {
         *self.status.write().await = SspStatus::Bootstrapping;
         *self.processor.write().await = Circuit::new();
+        self.apply_circuit_policy().await;
         match crate::bootstrap::rebuild_from_db(
             self.platform.db.as_ref(),
             &self.processor,
@@ -693,12 +704,24 @@ impl SspNode {
     /// (which component moved, and by how much) rather than as allocator-exact
     /// totals — see that module for the reasoning.
     async fn debug_memory_handler(&self) -> ApiResponse {
-        let report = {
+        let (report, graphs, subscribers, merging) = {
             let circuit = self.processor.read().await;
-            circuit.size_report()
+            (
+                circuit.size_report(),
+                circuit.graph_count(),
+                circuit.subscriber_count(),
+                circuit.merge_views(),
+            )
         };
         ok_json(json!({
             "total_bytes": report.total_bytes(),
+            // The merge win, measured rather than inferred: `views` counts
+            // registrations, `graphs` counts operator DAGs, and the gap is what
+            // sharing saved. Equal counts with `merging` true means nothing
+            // merged, which is a finding, not a formality.
+            "merging": merging,
+            "graphs": graphs,
+            "subscribers": subscribers,
             "store_bytes": report.store_bytes,
             "query_bytes": report.query_bytes,
             "tables": report.tables.iter().map(|t| json!({
@@ -977,14 +1000,19 @@ impl SspNode {
         // a joiner needs the same `_00_query` row write (notably `rowCount`,
         // which is how the client tells "no results" from "edges still
         // flushing") and the same initial edge publish.
-        let merge_owner = if self.merge_views {
+        // Read the policy off the circuit, not off `self`: boot re-registration
+        // reads it there too, and one source is what keeps the two paths from
+        // disagreeing about whether a graph is shareable.
+        let merge_owner = {
             let circuit = self.processor.read().await;
-            circuit
-                .owner_for_merge_key(&data.merge_key)
-                .filter(|owner| *owner != data.plan.id)
-                .map(|owner| owner.to_string())
-        } else {
-            None
+            if circuit.merge_views() {
+                circuit
+                    .owner_for_merge_key(&data.merge_key)
+                    .filter(|owner| *owner != data.plan.id)
+                    .map(|owner| owner.to_string())
+            } else {
+                None
+            }
         };
 
         let update = {
@@ -1008,7 +1036,7 @@ impl SspNode {
                     );
                     // Claim the key only once the graph exists, or a later
                     // registration would attach to nothing.
-                    if self.merge_views {
+                    if circuit.merge_views() {
                         circuit.claim_merge_key(data.merge_key.clone(), data.plan.id.clone());
                     }
                     delta

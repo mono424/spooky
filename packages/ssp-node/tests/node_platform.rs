@@ -294,6 +294,11 @@ async fn build(opts: HarnessOpts) -> Harness {
     // one behind the mutex and expose it.
     let (_dead_tx, dead_rx) = mpsc::channel::<JobEntry>(1);
 
+    // What every shell does after constructing a circuit: push the node's
+    // config into it, since the register path and boot re-registration both
+    // read the merge policy off the circuit.
+    node.apply_circuit_policy().await;
+
     Harness {
         node: Arc::new(node),
         raw_db: raw,
@@ -1344,6 +1349,13 @@ fn merge_register(id: &str, auth: &str) -> Value {
 
 async fn merging_harness() -> Harness {
     let h = build(HarnessOpts { merge_views: true, ..Default::default() }).await;
+    // DEFINEd in the DB as well as set in memory, so a rebuild-from-DB in the
+    // same test rediscovers the table and its select permission — otherwise
+    // boot re-registration rejects every row and the circuit comes back empty.
+    h.raw_db
+        .query("DEFINE TABLE thread SCHEMALESS PERMISSIONS FOR select FULL;")
+        .await
+        .unwrap();
     {
         let mut c = h.node.processor.write().await;
         c.set_permission("thread", "true");
@@ -1371,6 +1383,80 @@ async fn two_registrations_of_one_computation_share_one_graph() {
             .await.unwrap().take(0).unwrap();
         assert!(row.is_some(), "row {id} should exist");
     }
+}
+
+// A restart must not un-merge the tenant.
+//
+// Boot re-registration reads `_00_query` and rebuilds a graph per row. Without
+// merging there too, every restart undoes the sharing and rebuilds N identical
+// graphs — the exact memory blowup merging exists to prevent, reintroduced on
+// the one event guaranteed to happen.
+#[tokio::test]
+async fn boot_re_registration_rebuilds_onto_one_shared_graph() {
+    let h = merging_harness().await;
+    for id in ["_00_query:a", "_00_query:b"] {
+        let r = h.node.route(authed(Method::Post, "/view/register", merge_register(id, "user:alice"))).await.unwrap();
+        assert_eq!(r.status, 200, "register {id}: {:?}", json_of(&r));
+    }
+    assert_eq!(h.node.processor.read().await.graph_count(), 1);
+
+    // Cold rebuild from the DB rows those registrations left behind.
+    let fresh = Arc::new(RwLock::new(Circuit::new()));
+    fresh.write().await.set_merge_views(true);
+    ssp_node::bootstrap::rebuild_from_db(&MemDb(Arc::clone(&h.raw_db)), &fresh, 200)
+        .await
+        .unwrap();
+
+    let c = fresh.read().await;
+    assert_eq!(c.view_count(), 1, "one view for one computation");
+    assert_eq!(c.graph_count(), 1, "…backed by one graph");
+    assert_eq!(c.subscribers_of("a").len() + c.subscribers_of("b").len(), 1, "the other row re-registered as a subscriber");
+}
+
+// The same boot, with merging off, must keep one graph per row — the flag is
+// what gates the risk, and a rebuild path that merged regardless would enable
+// the behaviour behind the operator's back.
+#[tokio::test]
+async fn boot_re_registration_does_not_merge_when_the_flag_is_off() {
+    let h = merging_harness().await;
+    for id in ["_00_query:a", "_00_query:b"] {
+        h.node.route(authed(Method::Post, "/view/register", merge_register(id, "user:alice"))).await.unwrap();
+    }
+
+    let fresh = Arc::new(RwLock::new(Circuit::new()));
+    ssp_node::bootstrap::rebuild_from_db(&MemDb(Arc::clone(&h.raw_db)), &fresh, 200)
+        .await
+        .unwrap();
+
+    assert_eq!(fresh.read().await.graph_count(), 2, "merging off: one graph per row");
+}
+
+// A snapshot restore must keep the sharing, and a registration arriving after
+// it must still find the shared graph. Subscribers hold no view of their own,
+// so without the persisted bookkeeping they simply vanish.
+#[tokio::test]
+async fn a_snapshot_restore_keeps_subscribers_attached_to_the_shared_graph() {
+    let h = merging_harness().await;
+    for id in ["_00_query:a", "_00_query:b"] {
+        h.node.route(authed(Method::Post, "/view/register", merge_register(id, "user:alice"))).await.unwrap();
+    }
+
+    let blob = h.node.processor.read().await.save().unwrap();
+    let mut restored = Circuit::restore(&blob).unwrap();
+    restored.set_merge_views(true);
+
+    assert_eq!(restored.graph_count(), 1);
+    assert_eq!(restored.subscribers_of("a").len(), 1, "b still shares a's graph");
+
+    // An ingest reaches both rows.
+    let ids: Vec<String> = restored
+        .step(ssp::circuit::store::ChangeSet {
+            changes: vec![ssp::circuit::store::Change::create("thread", "t1", json!({ "title": "x" }))],
+        })
+        .into_iter()
+        .map(|d| d.query_id)
+        .collect();
+    assert_eq!(ids.len(), 2, "both registrations get the delta, got {ids:?}");
 }
 
 #[tokio::test]

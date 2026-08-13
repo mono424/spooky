@@ -596,8 +596,12 @@ pub async fn run_server() -> anyhow::Result<()> {
         }
     };
 
-    // Start with an empty circuit — self-bootstrap will populate it
+    // Start with an empty circuit — self-bootstrap will populate it. The merge
+    // policy goes in before anything registers: boot re-registration reads it
+    // from the circuit, and this shell's cluster path bootstraps the circuit
+    // directly rather than through `Runtime::bootstrap`.
     let processor_arc = Arc::new(RwLock::new(Circuit::new()));
+    processor_arc.write().await.set_merge_views(config.merge_views);
     let status = Arc::new(RwLock::new(SspStatus::Bootstrapping));
 
     // VM platform adapters (ssp-node ports) — constructed early because the
@@ -1114,7 +1118,11 @@ pub async fn run_server() -> anyhow::Result<()> {
                                         );
                                         {
                                             let mut guard = processor.write().await;
+                                            // Carry the merge policy across the wipe; `Circuit::new`
+                                            // is a fresh object and holds no configuration.
+                                            let merge_views = guard.merge_views();
                                             *guard = Circuit::new();
+                                            guard.set_merge_views(merge_views);
                                         }
                                         expected_hashes = v.table_hashes;
                                         continue;
@@ -1140,7 +1148,11 @@ pub async fn run_server() -> anyhow::Result<()> {
                                     );
                                     {
                                         let mut guard = processor.write().await;
+                                        // Carry the merge policy across the wipe; `Circuit::new`
+                                        // is a fresh object and holds no configuration.
+                                        let merge_views = guard.merge_views();
                                         *guard = Circuit::new();
+                                        guard.set_merge_views(merge_views);
                                     }
                                     if let Some(sched_url) = scheduler_url.as_deref() {
                                         let client = reqwest::Client::new();

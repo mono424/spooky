@@ -332,13 +332,41 @@ pub async fn rebuild_from_db(
         match prep {
             Ok(data) => {
                 let mut circuit = processor.write().await;
-                circuit.add_query_with_auth(
-                    data.plan,
-                    data.safe_params,
-                    Some(OutputFormat::Streaming),
-                    auth_id.clone(),
-                );
-                info!(view_id = %raw_id, auth_id = %auth_id, "Re-registered view");
+                // Merge here as well as on the live path, or every restart
+                // un-merges the whole tenant: these rows are exactly the
+                // registrations that were sharing graphs before the restart,
+                // and rebuilding them one graph apiece is the memory blowup
+                // merging exists to prevent. The delta is discarded on both
+                // branches for the same reason: the row's `_00_list_ref` edges
+                // are already in the DB, which is where they were read from.
+                let owner = if circuit.merge_views() {
+                    circuit
+                        .owner_for_merge_key(&data.merge_key)
+                        .filter(|owner| *owner != data.plan.id)
+                        .map(|owner| owner.to_string())
+                } else {
+                    None
+                };
+                match owner {
+                    Some(owner) => {
+                        circuit.attach_subscriber(&owner, data.plan.id.clone(), auth_id.clone());
+                        info!(view_id = %raw_id, auth_id = %auth_id, owner = %owner, "Re-registered view onto a shared graph");
+                    }
+                    None => {
+                        let merge_key = data.merge_key.clone();
+                        let query_id = data.plan.id.clone();
+                        circuit.add_query_with_auth(
+                            data.plan,
+                            data.safe_params,
+                            Some(OutputFormat::Streaming),
+                            auth_id.clone(),
+                        );
+                        if circuit.merge_views() {
+                            circuit.claim_merge_key(merge_key, query_id);
+                        }
+                        info!(view_id = %raw_id, auth_id = %auth_id, "Re-registered view");
+                    }
+                }
             }
             Err(e) => warn!(target: "ssp::policy", view_id = %raw_id, error = %e, "Failed to re-register view"),
         }
