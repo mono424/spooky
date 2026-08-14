@@ -638,6 +638,27 @@ pub struct DeploymentConfig {
     /// memory, and the size provisions an extra disk (dev docker mount + cloud).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<StorageConfig>,
+    /// Extra environment variables for the INFRA containers, keyed by role
+    /// (`ssp`, `scheduler`, `surrealdb`). Backends get their env from the
+    /// vault (`spky env set`); this is the equivalent for the containers the
+    /// control plane owns, which until now took a fixed, closed env list.
+    ///
+    /// ```yaml
+    /// deployment:
+    ///   env:
+    ///     ssp:
+    ///       SPKY_SSP_MERGE_VIEWS: "true"
+    /// ```
+    ///
+    /// Values are NOT secrets: they are stored unencrypted in the project's
+    /// cloud config, unlike `spky env set`. Keys the control plane manages
+    /// itself (`SPKY_DB_*`, `SPKY_AUTH_SECRET`, `SPKY_SSP_ID`, …) are refused
+    /// server-side rather than silently overridden.
+    ///
+    /// Omitted → the control plane keeps whatever was set on the last deploy;
+    /// an explicit empty map clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 /// Persistent storage allocation for bucket files. `sizeGB` is a
@@ -3077,5 +3098,35 @@ mod retention_config_tests {
         let err = serde_yaml::from_str::<Sp00kyConfig>("retention:\n  sucess: 1h\n")
             .expect_err("unknown key must not parse");
         assert!(err.to_string().contains("sucess"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod infra_env_tests {
+    use super::*;
+
+    /// `deployment.env` must survive the round trip from sp00ky.yml into the
+    /// deploy payload. It is the only way to set a runtime knob on the infra
+    /// containers, whose environment is otherwise a closed list assembled by
+    /// the control plane.
+    #[test]
+    fn deployment_env_parses_per_role() {
+        let cfg: Sp00kyConfig = serde_yaml::from_str(
+            "name: demo\ndeployment:\n  env:\n    ssp:\n      SPKY_SSP_MERGE_VIEWS: \"true\"\n",
+        )
+        .expect("yaml parse");
+
+        let env = cfg.deployment.as_ref().and_then(|d| d.env.as_ref()).expect("env present");
+        assert_eq!(env["ssp"]["SPKY_SSP_MERGE_VIEWS"], "true");
+    }
+
+    /// Absent means "keep whatever the control plane already has", which is
+    /// why the field is an Option and the payload omits it rather than
+    /// sending an empty map that would clear the previous setting.
+    #[test]
+    fn deployment_env_is_absent_when_unset() {
+        let cfg: Sp00kyConfig =
+            serde_yaml::from_str("name: demo\ndeployment:\n  sspCount: 2\n").expect("yaml parse");
+        assert!(cfg.deployment.as_ref().and_then(|d| d.env.as_ref()).is_none());
     }
 }

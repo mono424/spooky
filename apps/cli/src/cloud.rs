@@ -2891,7 +2891,17 @@ pub fn deploy(
         ssp_job_config = serde_json::json!(entries);
     }
 
+    // Per-role env for the infra containers (`deployment.env` in sp00ky.yml).
+    // Omitted when unset so the control plane keeps the previous setting, the
+    // same contract as `log_level` above.
+    let infra_env = config
+        .deployment
+        .as_ref()
+        .and_then(|d| d.env.as_ref())
+        .map(|e| serde_json::json!(e));
+
     let deploy_body = serde_json::json!({
+        "infra_env": infra_env,
         "surrealdb": surrealdb_manifest,
         "backends": backend_manifests,
         "external_backends": external_backends,

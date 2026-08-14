@@ -31,6 +31,13 @@ logLevel:
 export const codeLogLevelTargets = `# Tracing-style target=level directives also work
 logLevel: info,ssp=debug,scheduler=trace`;
 
+export const codeInfraEnv = `deployment:
+  env:
+    ssp:
+      SPKY_SSP_MERGE_VIEWS: "true"
+    scheduler:
+      SPKY_SOME_FLAG: "1"`;
+
 ## Deploy
 
 <CodeBlock
@@ -97,6 +104,32 @@ You can also set the default SSP count in your `sp00ky.yml`:
   code={code1}
   lang="yaml"
 />
+
+## Infrastructure Environment Variables
+
+Backends read their environment from the encrypted vault (`spky env set`). The
+infrastructure containers Sp00ky Cloud owns — SSP, Scheduler, SurrealDB — take a
+fixed environment assembled by the control plane. `deployment.env` is the escape
+hatch for setting a runtime knob on them, per role and per project:
+
+<CodeBlock code={codeInfraEnv} lang="yaml" />
+
+<Note>
+  These are <strong>not secrets</strong>. Unlike <code>spky env set</code>, values are stored
+  unencrypted in the project's cloud config. Put credentials in the vault, not here.
+</Note>
+
+Keys the control plane manages itself are refused rather than silently
+overridden: `SPKY_DB_*`, `SPKY_AUTH_SECRET`, `SPKY_SCHEDULER_URL`,
+`SPKY_SSP_ID`, `SPKY_SSP_ADVERTISE_ADDR`, the SSP snapshot/arena directories,
+`SPKY_JOB_CONFIG`, and `S3_*`. Those carry credentials, per-slot identity, or
+values derived from your deployed backends — overriding them breaks the
+deployment in ways that are hard to see (a stale `SPKY_JOB_CONFIG` disables job
+routing while health checks still pass).
+
+Values take effect when containers are next created, so run `spky deploy` or
+`spky restart` after changing them. Omitting the key entirely keeps the previous
+setting; an explicit empty map clears it.
 
 ## Log Level
 
