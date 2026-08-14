@@ -500,6 +500,30 @@
         },
         "storage": {
           "$ref": "#/$defs/storageConfig"
+        },
+        "env": {
+          "type": "object",
+          "description": "Extra environment variables for the infrastructure containers, keyed by role. Backends read their env from the encrypted vault (`spky env set`); this is the equivalent for the containers Sp00ky Cloud owns. Values are NOT secrets - they are stored unencrypted in the project's cloud config. Keys the control plane manages itself (SPKY_DB_*, SPKY_AUTH_SECRET, SPKY_SSP_ID, SPKY_JOB_CONFIG, S3_*) are refused. Takes effect on the next container creation, so a deploy or restart is required.",
+          "propertyNames": {
+            "enum": [
+              "ssp",
+              "scheduler",
+              "surrealdb"
+            ]
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "examples": [
+            {
+              "ssp": {
+                "SPKY_SSP_MERGE_VIEWS": "true"
+              }
+            }
+          ]
         }
       },
       "additionalProperties": false
