@@ -175,7 +175,18 @@ export class UpQueue {
     this.debouncedMutations.clear();
   }
 
-  async next(fn: (event: UpEvent) => Promise<void>, onRollback?: RollbackCallback): Promise<void> {
+  /**
+   * @param onSettled Reports a mutation the server ACCEPTED, after its outbox
+   * row is gone. Deliberately not called on the rollback path: a rejected
+   * mutation must stop being rendered immediately, while an accepted one has
+   * to stay visible until its membership arrives (see
+   * `DataModule.noteWriteSettled`).
+   */
+  async next(
+    fn: (event: UpEvent) => Promise<void>,
+    onRollback?: RollbackCallback,
+    onSettled?: (event: UpEvent) => void
+  ): Promise<void> {
     const event = this.queue.shift();
     if (event) {
       try {
@@ -228,6 +239,19 @@ export class UpQueue {
           { error, event, Category: 'sp00ky-client::UpQueue::next' },
           'Failed to remove mutation from database after successful processing'
         );
+      }
+      // Report AFTER the outbox row is gone: that delete is exactly what drops
+      // the row out of the render set, so this is the moment the grace window
+      // has to start covering.
+      if (onSettled) {
+        try {
+          onSettled(event);
+        } catch (error) {
+          this.logger.error(
+            { error, event, Category: 'sp00ky-client::UpQueue::next' },
+            'Settled-write handler failed'
+          );
+        }
       }
       this._events.addEvent({
         type: SyncQueueEventTypes.MutationDequeued,

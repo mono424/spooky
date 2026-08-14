@@ -37,7 +37,10 @@ export class SyncScheduler {
     // that actually processed ≥1 item): `ok=true` on a clean drain, `ok=false`
     // with the error when the round halted on a failure. Drives the consumer's
     // sync-health tracking; empty/no-op rounds report nothing.
-    private onSyncOutcome?: (ok: boolean, error?: unknown) => void
+    private onSyncOutcome?: (ok: boolean, error?: unknown) => void,
+    // Reports each mutation the server accepted, once its outbox row is gone.
+    // Lets the consumer keep the row rendered until its membership arrives.
+    private onSettled?: (event: UpEvent) => void
   ) {}
 
   async init(opts: { loadOutbox?: boolean } = {}) {
@@ -151,7 +154,7 @@ export class SyncScheduler {
     let processedAny = false;
     try {
       while (this.upQueue.size > 0 && !this.paused) {
-        await this.upQueue.next(this.onProcessUp, this.onRollback);
+        await this.upQueue.next(this.onProcessUp, this.onRollback, this.onSettled);
         processedAny = true;
       }
       if (processedAny) this.onSyncOutcome?.(true);

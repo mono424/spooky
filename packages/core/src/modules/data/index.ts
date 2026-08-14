@@ -565,6 +565,62 @@ export class DataModule<S extends SchemaStructure> {
     return null;
   }
 
+  // ---- Settled-write grace window ----------------------------------------
+  //
+  // A local write is visible because it is in the outbox: the render set is
+  // `(membership ∪ (pendingWrites ∩ localArray)) − pendingDeletes`. The outbox
+  // row is deleted the moment the remote push succeeds (see
+  // `UpQueue.next` / `SyncScheduler` — the delete is deliberately tied to the
+  // push, not to anything downstream), but the row does not enter `membership`
+  // until the SSP has ingested it, materialized the view and written the
+  // `_00_list_ref` edge, and this client has read that back.
+  //
+  // Between those two moments the row is in neither term, so it is rendered,
+  // then disappears, then returns — reported as "the comment shows on every
+  // other client but not on the one that wrote it". Other clients don't blink
+  // because a client that never established membership renders from the local
+  // predicate scan instead.
+  //
+  // So a settled write keeps its place in the union for a short grace period,
+  // until membership catches up or the deadline passes. Kept in memory only:
+  // it covers a round trip, and a reload re-derives membership anyway.
+  private readonly settledWrites = new Map<string, number>();
+  private readonly settledDeletes = new Map<string, number>();
+
+  /**
+   * Grace period for a settled write. Long enough to cover an SSP round trip
+   * that is running slowly (seconds, not milliseconds, when the edge path is
+   * backed up), short enough that a write the server silently dropped cannot
+   * linger misleadingly.
+   *
+   * The rejection case does NOT rely on this expiring: an application error
+   * rolls the mutation back and never reports it settled, so it vanishes at
+   * once. This deadline only bounds the case where the write succeeded and its
+   * membership never arrived at all.
+   */
+  private static readonly SETTLED_WRITE_GRACE_MS = 10_000;
+
+  /**
+   * Report that a mutation was accepted by the server and its outbox row
+   * removed. Called only on the SUCCESS path — a rolled-back mutation must
+   * disappear immediately, which is what makes this safe.
+   */
+  noteWriteSettled(recordId: string, mutationType: string): void {
+    const until = Date.now() + DataModule.SETTLED_WRITE_GRACE_MS;
+    if (mutationType === 'delete') this.settledDeletes.set(recordId, until);
+    else this.settledWrites.set(recordId, until);
+  }
+
+  /** Drop entries past their deadline. */
+  private pruneSettled(now: number): void {
+    for (const [id, until] of this.settledWrites) {
+      if (until <= now) this.settledWrites.delete(id);
+    }
+    for (const [id, until] of this.settledDeletes) {
+      if (until <= now) this.settledDeletes.delete(id);
+    }
+  }
+
   /** Apply the pending-write union and pending-delete subtraction, and map to
    *  RecordIds for the engines' id-set path. */
   private async buildRenderIds(
@@ -573,12 +629,38 @@ export class DataModule<S extends SchemaStructure> {
     sspArray?: Array<[string, number]>
   ): Promise<unknown[]> {
     const { writes, deletes } = await this.getPendingRecordIds();
+    const now = Date.now();
+    this.pruneSettled(now);
+    // A settled write counts as pending until membership catches up. Merged
+    // into the same sets so the union/subtraction below is unchanged — the
+    // grace window changes WHEN an id leaves the render set, never how the
+    // set is composed.
+    if (this.settledWrites.size > 0) {
+      for (const id of this.settledWrites.keys()) writes.add(id);
+    }
+    if (this.settledDeletes.size > 0) {
+      for (const id of this.settledDeletes.keys()) deletes.add(id);
+    }
+
     const ordered: string[] = [];
     const seen = new Set<string>();
     for (const [id] of membership) {
+      // Membership has caught up with this write: the grace window has done
+      // its job and ends here rather than at its deadline. Doing it inline
+      // keeps the common case (nothing settled) free of extra passes.
+      if (this.settledWrites.size > 0) this.settledWrites.delete(id);
       if (deletes.has(id) || seen.has(id)) continue;
       seen.add(id);
       ordered.push(id);
+    }
+    // A settled DELETE is the mirror case: membership still lists the row
+    // until the SSP publishes its removal, so the id stays subtracted until
+    // membership stops naming it.
+    if (this.settledDeletes.size > 0) {
+      const stillListed = new Set(membership.map(([id]) => id));
+      for (const id of [...this.settledDeletes.keys()]) {
+        if (!stillListed.has(id)) this.settledDeletes.delete(id);
+      }
     }
     if (writes.size > 0) {
       // Only pending writes the SSP agrees currently match this query — see the

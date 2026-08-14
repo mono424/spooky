@@ -454,7 +454,8 @@ export class Sp00kySync<S extends SchemaStructure> {
       this.processDownEvent.bind(this),
       this.logger,
       this.handleRollback.bind(this),
-      this.recordSyncOutcome.bind(this)
+      this.recordSyncOutcome.bind(this),
+      this.handleMutationSettled.bind(this)
     );
     this.refSyncIntervalMs = resolveListRefPollInterval(options?.refSyncIntervalMs);
     this.anonLiveEnabled = options?.anonymousLiveQueries ?? false;
@@ -1360,6 +1361,21 @@ export class Sp00kySync<S extends SchemaStructure> {
         );
         return;
     }
+  }
+
+  /**
+   * A mutation the server accepted, reported once its outbox row is gone.
+   *
+   * Keeps the written row in the render set until its membership arrives.
+   * Without this the row is briefly in neither term of
+   * `(membership ∪ pendingWrites) − pendingDeletes` — the outbox delete is
+   * tied to the push, while membership waits on the SSP ingesting the row,
+   * materializing the view, writing the `_00_list_ref` edge and this client
+   * reading it back. The writer therefore watched its own comment appear,
+   * vanish, and return, while every other client showed it throughout.
+   */
+  private handleMutationSettled(event: UpEvent): void {
+    this.dataModule.noteWriteSettled(encodeRecordId(event.record_id), event.type);
   }
 
   private async handleRollback(event: UpEvent, error: Error): Promise<void> {
