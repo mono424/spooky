@@ -1768,9 +1768,40 @@ export class Sp00kySync<S extends SchemaStructure> {
       );
       throw new Error('Query to register not found');
     }
-    await this.remote.query('fn::query::heartbeat($id)', {
+    // `fn::query::heartbeat` is an `UPDATE $id SET ...`. On a record that no
+    // longer exists that matches nothing and returns an empty array — it does
+    // NOT recreate the row. So an unchecked heartbeat is indistinguishable from
+    // a successful one, and a client whose row was reclaimed keeps beating
+    // against nothing forever: no membership, no edges, no re-registration.
+    // The page renders as if the data were deleted ("Game not found").
+    //
+    // A live query's row is reclaimed more easily than it looks. The sweep
+    // expires on `lastActiveAt + ttl`, and this heartbeat runs on a timer that
+    // browsers throttle hard in background tabs — so a second window left idle
+    // past its TTL is the ordinary way to get here, not an edge case. Until
+    // canary.194 the sweep could not actually remove the in-memory view (it
+    // looked it up under the other of the two query-id spellings), which masked
+    // this: the view survived its own row. Now reclamation is real, so the
+    // client has to notice and rebuild.
+    const result = await this.remote.query('fn::query::heartbeat($id)', {
       id: queryState.config.id,
     });
+    const updated = Array.isArray(result) ? result[0] : undefined;
+    const rowGone = Array.isArray(updated) && updated.length === 0;
+    if (!rowGone) return;
+
+    this.logger.warn(
+      {
+        queryHash,
+        id: String(queryState.config.id),
+        Category: 'sp00ky-client::Sp00kySync::heartbeatQuery',
+      },
+      'Query row was reclaimed while still in use; re-registering'
+    );
+    // Re-register rather than recreate the row here: the row alone is useless
+    // without the SSP view behind it, and only registration rebuilds the view,
+    // republishes `_00_list_ref` and writes `rowCount`.
+    this.enqueueDownEvent({ type: 'register', payload: { hash: queryHash } });
   }
 
   // Eager teardown of a deregistered query's remote `_00_query` view (opt-in,
