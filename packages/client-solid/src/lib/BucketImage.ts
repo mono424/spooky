@@ -1,4 +1,4 @@
-import { createSignal, createEffect, onMount, onCleanup } from 'solid-js';
+import { createSignal, createEffect, onMount, onCleanup, children } from 'solid-js';
 import type { JSX } from 'solid-js';
 import type { BucketNames, SchemaStructure } from '@spooky-sync/query-builder';
 import { useBucketImage, type UseBucketImageOptions } from './use-bucket-image';
@@ -70,12 +70,16 @@ export function BucketImage(props: BucketImageProps): JSX.Element {
 
   const placeholder = document.createElement('div');
   placeholder.style.cssText = LAYER_STYLE;
-  const fallback = props.fallback;
-  if (fallback != null) {
-    for (const node of Array.isArray(fallback) ? fallback : [fallback]) {
-      if (node instanceof Node) placeholder.append(node);
-    }
-  }
+  // Solid hands JSX props over as lazy thunks; `children` resolves them (and
+  // nested arrays/functions) to real nodes and keeps them alive reactively.
+  const fallbackHolder = document.createElement('div');
+  fallbackHolder.style.cssText = LAYER_STYLE;
+  placeholder.append(fallbackHolder);
+  const resolvedFallback = children(() => props.fallback);
+  createEffect(() => {
+    const nodes = resolvedFallback.toArray().filter((node) => node instanceof Node) as Node[];
+    fallbackHolder.replaceChildren(...nodes);
+  });
   const hashCanvas = Blurhash({
     get hash() {
       return image.blurhash();
