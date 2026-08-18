@@ -297,6 +297,19 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    */
   syncHealth?: SyncHealthConfig | false;
   /**
+   * Automatic blurhash placeholders for bucket image uploads. On every
+   * `bucket.put` of an image path (by extension: webp/png/jpg/jpeg/gif/avif/bmp)
+   * the client computes a blurhash and stores it as a tiny sidecar object
+   * `<path>.bh` in the same bucket, best-effort. Read it back with
+   * `bucket.blurhash(path)` (or the client-solid `useBucketImage`/`BucketImage`
+   * helpers) to paint a placeholder until the image is decoded.
+   *
+   * `true` (the default) enables with 4x3 components; pass
+   * `{ componentX, componentY }` to tune detail, or `false` to disable.
+   * A per-call `put(path, content, { blurhash })` option overrides this.
+   */
+  blurhash?: boolean | { componentX?: number; componentY?: number };
+  /**
    * Deadline (ms) for a single outgoing mutation push. Tighter than
    * {@link Sp00kyConfig.database.queryTimeoutMs} because the up-queue drains
    * one mutation at a time behind an `isSyncingUp` flag: a push that never

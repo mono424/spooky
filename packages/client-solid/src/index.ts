@@ -68,6 +68,14 @@ export {
   type UseDownloadFileOptions,
   type UseDownloadFileResult,
 } from './lib/use-download-file';
+export { useBlurhash, type UseBlurhashResult } from './lib/use-blurhash';
+export {
+  useBucketImage,
+  type UseBucketImageOptions,
+  type UseBucketImageResult,
+} from './lib/use-bucket-image';
+export { Blurhash, type BlurhashProps } from './lib/Blurhash';
+export { BucketImage, type BucketImageProps } from './lib/BucketImage';
 export { Sp00kyProvider, type Sp00kyProviderProps } from './lib/Sp00kyProvider';
 export { useDb } from './lib/context';
 

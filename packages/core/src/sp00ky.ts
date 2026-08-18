@@ -62,6 +62,15 @@ import type { SqliteCacheEngine } from './services/database/sqlite-cache-engine'
 import type { BlobCache, BlobReadOptions, BlobUrlLease } from './services/blobs/index';
 import { MemoryBlobStore, createBlobCache, resolveBlobBudget } from './services/blobs/index';
 
+import {
+  blurhashSidecarPath,
+  encodeImageToBlurhash,
+  isImagePath,
+  isBlurhashValid,
+  type BlurhashSetting,
+  type BlurhashEncodeOptions,
+} from './utils/blurhash';
+
 /** Coerce whatever the `.get()` RPC hands back into a Blob. */
 export function bucketContentToBlob(content: unknown): Blob | null {
   if (content == null) return null;
@@ -74,18 +83,110 @@ export function bucketContentToBlob(content: unknown): Blob | null {
   return null;
 }
 
+export interface BucketPutOptions {
+  /** Override the client-level {@link Sp00kyConfig.blurhash} setting for this put. */
+  blurhash?: BlurhashSetting;
+}
+
+export interface BucketPutResult {
+  /** The computed blurhash when the content was a hashable image; else null. */
+  blurhash: string | null;
+}
+
+interface BucketHandleSettings {
+  blurhash?: BlurhashSetting;
+  logger?: { warn: (obj: unknown, msg?: string) => void };
+}
+
+/**
+ * Paths known to have no blurhash sidecar, per tab. The blob cache has no
+ * negative caching, so without this every mount of a hashless image would pay
+ * one serialized remote read. Cleared when a put writes a sidecar or a delete
+ * removes the image. Keyed `${bucket}:${path}` (the image path, not the sidecar).
+ */
+const missingBlurhash = new Set<string>();
+
 export class BucketHandle {
   constructor(
     private bucketName: string,
     private remote: RemoteDatabaseService,
     /** Absent on the raw handle the cache itself reads through. */
-    private blobs?: BlobCache | null
+    private blobs?: BlobCache | null,
+    private settings?: BucketHandleSettings
   ) {}
 
-  async put(path: string, content: string | Uint8Array | Blob): Promise<void> {
+  /** Effective blurhash setting: per-call option > client config > default ON. */
+  private resolveBlurhash(option?: BlurhashSetting): BlurhashEncodeOptions | null {
+    const setting = option ?? this.settings?.blurhash ?? true;
+    if (setting === false) return null;
+    return setting === true ? {} : setting;
+  }
+
+  async put(
+    path: string,
+    content: string | Uint8Array | Blob,
+    options?: BucketPutOptions
+  ): Promise<BucketPutResult> {
+    // Start hashing while the upload is in flight; both browser-side costs
+    // overlap and the sidecar put only queues once the main put resolved.
+    const encodeOptions = this.resolveBlurhash(options?.blurhash);
+    const hashPromise =
+      encodeOptions && isImagePath(path)
+        ? encodeImageToBlurhash(content, encodeOptions)
+        : Promise.resolve(null);
+
     await this.remote.query(`RETURN f"${this.bucketName}:/${path}".put($content);`, { content });
     // A path can be overwritten, so anything cached under it is now wrong.
     await this.blobs?.invalidate({ bucket: this.bucketName, path });
+
+    // The sidecar is best-effort: a hash or sidecar failure must never fail
+    // the image put that triggered it.
+    let hash: string | null = null;
+    try {
+      hash = await hashPromise;
+      if (hash) {
+        const sidecar = blurhashSidecarPath(path);
+        await this.remote.query(`RETURN f"${this.bucketName}:/${sidecar}".put($content);`, {
+          content: hash,
+        });
+        await this.blobs?.invalidate({ bucket: this.bucketName, path: sidecar });
+        missingBlurhash.delete(`${this.bucketName}:${path}`);
+      }
+    } catch (error) {
+      hash = null;
+      this.settings?.logger?.warn({ error, path }, 'blurhash sidecar put failed');
+    }
+    return { blurhash: hash };
+  }
+
+  /**
+   * The blurhash stored alongside an uploaded image (see
+   * {@link blurhashSidecarPath}), or null when there is none. Reads through the
+   * blob cache, so a warm client answers from OPFS without a network hop, and
+   * misses are remembered per tab so a hashless image costs at most one
+   * serialized remote read per session.
+   */
+  async blurhash(path: string): Promise<string | null> {
+    const cacheKey = `${this.bucketName}:${path}`;
+    if (missingBlurhash.has(cacheKey)) return null;
+    try {
+      const blob = await this.read(blurhashSidecarPath(path), { persist: true });
+      if (!blob) {
+        missingBlurhash.add(cacheKey);
+        return null;
+      }
+      const hash = (await blob.text()).trim();
+      if (!isBlurhashValid(hash).result) {
+        this.settings?.logger?.warn({ path }, 'blurhash sidecar holds an invalid hash');
+        missingBlurhash.add(cacheKey);
+        return null;
+      }
+      return hash;
+    } catch (error) {
+      // Transient failure: do NOT negative-cache, the next mount may succeed.
+      this.settings?.logger?.warn({ error, path }, 'blurhash sidecar read failed');
+      return null;
+    }
   }
 
   async get(path: string): Promise<unknown> {
@@ -137,6 +238,18 @@ export class BucketHandle {
   async delete(path: string): Promise<void> {
     await this.remote.query(`RETURN f"${this.bucketName}:/${path}".delete();`);
     await this.blobs?.invalidate({ bucket: this.bucketName, path });
+    // Symmetry with put: an image's blurhash sidecar dies with it. Best-effort,
+    // the sidecar may simply not exist.
+    if (isImagePath(path)) {
+      const sidecar = blurhashSidecarPath(path);
+      try {
+        await this.remote.query(`RETURN f"${this.bucketName}:/${sidecar}".delete();`);
+        await this.blobs?.invalidate({ bucket: this.bucketName, path: sidecar });
+      } catch {
+        // Nothing to clean up.
+      }
+      missingBlurhash.delete(`${this.bucketName}:${path}`);
+    }
   }
 
   async exists(path: string): Promise<boolean> {
@@ -1373,13 +1486,19 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   bucket<B extends BucketNames<S>>(name: B): BucketHandle {
-    return new BucketHandle(name, this.remote, this.blobs);
+    return new BucketHandle(name, this.remote, this.blobs, {
+      blurhash: this.config.blurhash,
+      logger: this.logger,
+    });
   }
 
   /** Cache-free handle. The blob cache reads the remote through this, so a
    *  cache miss can't loop back into the cache. */
   private rawBucket(name: string): BucketHandle {
-    return new BucketHandle(name, this.remote, null);
+    return new BucketHandle(name, this.remote, null, {
+      blurhash: this.config.blurhash,
+      logger: this.logger,
+    });
   }
 
   /** Blob cache counters for DevTools. */

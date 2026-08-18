@@ -1,6 +1,7 @@
 import { createSignal, onCleanup } from 'solid-js';
 import type { SchemaStructure, BucketNames } from '@spooky-sync/query-builder';
 import { fileToUint8Array } from '@spooky-sync/core';
+import type { BucketPutOptions, BucketPutResult } from '@spooky-sync/core';
 import type { SyncedDb } from '../index';
 import { useDb } from './context';
 
@@ -8,7 +9,7 @@ export interface FileUploadResult {
   isUploading: () => boolean;
   error: () => Error | null;
   clearError: () => void;
-  upload: (path: string, file: File | Blob) => Promise<void>;
+  upload: (path: string, file: File | Blob, options?: BucketPutOptions) => Promise<BucketPutResult | void>;
   download: (path: string) => Promise<string | null>;
   remove: (path: string) => Promise<void>;
   exists: (path: string) => Promise<boolean>;
@@ -71,7 +72,11 @@ export function useFileUpload<S extends SchemaStructure>(
     }
   };
 
-  const upload = async (path: string, file: File | Blob): Promise<void> => {
+  const upload = async (
+    path: string,
+    file: File | Blob,
+    options?: BucketPutOptions
+  ): Promise<BucketPutResult | void> => {
     setError(null);
     try {
       validate(file);
@@ -83,7 +88,7 @@ export function useFileUpload<S extends SchemaStructure>(
     setIsUploading(true);
     try {
       const bytes = await fileToUint8Array(file);
-      await db.bucket(bucketName).put(path, bytes);
+      return await db.bucket(bucketName).put(path, bytes, options);
     } catch (e) {
       setError(e instanceof Error ? e : new Error(String(e)));
     } finally {

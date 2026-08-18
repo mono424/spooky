@@ -24,3 +24,14 @@ export type {
 } from './services/blobs/index';
 export { semverGt } from './utils/semver';
 export { fileToUint8Array, textToHtml } from './utils/index';
+export {
+  blurhashSidecarPath,
+  encodeImageToBlurhash,
+  encodeBlurhash,
+  decodeBlurhash,
+  isBlurhashValid,
+  isImagePath,
+  BLURHASH_IMAGE_EXTENSIONS,
+  type BlurhashSetting,
+  type BlurhashEncodeOptions,
+} from './utils/blurhash';
