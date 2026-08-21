@@ -8,6 +8,8 @@ export default defineConfig({
     'surrealdb',
     '@surrealdb/wasm',
     'solid-js',
+    '@solidjs/signals',
+    '@solidjs/web',
     '@spooky-sync/core',
     '@spooky-sync/query-builder',
   ],

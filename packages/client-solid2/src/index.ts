@@ -40,6 +40,7 @@ import type {
 } from '@spooky-sync/query-builder';
 
 import { RecordId, Uuid, type Surreal } from 'surrealdb';
+import { snapshot } from 'solid-js';
 export { RecordId, Uuid };
 export type { Model, GenericModel, GenericSchema, ModelPayload } from './lib/models';
 export { createQuery, useQuery, type CreateQueryResult, type QueryOptions } from './lib/create-query';
@@ -68,6 +69,14 @@ export {
   type UseDownloadFileOptions,
   type UseDownloadFileResult,
 } from './lib/use-download-file';
+export { useBlurhash, type UseBlurhashResult } from './lib/use-blurhash';
+export {
+  useBucketImage,
+  type UseBucketImageOptions,
+  type UseBucketImageResult,
+} from './lib/use-bucket-image';
+export { Blurhash, type BlurhashProps } from './lib/Blurhash';
+export { BucketImage, type BucketImageProps } from './lib/BucketImage';
 export { Sp00kyProvider, type Sp00kyProviderProps } from './lib/Sp00kyProvider';
 export { useDb, usePendingMutations } from './lib/context';
 export { createSubmission, type Submission } from './lib/create-submission';
@@ -135,7 +144,21 @@ export type WithRelatedMany<Field extends string, RelatedFields extends RelatedF
  * NOTE: keep in sync with packages/client-solid/src/index.ts (SyncedDb).
  * Copied rather than shared so this package's dependency graph never pulls
  * in solid-js 1.x; fold the two together once client-solid moves to Solid 2.
+ * Solid-2-only differences: `delete` accepts 'bound RecordId', and write
+ * payloads go through `snapshot()` (see `unproxy` below).
  */
+
+/**
+ * Solid 2 stores wrap every object read out of them (query rows, their nested
+ * arrays, `createStore` docs) in a Proxy. Those proxies cannot cross
+ * `postMessage` (the sqlite and shared-tabs workers): structuredClone throws
+ * DataCloneError. `snapshot()` returns the underlying plain value for store
+ * proxies and passes anything else through untouched.
+ */
+function unproxy<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value;
+  return snapshot(value as object) as T;
+}
 export class SyncedDb<S extends SchemaStructure> {
   private config: SyncedDbConfig<S>;
   private sp00ky: Sp00kyClient<S> | null = null;
@@ -178,7 +201,7 @@ export class SyncedDb<S extends SchemaStructure> {
    */
   async create(id: string, payload: Record<string, unknown>): Promise<void> {
     if (!this.sp00ky) throw new Error('SyncedDb not initialized');
-    await this.sp00ky.create(id, payload as Record<string, unknown>);
+    await this.sp00ky.create(id, unproxy(payload) as Record<string, unknown>);
   }
 
   /**
@@ -194,7 +217,7 @@ export class SyncedDb<S extends SchemaStructure> {
     await this.sp00ky.update(
       tableName as string,
       recordId,
-      payload as Record<string, unknown>,
+      unproxy(payload) as Record<string, unknown>,
       options
     );
   }
@@ -212,17 +235,19 @@ export class SyncedDb<S extends SchemaStructure> {
     // directly. Build the canonical string from the raw id part (not
     // `RecordId.toString()`, which escapes special chars) so it round-trips
     // through the engine's `parseRecordIdString`. InnerQuery selectors are not
-    // supported yet. (cross-package RecordId instances → match by constructor
-    // name; Solid 2 store proxies serve methods BOUND, so a RecordId read out
-    // of a query row reports 'bound RecordId' — accept both.)
-    const ctorName = (selector as any)?.constructor?.name;
+    // supported yet. A RecordId read out of a Solid 2 query row is a store
+    // proxy that hides its prototype (no instanceof, no constructor.name, on
+    // rc.1), so unwrap it first; cross-package RecordId instances then match
+    // by constructor name ('bound RecordId' covers rc.0 proxies).
+    const raw = unproxy(selector);
+    const ctorName = (raw as any)?.constructor?.name;
     const isRecordId =
-      selector instanceof RecordId || ctorName === 'RecordId' || ctorName === 'bound RecordId';
+      raw instanceof RecordId || ctorName === 'RecordId' || ctorName === 'bound RecordId';
     let id: string;
-    if (typeof selector === 'string') {
-      id = selector;
+    if (typeof raw === 'string') {
+      id = raw;
     } else if (isRecordId) {
-      id = `${tableName as string}:${(selector as RecordId).id}`;
+      id = `${tableName as string}:${(raw as RecordId).id}`;
     } else {
       throw new Error('Only string ID or RecordId selectors are supported currently with core');
     }
@@ -262,7 +287,7 @@ export class SyncedDb<S extends SchemaStructure> {
     options?: RunOptions
   ): Promise<void> {
     if (!this.sp00ky) throw new Error('SyncedDb not initialized');
-    await this.sp00ky.run(backend, path, payload, options);
+    await this.sp00ky.run(backend, path, unproxy(payload), options);
   }
 
   /**

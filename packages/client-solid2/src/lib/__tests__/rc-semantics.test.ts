@@ -1,5 +1,5 @@
 /**
- * Probes against solid-js 2.0.0-rc.0 semantics this package's design depends
+ * Probes against solid-js 2.0.0-rc.1 semantics this package's design depends
  * on. If any of these fail after a Solid version bump, the binding's
  * assumptions are broken — fix the binding, don't delete the probe.
  *
@@ -337,16 +337,20 @@ describe('probe 5: class instances inside store rows', () => {
       const rid = rows[0].rid;
       // Solid 2 wraps class instances (isWrappable true — unlike Solid 1).
       expect(isWrappable(new FakeRecordId('t', 'i'))).toBe(true);
-      // Document what survives through the proxy: methods are served BOUND, so
-      // `constructor.name` gains a 'bound ' prefix. SyncedDb.delete's
-      // cross-package RecordId detection must strip it.
-      expect((rid as any).constructor?.name).toBe('bound FakeRecordId');
+      // Document what survives through the proxy. rc.0 served methods BOUND
+      // and `constructor.name` read 'bound FakeRecordId'; rc.1 hides the
+      // prototype entirely: no `instanceof`, no `constructor`, but own fields
+      // and prototype methods still resolve. SyncedDb.delete therefore
+      // unwraps with `snapshot` BEFORE any RecordId detection.
+      expect(rid instanceof FakeRecordId).toBe(false);
+      expect((rid as any).constructor?.name).toBeUndefined();
       expect(rid.toString()).toBe('game:a');
       expect(`${rid.tb}:${rid.id}`).toBe('game:a');
       // `snapshot` must unwrap back to the raw instance so payloads passed to
       // surrealdb (which checks instanceof) can be de-proxied at the boundary.
       const snap = snapshot(rows[0]);
       expect(snap.rid instanceof FakeRecordId).toBe(true);
+      expect(snapshot(rid) instanceof FakeRecordId).toBe(true);
       dispose();
     });
   });
