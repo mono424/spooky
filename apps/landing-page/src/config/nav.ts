@@ -41,6 +41,7 @@ export const docsNav = [
     title: 'Framework Guides',
     links: [
       { text: 'SolidJS', href: `${basePath}/docs/guide/solid` },
+      { text: 'Solid 2 (RC)', href: `${basePath}/docs/guide/solid2` },
       { text: 'Flutter', href: `${basePath}/docs/guide/flutter` },
       { text: 'Vanilla JS / TS', href: `${basePath}/docs/guide/vanilla` },
     ],

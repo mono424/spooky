@@ -1,0 +1,296 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Solid 2 guide
+description: "Use Sp00ky from a Solid 2.0 app: createQuery, <Loading> suspension, createSubmission, and the migration table from client-solid."
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Steps from '../../../components/ui/Steps.astro';
+import Step from '../../../components/ui/Step.astro';
+import Note from '../../../components/ui/Note.astro';
+import Warning from '../../../components/ui/Warning.astro';
+import CardGrid from '../../../components/ui/CardGrid.astro';
+import LinkCard from '../../../components/ui/LinkCard.astro';
+
+`@spooky-sync/client-solid2` is the Solid **2.0** native binding. It is the counterpart of
+[`@spooky-sync/client-solid`](/docs/guide/solid), which stays on Solid 1.x — the two packages
+coexist until Solid 2.0 is stable, and you pick one per app.
+
+<Warning title="Tracks a Solid release candidate">
+  Solid 2.0 is still an RC. This package pins `solid-js@^2.0.0-rc.0` and `@solidjs/signals@^2.0.0-rc.0`
+  as peers, and its semantics probes (`src/lib/__tests__/rc-semantics.test.ts`) exist to catch RC
+  drift. On Solid 1.x apps use the [SolidJS guide](/docs/guide/solid) instead.
+</Warning>
+
+## What "native" means here
+
+- Query results are a `createProjection` fed by an async generator over the engine's live
+  subscription: keyed reconcile by `id`, row identity preserved across updates, `<For>` notified on
+  add / remove / reorder. No manual reconcile or version-signal plumbing.
+- `createQuery` exposes both worlds: non-suspending accessors (`data`, `isLoading`, `isFetching`,
+  `isSettled`, `error`) **and** a suspending `ready()` for `<Loading>` boundaries. Queries are born
+  committed, so a local-first cache paint never suspends.
+- Status hooks are async-iterable-backed memos with a `loadingValue`.
+- Mutations stay plain async calls — the engine is already optimistic local-first end to end
+  (local commit → live re-emit → outbox sync). `createSubmission` only adds button pending/error state.
+
+<Steps>
+  <Step title="Install">
+    <CodeBlock code={installCode} lang="bash" />
+
+    <Note title="Coordinated RC">
+      `solid-js`, `@solidjs/web` and `@solidjs/signals` must sit on matching `2.0.0-rc.x` versions.
+      Pin them exactly. In Solid 2 the JSX import source is `@solidjs/web`.
+    </Note>
+
+    <CodeBlock fileName="tsconfig.json" code={tsconfigCode} lang="json" />
+  </Step>
+
+  <Step title="Generate types">
+    <CodeBlock code={generateCode} lang="bash" />
+
+    Same generator as every other client — see [Generated types](/docs/schema/generated-types).
+  </Step>
+
+  <Step title="Configure the client">
+    <CodeBlock fileName="src/db.ts" code={configCode} lang="typescript" />
+
+    Every key is documented in [Client config](/docs/reference/client-config).
+  </Step>
+
+  <Step title="Mount the provider">
+    <CodeBlock fileName="src/App.tsx" code={providerCode} lang="tsx" />
+
+    Props are identical to client-solid's provider: `config`, `fallback`, `preload` (awaited gate
+    before children render), `onReady`, `onError`. A mounted client is deliberately not closed on
+    unmount.
+  </Step>
+</Steps>
+
+## Queries
+
+`createQuery` replaces `useQuery` (kept as a deprecated alias). Same overloads: `(query, options?)`
+with a provider in context, or `(db, query, options?)`.
+
+<CodeBlock fileName="src/components/PostList.tsx" code={queryCode} lang="tsx" />
+
+Pass a thunk when the query depends on signals — read them inside it:
+
+<CodeBlock code={reactiveQueryCode} lang="tsx" />
+
+### Suspension style
+
+`ready()` reads the same data but participates in Solid 2's boundary protocol: it pends until the
+first real result lands. `<Loading>` is Solid 2's renamed `<Suspense>`.
+
+<CodeBlock code={loadingCode} lang="tsx" />
+
+### Result surface
+
+| Accessor | Meaning |
+|---|---|
+| `data()` | Rows, or the row / `null` for `.one()`. Never suspends, never throws. Keyed-reconciled in place. |
+| `ready()` | Same data, suspends into the nearest `<Loading>` until the first result or an error. |
+| `error()` | Registration or sync error (e.g. SSP 503 during bootstrap). Never thrown into the render tree; the sync scheduler retries underneath. |
+| `isLoading()` | No result yet and no error. |
+| `isFetching()` | The sync engine is pulling records for this query. |
+| `isSettled()` | Delivered **and** idle — the gate a windowed list needs before trusting a short result as the end of the list. |
+
+Options: `{ enabled?: () => boolean, deregisterOnCleanup?: boolean }`, as in client-solid.
+
+<Warning title="Rows are store proxies">
+  Solid 2 stores wrap class instances too and serve their methods bound. A `RecordId` read out of a
+  row renders fine and `db.delete('post', row.id)` works, but if you hand a whole row back to a
+  surrealdb API that checks `instanceof`, unwrap it first with `snapshot(row)` from `solid-js`.
+</Warning>
+
+## Mutations
+
+Engine writes are already optimistic and local-first, so mutations are plain calls:
+
+<CodeBlock code={mutationCode} lang="typescript" />
+
+For button pending/error state, wrap the call in `createSubmission`:
+
+<CodeBlock code={submissionCode} lang="tsx" />
+
+To track a backend job, query its outbox row: `db.run()` writes one with `status: 'pending'`.
+
+<CodeBlock code={jobCode} lang="tsx" />
+
+## Status hooks
+
+Same shapes as client-solid, rebuilt on async-iterable-backed memos: `useDb`,
+`usePendingMutations`, [`useSyncStatus`](/docs/client/offline-sync),
+[`useStorageStatus`](/docs/client/offline-sync), [`useFeatureFlag`](/docs/client/feature-flags),
+`useAppRelease`, [`useCrdtField`](/docs/client/crdt),
+[`useFileUpload` / `useDownloadFile`](/docs/client/buckets), and `createPreload`.
+
+<CodeBlock code={statusCode} lang="tsx" />
+
+## Migrating from client-solid
+
+| client-solid (Solid 1) | client-solid2 (Solid 2) |
+|---|---|
+| `useQuery(q)` | `createQuery(q)` (`useQuery` kept as an alias) |
+| `data()` may be `undefined` before the first fetch | `data()` is `[]` / `null` before the first fetch |
+| No suspension | `ready()` + `<Loading>` |
+| `<Suspense>` | `<Loading>` |
+| `jsxImportSource: "solid-js"` | `jsxImportSource: "@solidjs/web"` |
+| everything else | unchanged call signatures |
+
+## Testing
+
+Under Node, `solid-js` resolves its `node` export condition to the SSR build, where user effects
+never run. Point Vitest at the browser build:
+
+<CodeBlock fileName="vitest.config.ts" code={vitestCode} lang="typescript" />
+
+## Next
+
+<CardGrid>
+  <LinkCard
+    href="/docs/client/queries"
+    title="Reactive queries"
+    icon="bolt"
+    description="The query DSL every binding shares."
+  />
+  <LinkCard
+    href="/docs/guide/solid"
+    title="SolidJS 1.x guide"
+    icon="code"
+    description="The stable binding, for apps not on the Solid 2 RC."
+  />
+  <LinkCard
+    href="/docs/reference/client-config"
+    title="Client config"
+    icon="config"
+    description="Every key of SyncedDbConfig."
+  />
+  <LinkCard
+    href="/docs/client/offline-sync"
+    title="Offline & sync health"
+    icon="sync"
+    description="What to show when the connection drops."
+  />
+</CardGrid>
+
+export const installCode = `pnpm add @spooky-sync/core @spooky-sync/client-solid2 \\
+  solid-js@2.0.0-rc.0 @solidjs/web@2.0.0-rc.0 @solidjs/signals@2.0.0-rc.0`;
+
+export const tsconfigCode = `{
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web"
+  }
+}`;
+
+export const generateCode = `spky generate`;
+
+export const configCode = `import type { SyncedDbConfig } from '@spooky-sync/client-solid2';
+import { schema, SURQL_SCHEMA } from './schema.gen';
+
+export const dbConfig: SyncedDbConfig<typeof schema> = {
+  logLevel: 'info',
+  schema,
+  schemaSurql: SURQL_SCHEMA,
+  database: {
+    namespace: 'main',
+    database: 'main',
+    // spky dev exposes SurrealDB on 8666 by default.
+    endpoint: 'ws://localhost:8666/rpc',
+    store: 'indexeddb',
+  },
+};`;
+
+export const providerCode = `import { Sp00kyProvider } from '@spooky-sync/client-solid2';
+import { dbConfig } from './db';
+import { MainContent } from './MainContent';
+
+export default function App() {
+  return (
+    <Sp00kyProvider
+      config={dbConfig}
+      fallback={<div>Initializing database…</div>}
+      preload={async (db) => {
+        // Optional: warm the local cache before the UI is revealed.
+        await db.preload(db.query('config').build());
+      }}
+      onError={(err) => console.error('Failed to initialize database:', err)}
+    >
+      <MainContent />
+    </Sp00kyProvider>
+  );
+}`;
+
+export const queryCode = `import { For, Show } from 'solid-js';
+import { createQuery, useDb } from '@spooky-sync/client-solid2';
+import type { schema } from '../schema.gen';
+
+export function PostList() {
+  const db = useDb<typeof schema>();
+
+  const posts = createQuery(
+    db.query('post').orderBy('created_at', 'desc').limit(20).build()
+  );
+
+  return (
+    <Show when={!posts.isLoading()} fallback={<div>Loading…</div>}>
+      <ul>
+        <For each={posts.data()}>
+          {(post) => <li>{post.title}</li>}
+        </For>
+      </ul>
+    </Show>
+  );
+}`;
+
+export const reactiveQueryCode = `const post = createQuery(() =>
+  postId() ? db.query('post').where({ id: postId() }).one().build() : null
+);`;
+
+export const loadingCode = `import { Loading } from 'solid-js';
+
+<Loading fallback={<Skeleton />}>
+  <For each={posts.ready()}>{(post) => <PostRow post={post} />}</For>
+</Loading>`;
+
+export const mutationCode = `await db.create('post:' + crypto.randomUUID(), { title: 'Hi' });
+await db.update('post', 'post:xyz', { title: 'Edited' });
+await db.delete('post', row.id);
+await db.run('backend', 'sendMail', { to });`;
+
+export const submissionCode = `import { createSubmission } from '@spooky-sync/client-solid2';
+
+const save = createSubmission((title: string) =>
+  db.create('post:' + crypto.randomUUID(), { title })
+);
+
+<button disabled={save.pending()} onClick={() => save.submit(title())}>
+  Save
+</button>
+<Show when={save.error()}>{(err) => <p>{err().message}</p>}</Show>`;
+
+export const jobCode = `const job = createQuery(() =>
+  db.query('job_outbox').where({ id: jobId() }).one().build()
+);
+// job.data()?.status → 'pending' | 'running' | 'done' | 'failed'`;
+
+export const statusCode = `import { useSyncStatus, usePendingMutations } from '@spooky-sync/client-solid2';
+
+const sync = useSyncStatus();
+const pending = usePendingMutations();
+
+<Show when={sync().isDegraded}>
+  <Banner>Can't reach the server — {pending()} change(s) queued.</Banner>
+</Show>`;
+
+export const vitestCode = `import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  resolve: {
+    // Without this, solid-js resolves to the SSR build under Node
+    // and user effects never run.
+    conditions: ['browser', 'development'],
+  },
+});`;
