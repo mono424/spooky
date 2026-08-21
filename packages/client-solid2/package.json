@@ -1,0 +1,63 @@
+{
+  "name": "@spooky-sync/client-solid2",
+  "version": "0.0.1-canary.200",
+  "type": "module",
+  "sideEffects": false,
+  "description": "Solid 2 native bindings for the sp00ky sync client",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "build:watch": "tsdown --watch",
+    "dev": "tsdown --watch",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "surrealdb",
+    "database",
+    "browser",
+    "offline",
+    "sync",
+    "solid-js",
+    "solid-2"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mono424/sp00ky.git",
+    "directory": "packages/client-solid2"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "dependencies": {
+    "@spooky-sync/query-builder": "workspace:*",
+    "@spooky-sync/core": "workspace:*",
+    "@surrealdb/wasm": "^3.0.3",
+    "surrealdb": "2.0.3"
+  },
+  "peerDependencies": {
+    "solid-js": "^2.0.0-rc.0",
+    "@solidjs/signals": "^2.0.0-rc.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "solid-js": "2.0.0-rc.0",
+    "@solidjs/signals": "2.0.0-rc.0",
+    "tsdown": "^0.12.4",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  }
+}
