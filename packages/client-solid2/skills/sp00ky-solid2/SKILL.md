@@ -16,7 +16,7 @@ metadata:
 
 `@spooky-sync/client-solid2` targets **solid-js 2.0** (`^2.0.0-rc.0`, peer with `@solidjs/signals`; apps also need `@solidjs/web` and `jsxImportSource: "@solidjs/web"`). Coordinated RC: all three Solid packages on matching versions.
 
-Internally the binding is Solid-2 native: query results live in a `createProjection` fed by an async generator over the engine's live subscription (keyed reconcile by `id`, row identity preserved, coarse `<For>` readers notified — no version-signal hack); status hooks are async-iterable-backed memos with `loadingValue`; teardown is `onCleanup`-driven because Solid 2 abandons superseded async generators without terminating them.
+Internally the binding is Solid-2 native: query results live in a plain store, written from the engine's live subscription and merged keyed by `id` (row identity preserved, coarse `<For>` readers notified). It is deliberately NOT an async-generator projection: a live query's generator never returns, which leaves its node permanently pending, and Solid 2 holds every navigation transition until the new tree's pending nodes settle - the first navigation into a screen that opens a query would never commit. Status hooks are async-iterable-backed memos with `loadingValue`; teardown runs from the effect's returned cleanup.
 
 ## Setup
 
