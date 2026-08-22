@@ -6,16 +6,18 @@ import type {
   QueryResult,
 } from '@spooky-sync/query-builder';
 import {
+  createEffect,
   createMemo,
-  createProjection,
   createSignal,
+  createStore,
+  isWrappable,
   onCleanup,
+  reconcile,
   type Accessor,
 } from 'solid-js';
 import { SyncedDb } from '..';
 import type { Sp00kyQueryResultPromise } from '@spooky-sync/core';
 import { useDb } from './context';
-import { conflate } from './conflate';
 
 type QueryArg<
   S extends SchemaStructure,
@@ -138,96 +140,121 @@ export function createQuery<
   // dispose (see `deregisterOnCleanup`).
   let activeHash: string | undefined;
 
-  // Results live in a projection: each yielded emission is reconciled in place
-  // keyed by `id` (unchanged rows keep identity; coarse readers are notified
-  // on add/remove/reorder — probed in rc-semantics.test.ts, replacing the
-  // Solid 1 reconcile + version-signal hack). `seedLoadingValue` births the
-  // store committed, so `data()` reads never suspend.
+  // Results live in a plain store, written from the engine's subscription
+  // callback and reconciled in place keyed by `id`, so unchanged rows keep
+  // identity and coarse readers (`<For>`) are notified on add/remove/reorder.
   //
-  // The compute's tracked reads (enabled, query thunk) all happen before the
-  // first await — Solid 2 only creates dependency edges for pre-await reads. A
-  // dep change restarts the generator; the superseded one is ABANDONED by
-  // Solid (no return()/finally — probed), so the onCleanup registered
-  // synchronously below is what tears down its subscriptions. This also
-  // replaces the Solid 1 hook's runId/prevQueryString supersede machinery:
-  // Solid dedupes re-runs whose tracked reads are unchanged, and identical
-  // query identity means an identical hash means the same compute inputs.
-  const store = createProjection(
-    async function* (): AsyncGenerator<{ value: TData }> {
+  // NOT an async-generator projection. A live query's generator never returns:
+  // it awaits the next emission forever, which leaves its node permanently
+  // PENDING. Solid 2 holds a navigation transition until every pending node in
+  // the new tree settles, so with a generator here the first client-side
+  // navigation into a screen that opens a query never commits: the URL and
+  // effects update while the old DOM stays on screen, with no error and no
+  // <Loading> fallback that can rescue it. Subscription writes settle
+  // immediately, which is what the Solid 1 binding did too.
+  //
+  // Wrapped in an object so `one()` queries (row object or null) and list
+  // queries share one store shape; `reconcile` keyes `value`'s contents.
+  const [store, setStore] = createStore<{ value: TData }>({ value: null as TData });
+
+  // Identity of the installed subscription, so a superseded run cannot write
+  // results for a query the caller has already moved off.
+  let runId = 0;
+
+  // Woken by the first result or error, for the suspending `ready()` read.
+  let readyWaiters: (() => void)[] = [];
+  const wakeReady = () => {
+    const waiters = readyWaiters;
+    readyWaiters = [];
+    for (const w of waiters) w();
+  };
+
+  // Tracked: the query identity and the `enabled` gate. Untracked apply: the
+  // registration + subscription, whose teardown is the returned cleanup.
+  createEffect(
+    () => {
       const enabled = options?.enabled?.() ?? true;
       const query = typeof finalQuery === 'function' ? finalQuery() : finalQuery;
-
-      if (!enabled || !query) {
-        setIsFetched(false);
-        setError(undefined);
-        return;
-      }
-
+      return { enabled, query };
+    },
+    ({ enabled, query }) => {
+      const myRun = ++runId;
       // A new identity starts clean: a previous identity's failure must not
       // keep this one out of its loading state.
       setIsFetched(false);
       setError(undefined);
+      if (!enabled || !query) return;
 
-      const iterators: AsyncIterator<any>[] = [];
       const cleanups: (() => void)[] = [];
-      onCleanup(() => {
-        for (const it of iterators) void it.return?.();
+      let disposed = false;
+
+      /**
+       * Registration can fail — the canonical case is the SSP answering 503
+       * NOT_READY while it bootstraps. Surface it as `error()` instead of
+       * throwing into the graph: the sync scheduler retries the registration
+       * underneath, so a transient failure still recovers, and a spinner
+       * driven by `isLoading()` resolves via `error()`.
+       */
+      query
+        .run()
+        .then(({ hash }: { hash: string }) => {
+          if (disposed || myRun !== runId) return;
+          activeHash = hash;
+
+          // Mirror the query's fetch status so the UI can show a "loading
+          // more" state while the sync engine pulls records in the background.
+          cleanups.push(
+            sp00ky.subscribeQueryStatus(hash, (status) => setIsFetching(status === 'fetching'), {
+              immediate: true,
+            })
+          );
+
+          let isFirstCall = true;
+          cleanups.push(
+            sp00ky.subscribe(
+              hash,
+              (rows: Record<string, any>[]) => {
+                if (disposed || myRun !== runId) return;
+                const queryData = (query.isOne ? (rows[0] ?? null) : rows) as TData;
+                // The first (immediate) callback with no data likely means the
+                // local DB has not synced yet — don't mark as fetched, so the
+                // UI keeps showing its loading state.
+                const hasData = query.isOne
+                  ? queryData !== null && queryData !== undefined
+                  : rows.length > 0;
+                if (!isFirstCall || hasData) {
+                  setIsFetched(true);
+                  wakeReady();
+                }
+                isFirstCall = false;
+
+                const t0 = performance.now();
+                setStore((s) => {
+                  if (queryData === null || queryData === undefined || !isWrappable(s.value)) {
+                    s.value = queryData;
+                  } else {
+                    // Keyed reconcile in place: row identity survives, and
+                    // `<For>` still sees add/remove/reorder.
+                    reconcile(queryData as any, 'id')(s.value as any);
+                  }
+                });
+                sp00ky.reportFrontendTiming(hash, performance.now() - t0);
+              },
+              { immediate: true }
+            )
+          );
+        })
+        .catch((err: unknown) => {
+          if (disposed || myRun !== runId) return;
+          setError(err instanceof Error ? err : new Error(String(err)));
+          wakeReady();
+        });
+
+      return () => {
+        disposed = true;
         for (const c of cleanups) c();
-      });
-
-      try {
-        /**
-         * Registration can fail — the canonical case is the SSP answering 503
-         * NOT_READY while it bootstraps. Surface it as `error()` instead of
-         * throwing into the graph: the sync scheduler retries the
-         * registration underneath, so a transient failure still recovers, and
-         * a spinner driven by `isLoading()` resolves via `error()`.
-         */
-        const { hash } = await query.run();
-        activeHash = hash;
-
-        // Mirror the query's fetch status so the UI can show a "loading more"
-        // state while the sync engine pulls missing records in the background.
-        cleanups.push(
-          sp00ky.subscribeQueryStatus(hash, (status) => setIsFetching(status === 'fetching'), {
-            immediate: true,
-          })
-        );
-
-        const it = conflate<Record<string, any>[]>((cb) =>
-          sp00ky.subscribe(hash, cb, { immediate: true })
-        )[Symbol.asyncIterator]();
-        iterators.push(it);
-
-        let isFirstCall = true;
-        while (true) {
-          const r = await it.next();
-          if (r.done) break;
-          const e = r.value;
-          const queryData = (query.isOne ? (e[0] ?? null) : e) as TData;
-          // The first (immediate) callback with no data likely means the local
-          // DB hasn't synced yet — don't mark as fetched so UI shows loading.
-          const hasData = query.isOne
-            ? queryData !== null && queryData !== undefined
-            : e.length > 0;
-          if (!isFirstCall || hasData) setIsFetched(true);
-          isFirstCall = false;
-
-          // Time the store commit (yield → resume) and report it as the
-          // "frontend" phase for DevTools/MCP. Approximate: Solid reconciles
-          // the yielded value before resuming the generator.
-          const t0 = performance.now();
-          yield { value: queryData };
-          sp00ky.reportFrontendTiming(hash, performance.now() - t0);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err : new Error(String(err)));
-      }
-    },
-    // Wrapped in an object so `one()` queries (row object or null) and list
-    // queries share one store shape; `key` reconciles `value`'s contents.
-    { value: null as TData },
-    { key: 'id', seedLoadingValue: true }
+      };
+    }
   );
 
   // Fallback empty value served before the first emission of a list query.
@@ -242,15 +269,23 @@ export function createQuery<
     return v as TData;
   };
 
-  // Suspending read: pends until the first real result (or error) via an async
-  // memo that resolves when isFetched/error flips. Reading it inside <Loading>
-  // integrates with Solid 2's boundary protocol; `data` stays non-throwing.
-  const readyGate = createMemo(async (): Promise<true> => {
-    if (isFetched() || error()) return true;
-    // Tracked reads above registered the deps; park until one flips.
-    await new Promise<void>(() => {});
-    return true;
-  });
+  // Suspending read: pends until the first real result (or error). Reading it
+  // inside <Loading> integrates with Solid 2's boundary protocol; `data` stays
+  // non-throwing.
+  //
+  // `lazy` matters, and so does the promise actually resolving: an unresolved
+  // async node stays PENDING, every queue flush carries pending nodes forward,
+  // and a navigation transition waits on them. Lazy means only a query whose
+  // `ready()` is read creates the node at all, and the deferred below is
+  // settled by the same emission that flips `isFetched`.
+  const readyGate = createMemo(
+    async (): Promise<true> => {
+      if (isFetched() || error()) return true;
+      await new Promise<void>((resolve) => readyWaiters.push(resolve));
+      return true;
+    },
+    { lazy: true }
+  );
   const ready: Accessor<TData> = () => {
     readyGate();
     return data();
