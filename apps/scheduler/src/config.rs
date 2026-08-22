@@ -12,6 +12,11 @@ pub struct SchedulerConfig {
     pub bootstrap_chunk_size: usize,
     pub job_tables: Vec<String>,
     pub replica_db_path: PathBuf,
+    /// Hard ceiling on the initial replica clone. A clone that overruns it
+    /// fails `start()` (and so exits the process) instead of leaving the
+    /// scheduler wedged in `cloning`, answering 503 to every SSP registration
+    /// for the life of the container. Override with SPKY_CLONE_TIMEOUT_SECS.
+    pub clone_timeout_secs: u64,
     pub ingest_host: Option<String>,
     pub ingest_port: u16,
     pub snapshot_update_interval_secs: u64,
@@ -56,6 +61,10 @@ impl Default for SchedulerConfig {
             bootstrap_chunk_size: 1000,
             job_tables: vec![],
             replica_db_path: PathBuf::from("./data/replica"),
+            // 15 minutes: whitepawn's 288k-record clone takes ~100s on a
+            // healthy box, so this is an order of magnitude of headroom for a
+            // large tenant on slow disk, and still bounded.
+            clone_timeout_secs: 900,
             ingest_host: None,
             ingest_port: 9667,
             snapshot_update_interval_secs: 300,
@@ -135,6 +144,14 @@ impl SchedulerConfig {
         // can legitimately need more — the 2026-08-08 whitepawn outage
         // livelocked on exactly this: every bootstrap timed out, the SSP
         // exited, re-registered, and re-froze the snapshot forever.
+        if let Ok(v) = std::env::var("SPKY_CLONE_TIMEOUT_SECS") {
+            if let Ok(secs) = v.parse::<u64>() {
+                if secs > 0 {
+                    scheduler_config.clone_timeout_secs = secs;
+                }
+            }
+        }
+
         if let Ok(v) = std::env::var("SPKY_BOOTSTRAP_TIMEOUT_SECS") {
             if let Ok(n) = v.parse::<u64>() {
                 if n > 0 {

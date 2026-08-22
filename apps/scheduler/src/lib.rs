@@ -34,6 +34,7 @@ use anyhow::{Context, Result};
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
 
@@ -436,7 +437,10 @@ impl Scheduler {
         };
 
         if needs_bootstrap {
-            info!("No persisted snapshot found — cloning remote database...");
+            info!(
+                timeout_secs = self.config.clone_timeout_secs,
+                "No persisted snapshot found — cloning remote database...",
+            );
             let mut replica = self.replica.write().await;
 
             // The replica may still hold orphan records from a prior startup
@@ -452,13 +456,47 @@ impl Scheduler {
                 db = %self.config.db.database,
                 "starting replica.ingest_all from remote"
             );
-            replica.ingest_all(&db).await?;
-
-            // Pass `None` for touched_tables so set_snapshot_state hashes
-            // every table we just ingested — that hash is the integrity
-            // baseline an SSP gets handed at /ssp/register.
-            let current_seq = self.seq_counter.load(Ordering::SeqCst);
-            replica.set_snapshot_state(current_seq, None).await?;
+            // Bounded, because a clone that hangs is not a slow clone: it is a
+            // scheduler that answers 503 to every SSP registration for as long
+            // as the process lives, with nothing to restart it and no error to
+            // report. That is exactly how whitepawn lost 57h of sync on
+            // 2026-08-22 — the embedded RocksDB stalled its writes mid-clone
+            // and every thread parked at 0% CPU, forever.
+            //
+            // A timeout here fails `start()`, which exits the process, which
+            // the container restart policy turns into another attempt. A
+            // crash-loop is a bad state; it is a strictly better bad state
+            // than a silent one.
+            match tokio::time::timeout(
+                Duration::from_secs(self.config.clone_timeout_secs),
+                async {
+                    replica.ingest_all(&db).await?;
+                    // Pass `None` for touched_tables so set_snapshot_state
+                    // hashes every table we just ingested — that hash is the
+                    // integrity baseline an SSP gets handed at /ssp/register.
+                    let current_seq = self.seq_counter.load(Ordering::SeqCst);
+                    replica.set_snapshot_state(current_seq, None).await?;
+                    anyhow::Ok(())
+                },
+            )
+            .await
+            {
+                Ok(res) => res?,
+                Err(_) => {
+                    error!(
+                        timeout_secs = self.config.clone_timeout_secs,
+                        "Snapshot clone did not finish in time — exiting so the \
+                         container restarts instead of serving 503 forever. If this \
+                         repeats, the replica's RocksDB is stalling: raise the \
+                         scheduler's memory cap (it sizes the write-buffer budget) \
+                         or raise SPKY_CLONE_TIMEOUT_SECS for a genuinely slow clone.",
+                    );
+                    anyhow::bail!(
+                        "snapshot clone exceeded {}s",
+                        self.config.clone_timeout_secs
+                    );
+                }
+            }
 
             let hashes = replica.snapshot_hashes();
             info!(

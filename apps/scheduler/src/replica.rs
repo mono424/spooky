@@ -25,6 +25,37 @@ fn replica_config() -> Config {
     )
 }
 
+/// The container's memory ceiling, if we are running under one. Read from
+/// cgroup v2 first, then v1; `None` when unlimited or unreadable (a bare
+/// process, a non-Linux dev box).
+///
+/// Only used for logging — but the number matters: SurrealDB derives its
+/// RocksDB write-buffer budget from this limit, so it is what decides how much
+/// a bootstrap clone can write before the engine stalls.
+fn cgroup_memory_limit() -> Option<u64> {
+    ["/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"]
+        .iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .find_map(|raw| parse_cgroup_limit(&raw))
+}
+
+/// Parse one cgroup memory-limit file. `None` for "unlimited", which the two
+/// cgroup versions spell differently: v2 writes the literal `max`, v1 writes a
+/// huge sentinel (`i64::MAX` rounded down to a page multiple, so the exact
+/// number varies by kernel — hence a plausibility bound, not an equality test).
+fn parse_cgroup_limit(raw: &str) -> Option<u64> {
+    /// No container is capped in petabytes; past this a value is a sentinel.
+    const IMPLAUSIBLE: u64 = 1 << 50;
+    let raw = raw.trim();
+    if raw == "max" {
+        return None;
+    }
+    match raw.parse::<u64>() {
+        Ok(v) if v < IMPLAUSIBLE => Some(v),
+        _ => None,
+    }
+}
+
 // Re-export RecordOp from messages to avoid duplication
 pub use crate::messages::RecordOp;
 
@@ -185,17 +216,39 @@ impl Replica {
                 .with_context(|| format!("Failed to create directory: {:?}", parent))?;
         }
 
-        let db = Surreal::new::<RocksDb>((
-            db_path.to_str().unwrap_or("./data/replica"),
-            replica_config(),
-        ))
-        .await
-        .with_context(|| format!("Failed to open RocksDB at {:?}", db_path))?;
+        // `?sync=never` — the ONE knob the embedded SDK actually forwards to
+        // the storage engine (query params become `datastore_*` ConfigMap keys;
+        // `rocksdb_*` keys are reachable only from the server binary, which
+        // reads `SURREAL_*` env we do not run through).
+        //
+        // Durability is not the property this store needs. The replica is a
+        // rebuildable cache of upstream: a crash mid-clone leaves
+        // `snapshot_seq == 0`, and the next start clones again from the source
+        // of truth. What it *does* need is to survive a bulk clone, and the
+        // default (`sync=every`) makes every commit wait on a grouped WAL
+        // fsync — which is what let memtables outrun flushes until RocksDB's
+        // WriteBufferManager stalled writes and never recovered: all threads
+        // parked, 0% CPU, bootstrap frozen forever with the scheduler stuck in
+        // `cloning` and every SSP registration answering 503 (whitepawn,
+        // 2026-08-22, 57h of dead sync).
+        let path = db_path.to_str().unwrap_or("./data/replica");
+        let db = Surreal::new::<RocksDb>((format!("{path}?sync=never"), replica_config()))
+            .await
+            .with_context(|| format!("Failed to open RocksDB at {:?}", db_path))?;
 
         db.use_ns("sp00ky").use_db("snapshot").await
             .context("Failed to select namespace/database on replica")?;
 
-        info!("Opened replica SurrealDB at {:?}", db_path);
+        // The engine sizes its RocksDB memory budget from the CGROUP limit, so
+        // the container's cap silently sets the stall threshold. Log what we
+        // are running under: it is the first number worth knowing when a clone
+        // wedges, and it is invisible from the outside.
+        info!(
+            memory_limit = %cgroup_memory_limit()
+                .map(|b| format!("{}MB", b / (1024 * 1024)))
+                .unwrap_or_else(|| "unknown".to_string()),
+            "Opened replica SurrealDB at {:?} (sync=never)", db_path,
+        );
 
         let SnapshotState {
             seq: snapshot_seq,
@@ -563,26 +616,43 @@ impl Replica {
                 table_name,
             );
 
-            let records =
-                Self::page_whole_table(remote_db, table_name, self.omit_for(table_name)).await?;
-            let count = records.len();
-            let fetch_ms = table_start.elapsed().as_millis();
-            let insert_start = std::time::Instant::now();
-            self.bulk_insert(table_name, records).await?;
+            // Page in, insert, drop — never hold a whole table. `omit` is
+            // cloned so the sink can borrow `self` for the insert without the
+            // pager still holding a borrow of `self.opaque_fields`.
+            let omit = self.omit_for(table_name).clone();
+            let insert_ms = std::sync::atomic::AtomicU64::new(0);
+            // Shared reborrow: `bulk_insert` only needs `&Replica`, and the
+            // borrow ends with the paging call, so the `&mut self` methods
+            // after this loop are unaffected.
+            let this: &Self = self;
+            let count = Self::page_table(remote_db, table_name, &omit, |page| {
+                let insert_ms = &insert_ms;
+                async move {
+                    let started = std::time::Instant::now();
+                    this.bulk_insert(table_name, page).await?;
+                    insert_ms.fetch_add(
+                        started.elapsed().as_millis() as u64,
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                    Ok(())
+                }
+            })
+            .await?;
 
-            let insert_ms = insert_start.elapsed().as_millis();
+            let elapsed_ms = table_start.elapsed().as_millis() as u64;
+            let insert_ms = insert_ms.load(std::sync::atomic::Ordering::Relaxed);
             total_records += count;
             info!(
                 table = %table_name,
                 records = count,
-                fetch_ms = fetch_ms as u64,
-                insert_ms = insert_ms as u64,
+                fetch_ms = elapsed_ms.saturating_sub(insert_ms),
+                insert_ms = insert_ms,
                 "[{}/{}] Done '{}' — {} records (fetch {}ms, insert {}ms)",
                 idx + 1,
                 tables.len(),
                 table_name,
                 count,
-                fetch_ms,
+                elapsed_ms.saturating_sub(insert_ms),
                 insert_ms,
             );
         }
@@ -728,6 +798,10 @@ impl Replica {
     /// `{"RecordId":{...}}` shapes. Tolerates the table disappearing between
     /// INFO FOR DB and SELECT (race) or simply not existing yet — treated as
     /// zero records.
+    /// Page a whole table and collect it in memory. Used by the spool path,
+    /// which writes one file per table and needs the rows together.
+    ///
+    /// The clone path deliberately does NOT use this: see [`Self::page_table`].
     async fn page_whole_table<C>(
         remote_db: &surrealdb::Surreal<C>,
         table_name: &str,
@@ -735,6 +809,33 @@ impl Replica {
     ) -> Result<Vec<Value>>
     where
         C: surrealdb::Connection,
+    {
+        let mut out: Vec<Value> = Vec::new();
+        Self::page_table(remote_db, table_name, omit, |page| {
+            out.extend(page);
+            std::future::ready(Ok(()))
+        })
+        .await?;
+        Ok(out)
+    }
+
+    /// Page a table with keyset pagination, handing each page to `sink` as it
+    /// arrives, and return the row count.
+    ///
+    /// The sink exists so a caller can consume a table it could not hold: the
+    /// clone inserts each page and drops it, which keeps peak memory at one
+    /// page instead of one table. Buffering the whole table first put ~220MB
+    /// of `analysis` in a single `Vec` on a scheduler capped at 1GB.
+    async fn page_table<C, F, Fut>(
+        remote_db: &surrealdb::Surreal<C>,
+        table_name: &str,
+        omit: &BTreeSet<String>,
+        mut sink: F,
+    ) -> Result<usize>
+    where
+        C: surrealdb::Connection,
+        F: FnMut(Vec<Value>) -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
     {
         let omit_clause = ssp_protocol::omit_clause(omit);
         let target_page_bytes: usize = 32 * 1024 * 1024;
@@ -778,7 +879,7 @@ impl Replica {
                 "bootstrap page-size auto-tuned",
             );
         }
-        let mut records: Vec<Value> = Vec::new();
+        let mut total: usize = 0;
         // Keyset cursor: the highest `id` paged so far (`None` = first page).
         let mut after_id: Option<String> = None;
         loop {
@@ -822,7 +923,10 @@ impl Replica {
                 .and_then(|row| row.get("id"))
                 .and_then(|v| v.as_str())
                 .map(str::to_string);
-            records.extend(page);
+            total += n;
+            // Hand the page over and drop it here: from this point the caller
+            // owns those rows, and this loop holds nothing but the cursor.
+            sink(page).await?;
             if n < page_size {
                 break;
             }
@@ -832,7 +936,7 @@ impl Replica {
                 None => break,
             }
         }
-        Ok(records)
+        Ok(total)
     }
 
     /// Bulk-insert records into a replica table in bounded batches. The
@@ -1381,6 +1485,22 @@ impl Replica {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cgroup_limit_parses_both_versions_and_unlimited() {
+        // v2 container with a cap.
+        assert_eq!(parse_cgroup_limit("3221225472\n"), Some(3 * 1024 * 1024 * 1024));
+        // v2 without one.
+        assert_eq!(parse_cgroup_limit("max\n"), None);
+        // v1's "unlimited" sentinel (i64::MAX page-aligned) must not read as
+        // a ~9EB cap.
+        assert_eq!(parse_cgroup_limit("9223372036854771712"), None);
+        // v1 with a cap.
+        assert_eq!(parse_cgroup_limit("1073741824"), Some(1024 * 1024 * 1024));
+        // Anything else is "we don't know", never a guess.
+        assert_eq!(parse_cgroup_limit(""), None);
+        assert_eq!(parse_cgroup_limit("not-a-number"), None);
+    }
 
     #[test]
     fn keyset_page_query_uses_ordered_cursor_not_offset() {

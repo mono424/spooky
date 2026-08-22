@@ -2,7 +2,7 @@ use anyhow::Result;
 use scheduler::config::SchedulerConfig;
 use scheduler::transport::HttpTransport;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
@@ -227,10 +227,17 @@ async fn run() -> Result<()> {
         let _ = shutdown_tx.send(());
     });
     
-    // Start scheduler
+    // Start scheduler.
+    //
+    // A failed start() is fatal and must LOOK fatal: the process exits
+    // non-zero so the container restart policy retries it and the exit code
+    // says why. The previous `eprintln!` let the task end quietly, main return
+    // `Ok(())`, and the container come back with no signal that bootstrap had
+    // failed at all.
     let scheduler_handle = tokio::spawn(async move {
         if let Err(e) = scheduler.start().await {
-            eprintln!("Scheduler error: {}", e);
+            error!(error = %e, "Scheduler failed to start — exiting for restart");
+            std::process::exit(1);
         }
     });
     
