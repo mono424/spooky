@@ -10,14 +10,13 @@ import {
   createMemo,
   createSignal,
   createStore,
-  isWrappable,
   onCleanup,
-  reconcile,
   type Accessor,
 } from 'solid-js';
 import { SyncedDb } from '..';
 import type { Sp00kyQueryResultPromise } from '@spooky-sync/core';
 import { useDb } from './context';
+import { mergeRows } from './merge-rows';
 
 type QueryArg<
   S extends SchemaStructure,
@@ -154,7 +153,7 @@ export function createQuery<
   // immediately, which is what the Solid 1 binding did too.
   //
   // Wrapped in an object so `one()` queries (row object or null) and list
-  // queries share one store shape; `reconcile` keyes `value`'s contents.
+  // queries share one store shape; `mergeRows` keys `value`'s contents by id.
   const [store, setStore] = createStore<{ value: TData }>({ value: null as TData });
 
   // Identity of the installed subscription, so a superseded run cannot write
@@ -187,6 +186,22 @@ export function createQuery<
 
       const cleanups: (() => void)[] = [];
       let disposed = false;
+      // `sp00ky.subscribe` resolves its unsubscribe asynchronously; the status
+      // subscription returns one directly. Accept both, and if teardown already
+      // happened while the promise was in flight, unsubscribe immediately.
+      const addCleanup = (c: (() => void) | Promise<(() => void) | undefined> | undefined) => {
+        if (!c) return;
+        if (typeof c === 'function') {
+          if (disposed) c();
+          else cleanups.push(c);
+          return;
+        }
+        void Promise.resolve(c).then((fn) => {
+          if (typeof fn !== 'function') return;
+          if (disposed) fn();
+          else cleanups.push(fn);
+        });
+      };
 
       /**
        * Registration can fail — the canonical case is the SSP answering 503
@@ -203,14 +218,14 @@ export function createQuery<
 
           // Mirror the query's fetch status so the UI can show a "loading
           // more" state while the sync engine pulls records in the background.
-          cleanups.push(
+          addCleanup(
             sp00ky.subscribeQueryStatus(hash, (status) => setIsFetching(status === 'fetching'), {
               immediate: true,
             })
           );
 
           let isFirstCall = true;
-          cleanups.push(
+          addCleanup(
             sp00ky.subscribe(
               hash,
               (rows: Record<string, any>[]) => {
@@ -230,12 +245,10 @@ export function createQuery<
 
                 const t0 = performance.now();
                 setStore((s) => {
-                  if (queryData === null || queryData === undefined || !isWrappable(s.value)) {
+                  if (query.isOne || queryData === null || !Array.isArray(s.value)) {
                     s.value = queryData;
                   } else {
-                    // Keyed reconcile in place: row identity survives, and
-                    // `<For>` still sees add/remove/reorder.
-                    reconcile(queryData as any, 'id')(s.value as any);
+                    mergeRows(s.value as any[], queryData as any[]);
                   }
                 });
                 sp00ky.reportFrontendTiming(hash, performance.now() - t0);
