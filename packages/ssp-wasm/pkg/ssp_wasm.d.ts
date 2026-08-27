@@ -48,6 +48,23 @@ export class Sp00kyProcessor {
      */
     ingest(table: string, op: string, id: string, record: any): any;
     /**
+     * Ingest MANY record changes as ONE circuit step.
+     *
+     * `ingest` costs one full circuit step per record, and a step walks every
+     * registered view, so a cold sync that lands thousands of rows paid that
+     * fixed cost thousands of times (a ~3.9k-row registry took ~3.4s of circuit
+     * time on a laptop, ~0.85ms a row, nearly all of it per-step overhead).
+     * `ChangeSet` already carries many changes and `step_timed` applies them
+     * all to the store before stepping once, so a batch is a single step with
+     * one set of deltas.
+     *
+     * Same input shape as `ingest`, as an array: `WasmIngestItem[]`. Returns
+     * the coalesced `WasmViewUpdate[]` for the whole batch. Changes are applied
+     * in array order, so repeated ids inside one batch settle last-write-wins,
+     * exactly as sequential `ingest` calls would.
+     */
+    ingest_many(items: any): any;
+    /**
      * Load circuit state from a JSON string
      */
     load_state(state: string): void;
@@ -88,6 +105,7 @@ export interface InitOutput {
     readonly __wbg_sp00kyprocessor_free: (a: number, b: number) => void;
     readonly init: () => void;
     readonly sp00kyprocessor_ingest: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: any) => [number, number, number];
+    readonly sp00kyprocessor_ingest_many: (a: number, b: any) => [number, number, number];
     readonly sp00kyprocessor_load_state: (a: number, b: number, c: number) => [number, number];
     readonly sp00kyprocessor_new: () => number;
     readonly sp00kyprocessor_register_view: (a: number, b: any) => [number, number, number];

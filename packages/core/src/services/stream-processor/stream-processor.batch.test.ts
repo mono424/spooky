@@ -133,4 +133,64 @@ describe('StreamProcessor ingestMany bulk insert', () => {
     svc.ingest('user', 'CREATE', 'user:1', { id: 'user:1', _00_rv: 1 });
     expect(receiver.received).toHaveLength(1);
   });
+
+  // A WASM build that exposes `ingest_many` takes one circuit step for the whole
+  // batch. The per-record loop above stays as the fallback for older builds.
+  describe('with a WASM build that supports bulk ingest', () => {
+    function makeBulkService() {
+      const svc = new StreamProcessorService(
+        {} as any,
+        {} as any,
+        { get: async () => undefined, set: async () => {} } as any,
+        makeLogger()
+      );
+      const calls: { items: any[] }[] = [];
+      const mockProcessor: Partial<WasmProcessor> = {
+        ingest: () => {
+          throw new Error('per-record ingest must not be used when ingest_many exists');
+        },
+        ingest_many: (items): WasmStreamUpdate[] => {
+          calls.push({ items });
+          return [
+            {
+              query_id: 'q1',
+              result_data: items.map((i) => [i.id, 1] as [string, number]),
+              timing_circuit_step_ms: 4,
+            } as WasmStreamUpdate,
+          ];
+        },
+      };
+      (svc as any).processor = mockProcessor;
+      return { svc, calls };
+    }
+
+    it('takes a single bulk call and dispatches one update per affected query', () => {
+      const { svc, calls } = makeBulkService();
+      svc.addReceiver(receiver);
+
+      svc.ingestMany([
+        { table: 'user', op: 'CREATE', id: 'user:1', record: { id: 'user:1', _00_rv: 1 } },
+        { table: 'user', op: 'CREATE', id: 'user:2', record: { id: 'user:2', _00_rv: 1 } },
+        { table: 'user', op: 'CREATE', id: 'user:3', record: { id: 'user:3', _00_rv: 1 } },
+      ]);
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].items.map((i) => i.id)).toEqual(['user:1', 'user:2', 'user:3']);
+      expect(receiver.received).toHaveLength(1);
+      expect(receiver.received[0].queryHash).toBe('q1');
+      expect(receiver.received[0].localArray).toHaveLength(3);
+      expect(receiver.received[0].op).toBe('CREATE');
+      expect(receiver.received[0].circuitStepMs).toBe(4);
+    });
+
+    it('never calls the bulk path for an empty batch', () => {
+      const { svc, calls } = makeBulkService();
+      svc.addReceiver(receiver);
+
+      svc.ingestMany([]);
+
+      expect(calls).toHaveLength(0);
+      expect(receiver.received).toHaveLength(0);
+    });
+  });
 });

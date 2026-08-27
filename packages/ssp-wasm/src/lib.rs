@@ -50,6 +50,44 @@ struct WasmViewUpdate {
     timing_snapshot_ms: f64,
 }
 
+/// One record change on the way in, as `ingest_many` receives it (mirrors the
+/// `WasmIngestItem` TS interface below).
+#[derive(serde::Deserialize)]
+struct IngestItem {
+    table: String,
+    op: String,
+    id: String,
+    record: Value,
+}
+
+/// Normalize one incoming record into the `Change` the circuit consumes. Shared
+/// by `ingest` and `ingest_many` so a batched row is treated identically to a
+/// single one.
+fn build_change(table: &str, op: &str, id: &str, record: Value) -> Change {
+    let clean_record = ssp::sanitizer::normalize_record(record);
+    let clean_sv: Sp00kyValue = clean_record.into();
+
+    let record_id = clean_sv
+        .get("id")
+        .cloned()
+        .map(normalize_record_id)
+        .and_then(|v| match v {
+            Sp00kyValue::Str(s) => Some(s.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            // Fallback: extract raw id from the passed `id` param,
+            // stripping the table prefix if present (e.g. "thread:abc" → "abc").
+            ssp::types::raw_id(id).to_string()
+        });
+
+    match Operation::from_str(op).unwrap_or(Operation::Create) {
+        Operation::Create => Change::create(table, &record_id, clean_sv),
+        Operation::Update => Change::update(table, &record_id, clean_sv),
+        Operation::Delete => Change::delete(table, &record_id),
+    }
+}
+
 /// Transform a Vec<ViewDelta> to Vec<WasmViewUpdate> with versions from the store.
 fn transform_deltas(deltas: &[ViewDelta], circuit: &Circuit) -> Vec<WasmViewUpdate> {
     deltas
@@ -165,31 +203,7 @@ impl Sp00kyProcessor {
         let record: Value = serde_wasm_bindgen::from_value(record)
             .map_err(|e| JsValue::from_str(&format!("Failed to parse record: {}", e)))?;
 
-        // Normalize the record and convert to new Sp00kyValue
-        let clean_record = ssp::sanitizer::normalize_record(record);
-        let clean_sv: Sp00kyValue = clean_record.into();
-
-        let record_id = clean_sv
-            .get("id")
-            .cloned()
-            .map(normalize_record_id)
-            .and_then(|v| match v {
-                Sp00kyValue::Str(s) => Some(s.to_string()),
-                _ => None,
-            })
-            .unwrap_or_else(|| {
-                // Fallback: extract raw id from the passed `id` param,
-                // stripping the table prefix if present (e.g. "thread:abc" → "abc").
-                ssp::types::raw_id(&id).to_string()
-            });
-
-        let op_enum = Operation::from_str(&op).unwrap_or(Operation::Create);
-
-        let change = match op_enum {
-            Operation::Create => Change::create(&table, &record_id, clean_sv),
-            Operation::Update => Change::update(&table, &record_id, clean_sv),
-            Operation::Delete => Change::delete(&table, &record_id),
-        };
+        let change = build_change(&table, &op, &id, record);
 
         let changeset = ChangeSet {
             changes: vec![change],
@@ -203,6 +217,50 @@ impl Sp00kyProcessor {
         let transform_ms = t_transform.elapsed().as_secs_f64() * 1000.0;
 
         // Stamp the per-phase ingest timings onto every produced update.
+        for u in wasm_updates.iter_mut() {
+            u.timing_store_apply_ms = step_timings.store_apply_ms;
+            u.timing_circuit_step_ms = step_timings.circuit_step_ms;
+            u.timing_transform_ms = transform_ms;
+        }
+
+        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+        Ok(wasm_updates.serialize(&serializer)?)
+    }
+
+    /// Ingest MANY record changes as ONE circuit step.
+    ///
+    /// `ingest` costs one full circuit step per record, and a step walks every
+    /// registered view, so a cold sync that lands thousands of rows paid that
+    /// fixed cost thousands of times (a ~3.9k-row registry took ~3.4s of circuit
+    /// time on a laptop, ~0.85ms a row, nearly all of it per-step overhead).
+    /// `ChangeSet` already carries many changes and `step_timed` applies them
+    /// all to the store before stepping once, so a batch is a single step with
+    /// one set of deltas.
+    ///
+    /// Same input shape as `ingest`, as an array: `WasmIngestItem[]`. Returns
+    /// the coalesced `WasmViewUpdate[]` for the whole batch. Changes are applied
+    /// in array order, so repeated ids inside one batch settle last-write-wins,
+    /// exactly as sequential `ingest` calls would.
+    pub fn ingest_many(&mut self, items: JsValue) -> Result<JsValue, JsValue> {
+        let items: Vec<IngestItem> = serde_wasm_bindgen::from_value(items)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse ingest batch: {}", e)))?;
+
+        if items.is_empty() {
+            let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+            return Ok(Vec::<WasmViewUpdate>::new().serialize(&serializer)?);
+        }
+
+        let changes = items
+            .into_iter()
+            .map(|item| build_change(&item.table, &item.op, &item.id, item.record))
+            .collect();
+
+        let (deltas, step_timings) = self.circuit.step_timed(ChangeSet { changes });
+
+        let t_transform = Instant::now();
+        let mut wasm_updates = transform_deltas(&deltas, &self.circuit);
+        let transform_ms = t_transform.elapsed().as_secs_f64() * 1000.0;
+
         for u in wasm_updates.iter_mut() {
             u.timing_store_apply_ms = step_timings.store_apply_ms;
             u.timing_circuit_step_ms = step_timings.circuit_step_ms;

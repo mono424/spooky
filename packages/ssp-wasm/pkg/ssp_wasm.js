@@ -33,6 +33,31 @@ export class Sp00kyProcessor {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * Ingest MANY record changes as ONE circuit step.
+     *
+     * `ingest` costs one full circuit step per record, and a step walks every
+     * registered view, so a cold sync that lands thousands of rows paid that
+     * fixed cost thousands of times (a ~3.9k-row registry took ~3.4s of circuit
+     * time on a laptop, ~0.85ms a row, nearly all of it per-step overhead).
+     * `ChangeSet` already carries many changes and `step_timed` applies them
+     * all to the store before stepping once, so a batch is a single step with
+     * one set of deltas.
+     *
+     * Same input shape as `ingest`, as an array: `WasmIngestItem[]`. Returns
+     * the coalesced `WasmViewUpdate[]` for the whole batch. Changes are applied
+     * in array order, so repeated ids inside one batch settle last-write-wins,
+     * exactly as sequential `ingest` calls would.
+     * @param {any} items
+     * @returns {any}
+     */
+    ingest_many(items) {
+        const ret = wasm.sp00kyprocessor_ingest_many(this.__wbg_ptr, items);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
      * Load circuit state from a JSON string
      * @param {string} state
      */
@@ -217,6 +242,10 @@ function __wbg_get_imports() {
             const ret = Reflect.get(arg0, arg1);
             return ret;
         }, arguments); },
+        __wbg_get_with_ref_key_1dc361bd10053bfe: function(arg0, arg1) {
+            const ret = arg0[arg1];
+            return ret;
+        },
         __wbg_instanceof_ArrayBuffer_c367199e2fa2aa04: function(arg0) {
             let result;
             try {

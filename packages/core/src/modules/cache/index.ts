@@ -151,17 +151,18 @@ export class CacheModule implements StreamUpdateReceiver {
           )
         );
 
-        const params = populatedRecords.reduce(
-          (acc, record, i) => {
-            const { id, ...content } = record.record;
-            return {
-              ...acc,
-              [`id${i}`]: id,
-              [`content${i}`]: content,
-            };
-          },
-          {} as Record<string, any>
-        );
+        // Filled in place, NOT with a spread-per-iteration reduce: spreading the
+        // accumulator copies every key written so far on each record, which is
+        // O(n^2) in the batch size. On a cold start that batches thousands of
+        // rows (a game library, a player-name registry) it was the single
+        // biggest main-thread cost of the whole boot - ~36% of samples, seconds
+        // of blocking - for a loop that does no real work.
+        const params: Record<string, any> = {};
+        for (let i = 0; i < populatedRecords.length; i++) {
+          const { id, ...content } = populatedRecords[i].record;
+          params[`id${i}`] = id;
+          params[`content${i}`] = content;
+        }
 
         await this.local.execute(query, params, { epoch });
       }

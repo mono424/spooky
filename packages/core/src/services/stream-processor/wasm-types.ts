@@ -34,6 +34,10 @@ export interface WasmIngestItem {
 // Interface matching the Sp00kyProcessor class from WASM
 export interface WasmProcessor {
   ingest(table: string, op: string, id: string, record: any): WasmStreamUpdate[];
+  // Bulk ingest: ONE circuit step for the whole array, returning the coalesced
+  // updates. Optional because a stale WASM build won't have it — callers guard
+  // with `typeof x === 'function'` and fall back to a loop over `ingest`.
+  ingest_many?(items: WasmIngestItem[]): WasmStreamUpdate[];
   register_view(config: WasmQueryConfig): WasmStreamUpdate | undefined;
   unregister_view(id: string): void;
   // Seed per-table `select` permission predicates ({ [table]: whereText }) so

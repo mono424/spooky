@@ -204,6 +204,72 @@ export class StreamProcessorService {
   ): void {
     if (records.length === 0) return;
 
+    if (!this.processor) {
+      this.logger.warn(
+        { Category: 'sp00ky-client::StreamProcessorService::ingestMany' },
+        'Not initialized, skipping ingest'
+      );
+      return;
+    }
+
+    // One circuit step for the whole batch when the WASM build offers it. A
+    // step walks every registered view, so the per-record path pays that fixed
+    // cost N times: a cold sync landing a few thousand rows spent seconds of
+    // main-thread time almost entirely on step overhead. Older builds have no
+    // `ingest_many`, hence the loop below.
+    const bulkIngest = this.processor.ingest_many;
+    if (typeof bulkIngest === 'function') {
+      this.logger.debug(
+        { count: records.length, Category: 'sp00ky-client::StreamProcessorService::ingestMany' },
+        'Ingesting batch into ssp'
+      );
+      try {
+        const items = records.map((record) => ({
+          table: record.table,
+          op: record.op,
+          id: record.id,
+          record: this.normalizeValue(record.record),
+        }));
+        const t0 = performance.now();
+        const rawUpdates = bulkIngest.call(this.processor, items) ?? [];
+        const materializationTimeMs = performance.now() - t0;
+        this.logger.debug(
+          {
+            count: records.length,
+            rawUpdates: rawUpdates.length,
+            materializationTimeMs,
+            Category: 'sp00ky-client::StreamProcessorService::ingestMany',
+          },
+          'Ingesting batch into ssp done'
+        );
+        if (rawUpdates.length > 0) {
+          // `op: 'CREATE'` for the same reason the coalesced flush uses it: the
+          // batch's update takes DataModule's immediate (non-debounced) path.
+          this.dispatchUpdates(
+            rawUpdates.map((u: WasmStreamUpdate) => ({
+              queryHash: u.query_id,
+              localArray: u.result_data,
+              op: 'CREATE' as const,
+              materializationTimeMs,
+              storeApplyMs: u.timing_store_apply_ms,
+              circuitStepMs: u.timing_circuit_step_ms,
+              transformMs: u.timing_transform_ms,
+            }))
+          );
+        }
+      } catch (e) {
+        // Same contract as the single-record path: report and move on rather
+        // than re-running the batch, which would double-apply whatever the
+        // failed step already committed to the store.
+        this.logger.error(
+          { error: e, count: records.length, Category: 'sp00ky-client::StreamProcessorService::ingestMany' },
+          'Ingesting batch into ssp failed'
+        );
+      }
+      this.markSnapshotDirty();
+      return;
+    }
+
     this.beginCoalescing();
     try {
       for (const record of records) {
