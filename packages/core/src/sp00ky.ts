@@ -334,6 +334,17 @@ export class Sp00kyClient<S extends SchemaStructure> {
   private sync: Sp00kySync<S>;
   private devTools: DevToolsService;
   private crdtManager: CrdtManager;
+  /**
+   * True once the LOCAL half of boot is done and the client can serve reads
+   * from the local store. Distinct from being connected: `syncHealth` covers
+   * reaching the server and `storageHealth` covers whether the local store is
+   * durable, but neither says "usable". Consumers gate their first paint on
+   * this, which is what makes a warm boot instant and an offline boot possible.
+   */
+  private localReady = false;
+  // Principal the current query-id salt was minted for (`null` = signed out).
+  // Rotated only on a real auth flip: see the call sites in `init`.
+  private saltUserId: string | null = null;
   private featureFlags!: FeatureFlagModule<S>;
   private appReleases!: AppReleaseModule<S>;
   // Query hashes already preloaded this session — skip redundant one-shot
@@ -831,16 +842,6 @@ export class Sp00kyClient<S extends SchemaStructure> {
         this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Schema provisioned');
       }
 
-      await this.remote.connect();
-      // Start supervising only after the first connect succeeds, so a boot-time
-      // failure surfaces as a thrown init() rather than being silently absorbed
-      // into a background retry loop.
-      this.connectionSupervisor.start();
-      this.logger.debug(
-        { Category: 'sp00ky-client::Sp00kyClient::init' },
-        'Remote database connected'
-      );
-
       // Warm the blob cache in the background. Deliberately NOT awaited, and
       // deliberately after `remote.connect()`: this walks the OPFS directory to
       // rebuild the manifest, and awaiting it ahead of the socket delayed the
@@ -870,26 +871,31 @@ export class Sp00kyClient<S extends SchemaStructure> {
         'StreamProcessor initialized'
       );
 
-      await this.auth.init();
-      this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Auth initialized');
 
-      // Salt query-id hashing with the SurrealDB session id so two browsers
-      // for the same user don't collide on shared `_00_query` rows. The same
-      // session id is the `session_id` key in `_00_cursor` rows, so the
-      // CrdtManager needs it too.
-      //
-      // Deliberately NOT refreshed on reconnect, even though `session::id()`
-      // does change with every WebSocket session. The salt keys `_00_query`
-      // rows and local cache entries, so rotating it would invalidate every
-      // query hash and force a full re-register plus a cache-key migration on
-      // each blip. Those rows stay valid because the TTL heartbeat keeps them
-      // alive, not because the session that created them is still open — so a
-      // stable salt across reconnects is the correct behavior. Auth flips are
-      // the one case that must rotate it (below): a sign-in is a different
-      // principal, not the same session on a new socket.
-      const sessionId = await this.fetchSessionId();
+      // Restore the session from the cached JWT, with no network. This is what
+      // lets the rest of the boot - and the app on top of it - proceed as a
+      // signed-in user before a socket exists. `initRemote()` verifies the
+      // token afterwards and signs out for real if the server rejects it.
+      const restoredUserId = await this.auth.restoreSessionFromToken();
+
+      // Salt for query-id hashing, minted locally (see `mintSessionSalt`). It
+      // is stable for the life of this client: the salt keys `_00_query` rows
+      // and local cache entries, so rotating it would invalidate every query
+      // hash and force a full re-register. Auth flips are the one case that
+      // must rotate it - a sign-in is a different principal.
+      const sessionId = this.mintSessionSalt();
+      this.saltUserId = restoredUserId;
       await this.dataModule.init(sessionId);
       this.crdtManager.setSessionId(sessionId);
+
+      // Route queries and satisfy `$auth`-gated permission predicates from the
+      // restored identity, BEFORE anything can register. Without this a query
+      // registering pre-verification would target the wrong
+      // `_00_query_user_<id>` table and register a permission-dead SSP view.
+      if (restoredUserId) {
+        this.dataModule.setCurrentUserId(restoredUserId);
+        this.streamProcessor.setSessionAuth(this.sessionAuthId(), this.auth.access);
+      }
       this.logger.debug(
         { sessionId, Category: 'sp00ky-client::Sp00kyClient::init' },
         'DataModule initialized'
@@ -920,10 +926,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
         // locally instead of being rejected. Set synchronously BEFORE the
         // first `await` (like `setCurrentUserId` above) so queries that
         // re-register on this auth flip see the fresh context, not a stale one.
-        this.streamProcessor.setSessionAuth(
-          this.auth.currentUser?.id ? encodeRecordId(this.auth.currentUser.id) : null,
-          this.auth.access
-        );
+        this.streamProcessor.setSessionAuth(this.sessionAuthId(), this.auth.access);
         // Record the target bucket synchronously (still before the first
         // `await`) so a reload mid-switch boots straight into the right store.
         writeBootBucketHint(bucketIdForUser(userId));
@@ -931,9 +934,25 @@ export class Sp00kyClient<S extends SchemaStructure> {
         // + latest-target-wins internally; no-op when the bucket already
         // matches (the boot-hint warm path).
         await this.ensureLocalBucket(userId);
-        const next = await this.fetchSessionId();
-        this.dataModule.setSessionId(next);
-        this.crdtManager.setSessionId(next);
+        // Only rotate the salt when the PRINCIPAL actually changed: a sign-in or
+        // sign-out is a different principal and must not keep the old
+        // principal's query ids, but the first fire of this callback after boot
+        // carries the same user the salt was already minted for, and rotating
+        // there would invalidate every query hash for no change in value.
+        // Canonicalize with the SAME encoding the restore path used, NOT
+        // String(): after background verification this callback carries a
+        // RecordId, while a session restored from the token carries the plain
+        // "table:id" string. Comparing their raw stringifications made every
+        // warm boot look like a principal change, which rotated the salt and
+        // re-registered every mounted query - the list painted from cache and
+        // then emptied a second later.
+        const saltFor = this.sessionAuthId();
+        if (saltFor !== this.saltUserId) {
+          this.saltUserId = saltFor;
+          const next = this.mintSessionSalt();
+          this.dataModule.setSessionId(next);
+          this.crdtManager.setSessionId(next);
+        }
         try {
           await this.sync.setCurrentUserId(userId);
         } catch (e) {
@@ -959,16 +978,75 @@ export class Sp00kyClient<S extends SchemaStructure> {
         'AppReleaseModule initialized'
       );
 
+      // LOCAL BOOT IS DONE — the client can serve reads. Consumers gate their
+      // UI on this resolving, so everything above must stay network-free.
+      this.localReady = true;
       this.logger.info(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
-        'Sp00kyClient initialization completed successfully'
+        'Sp00kyClient local initialization completed; connecting in the background'
       );
+
+      // The network half, deliberately NOT awaited. Nothing above needed it:
+      // queries paint from the local store, `sync.init()` tolerates a closed
+      // socket, and the session was restored from the cached token. Awaiting
+      // this was the entire reason a warm reload sat on a loading screen for
+      // seconds over data the browser already had on disk - and the reason an
+      // offline boot never completed at all.
+      void this.initRemote();
     } catch (e) {
       this.logger.error(
         { error: e, Category: 'sp00ky-client::Sp00kyClient::init' },
         'Sp00kyClient initialization failed'
       );
       throw e;
+    }
+  }
+
+  /**
+   * The network half of boot: connect, verify the restored session, and let the
+   * sync engine catch up. Runs in the background after `init()` has already
+   * resolved, so nothing here is on the paint path.
+   *
+   * Every step is best-effort. A failure leaves the client in exactly the state
+   * a warm offline boot is in - local reads working, writes queued in the
+   * outbox - and the connection supervisor keeps retrying underneath.
+   */
+  private async initRemote(): Promise<void> {
+    try {
+      await this.remote.connect();
+      this.logger.debug(
+        { Category: 'sp00ky-client::Sp00kyClient::initRemote' },
+        'Remote database connected'
+      );
+    } catch (e) {
+      // NOT fatal. This used to throw out of init() and leave the consuming app
+      // on its loading screen forever with no network. The supervisor (started
+      // unconditionally below) owns the retry from here.
+      this.logger.warn(
+        { err: e, Category: 'sp00ky-client::Sp00kyClient::initRemote' },
+        'Remote connect failed; running from the local store and retrying in the background'
+      );
+    }
+
+    // Started whether or not the first connect succeeded - it is the thing that
+    // revives the socket, so gating it on a successful connect would mean a
+    // boot-time failure never recovered.
+    this.connectionSupervisor.start();
+
+    try {
+      // Verifies the optimistically restored token against the server. On a
+      // rejected token this signs out for real; on an unreachable server it
+      // keeps the cached session (see AuthService.check).
+      await this.auth.init();
+      this.logger.debug(
+        { Category: 'sp00ky-client::Sp00kyClient::initRemote' },
+        'Auth verified'
+      );
+    } catch (e) {
+      this.logger.warn(
+        { err: e, Category: 'sp00ky-client::Sp00kyClient::initRemote' },
+        'Auth verification failed; keeping the restored session'
+      );
     }
   }
 
@@ -1518,26 +1596,53 @@ export class Sp00kyClient<S extends SchemaStructure> {
     return this.dataModule.delete(table, id);
   }
 
+  /**
+   * Whether the local store is initialized and reads can be served. See the
+   * `localReady` field: this is deliberately independent of connectivity.
+   */
+  isLocalReady(): boolean {
+    return this.localReady;
+  }
+
   async useRemote<T>(fn: (client: Surreal) => Promise<T> | T): Promise<T> {
     return fn(this.remote.getClient());
   }
 
   /**
-   * Fetch SurrealDB's `session::id()` as a string. Used as a salt for
-   * query-id hashing so two sessions for the same user get distinct
-   * `_00_query` rows. Returns empty string if the query fails (we still
-   * boot, just without session scoping for IDs).
+   * Mint the salt used for query-id hashing, so two sessions registering the
+   * same logical query get distinct `_00_query` rows.
+   *
+   * Generated LOCALLY, deliberately. This used to be `RETURN <string>session::id()`,
+   * which cost a serial round trip on the critical boot path and resolved to
+   * `''` offline. The value never needed to come from the server: the server
+   * derives its own `clientId` inside `fn::query::register` and *ignores*
+   * whatever the caller passed, and the permission rules that matter gate on
+   * `auth_id = $auth.id` rather than the session (`_00_list_ref`). Session
+   * scoping via `clientId = session::id()` was in fact removed upstream because
+   * it broke a user with two tabs open. All this value has to be is unique per
+   * browser session, which `randomUUID` gives us for free and offline.
    */
-  private async fetchSessionId(): Promise<string> {
-    try {
-      const [sid] = await this.remote.query<[string]>('RETURN <string>session::id()');
-      return typeof sid === 'string' ? sid : '';
-    } catch (e) {
-      this.logger.warn(
-        { error: e, Category: 'sp00ky-client::Sp00kyClient::fetchSessionId' },
-        'Failed to fetch session::id() — proceeding with empty salt'
-      );
-      return '';
-    }
+  /**
+   * The current principal as the `"table:id"` string the in-browser SSP wants
+   * for `$auth.id`, or null when signed out.
+   *
+   * Tolerates BOTH shapes `currentUser.id` can take, which is the point:
+   * a session restored from the cached token carries a plain string (the JWT's
+   * `ID` claim), while one verified by the server carries a RecordId. Passing
+   * the former to `encodeRecordId` reads `.table` off a string and throws
+   * during boot.
+   */
+  private sessionAuthId(): string | null {
+    const id = this.auth.currentUser?.id;
+    if (!id) return null;
+    return typeof id === 'string' ? id : encodeRecordId(id);
+  }
+
+  private mintSessionSalt(): string {
+    const c: Crypto | undefined =
+      typeof globalThis !== 'undefined' ? (globalThis as { crypto?: Crypto }).crypto : undefined;
+    if (c?.randomUUID) return c.randomUUID();
+    // Older browsers / non-secure contexts: uniqueness is all that is required.
+    return `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
   }
 }

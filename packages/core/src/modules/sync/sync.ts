@@ -473,6 +473,13 @@ export class Sp00kySync<S extends SchemaStructure> {
     if (this.isInit) throw new Error('Sp00kySync is already initialized');
     this.isInit = true;
     await this.scheduler.init({ loadOutbox: this.tabRole !== 'follower' });
+    // Boot is local-first now, so init() routinely runs BEFORE the socket is
+    // up. Treat that as "the socket we registered on is gone": otherwise the
+    // first `connected` takes the initial-connect branch, returns early, and
+    // never re-enqueues `register` for queries that registered while offline.
+    // They would still heal via the down-queue backoff, but slowly and only
+    // because every query happens to enqueue its own register.
+    if (this.remote.getStatus() !== 'connected') this.needsResubscribe = true;
     this.subscribeToReconnect();
     this.subscribeToConnectionState();
     void this.scheduler.syncUp();

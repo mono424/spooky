@@ -9,6 +9,7 @@ import type { Logger } from '../../services/logger/index';
 export * from './events/index';
 import { AuthEventTypes, createAuthEventSystem } from './events/index';
 import type { PersistenceClient } from '../../types';
+import { classifySyncError } from '../../utils/error-classification';
 
 // Helper to pretty print types
 type Prettify<T> = {
@@ -36,26 +37,39 @@ type ExtractAccessParams<
     : never;
 
 /**
- * Read the `AC` (access-method name) claim from a SurrealDB record-access
- * JWT without verifying it — we only need the claim, the server enforces the
- * token. Returns null on any malformed input. The in-browser SSP needs this
- * to resolve `$access` in table permission predicates (mirrors the session's
- * `$access` that the server's `fn::query::register` reads).
+ * Read the claims of a SurrealDB record-access JWT WITHOUT verifying it. The
+ * server still enforces the token on every request; this is only so the client
+ * can act on what it already holds before a round trip completes.
+ *
+ * `AC` is the access-method name — the in-browser SSP needs it to resolve
+ * `$access` in table permission predicates (mirrors the session's `$access`
+ * that the server's `fn::query::register` reads). `ID` is the `$auth.id` record
+ * id, which is what lets a warm boot restore a session locally.
+ *
+ * Returns nulls on any malformed input.
  */
-function decodeAccessFromToken(token: string): string | null {
+function decodeTokenClaims(token: string): { access: string | null; userId: string | null } {
   try {
     const payload = token.split('.')[1];
-    if (!payload) return null;
+    if (!payload) return { access: null, userId: null };
     let b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
     b64 += '='.repeat((4 - (b64.length % 4)) % 4);
     const json =
       typeof atob === 'function' ? atob(b64) : Buffer.from(b64, 'base64').toString('binary');
     const claims = JSON.parse(json) as Record<string, unknown>;
     const ac = claims.AC ?? claims.ac;
-    return typeof ac === 'string' ? ac : null;
+    const id = claims.ID ?? claims.id;
+    return {
+      access: typeof ac === 'string' ? ac : null,
+      userId: typeof id === 'string' ? id : null,
+    };
   } catch {
-    return null;
+    return { access: null, userId: null };
   }
+}
+
+function decodeAccessFromToken(token: string): string | null {
+  return decodeTokenClaims(token).access;
 }
 
 export class AuthService<S extends SchemaStructure> {
@@ -113,6 +127,44 @@ export class AuthService<S extends SchemaStructure> {
   private notifyListeners() {
     const userId = this.currentUser?.id || null;
     this.events.emit(AuthEventTypes.AuthStateChanged, userId);
+  }
+
+  /**
+   * Restore a session from the locally cached JWT, with NO network.
+   *
+   * This is what makes a warm boot paint instantly and what makes an offline
+   * boot possible at all: the token is in local storage, and it already carries
+   * both the access method and the `$auth.id` record id. Everything the client
+   * needs to route queries (`setCurrentUserId`) and to satisfy `$auth`-gated
+   * permission predicates in the in-browser SSP (`setSessionAuth`) is therefore
+   * available before a socket exists.
+   *
+   * The session is OPTIMISTIC: the token is unverified here. `check()` runs
+   * afterwards in the background and downgrades to a real sign-out if the
+   * server rejects it. Nothing is trusted that the server has not also seen -
+   * the local store only ever holds rows the server previously sent.
+   *
+   * Returns the restored user id, or null when there is no usable token.
+   */
+  async restoreSessionFromToken(): Promise<string | null> {
+    const token = await this.persistenceClient.get<string>('sp00ky_auth_token');
+    if (!token) return null;
+    const { access, userId } = decodeTokenClaims(token);
+    if (!userId) return null;
+
+    this.token = token;
+    // Only the id: the full row is not in the token. It lands from the local
+    // cache when the app's own `user` query paints, and is replaced wholesale
+    // by `check()` once the server answers.
+    this.currentUser = { id: userId };
+    this.isAuthenticated = true;
+    this.access = access ?? this.defaultAccessName();
+    this.notifyListeners();
+    this.logger.debug(
+      { userId, Category: 'sp00ky-client::AuthService::restoreSessionFromToken' },
+      'Session restored optimistically from cached token'
+    );
+    return userId;
   }
 
   /**
@@ -180,11 +232,23 @@ export class AuthService<S extends SchemaStructure> {
         }
       }
     } catch (error) {
-      this.logger.error(
-        { error, stack: (error as Error).stack, Category: 'sp00ky-client::AuthService::check' },
-        'Auth check failed'
-      );
-      await this.signOut();
+      // A REACHABILITY failure is not a rejected token. This catch used to call
+      // signOut() unconditionally, which deletes `sp00ky_auth_token` - so a
+      // blip on boot silently logged the user out, and an offline boot could
+      // never stay signed in. Only an application error (the server answered,
+      // and the answer was "no") ends the session.
+      if (classifySyncError(error) === 'network') {
+        this.logger.warn(
+          { error, Category: 'sp00ky-client::AuthService::check' },
+          'Auth check unreachable; keeping the cached session and retrying later'
+        );
+      } else {
+        this.logger.error(
+          { error, stack: (error as Error).stack, Category: 'sp00ky-client::AuthService::check' },
+          'Auth check failed'
+        );
+        await this.signOut();
+      }
     } finally {
       this.isLoading = false;
     }
