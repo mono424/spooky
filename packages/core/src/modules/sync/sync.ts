@@ -75,6 +75,15 @@ export interface Sp00kySyncOptions {
    */
   pushTimeoutMs?: number;
   /**
+   * Max time a single down event (`register`/`sync`/`cleanup`) may take before
+   * it is treated as a network failure and retried. The mirror of
+   * {@link pushTimeoutMs} for the read side, which had no such guard: a
+   * `fn::query::register` that never settled held its slot in the down drain,
+   * and every later registration behind it, for the rest of the session.
+   * Defaults to 30000; `0` disables the timeout.
+   */
+  downTimeoutMs?: number;
+  /**
    * Transport supervisor. Sync reads its state to report `connection` in
    * {@link SyncHealth} so a UI can show "reconnecting…" the instant the socket
    * drops, without waiting for the degrade threshold. Optional: omitted in
@@ -225,6 +234,7 @@ export class Sp00kySync<S extends SchemaStructure> {
   private readonly degradeAfterFailures: number;
   /** Per-push RPC deadline; see {@link withPushTimeout}. */
   private readonly pushTimeoutMs: number;
+  private readonly downTimeoutMs: number;
   private consecutiveSyncFailures = 0;
   private syncHealthStatus: SyncHealthStatus = 'healthy';
   private lastSyncErrorKind: 'network' | 'application' | undefined;
@@ -461,6 +471,7 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.anonLiveEnabled = options?.anonymousLiveQueries ?? false;
     this.degradeAfterFailures = Math.max(0, options?.degradeAfterConsecutiveFailures ?? 3);
     this.pushTimeoutMs = Math.max(0, options?.pushTimeoutMs ?? 30_000);
+    this.downTimeoutMs = Math.max(0, options?.downTimeoutMs ?? 30_000);
     this.connectionSupervisor = options?.connectionSupervisor;
   }
 
@@ -1456,6 +1467,24 @@ export class Sp00kySync<S extends SchemaStructure> {
       { event, Category: 'sp00ky-client::Sp00kySync::processDownEvent' },
       'Processing down event'
     );
+    // Bounded for the same reason a push is (see withPushTimeout): an RPC that
+    // never settles would otherwise hold its slot in the concurrent down drain
+    // — and, before that drain existed, the WHOLE queue — for the rest of the
+    // session, with no retry, no error, and every dependent `useQuery` stuck
+    // loading. "timed out" in the message keeps `classifySyncError` treating it
+    // as a network failure, so `DownQueue.run` re-heads it for the next pass.
+    return this.withDownTimeout(this.runDownEvent(event), `${event.type} ${event.payload.hash}`);
+  }
+
+  private withDownTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+    return withTimeout(
+      promise,
+      this.downTimeoutMs,
+      `Down event timed out after ${this.downTimeoutMs}ms (${label})`
+    );
+  }
+
+  private async runDownEvent(event: DownEvent): Promise<void> {
     switch (event.type) {
       case 'register':
         return this.registerQuery(event.payload.hash);

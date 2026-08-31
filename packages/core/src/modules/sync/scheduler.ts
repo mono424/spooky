@@ -8,6 +8,17 @@ import { SyncQueueEventTypes } from './events/index';
  */
 /** Backoff for re-draining a queue that halted on an error. */
 const RETRY_BASE_MS = 500;
+/**
+ * How many down events may be in flight at once.
+ *
+ * The down queue was strictly serial: one `register`/`sync`/`cleanup` RPC at a
+ * time for the WHOLE client. Measured in production that drained at roughly one
+ * event per 8.8s, so a list that registers a query per scrolled-to window took
+ * minutes to fill — the rows were already cached, only the registration lagged.
+ * Ordering is a per-hash requirement, not a global one (see `takeNext`), so
+ * independent hashes can go in parallel. Bounded to stay polite to the SSP.
+ */
+const MAX_CONCURRENT_DOWN = 4;
 const RETRY_MAX_MS = 15_000;
 
 export class SyncScheduler {
@@ -197,14 +208,58 @@ export class SyncScheduler {
 
     this.isSyncingDown = true;
     let processedAny = false;
+    // Hashes currently in flight. `takeNext` skips their events, so per-hash
+    // ordering holds while independent hashes run concurrently.
+    const busy = new Set<string>();
+    const inFlight = new Set<Promise<void>>();
+    // First failure of this pass. Once set we stop TAKING work (mirroring the
+    // old "halt the pass and retry on a backoff") but still let what is already
+    // in flight finish, rather than abandoning RPCs mid-round.
+    let failure: unknown | undefined;
     try {
-      while (this.downQueue.size > 0 && !this.paused) {
-        if (this.upQueue.size > 0) break;
-        await this.downQueue.next(this.onProcessDown);
-        processedAny = true;
+      for (;;) {
+        if (this.paused) break;
+        // Yield to the up queue: stop taking new down work so a pending
+        // mutation gets its turn. The old code `break`-ed out and came back
+        // only on a backoff, so a steady trickle of local writes could starve
+        // registration indefinitely; draining what is in flight and re-arming
+        // immediately interleaves the two instead.
+        const yieldToUp = this.upQueue.size > 0;
+        while (
+          failure === undefined &&
+          !yieldToUp &&
+          inFlight.size < MAX_CONCURRENT_DOWN
+        ) {
+          const event = this.downQueue.takeNext(busy);
+          if (!event) break;
+          const hash = event.payload.hash;
+          busy.add(hash);
+          processedAny = true;
+          // `run` never rejects — it hands the error back — so one failing
+          // event cannot reject the `Promise.race` below and lose the rest.
+          const task: Promise<void> = this.downQueue
+            .run(event, this.onProcessDown)
+            .then((error) => {
+              if (error !== undefined && failure === undefined) failure = error;
+            })
+            .finally(() => {
+              busy.delete(hash);
+              inFlight.delete(task);
+            });
+          inFlight.add(task);
+        }
+        if (inFlight.size === 0) break;
+        // Wake as soon as ANY slot frees, so the pool refills continuously
+        // instead of in barriers.
+        await Promise.race(inFlight);
+        if (yieldToUp && inFlight.size === 0) break;
       }
+      if (failure !== undefined) throw failure;
       if (processedAny) this.onSyncOutcome?.(true);
       this.downRetryAttempt = 0;
+      // Re-arm if we stopped early for the up queue (or hit the pool cap with
+      // work still queued) — otherwise that work waits for a fresh enqueue.
+      if (this.downQueue.size > 0) this.scheduleDownRetry(RETRY_BASE_MS);
     } catch (error) {
       this.onSyncOutcome?.(false, error);
       this.scheduleDownRetry();

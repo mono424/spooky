@@ -83,6 +83,38 @@ export function reviveRow(json: string): Row {
   });
 }
 
+/**
+ * SELECT-clause expression yielding the row's `data` narrowed to `fields` (plus
+ * `id`), so SQLite never returns — and neither side ever parses — the fields the
+ * caller did not ask for. On a game list that is every row's `pgn`, which was
+ * being read, parsed and thrown away 50 rows at a time for eight rendered fields.
+ *
+ * Byte-identical to running {@link project} over the fully-parsed row, which is
+ * what both paths did before, and verified so against real SQLite:
+ * `json_each` walks the keys the row ACTUALLY has, so an ABSENT key stays absent
+ * rather than becoming an explicit null — the difference `json_object`/
+ * `json_extract` would have introduced. A stored null, nested objects and
+ * arrays, and `{__u8}` blob tags all round-trip unchanged, because
+ * `json_group_object` understands `json_each`'s `value` column as JSON rather
+ * than as text. `COALESCE` covers a row sharing none of the requested keys,
+ * where the subquery yields NULL and `reviveRow` would throw.
+ *
+ * Deliberately unaliased, so the emitted statement keeps the exact shape the
+ * callers already produce (`FROM "t" WHERE id IN (…)`).
+ *
+ * Binds one parameter per key, pushed onto `bind` — these land in the SELECT
+ * clause, so they must be bound BEFORE any WHERE parameters.
+ */
+export function projectedDataSql(fields: string[], bind: unknown[]): string {
+  const keys = ['id', ...fields];
+  for (const k of keys) bind.push(k);
+  const placeholders = keys.map(() => '?').join(', ');
+  return (
+    `COALESCE((SELECT json_group_object(je.key, je.value) ` +
+    `FROM json_each(data) je WHERE je.key IN (${placeholders})), '{}') AS data`
+  );
+}
+
 export function project(row: Row, fields: string[]): Row {
   const out: Row = {};
   for (const f of ['id', ...fields]) if (f in row) out[f] = row[f];

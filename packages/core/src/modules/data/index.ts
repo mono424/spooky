@@ -587,6 +587,32 @@ export class DataModule<S extends SchemaStructure> {
   private readonly settledWrites = new Map<string, number>();
   private readonly settledDeletes = new Map<string, number>();
 
+  // ---- Outbox id cache -----------------------------------------------------
+  //
+  // `getPendingRecordIds` runs a full `SELECT ... FROM _00_pending_mutations`,
+  // and `buildRenderIds` calls it on EVERY materialization of EVERY query. That
+  // is a round trip down the local engine's single-flight op queue, so with tens
+  // of live queries one ingest fanned out into tens of them — in a 4-second
+  // capture, 11 of 25 local queries were that one statement, against an outbox
+  // holding zero rows.
+  //
+  // Cached, and invalidated at the two points that change the outbox: enqueueing
+  // a mutation (below) and `noteWriteSettled` (the row is deleted before it is
+  // called). The TTL is a BACKSTOP, not the mechanism: should some other path
+  // ever remove a row without telling us, this bounds the staleness to one tick
+  // instead of the session. Well under the grace windows the render set already
+  // tolerates deliberately (SETTLED_WRITE_GRACE_MS is 10s).
+  private pendingIds: { writes: Set<string>; deletes: Set<string> } | null = null;
+  private pendingIdsAt = 0;
+  private pendingIdsInflight: Promise<{ writes: Set<string>; deletes: Set<string> }> | null = null;
+  private static readonly PENDING_IDS_TTL_MS = 250;
+
+  /** Drop the cached outbox ids. Cheap; call it on anything that could change
+   *  `_00_pending_mutations`. */
+  private invalidatePendingIds(): void {
+    this.pendingIds = null;
+  }
+
   /**
    * Grace period for a settled write. Long enough to cover an SSP round trip
    * that is running slowly (seconds, not milliseconds, when the edge path is
@@ -606,6 +632,9 @@ export class DataModule<S extends SchemaStructure> {
    * disappear immediately, which is what makes this safe.
    */
   noteWriteSettled(recordId: string, mutationType: string): void {
+    // The outbox row is already gone by the time this is called — that is what
+    // makes it the delete-side invalidation point for the cache above.
+    this.invalidatePendingIds();
     const until = Date.now() + DataModule.SETTLED_WRITE_GRACE_MS;
     if (mutationType === 'delete') this.settledDeletes.set(recordId, until);
     else this.settledWrites.set(recordId, until);
@@ -1181,6 +1210,30 @@ export class DataModule<S extends SchemaStructure> {
    * briefly hide an optimistic write but never resurrects a deleted row.
    */
   async getPendingRecordIds(): Promise<{ writes: Set<string>; deletes: Set<string> }> {
+    const now = Date.now();
+    const cached = this.pendingIds;
+    if (cached && now - this.pendingIdsAt < DataModule.PENDING_IDS_TTL_MS) {
+      // COPIES: `buildRenderIds` merges the settled-write ids into these sets,
+      // and handing out the cached instances would let it grow them permanently.
+      return { writes: new Set(cached.writes), deletes: new Set(cached.deletes) };
+    }
+    // Single-flight: one ingest fans out to many queries materializing at once,
+    // and without this they all queue their own identical read behind each other.
+    if (!this.pendingIdsInflight) {
+      this.pendingIdsInflight = this.readPendingRecordIds().finally(() => {
+        this.pendingIdsInflight = null;
+      });
+    }
+    const fresh = await this.pendingIdsInflight;
+    return { writes: new Set(fresh.writes), deletes: new Set(fresh.deletes) };
+  }
+
+  /** The uncached read. Also the reload path after an invalidation, so the ids
+   *  still survive a reload exactly as before. */
+  private async readPendingRecordIds(): Promise<{
+    writes: Set<string>;
+    deletes: Set<string>;
+  }> {
     const writes = new Set<string>();
     const deletes = new Set<string>();
     try {
@@ -1198,7 +1251,12 @@ export class DataModule<S extends SchemaStructure> {
         { err, Category: 'sp00ky-client::DataModule::getPendingRecordIds' },
         'Failed to read pending mutations; optimistic writes may be briefly hidden'
       );
+      // Do NOT cache a failed read: the empty sets are a fallback for this call,
+      // not a statement that the outbox is empty.
+      return { writes, deletes };
     }
+    this.pendingIds = { writes, deletes };
+    this.pendingIdsAt = Date.now();
     return { writes, deletes };
   }
 
@@ -1685,6 +1743,8 @@ export class DataModule<S extends SchemaStructure> {
       tableName,
     };
 
+    // A new outbox row: the cached pending-id sets no longer describe it.
+    this.invalidatePendingIds();
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }
@@ -1778,6 +1838,8 @@ export class DataModule<S extends SchemaStructure> {
       options: pushEventOptions,
     };
 
+    // A new outbox row: the cached pending-id sets no longer describe it.
+    this.invalidatePendingIds();
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }
@@ -1853,6 +1915,8 @@ export class DataModule<S extends SchemaStructure> {
       record_id: rid,
     };
 
+    // A new outbox row: the cached pending-id sets no longer describe it.
+    this.invalidatePendingIds();
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }

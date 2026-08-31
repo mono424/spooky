@@ -318,6 +318,12 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * `0` disables. Defaults to `30_000`.
    */
   pushTimeoutMs?: number;
+  /**
+   * Max time a single down event (`register`/`sync`/`cleanup`) may take before
+   * it is retried. Mirror of {@link pushTimeoutMs} for the read side.
+   * Defaults to 30000; `0` disables the timeout.
+   */
+  downTimeoutMs?: number;
 }
 
 /** Tunables for sync-health reporting. See {@link Sp00kyConfig.syncHealth}. */

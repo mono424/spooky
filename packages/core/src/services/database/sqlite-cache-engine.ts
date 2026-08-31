@@ -6,6 +6,7 @@ import {
   reviveRow,
   serializeRow,
   project,
+  projectedDataSql,
 } from './sqlite-plan-sql';
 import type { Logger } from '../logger/index';
 import type { Sp00kyConfig, StorageHealth } from '../../types';
@@ -772,7 +773,8 @@ export class SqliteCacheEngine implements LocalStore {
     }
     await this.ensureTable(plan.table);
     const bind: unknown[] = [];
-    const proj = 'data';
+    // Projection binds land in the SELECT clause, ahead of any WHERE binds.
+    const proj = plan.select ? projectedDataSql(plan.select, bind) : 'data';
     let sql = `SELECT ${proj} FROM "${plan.table}"`;
     if (plan.where && plan.where.length > 0) {
       sql += ` WHERE ${renderWhereSql(plan.where, bind, params)}`;
@@ -785,10 +787,8 @@ export class SqliteCacheEngine implements LocalStore {
     if (plan.limit !== undefined) sql += ` LIMIT ${Number(plan.limit)}`;
     if (plan.offset !== undefined) sql += ` OFFSET ${Number(plan.offset)}`;
     const rows = await this.execRows(sql, bind);
-    // Optional projection trimming to match `SELECT <fields>`.
-    const projected = plan.select ? rows.map((r) => project(r, plan.select!)) : rows;
-    await resolveRelations(projected, plan.relations, this);
-    return projected;
+    await resolveRelations(rows, plan.relations, this);
+    return rows;
   }
 
   async fetchRelation(req: RelationFetch): Promise<Row[]> {
@@ -816,14 +816,19 @@ export class SqliteCacheEngine implements LocalStore {
     await this.ensureTable(table);
     const keys = ids.map(stableKey);
     const placeholders = keys.map(() => '?').join(', ');
-    let sql = `SELECT data FROM "${table}" WHERE id IN (${placeholders})`;
+    // Projection binds land in the SELECT clause, so they go first. Must stay
+    // byte-identical to the worker path in sqlite-select.ts.
+    const bind: unknown[] = [];
+    const dataCol = opts?.select ? projectedDataSql(opts.select, bind) : 'data';
+    bind.push(...keys);
+    let sql = `SELECT ${dataCol} FROM "${table}" WHERE id IN (${placeholders})`;
     if (opts?.orderBy && opts.orderBy.length > 0) sql += renderOrderSql(opts.orderBy);
-    let rows = await this.execRows(sql, keys);
+    let rows = await this.execRows(sql, bind);
     if (!opts?.orderBy || opts.orderBy.length === 0) {
       const pos = new Map(keys.map((k, i) => [k, i]));
       rows = rows.sort((a, b) => (pos.get(stableKey(a.id)) ?? 0) - (pos.get(stableKey(b.id)) ?? 0));
     }
-    return opts?.select ? rows.map((r) => project(r, opts.select!)) : rows;
+    return rows;
   }
 
   async getById(table: string, id: Id): Promise<Row | null> {

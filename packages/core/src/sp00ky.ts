@@ -555,6 +555,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
             ? 0
             : (this.config.syncHealth?.degradeAfterConsecutiveFailures ?? 3),
         pushTimeoutMs: this.config.pushTimeoutMs,
+        downTimeoutMs: this.config.downTimeoutMs,
         // Read-only: sync mirrors the transport state into `SyncHealth`.
         connectionSupervisor: this.connectionSupervisor,
       }

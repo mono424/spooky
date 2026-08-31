@@ -105,3 +105,76 @@ describe('DownQueue.next failure handling', () => {
     expect(drained).toEqual(['b']);
   });
 });
+
+describe('DownQueue.takeNext (per-hash ordering under concurrency)', () => {
+  it('hands out events for distinct hashes so they can run in parallel', () => {
+    const q = makeQueue();
+    q.push(register('a'));
+    q.push(register('b'));
+    q.push(register('c'));
+    const busy = new Set<string>();
+
+    const first = q.takeNext(busy)!;
+    busy.add(hashOf(first));
+    const second = q.takeNext(busy)!;
+    busy.add(hashOf(second));
+
+    expect([hashOf(first), hashOf(second)]).toEqual(['a', 'b']);
+    expect(q.size).toBe(1);
+  });
+
+  it('SKIPS an event whose hash is busy without reordering it', () => {
+    // The whole correctness argument: a `cleanup` must never overtake the
+    // `register` for the same query. A busy hash's event keeps its place in the
+    // queue and is simply passed over.
+    const q = makeQueue();
+    q.push(register('a'));
+    q.push(register('a'));
+    q.push(register('b'));
+
+    const busy = new Set(['a']);
+    const taken = q.takeNext(busy)!;
+    expect(hashOf(taken)).toBe('b');
+
+    // Once 'a' frees up, its two events come back out in their original order.
+    const rest = [q.takeNext(new Set())!, q.takeNext(new Set())!];
+    expect(rest.map(hashOf)).toEqual(['a', 'a']);
+    expect(q.size).toBe(0);
+  });
+
+  it('returns undefined when every remaining event is blocked', () => {
+    const q = makeQueue();
+    q.push(register('a'));
+    expect(q.takeNext(new Set(['a']))).toBeUndefined();
+    // Blocked, not consumed.
+    expect(q.size).toBe(1);
+  });
+});
+
+describe('DownQueue.run', () => {
+  it('returns the error instead of throwing, and re-heads the event', async () => {
+    // A concurrent drain has other work in flight when one event fails; a
+    // rejection here would take that work down with it.
+    const q = makeQueue();
+    const event = register('a');
+    q.push(event);
+    const taken = q.takeNext(new Set())!;
+
+    const boom = new Error('nope');
+    const err = await q.run(taken, async () => {
+      throw boom;
+    });
+
+    expect(err).toBe(boom);
+    expect(q.size).toBe(1);
+    expect(hashOf(q.takeNext(new Set())!)).toBe('a');
+  });
+
+  it('returns undefined on success', async () => {
+    const q = makeQueue();
+    q.push(register('a'));
+    const taken = q.takeNext(new Set())!;
+    await expect(q.run(taken, async () => {})).resolves.toBeUndefined();
+    expect(q.size).toBe(0);
+  });
+});

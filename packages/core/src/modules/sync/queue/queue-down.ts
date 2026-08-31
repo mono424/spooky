@@ -91,28 +91,66 @@ export class DownQueue {
 
   async next(fn: (event: DownEvent) => Promise<void>): Promise<void> {
     const event = this.queue.shift();
-    if (event) {
-      try {
-        await fn(event);
-        this.failures.delete(event);
-      } catch (error) {
-        const attempts = (this.failures.get(event) ?? 0) + 1;
-        this.failures.set(event, attempts);
-        // Re-head so a transient failure keeps its ordering, but give up the
-        // head once it looks permanent and there is other work waiting — one
-        // unregisterable query must not stall every other query's registration.
-        const starvingOthers = attempts >= MAX_HEAD_RETRIES && this.queue.length > 0;
-        if (starvingOthers) {
-          this.queue.push(event);
-        } else {
-          this.queue.unshift(event);
-        }
-        this.logger.error(
-          { error, event, attempts, rotated: starvingOthers, Category: 'sp00ky-client::DownQueue::next' },
-          'Failed to process query'
-        );
-        throw error;
+    if (!event) return;
+    const error = await this.run(event, fn);
+    if (error !== undefined) throw error;
+  }
+
+  /**
+   * The next event whose hash is NOT already being processed, or `undefined`
+   * when every remaining event is blocked on a busy hash.
+   *
+   * Ordering only ever mattered PER HASH — a `cleanup` must not overtake the
+   * `register` for the same query — but the queue enforced it globally, so one
+   * registration RPC at a time was the ceiling for the whole client. An event
+   * for a busy hash keeps its place here (it is skipped, not reordered), so
+   * per-hash ordering is preserved exactly while independent hashes proceed
+   * concurrently.
+   */
+  takeNext(busy: ReadonlySet<string>): DownEvent | undefined {
+    for (let i = 0; i < this.queue.length; i++) {
+      const event = this.queue[i]!;
+      if (busy.has(event.payload.hash)) continue;
+      this.queue.splice(i, 1);
+      return event;
+    }
+    return undefined;
+  }
+
+  /**
+   * Process one event, applying the re-head / rotate failure policy.
+   *
+   * NEVER rejects: it RETURNS the error instead (`undefined` on success). A
+   * concurrent drain has other work in flight when one event fails, and a
+   * rejection would either take that work down with it or have to be caught at
+   * every call site. `next` reinstates the throwing contract for the serial
+   * callers that still want it.
+   */
+  async run(
+    event: DownEvent,
+    fn: (event: DownEvent) => Promise<void>
+  ): Promise<unknown | undefined> {
+    try {
+      await fn(event);
+      this.failures.delete(event);
+      return undefined;
+    } catch (error) {
+      const attempts = (this.failures.get(event) ?? 0) + 1;
+      this.failures.set(event, attempts);
+      // Re-head so a transient failure keeps its ordering, but give up the
+      // head once it looks permanent and there is other work waiting — one
+      // unregisterable query must not stall every other query's registration.
+      const starvingOthers = attempts >= MAX_HEAD_RETRIES && this.queue.length > 0;
+      if (starvingOthers) {
+        this.queue.push(event);
+      } else {
+        this.queue.unshift(event);
       }
+      this.logger.error(
+        { error, event, attempts, rotated: starvingOthers, Category: 'sp00ky-client::DownQueue::next' },
+        'Failed to process query'
+      );
+      return error;
     }
   }
 }
