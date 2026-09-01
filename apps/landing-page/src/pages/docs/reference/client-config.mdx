@@ -92,6 +92,24 @@ to `500`; non-positive values fall back to the default. The poll
 self-throttles to a longer interval when LIVE is delivering events
 healthily (see [Architecture](/docs/reference/architecture)).
 
+#### `persistCircuit`
+
+Persist the in-browser stream processor's store as a snapshot in the local
+store, so a reload restores it and only steps in what changed since instead
+of re-downloading the working set. Defaults to `true` under
+`localEngine: 'sqlite'` (the OPFS-backed store holds the bytes) and `false`
+otherwise. Snapshots are written on `circuitCheckpointMs` (default `30000`)
+and when the page goes hidden, never per ingest. Without a snapshot the
+circuit is primed by reading the cached rows back out of the local store.
+
+#### `circuitProjection`
+
+Keep only the fields registered queries evaluate (filter predicates, join
+keys, sort keys, plus `id`/`_00_rv`) per row inside the in-browser circuit.
+Defaults to `true`. Bodies are rendered from the local store, so the circuit
+never needs the rest; on rows with large text fields this is the difference
+between a few hundred megabytes of wasm heap and a few megabytes.
+
 ## Diagnostics
 
 The client exposes a small number of read-only getters intended for
@@ -160,6 +178,15 @@ export const code2 = `interface SyncedDbConfig<Schema> {
    * to 500ms; non-positive values fall back to the default.
    */
   refSyncIntervalMs?: number;
+
+  /** Snapshot the in-browser circuit's store for reloads (default: true on the sqlite engine) */
+  persistCircuit?: boolean;
+
+  /** Snapshot checkpoint interval in ms (default: 30000) */
+  circuitCheckpointMs?: number;
+
+  /** Keep only evaluated fields per row in the in-browser circuit (default: true) */
+  circuitProjection?: boolean;
 }`;
 
 export const code1 = `import { SyncedDb, type SyncedDbConfig } from '@spooky-sync/client-solid';

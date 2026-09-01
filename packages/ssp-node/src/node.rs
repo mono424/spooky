@@ -1174,6 +1174,7 @@ impl SspNode {
         let change = match op {
             Operation::Create => Change::create(&payload.table, &payload.id, clean),
             Operation::Update => Change::update(&payload.table, &payload.id, clean),
+            Operation::Merge => Change::merge(&payload.table, &payload.id, clean),
             Operation::Delete => Change::delete(&payload.table, &payload.id),
         };
         let step_start = web_time::Instant::now();

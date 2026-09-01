@@ -19,7 +19,8 @@
     "build": "wasm-pack build --target web --out-dir pkg",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bench:save": "node bench/circuit-save.mjs"
+    "bench:save": "node bench/circuit-save.mjs",
+    "bench:ingest": "node bench/ingest-memory.mjs"
   },
   "devDependencies": {
     "typescript": "^5.0.0",

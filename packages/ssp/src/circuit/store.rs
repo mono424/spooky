@@ -3,7 +3,25 @@ use crate::circuit::row_table::RowTable;
 use crate::eval::value_ref::ValueRef;
 use crate::types::{make_key, raw_id, Sp00kyValue};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+/// Fields every projected row keeps regardless of what the registered plans
+/// reference: the identity and the version the sync layer keys on.
+pub const ALWAYS_RETAINED: [&str; 2] = ["id", "_00_rv"];
+
+/// What one applied mutation did to its collection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Applied {
+    /// Full `table:id` z-set key.
+    pub key: RowKey,
+    /// Membership delta: `+1` a row appeared, `-1` it disappeared, `0` it
+    /// stayed (content may or may not have changed, see below).
+    pub weight: Weight,
+    /// The stored bytes changed. `false` for a Create/Update whose canonical
+    /// digest matches what is already stored (nothing was written, nothing
+    /// needs re-evaluating) and for a Delete of an absent row.
+    pub content_changed: bool,
+}
 
 /// A base collection (table) in the store.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -30,6 +48,15 @@ pub struct Collection {
     /// state between calls beyond its capacity.
     #[serde(skip)]
     scratch: Vec<u8>,
+    /// Projection: the root fields this collection keeps per row, or `None`
+    /// to keep whole bodies (the server default). A client circuit only ever
+    /// reads the fields its registered plans evaluate (`resolve_field` on
+    /// predicates, join keys, sort keys), and renders bodies from its own
+    /// durable store, so everything else is dead weight in a wasm heap that
+    /// never shrinks. Configuration, not state: never serialized, re-applied
+    /// from the registered plans after a restore.
+    #[serde(skip)]
+    pub retained: Option<BTreeSet<String>>,
 }
 
 impl Collection {
@@ -41,7 +68,46 @@ impl Collection {
             rows,
             catchup_xor: ssp_protocol::snapshot_hash::xor_empty(),
             scratch: Vec::new(),
+            retained: None,
         }
+    }
+
+    /// Reduce `value` to this collection's retained fields (plus
+    /// [`ALWAYS_RETAINED`]). Identity when the collection keeps whole bodies
+    /// or the value is not an object.
+    pub fn project(&self, value: Sp00kyValue) -> Sp00kyValue {
+        match (&self.retained, value) {
+            (Some(keep), Sp00kyValue::Object(mut map)) => {
+                map.retain(|k, _| keep.contains(k) || ALWAYS_RETAINED.contains(&k.as_str()));
+                Sp00kyValue::Object(map)
+            }
+            (_, value) => value,
+        }
+    }
+
+    /// Rebuild the row bytes without the space orphaned by updates and
+    /// deletes, re-projecting each row through [`Self::project`] so a
+    /// narrowed retained set takes effect on already-stored rows too.
+    /// Preserves the arena kind (a file-backed table stays file-backed).
+    ///
+    /// Transiently holds every row decoded, so callers should run this off
+    /// the hot path (a checkpoint, an idle timer) and only when
+    /// `rows.dead_bytes()` is worth it.
+    pub fn compact(&mut self) {
+        let decoded: Vec<(String, Sp00kyValue)> = self
+            .rows
+            .iter()
+            .map(|(id, v)| (id.to_string(), v.to_owned_value()))
+            .collect();
+        self.rows.clear();
+        let mut acc = ssp_protocol::snapshot_hash::xor_empty();
+        for (id, value) in decoded {
+            let value = self.project(value);
+            let digest = self.incoming_digest(&id, &value);
+            ssp_protocol::snapshot_hash::xor_digest(&mut acc, &digest);
+            self.rows.insert(&id, &value, &digest);
+        }
+        self.catchup_xor = acc;
     }
 
     /// Recompute the incremental XOR accumulator from the current rows. Call
@@ -77,46 +143,101 @@ impl Collection {
     }
 
     /// Apply a mutation to this collection. Returns (zset_key, weight).
+    ///
+    /// Thin wrapper over [`Self::apply`] for callers that only care about the
+    /// membership delta.
     pub fn apply_mutation(
         &mut self,
         op: Operation,
         id: &str,
         data: Sp00kyValue,
     ) -> (RowKey, Weight) {
-        let weight = op.weight();
+        let applied = self.apply(op, id, data);
+        (applied.key, applied.weight)
+    }
+
+    /// Apply a mutation to this collection.
+    ///
+    /// Presence-driven, so every op is idempotent against the store rather
+    /// than trusting the caller's verb:
+    ///
+    /// - Create/Update/Merge of an ABSENT row: `+1`, the row appears.
+    /// - Create/Update/Merge of a PRESENT row: `0`, content replaced.
+    /// - Delete of a present row: `-1`; of an absent row: `0`, nothing written.
+    ///
+    /// Trusting the verb produced z-set weights of 2 (a second Create) that a
+    /// later Delete could never bring back to 0, `-1` entries for rows that
+    /// never existed, and Update-on-absent rows that sat in `rows` with no
+    /// z-set entry and were invisible to every Scan. A client replaying its
+    /// own cache into a restored store hits all three on the first batch.
+    ///
+    /// A Create/Update whose canonical digest equals the stored one writes
+    /// nothing: no arena append (which is what made a re-sync of unchanged
+    /// rows grow the heap by the whole table), no XOR churn, and
+    /// `content_changed == false` so the circuit skips re-evaluation.
+    ///
+    /// `Merge` overlays the incoming fields on the stored row before any of
+    /// the above, for widening a projected row with fields it did not keep.
+    pub fn apply(&mut self, op: Operation, id: &str, data: Sp00kyValue) -> Applied {
         let normalized = raw_id(id);
-        // Maintain the incremental XOR set-hash atomically with the row change:
-        // XOR out the prior value (if any), XOR in the new value. Done here, the
-        // single row-mutation chokepoint, so the accumulator cannot miss an op.
-        //
-        // The outgoing digest is read from the stored row's header — 32 bytes
-        // at a fixed offset, no decode. The incoming one is computed once by
-        // the canonical writer and handed to the row store, which keeps it in
-        // the record it writes. So a mutation canonicalizes exactly once and
-        // copies the body exactly once.
+        let key = make_key(&self.name, id);
+        let present = self.rows.contains_key(normalized);
+
+        if op == Operation::Delete {
+            if !present {
+                return Applied { key, weight: 0, content_changed: false };
+            }
+            // Maintain the incremental XOR set-hash atomically with the row
+            // change, here at the single row-mutation chokepoint so the
+            // accumulator cannot miss an op.
+            if let Some(d) = self.rows.digest_of(normalized) {
+                ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &d);
+            }
+            self.rows.remove(normalized);
+            self.bump_zset(&key, -1);
+            return Applied { key, weight: -1, content_changed: true };
+        }
+
+        let data = if op == Operation::Merge && present {
+            match (self.rows.get(normalized).to_owned_value(), data) {
+                (Sp00kyValue::Object(mut base), Sp00kyValue::Object(incoming)) => {
+                    base.extend(incoming);
+                    Sp00kyValue::Object(base)
+                }
+                (_, incoming) => incoming,
+            }
+        } else {
+            data
+        };
+        let data = self.project(data);
+
+        // The incoming digest is computed once by the canonical writer and
+        // handed to the row store, which keeps it in the record header. The
+        // outgoing one is read back from that header: 32 bytes at a fixed
+        // offset, no decode.
+        let incoming = self.incoming_digest(normalized, &data);
+        if present && self.rows.digest_of(normalized) == Some(incoming) {
+            return Applied { key, weight: 0, content_changed: false };
+        }
         if let Some(d) = self.rows.digest_of(normalized) {
             ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &d);
         }
-        match op {
-            Operation::Create | Operation::Update => {
-                let d = self.incoming_digest(normalized, &data);
-                ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &d);
-                self.rows.insert(normalized, &data, &d);
-            }
-            Operation::Delete => {
-                self.rows.remove(normalized);
-            }
-        }
+        ssp_protocol::snapshot_hash::xor_digest(&mut self.catchup_xor, &incoming);
+        self.rows.insert(normalized, &data, &incoming);
 
-        let key = make_key(&self.name, id);
+        let weight = if present { 0 } else { 1 };
         if weight != 0 {
-            let entry = self.zset.entry(key.clone()).or_insert(0);
-            *entry += weight;
-            if *entry == 0 {
-                self.zset.remove(&key);
-            }
+            self.bump_zset(&key, weight);
         }
-        (key, weight)
+        Applied { key, weight, content_changed: true }
+    }
+
+    fn bump_zset(&mut self, key: &RowKey, weight: Weight) {
+        let entry = self.zset.entry(key.clone()).or_insert(0);
+        *entry += weight;
+        if *entry == 0 {
+            self.zset.remove(key);
+        }
     }
 
     /// Look up a row by its raw ID.
@@ -199,8 +320,16 @@ impl Store {
         op: Operation,
         id: &str,
         data: Sp00kyValue,
-    ) -> (RowKey, Weight) {
-        self.ensure_collection(table).apply_mutation(op, id, data)
+    ) -> Applied {
+        self.ensure_collection(table).apply(op, id, data)
+    }
+
+    /// Set (or clear, with `None`) the projection for `table`. Takes effect on
+    /// the next write of each row; call [`Collection::compact`] to re-project
+    /// rows already stored. Never widens what a stored row holds: widening is
+    /// the caller's job via [`Operation::Merge`] with the missing fields.
+    pub fn set_retained_fields(&mut self, table: &str, fields: Option<BTreeSet<String>>) {
+        self.ensure_collection(table).retained = fields;
     }
 
     /// Apply a borrowed Change to the store. Returns (zset_key, weight).
@@ -208,7 +337,8 @@ impl Store {
     /// Convenience for callers holding a `&Change` (tests, mostly); it has to
     /// clone the body. Prefer [`apply_owned`] where the body is owned.
     pub fn apply_change(&mut self, change: &Change) -> (RowKey, Weight) {
-        self.apply_owned(&change.table, change.op, &change.id, change.data.clone())
+        let applied = self.apply_owned(&change.table, change.op, &change.id, change.data.clone());
+        (applied.key, applied.weight)
     }
 
     /// Get row data by zset key (format "table:id").
@@ -299,6 +429,15 @@ impl Change {
         }
     }
 
+    pub fn merge(table: &str, id: &str, data: impl Into<Sp00kyValue>) -> Self {
+        Self {
+            table: table.to_string(),
+            op: Operation::Merge,
+            id: id.to_string(),
+            data: data.into(),
+        }
+    }
+
     pub fn delete(table: &str, id: &str) -> Self {
         Self {
             table: table.to_string(),
@@ -338,20 +477,26 @@ impl Record {
 pub enum Operation {
     Create,
     Update,
+    /// Overlay the given fields on the stored row (Update semantics
+    /// otherwise). The way a projected row is widened with fields it did not
+    /// keep, without the caller having to resend the whole body.
+    Merge,
     Delete,
 }
 
 impl Operation {
+    /// The membership weight this verb CLAIMS. The store no longer trusts it
+    /// (see [`Collection::apply`]); kept for callers that classify ops.
     pub fn weight(&self) -> Weight {
         match self {
             Operation::Create => 1,
-            Operation::Update => 0,
+            Operation::Update | Operation::Merge => 0,
             Operation::Delete => -1,
         }
     }
 
     pub fn changes_content(&self) -> bool {
-        matches!(self, Operation::Create | Operation::Update)
+        matches!(self, Operation::Create | Operation::Update | Operation::Merge)
     }
 
     /// Parse an operation from a string (case-insensitive).
@@ -359,8 +504,144 @@ impl Operation {
         match s.to_uppercase().as_str() {
             "CREATE" => Some(Operation::Create),
             "UPDATE" => Some(Operation::Update),
+            "MERGE" => Some(Operation::Merge),
             "DELETE" => Some(Operation::Delete),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn coll() -> Collection {
+        Collection::new("thread".to_string())
+    }
+
+    fn sv(j: serde_json::Value) -> Sp00kyValue {
+        Sp00kyValue::from(j)
+    }
+
+    #[test]
+    fn create_twice_then_delete_leaves_no_row() {
+        let mut c = coll();
+        let first = c.apply(Operation::Create, "a", sv(json!({ "title": "x" })));
+        assert_eq!(first.weight, 1);
+        assert!(first.content_changed);
+
+        // A second Create of a present row is an Update: no membership change.
+        let second = c.apply(Operation::Create, "a", sv(json!({ "title": "y" })));
+        assert_eq!(second.weight, 0);
+        assert!(second.content_changed);
+        assert_eq!(c.zset.get(&*second.key), Some(&1), "weight must not climb to 2");
+
+        let gone = c.apply(Operation::Delete, "a", Sp00kyValue::Null);
+        assert_eq!(gone.weight, -1);
+        assert!(c.zset.is_empty(), "the row must leave the z-set");
+        assert!(c.rows.is_empty());
+    }
+
+    #[test]
+    fn delete_of_an_absent_row_writes_nothing() {
+        let mut c = coll();
+        let applied = c.apply(Operation::Delete, "ghost", Sp00kyValue::Null);
+        assert_eq!(applied.weight, 0);
+        assert!(!applied.content_changed);
+        assert!(c.zset.is_empty(), "no -1 entry for a row that never existed");
+    }
+
+    #[test]
+    fn update_of_an_absent_row_is_an_insert() {
+        let mut c = coll();
+        let applied = c.apply(Operation::Update, "a", sv(json!({ "title": "x" })));
+        assert_eq!(applied.weight, 1, "the row appeared, whatever the verb said");
+        assert_eq!(c.zset.get(&*applied.key), Some(&1));
+        assert!(c.rows.contains_key("a"));
+    }
+
+    #[test]
+    fn an_unchanged_write_is_a_no_op() {
+        let mut c = coll();
+        c.apply(Operation::Create, "a", sv(json!({ "title": "x", "n": 1 })));
+        let dead_before = c.rows.dead_bytes();
+        let xor_before = c.catchup_xor;
+
+        let again = c.apply(Operation::Update, "a", sv(json!({ "n": 1, "title": "x" })));
+        assert_eq!(again.weight, 0);
+        assert!(!again.content_changed, "same digest, nothing to do");
+        assert_eq!(c.rows.dead_bytes(), dead_before, "no arena append for an unchanged row");
+        assert_eq!(c.catchup_xor, xor_before, "accumulator untouched");
+
+        let changed = c.apply(Operation::Update, "a", sv(json!({ "title": "x", "n": 2 })));
+        assert!(changed.content_changed);
+        assert!(c.rows.dead_bytes() > dead_before, "a real change orphans the old bytes");
+    }
+
+    #[test]
+    fn merge_overlays_the_stored_fields() {
+        let mut c = coll();
+        c.apply(Operation::Create, "a", sv(json!({ "a": 1, "b": 1 })));
+        let merged = c.apply(Operation::Merge, "a", sv(json!({ "b": 2, "c": 3 })));
+        assert_eq!(merged.weight, 0);
+        let row = c.rows.get("a").to_owned_value();
+        assert_eq!(row, sv(json!({ "a": 1, "b": 2, "c": 3 })));
+
+        // Merge into an absent row is just an insert of what was given.
+        let fresh = c.apply(Operation::Merge, "z", sv(json!({ "q": 1 })));
+        assert_eq!(fresh.weight, 1);
+        assert_eq!(c.rows.get("z").to_owned_value(), sv(json!({ "q": 1 })));
+    }
+
+    #[test]
+    fn projection_keeps_retained_fields_plus_identity() {
+        let mut c = coll();
+        c.retained = Some(["score".to_string()].into_iter().collect());
+        c.apply(
+            Operation::Create,
+            "a",
+            sv(json!({ "id": "thread:a", "_00_rv": 3, "score": 7, "title": "big", "pgn": "1. e4" })),
+        );
+        let row = c.rows.get("a").to_owned_value();
+        assert_eq!(row, sv(json!({ "id": "thread:a", "_00_rv": 3, "score": 7 })));
+        assert_eq!(c.rows.rv_of("a"), Some(3), "the lifted rv survives projection");
+
+        // The digest is over the projection, so a body that differs only in
+        // dropped fields is the same row.
+        let same = c.apply(
+            Operation::Update,
+            "a",
+            sv(json!({ "id": "thread:a", "_00_rv": 3, "score": 7, "title": "other", "pgn": "1. d4" })),
+        );
+        assert!(!same.content_changed);
+    }
+
+    #[test]
+    fn compact_reclaims_dead_bytes_and_reprojects() {
+        let mut c = coll();
+        for i in 0..20 {
+            c.apply(Operation::Create, &format!("r{i}"), sv(json!({ "n": i, "blob": "x".repeat(200) })));
+        }
+        for i in 0..20 {
+            c.apply(Operation::Update, &format!("r{i}"), sv(json!({ "n": i + 1, "blob": "y".repeat(200) })));
+        }
+        assert!(c.rows.dead_bytes() > 0);
+        let live_before = c.rows.live_bytes();
+
+        // Narrow the projection, then compact: rows shed `blob`.
+        c.retained = Some(["n".to_string()].into_iter().collect());
+        c.compact();
+        assert_eq!(c.rows.dead_bytes(), 0);
+        assert!(c.rows.live_bytes() < live_before / 4, "the 200-byte blobs are gone");
+        assert_eq!(c.rows.len(), 20);
+        assert_eq!(c.rows.get("r3").to_owned_value(), sv(json!({ "n": 4 })));
+
+        // The accumulator is rebuilt from what is now stored, and agrees with
+        // a from-scratch re-seed.
+        let after = c.catchup_xor;
+        c.reseed_catchup_xor();
+        assert_eq!(c.catchup_xor, after);
+        assert!(c.zset.len() == 20, "membership is untouched by compaction");
     }
 }

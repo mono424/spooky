@@ -121,6 +121,7 @@ impl Processor {
         let change = match op_enum {
             Operation::Create => Change::create(table, &record_id, clean_sv),
             Operation::Update => Change::update(table, &record_id, clean_sv),
+            Operation::Merge => Change::merge(table, &record_id, clean_sv),
             Operation::Delete => Change::delete(table, &record_id),
         };
 

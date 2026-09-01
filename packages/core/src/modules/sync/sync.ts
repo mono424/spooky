@@ -531,6 +531,19 @@ export class Sp00kySync<S extends SchemaStructure> {
    *  instead of double-draining the outbox. */
   private leaderDutiesInFlight: Promise<void> | null = null;
 
+  /** Resolves once the in-browser circuit has been primed from the local
+   *  store. Every sync diff waits on it: diffing against an empty circuit
+   *  classifies the whole working set as missing and re-downloads it. */
+  private primeGate: () => Promise<void> = () => Promise.resolve();
+  /** The prime we last waited on. `whenPrimed` hands out one promise per
+   *  prime, so a new identity means a new prime (boot, bucket switch) ran. */
+  private settledPrime: Promise<void> | null = null;
+
+  setPrimeGate(gate: () => Promise<void>): void {
+    this.primeGate = gate;
+    this.settledPrime = null;
+  }
+
   /**
    * Leader WIRING only, and deliberately synchronous.
    *
@@ -1562,6 +1575,19 @@ export class Sp00kySync<S extends SchemaStructure> {
    * means the single resulting UI update lands after this completes.
    */
   private async runSyncForQuery(hash: string, diff: RecordVersionDiff): Promise<void> {
+    // The diff was computed against whatever the circuit held at call time; if
+    // the boot prime is still filling it, wait and recompute from the primed
+    // `localArray` so the delta is real rather than "everything".
+    const prime = this.primeGate();
+    if (prime !== this.settledPrime) {
+      await prime;
+      this.settledPrime = prime;
+      const fresh = this.dataModule.getQueryByHash(hash);
+      if (!fresh) return;
+      const recomputed = new ArraySyncer(fresh.config.localArray, fresh.config.remoteArray).nextSet();
+      if (!recomputed) return;
+      diff = recomputed;
+    }
     // Don't let sync re-add a record the user just deleted locally. The remote
     // delete is queued in the outbox, so until it's processed the server's
     // `_00_list_ref` still lists the record — the diff then classifies it as

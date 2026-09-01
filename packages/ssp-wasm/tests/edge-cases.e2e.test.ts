@@ -910,14 +910,17 @@ describe('Edge Cases: Duplicate and Non-Existent Operations', () => {
     ).not.toThrow();
   });
 
-  it('should not add UPDATE-only record to view (weight 0 = no membership)', () => {
+  it('treats an UPDATE of an unknown record as its arrival (presence-driven weights)', () => {
     const processor = makeProcessor();
 
     const config = createViewConfig('update-ghost', 'SELECT * FROM user');
     const initial = processor.register_view(config) as WasmViewUpdate;
     expect(initial.result_data).toHaveLength(0);
 
-    // UPDATE without prior CREATE
+    // UPDATE without prior CREATE. The store decides membership from
+    // presence, not from the verb: the row was absent, now it exists, so it
+    // joins the view. (Trusting the verb used to leave the body in the store
+    // with no z-set entry, invisible to every scan forever.)
     const record = {
       id: 'user:ghost',
       username: 'ghost',
@@ -931,12 +934,14 @@ describe('Edge Cases: Duplicate and Non-Existent Operations', () => {
     ) as WasmViewUpdate[];
 
     const viewUpdate = updates.find((u) => u.query_id === 'update-ghost');
-    if (viewUpdate) {
-      // Record should NOT be in the view (UPDATE has weight 0)
-      expect(viewUpdate.result_data.map((i) => i[0])).not.toContain(
-        'user:ghost'
-      );
-    }
+    expect(viewUpdate?.result_data.map((i) => i[0])).toContain('user:ghost');
+
+    // And a second CREATE of the same row is an update, not a double count:
+    // one DELETE removes it.
+    processor.ingest('user', 'CREATE', 'user:ghost', record);
+    const gone = processor.ingest('user', 'DELETE', 'user:ghost', {}) as WasmViewUpdate[];
+    const afterDelete = gone.find((u) => u.query_id === 'update-ghost');
+    expect(afterDelete?.result_data.map((i) => i[0])).not.toContain('user:ghost');
   });
 
   it('should allow delete followed by re-create of same ID', () => {

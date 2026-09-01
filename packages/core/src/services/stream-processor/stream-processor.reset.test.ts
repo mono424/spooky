@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // `StreamProcessorService.reset()` is the SSP half of a local-bucket switch:
 // the old circuit holds the previous user's rows and views registered with the
 // previous `$auth`, so reset must swap in a FRESH processor (no state load),
-// and a `saveState` racing the reset must not persist the old circuit into the
-// new bucket's key.
+// and a checkpoint racing the reset must not persist the old circuit into the
+// new bucket's store.
 
 const processorInstances: any[] = [];
 
@@ -16,8 +16,10 @@ vi.mock('@spooky-sync/ssp-wasm', () => ({
       register_view: vi.fn(() => ({ query_id: 'q1', result_data: [] })),
       unregister_view: vi.fn(),
       set_permissions: vi.fn(),
-      save_state: vi.fn(() => 'state-bytes'),
-      load_state: vi.fn(),
+      set_projection: vi.fn(),
+      save_store_state: vi.fn(() => new Uint8Array([1, 2, 3])),
+      load_store_state: vi.fn(() => []),
+      reconcile: vi.fn(() => ({ fetch: [], deleted: 0, updates: [] })),
       free: vi.fn(),
     };
     processorInstances.push(instance);
@@ -37,22 +39,22 @@ const silentLogger = {
 } as any;
 
 function makeService() {
-  const persisted: Record<string, unknown> = {};
-  const persistence = {
-    set: vi.fn(async (key: string, value: unknown) => {
-      persisted[key] = value;
+  const snapshots: Record<string, { bytes: Uint8Array; meta: any }> = {};
+  const db = {
+    epoch: 0,
+    engineKind: 'sqlite' as const,
+    scanVersions: vi.fn(async () => ({})),
+    selectByIds: vi.fn(async () => []),
+    getSnapshot: vi.fn(async (key: string) => snapshots[key] ?? null),
+    putSnapshot: vi.fn(async (key: string, bytes: Uint8Array, meta: any) => {
+      snapshots[key] = { bytes, meta };
     }),
-    get: vi.fn(async () => null),
-    remove: vi.fn(async () => {}),
   };
-  const service = new StreamProcessorService(
-    {} as any,
-    {} as any,
-    persistence as any,
-    silentLogger
-  );
-  return { service, persistence, persisted };
+  const service = new StreamProcessorService({} as any, db as any, silentLogger);
+  return { service, db, snapshots };
 }
+
+const primeCtx = { tables: [], schemaHash: 'schema-1', pendingIds: new Set<string>() };
 
 beforeEach(() => {
   processorInstances.length = 0;
@@ -70,7 +72,7 @@ describe('StreamProcessorService.reset', () => {
     const second = processorInstances[1];
     // Fresh circuit: nothing loaded into it (a persisted snapshot references
     // views under a dead sessionId salt and the previous user's data).
-    expect(second.load_state).not.toHaveBeenCalled();
+    expect(second.load_store_state).not.toHaveBeenCalled();
 
     // New registrations land on the fresh processor, not the old circuit.
     service.registerQueryPlan({
@@ -87,27 +89,42 @@ describe('StreamProcessorService.reset', () => {
     expect(first.register_view).not.toHaveBeenCalled();
   });
 
-  it('routes persisted state to the per-bucket key', async () => {
-    const { service, persistence } = makeService();
+  it('writes a store-only snapshot through the engine on checkpoint', async () => {
+    const { service, db, snapshots } = makeService();
     service.configureCircuitPersistence(true);
     await service.init();
-    service.setStateKeySuffix('u1');
-    await service.saveState();
-    expect(persistence.set).toHaveBeenCalledWith('_00_stream_processor_state:u1', 'state-bytes');
+    await service.primeFromLocal(primeCtx);
+    await service.checkpoint('test');
+    expect(processorInstances[0].save_store_state).toHaveBeenCalledTimes(1);
+    expect(db.putSnapshot).toHaveBeenCalledTimes(1);
+    expect(snapshots.circuit.bytes).toEqual(new Uint8Array([1, 2, 3]));
+    expect(snapshots.circuit.meta.schemaHash).toBe('schema-1');
+    expect(snapshots.circuit.meta.formatVersion).toBe(1);
   });
 
-  it('drops a saveState that raced a reset (old circuit never persists into the new key)', async () => {
-    const { service, persistence } = makeService();
+  it('drops a checkpoint that raced a reset (old circuit never persists into the new bucket)', async () => {
+    const { service, db } = makeService();
     service.configureCircuitPersistence(true);
     await service.init();
-    // The snapshot is taken, then a reset lands before the persist step,
-    // simulated by bumping the generation from inside save_state().
-    processorInstances[0].save_state.mockImplementation(() => {
+    await service.primeFromLocal(primeCtx);
+    // The bytes are taken, then a reset lands before the write step,
+    // simulated by resetting from inside save_store_state().
+    processorInstances[0].save_store_state.mockImplementation(() => {
       void service.reset();
-      return 'stale-circuit';
+      return new Uint8Array([9]);
     });
-    await service.saveState();
-    expect(persistence.set).not.toHaveBeenCalled();
+    await service.checkpoint('test');
+    expect(db.putSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('does not write a snapshot from a follower tab', async () => {
+    const { service, db } = makeService();
+    service.configureCircuitPersistence(true);
+    await service.init();
+    await service.primeFromLocal(primeCtx);
+    service.setPersistenceEnabled(false);
+    await service.checkpoint('test');
+    expect(db.putSnapshot).not.toHaveBeenCalled();
   });
 
   it('frees the replaced wasm circuit on reset', async () => {
@@ -122,11 +139,11 @@ describe('StreamProcessorService.reset', () => {
   });
 });
 
-// The renderer-OOM guardrail. `Circuit::save` deep-clones the entire store (every
-// row of every ingested table) and JSON-encodes it. It used to run once per
-// ingest batch and once per query register/unregister, which on a large windowed
-// list meant hundreds of whole-store serializations per scroll, for a snapshot
-// the browser could never read back. Snapshots are now opt-in and checkpointed.
+// The renderer-OOM guardrail. A snapshot walks every row of the store, so it
+// must never run inline with an ingest or a query register/unregister: on a
+// large windowed list that meant hundreds of whole-store serializations per
+// scroll. Snapshots are checkpointed on a timer, and only once enough rows
+// changed to be worth the write.
 describe('StreamProcessorService circuit snapshots', () => {
   const plan = {
     queryHash: 'q1',
@@ -139,8 +156,9 @@ describe('StreamProcessorService circuit snapshots', () => {
     meta: { tableName: 'thing' },
   } as any;
 
-  it('never snapshots on ingest or register/unregister by default', async () => {
-    const { service, persistence } = makeService();
+  it('never snapshots on ingest or register/unregister when persistence is off', async () => {
+    const { service, db } = makeService();
+    service.configureCircuitPersistence(false);
     await service.init();
     const processor = processorInstances[0];
 
@@ -152,14 +170,15 @@ describe('StreamProcessorService circuit snapshots', () => {
     ]);
     service.unregisterQueryPlan('q1');
 
-    expect(processor.save_state).not.toHaveBeenCalled();
-    expect(persistence.set).not.toHaveBeenCalled();
+    expect(processor.save_store_state).not.toHaveBeenCalled();
+    expect(db.putSnapshot).not.toHaveBeenCalled();
   });
 
-  it('still never snapshots inline when persistence is opted in', async () => {
-    const { service, persistence } = makeService();
+  it('still never snapshots inline when persistence is on', async () => {
+    const { service, db } = makeService();
     service.configureCircuitPersistence(true, 30_000);
     await service.init();
+    await service.primeFromLocal(primeCtx);
     const processor = processorInstances[0];
 
     service.registerQueryPlan(plan);
@@ -167,50 +186,41 @@ describe('StreamProcessorService circuit snapshots', () => {
     service.unregisterQueryPlan('q1');
 
     // Marked dirty, but the write waits for the checkpoint interval.
-    expect(processor.save_state).not.toHaveBeenCalled();
-    expect(persistence.set).not.toHaveBeenCalled();
+    expect(processor.save_store_state).not.toHaveBeenCalled();
+    expect(db.putSnapshot).not.toHaveBeenCalled();
     service.stopCheckpoints();
   });
 
-  it('writes at most one snapshot per checkpoint tick', async () => {
+  it('writes at most one snapshot per checkpoint tick, and none for a handful of rows', async () => {
     vi.useFakeTimers();
     try {
-      const { service } = makeService();
+      const { service, db } = makeService();
       service.configureCircuitPersistence(true, 1000);
       await service.init();
+      await service.primeFromLocal(primeCtx);
       const processor = processorInstances[0];
 
-      for (let i = 0; i < 50; i++) {
+      // Below the row threshold: the tick stays quiet.
+      for (let i = 0; i < 10; i++) {
         service.ingest('thing', 'CREATE', `thing:${i}`, { id: `thing:${i}` });
       }
       await vi.advanceTimersByTimeAsync(1000);
-      expect(processor.save_state).toHaveBeenCalledTimes(1);
+      expect(processor.save_store_state).not.toHaveBeenCalled();
+
+      for (let i = 10; i < 60; i++) {
+        service.ingest('thing', 'CREATE', `thing:${i}`, { id: `thing:${i}` });
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(processor.save_store_state).toHaveBeenCalledTimes(1);
+      expect(db.putSnapshot).toHaveBeenCalledTimes(1);
 
       // Idle interval: nothing changed, so nothing is serialized.
       await vi.advanceTimersByTimeAsync(1000);
-      expect(processor.save_state).toHaveBeenCalledTimes(1);
+      expect(processor.save_store_state).toHaveBeenCalledTimes(1);
 
       service.stopCheckpoints();
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('restores a snapshot the shipped persistence clients actually return', async () => {
-    const { service, persistence } = makeService();
-    // Both clients round-trip `save_state`'s output as a bare string. The old
-    // shape check looked for a raw SurrealDB result, so it never matched and the
-    // browser never restored anything it wrote.
-    persistence.get.mockResolvedValue('state-bytes' as any);
-    service.configureCircuitPersistence(true);
-    await service.init();
-    expect(processorInstances[0].load_state).toHaveBeenCalledWith('state-bytes');
-  });
-
-  it('does not restore a snapshot when persistence is off', async () => {
-    const { service, persistence } = makeService();
-    persistence.get.mockResolvedValue('state-bytes' as any);
-    await service.init();
-    expect(processorInstances[0].load_state).not.toHaveBeenCalled();
   });
 });

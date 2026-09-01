@@ -99,6 +99,26 @@ export class SurrealCacheEngine extends LocalDatabaseService implements LocalCac
     return new RecordId(table, raw);
   }
 
+  /**
+   * `(id, _00_rv)` of every row per table. Runs on the main thread against the
+   * embedded engine (no worker here), which is why the circuit prime caps how
+   * much it is willing to read through this path.
+   */
+  async scanVersions(tables: string[]): Promise<Record<string, [string, number][]>> {
+    const out: Record<string, [string, number][]> = {};
+    for (const table of tables) {
+      try {
+        const [rows] = await this.query<[{ id: Id; _00_rv?: unknown }[]]>(
+          `SELECT id, _00_rv FROM ${table};`
+        );
+        out[table] = (rows ?? []).map((r) => [stableKey(r.id), Number(r._00_rv) || 0]);
+      } catch {
+        out[table] = [];
+      }
+    }
+    return out;
+  }
+
   async getById(table: string, id: Id): Promise<Row | null> {
     const [row] = await this.query<[Row | null]>('SELECT * FROM ONLY $__id;', {
       __id: this.toRecordId(table, id),

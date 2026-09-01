@@ -328,19 +328,42 @@ impl super::Operator for TopK {
 
     fn evaluate_key(
         &self,
-        _key: &str,
+        key: &str,
         input_evals: &[bool],
         _store: &Store,
         _ctx: Option<&Sp00kyValue>,
     ) -> bool {
-        // TopK can drop keys that fall outside the limit, but that
-        // path is handled by the in-cache check at apply-delta time.
-        // For the purpose of detecting Update-driven membership
-        // transitions, treating it as a pass-through is correct
-        // enough: a row newly admitted upstream may not actually end
-        // up in the top-N, but the over-emit gets dedup'd by
-        // `view.cache.contains_key` when classifying additions.
-        input_evals.first().copied().unwrap_or(false)
+        // Membership in the CURRENT window, not a pass-through of upstream:
+        // the pass-through admitted every updated row into `LIMIT n` views.
+        // Content updates that move a row across the window edge go through
+        // `reorder_key`, which the circuit prefers when it is available.
+        input_evals.first().copied().unwrap_or(false) && self.current_window().iter().any(|k| &**k == key)
+    }
+
+    fn reorder_key(
+        &mut self,
+        key: &str,
+        upstream_now: bool,
+        store: &Store,
+        ctx: Option<&Sp00kyValue>,
+    ) -> Option<ZSet> {
+        let mut out: ZSet = HashMap::new();
+        let mut fold = |delta: ZSet| {
+            for (k, w) in delta {
+                *out.entry(k).or_insert(0) += w;
+            }
+        };
+        let row_key: RowKey = key.into();
+        if self.key_index.contains_key(&row_key) {
+            let retract: ZSet = HashMap::from([(row_key.clone(), -1)]);
+            fold(self.step(&[&retract], store, ctx));
+        }
+        if upstream_now {
+            let insert: ZSet = HashMap::from([(row_key, 1)]);
+            fold(self.step(&[&insert], store, ctx));
+        }
+        out.retain(|_, w| *w != 0);
+        Some(out)
     }
 }
 

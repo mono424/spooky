@@ -2,7 +2,7 @@ use crate::algebra::{RowKey, ZSet};
 use crate::circuit::graph::Graph;
 use crate::circuit::store::{Change, ChangeSet, Operation, Record, Store};
 use crate::circuit::view::{OutputFormat, View};
-use crate::operator::QueryPlan;
+use crate::operator::{OperatorPlan, QueryPlan};
 use crate::types::{make_key, raw_id, Sp00kyValue};
 use std::collections::{BTreeMap, HashMap};
 // Portable monotonic clock: std::time on native, performance.now() on wasm32
@@ -148,6 +148,32 @@ pub struct Circuit {
     /// matches nothing, because `resolve_field` returns `None` for the absent key
     /// and the comparison silently evaluates false.
     opaque_fields: HashMap<String, std::collections::BTreeSet<String>>,
+    /// Whether base collections keep only the fields registered plans
+    /// evaluate (see `Collection::retained`). Off on the server, where the
+    /// whole body is the product; on for a browser circuit, which renders from
+    /// its own durable store and only needs what predicates, join keys and
+    /// sort keys read. Configuration, not state: not part of the snapshot.
+    projection: bool,
+    /// Fields the most recent registration evaluates that rows ALREADY in the
+    /// store were projected without. The caller widens those rows (an
+    /// `Operation::Merge` per row with just these fields) or the new view
+    /// silently matches nothing on them. Drained by
+    /// [`Self::take_missing_fields`].
+    missing_fields: BTreeMap<String, std::collections::BTreeSet<String>>,
+}
+
+/// What [`Circuit::reconcile`] found when a table's rows were compared against
+/// the caller's authoritative `(id, _00_rv)` list.
+#[derive(Debug, Default)]
+pub struct Reconciled {
+    /// Ids (as the caller spelled them) whose row is absent from the store or
+    /// stored at a lower `_00_rv`; the caller ingests their bodies.
+    pub fetch: Vec<String>,
+    /// Rows the store held that the caller's list did not: already stepped
+    /// out as deletes.
+    pub deleted: usize,
+    /// View deltas produced by those deletes.
+    pub deltas: Vec<ViewDelta>,
 }
 
 /// Compute the full set of subquery records visible through the current view.
@@ -326,6 +352,8 @@ impl Circuit {
             permissions: HashMap::new(),
             link_targets: HashMap::new(),
             opaque_fields: HashMap::new(),
+            projection: false,
+            missing_fields: BTreeMap::new(),
         }
     }
 
@@ -464,6 +492,11 @@ impl Circuit {
             auth_id,
         );
 
+        // Projection bookkeeping BEFORE the graph exists: the fields this plan
+        // evaluates that stored rows were projected without are exactly what
+        // the initial snapshot below cannot see.
+        self.note_missing_fields(&plan.root);
+
         self.graphs.insert(query_id.clone(), graph);
         self.views.insert(query_id.clone(), view);
 
@@ -474,6 +507,7 @@ impl Circuit {
                 .or_default()
                 .push(query_id.clone());
         }
+        self.refresh_retained_fields();
         timings.plan_ms = ms_since(t_plan);
 
         // Run initial snapshot evaluation
@@ -534,15 +568,23 @@ impl Circuit {
             if op == Operation::Delete {
                 self.store.stage_deleted_row(&table, &id);
             }
-            let (key, weight) = self.store.apply_owned(&table, op, &id, data);
-            if weight != 0 {
-                let delta = table_deltas.entry(table.clone()).or_default();
-                *delta.entry(key).or_insert(0) += weight;
+            let applied = self.store.apply_owned(&table, op, &id, data);
+            // A write whose digest matched what was stored did nothing: no
+            // delta, no content update, and the table is not even "changed".
+            if !applied.content_changed {
+                continue;
             }
-            // Track content updates (data changed but membership unchanged)
-            if op == Operation::Update {
-                let key = make_key(&table, &id);
-                content_updates.entry(table.clone()).or_default().push(key);
+            if applied.weight != 0 {
+                let delta = table_deltas.entry(table.clone()).or_default();
+                *delta.entry(applied.key).or_insert(0) += applied.weight;
+            } else {
+                // Content changed, membership did not: the store decided that
+                // from presence, not from the verb, so a Create that lands on
+                // an existing row is tracked here exactly like an Update.
+                content_updates
+                    .entry(table.clone())
+                    .or_default()
+                    .push(applied.key);
             }
             if !changed_tables.contains(&table) {
                 changed_tables.push(table);
@@ -746,16 +788,62 @@ impl Circuit {
                 // per node so the output's result reflects whether the
                 // row's NEW content satisfies the view right now.
                 let mut node_evals: Vec<bool> = vec![false; num_nodes];
+                let mut reordered: Option<(usize, ZSet)> = None;
                 for &node_id in &topo_order {
                     let input_ids = graph.nodes[node_id].inputs.clone();
                     let input_evals: Vec<bool> =
                         input_ids.iter().map(|&i| node_evals[i]).collect();
+                    // An order-sensitive operator re-places the key itself:
+                    // its answer is a delta, not a bool, and it supersedes the
+                    // synthesized +1/-1 below for this key.
+                    if reordered.is_none() {
+                        let upstream_now = input_evals.first().copied().unwrap_or(true);
+                        if let Some(delta) = graph.nodes[node_id].operator.reorder_key(
+                            key,
+                            upstream_now,
+                            &self.store,
+                            view.params.as_ref(),
+                        ) {
+                            reordered = Some((node_id, delta));
+                        }
+                    }
                     node_evals[node_id] = graph.nodes[node_id].operator.evaluate_key(
                         key,
                         &input_evals,
                         &self.store,
                         view.params.as_ref(),
                     );
+                }
+                if let Some((from, delta)) = reordered {
+                    // Push the re-placement through whatever sits downstream
+                    // of the reordering node (a Project, typically) so the
+                    // view sees it in output terms.
+                    let mut outputs: Vec<Option<ZSet>> = vec![None; num_nodes];
+                    outputs[from] = Some(delta);
+                    let after = topo_order.iter().position(|&n| n == from).unwrap_or(0);
+                    for &node_id in &topo_order[after + 1..] {
+                        let input_ids = graph.nodes[node_id].inputs.clone();
+                        if !input_ids.iter().any(|&i| outputs[i].is_some()) {
+                            continue;
+                        }
+                        let inputs: Vec<&ZSet> = input_ids
+                            .iter()
+                            .map(|&i| outputs[i].as_ref().unwrap_or(&empty_delta))
+                            .collect();
+                        let out = graph.nodes[node_id].operator.step(
+                            &inputs,
+                            &self.store,
+                            view.params.as_ref(),
+                        );
+                        outputs[node_id] = Some(out);
+                    }
+                    if let Some(out) = outputs[graph.output_node].take() {
+                        for (k, w) in out {
+                            *view_delta.entry(k).or_insert(0) += w;
+                        }
+                        view_delta.retain(|_, w| *w != 0);
+                    }
+                    continue;
                 }
                 let now_matches = node_evals[graph.output_node];
                 let prev_cached = view.cache.get(&**key).copied().unwrap_or(0);
@@ -879,6 +967,15 @@ pub struct TableSize {
     /// Membership Z-set. Separate from `rows_bytes` because its keys are a
     /// second `"table:id"` string per row on top of the raw id in `rows`.
     pub zset_bytes: usize,
+    /// Row bytes referenced by a live slot.
+    #[serde(default)]
+    pub live_bytes: u64,
+    /// Row bytes orphaned by updates and deletes, reclaimable by `compact`.
+    #[serde(default)]
+    pub dead_bytes: u64,
+    /// Fields kept per row under projection; `None` when whole bodies are kept.
+    #[serde(default)]
+    pub retained_fields: Option<Vec<String>>,
 }
 
 impl TableSize {
@@ -1074,6 +1171,232 @@ impl Circuit {
         Ok(String::from_utf8(buf).expect("serde_json emits UTF-8"))
     }
 
+    /// Serialize ONLY the base collections, as bytes.
+    ///
+    /// For a circuit whose views are re-registered from scratch on every boot
+    /// (the browser client mints a fresh session-salted id per query), views
+    /// in the snapshot are zombies: stepped on every ingest, never read. The
+    /// store is the part worth keeping. Bytes rather than a `String` because
+    /// the consumer is a JS host, where a string doubles to UTF-16 on the way
+    /// across and the snapshot is the largest single allocation it makes.
+    pub fn save_store_only(&self) -> serde_json::Result<Vec<u8>> {
+        let state = CircuitStateRef {
+            store: &self.store,
+            queries: Vec::new(),
+        };
+        let mut buf = Vec::with_capacity(self.estimated_snapshot_bytes());
+        serde_json::to_writer(&mut buf, &state)?;
+        Ok(buf)
+    }
+
+    /// Read the base collections out of a snapshot written by
+    /// [`Self::save_store_only`] (or a full [`Self::save`]; the views are
+    /// ignored). The caller installs it with [`Self::replace_store`].
+    pub fn restore_store(bytes: &[u8]) -> serde_json::Result<Store> {
+        let state: CircuitState = serde_json::from_slice(bytes)?;
+        Ok(state.store)
+    }
+
+    /// Swap the base collections under the registered views and re-prime
+    /// every view against the new rows.
+    ///
+    /// Keeps everything `restore` drops (permissions, link targets, opaque
+    /// fields, projection) and keeps the views themselves: a client loads its
+    /// snapshot in the background while queries are already registering, and
+    /// a view registered against the empty pre-snapshot store must end up
+    /// seeing the restored rows, not be silently discarded. Each view gets a
+    /// fresh graph (operator state is a function of the store) and a full
+    /// initial snapshot, returned as the deltas to publish. A view that ends
+    /// up empty still gets a delta so its consumer drops the stale rows.
+    pub fn replace_store(&mut self, store: Store) -> Vec<ViewDelta> {
+        self.store = store;
+        self.store.clear_pending_deleted_rows();
+        self.refresh_retained_fields();
+
+        let ids: Vec<String> = self.views.keys().cloned().collect();
+        let mut out = Vec::new();
+        for id in ids {
+            let (root, previous) = {
+                let view = self.views.get_mut(&id).expect("view listed");
+                let previous: Vec<String> = view.cache.keys().map(|k| k.to_string()).collect();
+                view.cache.clear();
+                view.subquery_cache.clear();
+                view.last_hash = String::new();
+                (view.plan.root.clone(), previous)
+            };
+            self.graphs.insert(id.clone(), Graph::from_plan(&root));
+            match self.run_initial_snapshot(&id) {
+                Some(delta) => out.extend(self.fan_out(delta)),
+                None => {
+                    let view = self.views.get_mut(&id).expect("view listed");
+                    view.last_hash = view.compute_hash();
+                    let delta = ViewDelta {
+                        query_id: id.clone(),
+                        additions: vec![],
+                        removals: previous,
+                        updates: vec![],
+                        records: vec![],
+                        result_hash: view.last_hash.clone(),
+                        subquery_items: vec![],
+                        auth_id: view.auth_id.clone(),
+                    };
+                    out.extend(self.fan_out(delta));
+                }
+            }
+        }
+        out
+    }
+
+    /// Bring one table in line with the caller's authoritative `(id, rv)`
+    /// list, the client-side counterpart of the server's `_00_rv` catch-up.
+    ///
+    /// Rows the store holds that the list lacks are deleted THROUGH `step`, so
+    /// registered views retract them. Rows the list has that the store lacks,
+    /// or holds at a lower `_00_rv`, are returned for the caller to ingest;
+    /// nothing is fetched here because the bodies live on the caller's side.
+    /// Ids may be spelled raw or `table:id`; the returned `fetch` keeps the
+    /// caller's spelling.
+    pub fn reconcile(&mut self, table: &str, entries: &[(String, i64)]) -> Reconciled {
+        let local: HashMap<&str, i64> = entries
+            .iter()
+            .map(|(id, rv)| (crate::types::raw_id(id), *rv))
+            .collect();
+        let (fetch, stale): (Vec<String>, Vec<String>) = match self.store.get_collection(table) {
+            Some(coll) => {
+                let stale = coll
+                    .rows
+                    .keys()
+                    .filter(|id| !local.contains_key(*id))
+                    .map(str::to_string)
+                    .collect();
+                let fetch = entries
+                    .iter()
+                    .filter(|(id, rv)| match coll.rows.rv_of(crate::types::raw_id(id)) {
+                        Some(stored) => stored < *rv,
+                        None => true,
+                    })
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                (fetch, stale)
+            }
+            None => (entries.iter().map(|(id, _)| id.clone()).collect(), Vec::new()),
+        };
+        let deleted = stale.len();
+        let deltas = if stale.is_empty() {
+            Vec::new()
+        } else {
+            let changes = stale
+                .into_iter()
+                .map(|id| Change::delete(table, &id))
+                .collect();
+            self.step(ChangeSet { changes })
+        };
+        Reconciled {
+            fetch,
+            deleted,
+            deltas,
+        }
+    }
+
+    /// Rebuild every table's row bytes without dead space (and re-projected,
+    /// when projection is on). Returns the bytes that were dead beforehand.
+    /// Holds each table decoded while it rebuilds, so call it from a
+    /// checkpoint or idle timer, not from an ingest.
+    pub fn compact(&mut self) -> u64 {
+        let mut reclaimed = 0;
+        for coll in self.store.collections.values_mut() {
+            reclaimed += coll.rows.dead_bytes();
+            coll.compact();
+        }
+        reclaimed
+    }
+
+    /// Bytes orphaned by updates and deletes across every table.
+    pub fn dead_bytes(&self) -> u64 {
+        self.store.collections.values().map(|c| c.rows.dead_bytes()).sum()
+    }
+
+    /// Bytes referenced by live rows across every table.
+    pub fn live_bytes(&self) -> u64 {
+        self.store.collections.values().map(|c| c.rows.live_bytes()).sum()
+    }
+
+    /// Turn projection on or off. On: every collection keeps only the fields
+    /// the registered plans evaluate (recomputed on each registration). Off:
+    /// whole bodies. Rows already stored are not rewritten either way until
+    /// the next write of each row or a [`Self::compact`].
+    pub fn set_projection(&mut self, enabled: bool) {
+        self.projection = enabled;
+        if enabled {
+            self.refresh_retained_fields();
+        } else {
+            for coll in self.store.collections.values_mut() {
+                coll.retained = None;
+            }
+        }
+    }
+
+    pub fn projection(&self) -> bool {
+        self.projection
+    }
+
+    /// Root fields per table that the registered plans evaluate.
+    fn evaluated_fields(&self) -> HashMap<String, std::collections::BTreeSet<String>> {
+        let mut out: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
+        for view in self.views.values() {
+            for (table, field) in view.plan.root.evaluated_field_refs() {
+                out.entry(table).or_default().insert(field);
+            }
+        }
+        out
+    }
+
+    /// Re-derive each collection's retained set from the registered plans.
+    /// No-op unless projection is on.
+    fn refresh_retained_fields(&mut self) {
+        if !self.projection {
+            return;
+        }
+        let wanted = self.evaluated_fields();
+        // A table a plan reads but nothing has written yet still needs its
+        // projection in place before the first row lands.
+        for table in wanted.keys() {
+            self.store.ensure_collection(table);
+        }
+        for (name, coll) in self.store.collections.iter_mut() {
+            coll.retained = Some(wanted.get(name).cloned().unwrap_or_default());
+        }
+    }
+
+    /// Record which fields `root` evaluates that stored rows of its tables
+    /// were projected without. Only meaningful with projection on and rows
+    /// present: an empty table has nothing to widen.
+    fn note_missing_fields(&mut self, root: &OperatorPlan) {
+        if !self.projection {
+            return;
+        }
+        for (table, field) in root.evaluated_field_refs() {
+            let Some(coll) = self.store.get_collection(&table) else {
+                continue;
+            };
+            if coll.rows.is_empty() {
+                continue;
+            }
+            let held = match &coll.retained {
+                Some(kept) => kept.contains(&field) || crate::circuit::store::ALWAYS_RETAINED.contains(&field.as_str()),
+                None => true,
+            };
+            if !held {
+                self.missing_fields.entry(table).or_default().insert(field);
+            }
+        }
+    }
+
+    /// Drain the fields noted by the registrations since the last call.
+    pub fn take_missing_fields(&mut self) -> BTreeMap<String, std::collections::BTreeSet<String>> {
+        std::mem::take(&mut self.missing_fields)
+    }
+
     /// Rough byte estimate for a serialized snapshot, used only to size the
     /// output buffer. Deliberately cheap: it must not walk every row, or
     /// sizing the buffer would cost more than the reallocation it avoids.
@@ -1106,6 +1429,8 @@ impl Circuit {
             // `permissions` (none of the three is part of the serialized snapshot).
             link_targets: HashMap::new(),
             opaque_fields: HashMap::new(),
+            projection: false,
+            missing_fields: BTreeMap::new(),
         };
 
         for qs in state.queries {
@@ -1407,6 +1732,12 @@ impl Circuit {
                 rows_bytes: coll.rows_bytes(),
                 index_bytes: coll.index_bytes(),
                 zset_bytes: coll.zset_bytes(),
+                live_bytes: coll.rows.live_bytes(),
+                dead_bytes: coll.rows.dead_bytes(),
+                retained_fields: coll
+                    .retained
+                    .as_ref()
+                    .map(|f| f.iter().cloned().collect()),
             })
             .collect();
         tables.sort_by(|a, b| b.total_bytes().cmp(&a.total_bytes()));
@@ -3234,5 +3565,311 @@ mod tests {
         assert_eq!(deltas.len(), 1);
         let adds: Vec<_> = deltas[0].subquery_items.iter().filter(|i| i.op == SubqueryOp::Add).collect();
         assert!(adds.iter().any(|i| i.id == "user:alice" && i.alias == "author"));
+    }
+}
+
+#[cfg(test)]
+mod snapshot_and_projection_tests {
+    use super::*;
+    use crate::operator::plan::{OperatorPlan, OrderSpec};
+    use crate::operator::predicate::Predicate;
+    use crate::types::Path;
+    use serde_json::json;
+
+    fn scan(id: &str, table: &str) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Scan {
+                table: table.to_string(),
+            },
+        }
+    }
+
+    fn top(id: &str, table: &str, limit: usize, field: &str) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Limit {
+                input: Box::new(OperatorPlan::Scan {
+                    table: table.to_string(),
+                }),
+                limit,
+                start: 0,
+                order_by: Some(vec![OrderSpec {
+                    field: Path::new(field),
+                    direction: "desc".to_string(),
+                }]),
+            },
+        }
+    }
+
+    fn filtered(id: &str, table: &str, field: &str, value: serde_json::Value) -> QueryPlan {
+        QueryPlan {
+            id: id.to_string(),
+            root: OperatorPlan::Filter {
+                input: Box::new(OperatorPlan::Scan {
+                    table: table.to_string(),
+                }),
+                predicate: Predicate::Eq {
+                    field: Path::new(field),
+                    value,
+                },
+            },
+        }
+    }
+
+    fn row(i: i64) -> serde_json::Value {
+        json!({ "id": format!("thread:t{i}"), "_00_rv": i, "score": i, "published": i % 2 == 0, "pgn": "x".repeat(50) })
+    }
+
+    fn seeded(n: i64) -> Circuit {
+        let mut c = Circuit::new();
+        let changes = (0..n)
+            .map(|i| Change::create("thread", &format!("t{i}"), row(i)))
+            .collect();
+        c.step(ChangeSet { changes });
+        c
+    }
+
+    fn records(delta: &ViewDelta) -> Vec<String> {
+        let mut r = delta.records.clone();
+        r.sort();
+        r
+    }
+
+    #[test]
+    fn a_repeated_identical_ingest_produces_no_delta() {
+        let mut c = seeded(3);
+        c.add_query(scan("q", "thread"), None, None);
+        let again = c.step(ChangeSet {
+            changes: vec![Change::create("thread", "t1", row(1))],
+        });
+        assert!(again.is_empty(), "same bytes, no work: {again:?}");
+        assert_eq!(c.dead_bytes(), 0, "and no orphaned arena bytes");
+    }
+
+    #[test]
+    fn save_store_only_round_trips_rows_and_carries_no_views() {
+        let mut a = seeded(5);
+        a.add_query(scan("q", "thread"), None, None);
+        let bytes = a.save_store_only().unwrap();
+
+        let store = Circuit::restore_store(&bytes).unwrap();
+        let mut b = Circuit::new();
+        let deltas = b.replace_store(store);
+        assert!(deltas.is_empty(), "no views registered, nothing to publish");
+        assert_eq!(b.view_count(), 0);
+        assert_eq!(b.compute_table_hashes(), a.compute_table_hashes());
+        assert_eq!(b.max_row_versions()["thread"], 4);
+
+        // A full snapshot's views are ignored on the store-only path too.
+        let full = a.save().unwrap();
+        let store = Circuit::restore_store(full.as_bytes()).unwrap();
+        let mut c = Circuit::new();
+        c.replace_store(store);
+        assert_eq!(c.view_count(), 0);
+    }
+
+    #[test]
+    fn replace_store_reprimes_views_registered_before_the_snapshot_landed() {
+        let a = seeded(6);
+        let bytes = a.save_store_only().unwrap();
+
+        // Boot order on a client: views register against an empty store,
+        // THEN the snapshot arrives.
+        let mut b = Circuit::new();
+        b.set_permission("thread", "true");
+        assert!(b.add_query(scan("all", "thread"), None, None).is_none());
+        assert!(b.add_query(top("top2", "thread", 2, "score"), None, None).is_none());
+        assert!(b
+            .add_query(filtered("pub", "thread", "published", json!(true)), None, None)
+            .is_none());
+
+        let deltas = b.replace_store(Circuit::restore_store(&bytes).unwrap());
+        let by_id: HashMap<String, ViewDelta> =
+            deltas.into_iter().map(|d| (d.query_id.clone(), d)).collect();
+        assert_eq!(by_id.len(), 3, "every view republished");
+        assert_eq!(records(&by_id["all"]).len(), 6);
+        assert_eq!(records(&by_id["top2"]), vec!["thread:t4", "thread:t5"]);
+        assert_eq!(records(&by_id["pub"]), vec!["thread:t0", "thread:t2", "thread:t4"]);
+        assert_eq!(b.permissions()["thread"], "true", "config survives the swap");
+
+        // Operator state was primed from the restored rows: a later row that
+        // outranks the window evicts the right one.
+        let next = b.step(ChangeSet {
+            changes: vec![Change::create("thread", "t9", row(9))],
+        });
+        let top = next.iter().find(|d| d.query_id == "top2").expect("top2 stepped");
+        assert_eq!(records(top), vec!["thread:t5", "thread:t9"]);
+        assert_eq!(top.removals, vec!["thread:t4".to_string()]);
+    }
+
+    #[test]
+    fn replace_store_tells_a_view_that_became_empty() {
+        let mut c = seeded(2);
+        c.add_query(scan("q", "thread"), None, None);
+        let deltas = c.replace_store(Store::new());
+        assert_eq!(deltas.len(), 1);
+        assert!(deltas[0].records.is_empty());
+        let mut removed = deltas[0].removals.clone();
+        removed.sort();
+        assert_eq!(removed, vec!["thread:t0", "thread:t1"]);
+    }
+
+    #[test]
+    fn reconcile_deletes_rows_the_caller_lacks_and_lists_what_it_must_fetch() {
+        let mut c = seeded(3); // t0 rv0, t1 rv1, t2 rv2
+        c.add_query(scan("q", "thread"), None, None);
+
+        let entries = vec![
+            ("thread:t0".to_string(), 0), // same
+            ("t1".to_string(), 5),        // newer locally, raw spelling
+            ("thread:t7".to_string(), 1), // unknown to the store
+        ];
+        let result = c.reconcile("thread", &entries);
+        assert_eq!(result.fetch, vec!["t1".to_string(), "thread:t7".to_string()]);
+        assert_eq!(result.deleted, 1, "t2 is gone from the caller's list");
+        assert_eq!(result.deltas.len(), 1);
+        assert_eq!(result.deltas[0].removals, vec!["thread:t2".to_string()]);
+        assert!(!c.contains("thread", "t2"));
+
+        // Unknown table: everything must be fetched, nothing deleted.
+        let result = c.reconcile("nope", &entries);
+        assert_eq!(result.fetch.len(), 3);
+        assert_eq!(result.deleted, 0);
+    }
+
+    #[test]
+    fn projection_stores_only_evaluated_fields_and_reports_what_a_new_view_lacks() {
+        let mut c = Circuit::new();
+        c.set_projection(true);
+        c.add_query(filtered("pub", "thread", "published", json!(true)), None, None);
+        c.step(ChangeSet {
+            changes: (0..4)
+                .map(|i| Change::create("thread", &format!("t{i}"), row(i)))
+                .collect(),
+        });
+        let stored = c.store.get_row_by_key("thread:t1").to_owned_value();
+        assert_eq!(
+            stored,
+            Sp00kyValue::from(json!({ "id": "thread:t1", "_00_rv": 1, "published": false })),
+            "only the predicate field and the identity are kept"
+        );
+        assert!(c.take_missing_fields().is_empty());
+
+        // A view ordering on `score` cannot see it: registration says so.
+        let initial = c.add_query(top("top2", "thread", 2, "score"), None, None);
+        assert!(initial.is_some());
+        let missing = c.take_missing_fields();
+        assert_eq!(
+            missing["thread"],
+            ["score".to_string()].into_iter().collect::<std::collections::BTreeSet<_>>()
+        );
+        assert!(c.take_missing_fields().is_empty(), "drained");
+
+        // Widening: merge just that field into each stored row, and the view
+        // converges. New rows keep it from now on.
+        let widen = c.step(ChangeSet {
+            changes: (0..4)
+                .map(|i| Change::merge("thread", &format!("t{i}"), json!({ "score": i })))
+                .collect(),
+        });
+        let top = widen.iter().find(|d| d.query_id == "top2").expect("top2 stepped");
+        assert_eq!(records(top), vec!["thread:t2", "thread:t3"]);
+        let stored = c.store.get_row_by_key("thread:t3").to_owned_value();
+        assert_eq!(
+            stored,
+            Sp00kyValue::from(json!({ "id": "thread:t3", "_00_rv": 3, "published": false, "score": 3 }))
+        );
+
+        let report = c.size_report();
+        let thread = report.tables.iter().find(|t| t.table == "thread").unwrap();
+        let mut kept = thread.retained_fields.clone().unwrap();
+        kept.sort();
+        assert_eq!(kept, vec!["published", "score"]);
+    }
+
+    /// Regression: an UPDATE of a row OUTSIDE a `LIMIT n` window used to grow
+    /// the window by one (TopK's `evaluate_key` passed upstream through and
+    /// the synthesized `+1` was never evicted). Now content updates re-place
+    /// the row: out stays out, a raised score moves in and evicts the tail,
+    /// a lowered score moves out and backfills.
+    #[test]
+    fn a_content_update_re_places_a_row_in_a_top_k_window() {
+        let mut c = seeded(10); // scores 0..9
+        c.add_query(top("top3", "thread", 3, "score"), None, None);
+        let window = |c: &Circuit| {
+            let mut r: Vec<String> = c.get_view("top3").unwrap().cache.keys().map(|k| k.to_string()).collect();
+            r.sort();
+            r
+        };
+        assert_eq!(window(&c), vec!["thread:t7", "thread:t8", "thread:t9"]);
+
+        // Out stays out.
+        let d = c.step(ChangeSet {
+            changes: vec![Change::update("thread", "t1", {
+                let mut r = row(1);
+                r["pgn"] = json!("changed");
+                r
+            })],
+        });
+        assert!(d.is_empty(), "no membership change, no delta: {d:?}");
+        assert_eq!(window(&c).len(), 3);
+
+        // Raised score moves in and evicts t7.
+        let d = c.step(ChangeSet {
+            changes: vec![Change::update("thread", "t1", {
+                let mut r = row(1);
+                r["score"] = json!(100);
+                r
+            })],
+        });
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].additions, vec!["thread:t1".to_string()]);
+        assert_eq!(d[0].removals, vec!["thread:t7".to_string()]);
+        assert_eq!(window(&c), vec!["thread:t1", "thread:t8", "thread:t9"]);
+
+        // Lowered score moves out and t7 backfills.
+        let d = c.step(ChangeSet {
+            changes: vec![Change::update("thread", "t1", row(1))],
+        });
+        assert_eq!(d[0].additions, vec!["thread:t7".to_string()]);
+        assert_eq!(d[0].removals, vec!["thread:t1".to_string()]);
+        assert_eq!(window(&c), vec!["thread:t7", "thread:t8", "thread:t9"]);
+
+        // In-window content change that keeps the order: content update only.
+        let d = c.step(ChangeSet {
+            changes: vec![Change::update("thread", "t9", {
+                let mut r = row(9);
+                r["pgn"] = json!("edited");
+                r
+            })],
+        });
+        assert_eq!(d[0].updates, vec!["thread:t9".to_string()]);
+        assert!(d[0].additions.is_empty() && d[0].removals.is_empty());
+    }
+
+    #[test]
+    fn compact_drops_dead_bytes_without_changing_results() {
+        let mut c = seeded(10);
+        c.add_query(top("top3", "thread", 3, "score"), None, None);
+        for i in 0..10 {
+            c.step(ChangeSet {
+                changes: vec![Change::update("thread", &format!("t{i}"), {
+                    let mut r = row(i);
+                    r["pgn"] = json!("y".repeat(60));
+                    r
+                })],
+            });
+        }
+        assert!(c.dead_bytes() > 0);
+        let hashes = c.compute_table_hashes();
+        let reclaimed = c.compact();
+        assert!(reclaimed > 0);
+        assert_eq!(c.dead_bytes(), 0);
+        assert_eq!(c.compute_table_hashes(), hashes);
+        let next = c.step(ChangeSet {
+            changes: vec![Change::create("thread", "t99", row(99))],
+        });
+        assert_eq!(records(&next[0]), vec!["thread:t8", "thread:t9", "thread:t99"]);
     }
 }

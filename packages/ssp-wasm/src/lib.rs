@@ -84,8 +84,34 @@ fn build_change(table: &str, op: &str, id: &str, record: Value) -> Change {
     match Operation::from_str(op).unwrap_or(Operation::Create) {
         Operation::Create => Change::create(table, &record_id, clean_sv),
         Operation::Update => Change::update(table, &record_id, clean_sv),
+        Operation::Merge => Change::merge(table, &record_id, clean_sv),
         Operation::Delete => Change::delete(table, &record_id),
     }
+}
+
+/// Serialize circuit output for JS: maps as plain objects, like every other
+/// export here.
+fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+    Ok(value.serialize(&serializer)?)
+}
+
+/// What `reconcile` returns to JS.
+#[derive(Serialize)]
+struct WasmReconciled {
+    fetch: Vec<String>,
+    deleted: usize,
+    updates: Vec<WasmViewUpdate>,
+}
+
+/// What `register_view` returns: the initial view update plus, under
+/// projection, the fields this plan evaluates that stored rows do not hold.
+#[derive(Serialize)]
+struct WasmRegistration {
+    #[serde(flatten)]
+    update: WasmViewUpdate,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    missing_fields: Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 /// Transform a Vec<ViewDelta> to Vec<WasmViewUpdate> with versions from the store.
@@ -180,6 +206,17 @@ export interface WasmIngestItem {
   op: string;
   id: string;
   record: any;
+}
+
+export interface WasmRegistration extends WasmViewUpdate {
+  /** Under projection: fields this plan evaluates that stored rows lack. */
+  missing_fields?: Record<string, string[]>;
+}
+
+export interface WasmReconciled {
+  fetch: string[];
+  deleted: number;
+  updates: WasmViewUpdate[];
 }
 "#;
 
@@ -317,8 +354,17 @@ impl Sp00kyProcessor {
         wasm_result.timing_plan_ms = reg_timings.plan_ms;
         wasm_result.timing_snapshot_ms = reg_timings.snapshot_ms;
 
-        let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-        Ok(wasm_result.serialize(&serializer)?)
+        let missing = self.circuit.take_missing_fields();
+        let missing_fields = (!missing.is_empty()).then(|| {
+            missing
+                .into_iter()
+                .map(|(t, f)| (t, f.into_iter().collect()))
+                .collect()
+        });
+        to_js(&WasmRegistration {
+            update: wasm_result,
+            missing_fields,
+        })
     }
 
     /// Unregister a view by ID
@@ -352,10 +398,95 @@ impl Sp00kyProcessor {
 
     /// Load circuit state from a JSON string
     pub fn load_state(&mut self, state: String) -> Result<(), JsValue> {
-        let circuit = Circuit::restore(&state)
+        let mut circuit = Circuit::restore(&state)
             .map_err(|e| JsValue::from_str(&format!("Failed to deserialize state: {}", e)))?;
-
+        // `Circuit::restore` carries state, not configuration: permissions,
+        // link targets, opaque fields and projection were seeded on THIS
+        // processor and must survive the swap, or every table default-denies.
+        for (table, text) in self.circuit.permissions() {
+            circuit.set_permission(table.clone(), text.clone());
+        }
+        for (table, fields) in self.circuit.link_targets() {
+            for (field, target) in fields {
+                circuit.set_link_target(table.clone(), field.clone(), target.clone());
+            }
+        }
+        for (table, fields) in self.circuit.opaque_fields() {
+            circuit.set_opaque_fields(table.clone(), fields.clone());
+        }
+        circuit.set_projection(self.circuit.projection());
         self.circuit = circuit;
         Ok(())
+    }
+
+    /// Snapshot the base collections only, as bytes (a `Uint8Array` in JS).
+    /// Views are deliberately left out: the client re-registers every query
+    /// under a fresh session id on boot, so persisted views would only be
+    /// stepped and never read. Pair with `load_store_state`.
+    pub fn save_store_state(&self) -> Result<Vec<u8>, JsValue> {
+        self.circuit
+            .save_store_only()
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize store: {}", e)))
+    }
+
+    /// Install a snapshot written by `save_store_state` UNDER the views that
+    /// are already registered, keeping permissions and projection. Every
+    /// registered view is re-primed against the restored rows; the returned
+    /// `WasmViewUpdate[]` carries their new full results, so a query that
+    /// registered against the empty pre-snapshot store catches up.
+    pub fn load_store_state(&mut self, bytes: &[u8]) -> Result<JsValue, JsValue> {
+        let store = Circuit::restore_store(bytes)
+            .map_err(|e| JsValue::from_str(&format!("Failed to deserialize store: {}", e)))?;
+        let deltas = self.circuit.replace_store(store);
+        to_js(&transform_deltas(&deltas, &self.circuit))
+    }
+
+    /// Compare one table against the caller's authoritative `[id, rv][]`.
+    /// Rows the store holds but the list lacks are deleted (with view
+    /// updates); ids the store lacks or holds at a lower `_00_rv` come back in
+    /// `fetch` for the caller to ingest. See `Circuit::reconcile`.
+    pub fn reconcile(&mut self, table: String, entries: JsValue) -> Result<JsValue, JsValue> {
+        let entries: Vec<(String, i64)> = serde_wasm_bindgen::from_value(entries)
+            .map_err(|e| JsValue::from_str(&format!("Failed to parse entries: {}", e)))?;
+        let result = self.circuit.reconcile(&table, &entries);
+        to_js(&WasmReconciled {
+            fetch: result.fetch,
+            deleted: result.deleted,
+            updates: transform_deltas(&result.deltas, &self.circuit),
+        })
+    }
+
+    /// Highest `_00_rv` folded into each table, `{ [table]: rv }`.
+    pub fn max_row_versions(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.circuit.max_row_versions())
+    }
+
+    /// Rebuild row storage without the bytes orphaned by updates and deletes.
+    /// Returns how many bytes were dead. Costs a decode of every row, so call
+    /// it from a checkpoint, never per ingest.
+    pub fn compact(&mut self) -> f64 {
+        self.circuit.compact() as f64
+    }
+
+    /// Bytes of row storage orphaned by updates and deletes.
+    pub fn dead_bytes(&self) -> f64 {
+        self.circuit.dead_bytes() as f64
+    }
+
+    /// Bytes of row storage referenced by live rows.
+    pub fn live_bytes(&self) -> f64 {
+        self.circuit.live_bytes() as f64
+    }
+
+    /// Keep only the fields registered plans evaluate (plus `id`/`_00_rv`)
+    /// per stored row. Off by default. Must be set before the first ingest
+    /// to take effect on those rows; `compact` re-projects existing ones.
+    pub fn set_projection(&mut self, enabled: bool) {
+        self.circuit.set_projection(enabled);
+    }
+
+    /// Per-table and per-view heap attribution, sorted heaviest first.
+    pub fn size_report(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.circuit.size_report())
     }
 }

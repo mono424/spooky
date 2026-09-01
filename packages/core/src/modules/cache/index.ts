@@ -88,6 +88,19 @@ export class CacheModule implements StreamUpdateReceiver {
     return this.versionLookups[recordId] ?? 0;
   }
 
+  /**
+   * Seed the version memo from rows the circuit was primed with out of the
+   * local store, so the first post-reload sync diff does not re-download
+   * bodies the browser already has. Only rows the prime actually put into the
+   * circuit belong here: a memo entry with no circuit row would make the diff
+   * flag the id forever while nothing ever fetches it.
+   */
+  public primeVersions(entries: [string, number][]): void {
+    for (const [id, rv] of entries) {
+      if (rv > (this.versionLookups[id] ?? 0)) this.versionLookups[id] = rv;
+    }
+  }
+
   /** Drop the version cache on a bucket switch — a stale version would make
    *  the sync diff skip fetching a body the new bucket legitimately needs. */
   public clearVersionLookups(): void {
@@ -174,13 +187,17 @@ export class CacheModule implements StreamUpdateReceiver {
       // ingestMany coalesces the per-record stream updates into a single
       // notification per affected query — the UI then updates once, after the
       // whole batch is ingested, instead of row-by-row.
+      const versionOf = new Map<string, number>();
       const bulk = populatedRecords.map((record) => {
         const recordId = encodeRecordId(record.record.id);
-        this.versionLookups[recordId] = record.version;
+        versionOf.set(recordId, record.version);
         return { table: record.table, op: record.op, id: recordId, record: record.record };
       });
-      this.streamProcessor.ingestMany(bulk);
-      this.ingestRelay?.(bulk as CacheIngestTuple[]);
+      // Memo and relay only what the circuit actually took: a chunk that
+      // failed mid-batch is neither "known" here nor fanned out to followers.
+      const ingested = this.streamProcessor.ingestMany(bulk);
+      for (const t of ingested) this.versionLookups[t.id] = versionOf.get(t.id) ?? 0;
+      if (ingested.length > 0) this.ingestRelay?.(ingested as CacheIngestTuple[]);
 
       this.logger.debug(
         { count: records.length, Category: 'sp00ky-client::CacheModule::saveBatch' },
@@ -221,7 +238,7 @@ export class CacheModule implements StreamUpdateReceiver {
 
       // 2. Ingest deletion into DBSP (pass record data so predicates can be matched)
       delete this.versionLookups[id];
-      this.streamProcessor.ingest(table, 'DELETE', id, recordData);
+      this.streamProcessor.ingestMany([{ table, op: 'DELETE', id, record: recordData }]);
       this.ingestRelay?.([{ table, op: 'DELETE', id, record: recordData }]);
 
       this.logger.debug(

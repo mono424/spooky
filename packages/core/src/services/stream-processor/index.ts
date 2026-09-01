@@ -5,7 +5,8 @@ import type { Logger } from 'pino';
 import type { LocalStore } from '../database/index';
 import type { WasmProcessor, WasmStreamUpdate } from './wasm-types';
 import type { Duration } from 'surrealdb';
-import type { PersistenceClient, QueryTimeToLive, RecordVersionArray } from '../../types';
+import type { QueryTimeToLive, RecordVersionArray } from '../../types';
+import { encodeRecordId } from '../../utils/index';
 
 // Simple interface for query plan registration (replaces Incantation class)
 interface QueryPlanConfig {
@@ -57,19 +58,56 @@ export interface StreamUpdateReceiver {
   onStreamUpdate(update: StreamUpdate): void;
 }
 
+/** One row change in the shape `ingestMany` consumes. */
+export interface IngestRecord {
+  table: string;
+  /** `MERGE` overlays the given fields on the stored row (projection widening). */
+  op: 'CREATE' | 'UPDATE' | 'DELETE' | 'MERGE';
+  id: string;
+  record: any;
+}
+
 /**
- * Read a circuit snapshot out of the pre-`persistCircuit` persisted shape
- * (`[[{ state }]]`, a raw SurrealDB result). Returns null for anything else.
+ * What the boot-time prime needs from the client: which tables to walk, how
+ * to recognise a snapshot written under a different schema, and which rows'
+ * local `_00_rv` must not be reported as the server's.
  */
-function extractLegacyState(result: unknown): string | null {
-  if (
-    Array.isArray(result) &&
-    Array.isArray(result[0]) &&
-    typeof result[0][0]?.state === 'string'
-  ) {
-    return result[0][0].state;
-  }
-  return null;
+export interface CircuitPrimeContext {
+  tables: string[];
+  schemaHash: string;
+  /** Encoded ids with an unsettled local mutation (their `_00_rv` was bumped
+   *  locally and may exceed the server's next version). */
+  pendingIds: Set<string>;
+  /** Receives every `(id, rv)` the prime put into the circuit, per table, so
+   *  the sync layer can skip re-downloading bodies it already has. */
+  onVersions?: (table: string, entries: [string, number][]) => void;
+}
+
+/** Storage key of the circuit snapshot inside the local store. */
+export const CIRCUIT_SNAPSHOT_KEY = 'circuit';
+/** Bump when the bytes `load_store_state` reads change shape. */
+export const CIRCUIT_SNAPSHOT_FORMAT = 1;
+/** Rows per `ingest_many` call. Bounds the transient the wasm side allocates
+ *  to parse a batch (measured: one 7700-row call of 20 KB bodies peaked at
+ *  500 MB, 128-row chunks at 335 MB, and under projection at 24 MB). */
+const INGEST_CHUNK = 128;
+/** Ids per `selectByIds` when priming bodies out of the local store. */
+const PRIME_CHUNK = 256;
+/** Rows the SurrealDB (main-thread, IndexedDB) engine is allowed to prime
+ *  through; above this the circuit boots empty as it always did. */
+const SURREAL_PRIME_ROW_CAP = 20_000;
+/** Below this many changed rows the checkpoint timer stays quiet. */
+const CHECKPOINT_MIN_ROWS = 50;
+
+/** Stable `table:id` for a row id that may already be a string. */
+function idString(id: unknown): string {
+  return typeof id === 'string' ? id : encodeRecordId(id as any);
+}
+
+function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
 
 export class StreamProcessorService {
@@ -90,51 +128,42 @@ export class StreamProcessorService {
   // rejecting `$auth`-gated tables; the predicate just degrades to its public
   // branch. Set via `setSessionAuth` on every auth state change.
   private sessionAuth: { authId: string; access: string } = { authId: '', access: '' };
-  // Persisted-state key suffix (the local bucket id) so each user's circuit
-  // snapshot lands in their own key. Only matters for localStorage-backed
-  // persistence — the surrealdb persistence client already writes into the
-  // per-user bucket itself.
-  private stateKeySuffix = '';
-  // Bumped by `reset()`. A `saveState` captured before a reset must not persist
-  // the OLD processor's circuit (holding the previous user's rows) after the
-  // switch — the fire-and-forget calls in `ingest`/`flushCoalescing` can land
-  // late.
+  // Bumped by `reset()`. Anything captured before a reset (a checkpoint's
+  // bytes, a prime's chunk, a widening read) must not land on the NEW
+  // processor, which belongs to a different bucket.
   private stateGeneration = 0;
-  // Shared-tabs: follower circuits are in-memory ONLY. Persisting them would
-  // stomp the leader's snapshot under the same key (the pre-existing cross-tab
-  // localStorage hazard); a promoted follower flips this back on.
+  // Shared-tabs: follower circuits are in-memory ONLY. Only the tab that owns
+  // the store writes its snapshot; a promoted follower flips this back on.
   private persistState = true;
-  // Snapshot persistence is OPT-IN and off by default (`persistCircuit`).
-  //
-  // `Circuit::save` deep-clones the WHOLE store (every row of every ingested
-  // table, full bodies) plus every view cache and JSON-encodes the result. It
-  // used to run from `ingest`, `flushCoalescing`, `registerQueryPlan` and
-  // `unregisterQueryPlan`, i.e. once per sync batch AND once per query
-  // register/unregister. On a 3.7k-game collection whose list registers and
-  // drops one windowed query per 50 rows scrolled, that measured 220 whole-store
-  // serializations and ~1 GB of transient JSON for a single scroll, 5.5x the
-  // wall time of the same ingests without it, and it doubled the wasm heap
-  // high-water mark (wasm32 dlmalloc never returns pages, so the peak is
-  // permanent). It also ran the encode a second time in
-  // `LocalStoragePersistenceClient.set` and wrote it synchronously on the main
-  // thread. All of it was dead weight: `loadState`'s shape check could never
-  // match what either shipped persistence client returns, so the browser never
-  // restored a snapshot, and first paint comes from the local SQLite store
-  // anyway.
-  //
-  // When enabled, we mark the circuit dirty and let a checkpoint timer (plus a
-  // `pagehide` flush) do at most one snapshot per interval, mirroring
-  // `ssp-node`'s "NEVER per-ingest" rule.
+  // Snapshot persistence. Store-only bytes, written by the checkpoint timer
+  // and on the page going hidden, never per ingest: `save_store_state` walks
+  // every row. The snapshot is what lets a reload restore the circuit and
+  // step in only what changed since (`reconcile`), instead of re-downloading
+  // and re-ingesting the whole working set.
   private persistCircuit = false;
   private checkpointMs = 30_000;
   private checkpointTimer: ReturnType<typeof setInterval> | null = null;
   private snapshotDirty = false;
-  private pagehideHandler: (() => void) | null = null;
+  private dirtyRows = 0;
+  private hideHandler: (() => void) | null = null;
+  private checkpointInFlight: Promise<void> | null = null;
+  // Keep only the fields registered plans evaluate per stored row. The client
+  // renders bodies from the local store, so a 20 KB game row in the circuit
+  // is ~150 B of predicate/sort fields under projection.
+  private projection = true;
+  // Prime state: `primed` resolves when the boot-time prime (snapshot restore
+  // + reconcile, or a full read of the local store) has finished, aborted or
+  // been skipped. Sync waits on it before its first diff.
+  private primed: Promise<void> = Promise.resolve();
+  private schemaHash: string | null = null;
+  // Projection widening, serialised: fields a new view evaluates that stored
+  // rows lack are merged in table by table.
+  private widenQueue: Promise<void> = Promise.resolve();
+  private widenPending: Map<string, Set<string>> = new Map();
 
   constructor(
     public events: EventSystem<StreamProcessorEvents>,
     private db: LocalStore,
-    private persistenceClient: PersistenceClient,
     logger: Logger
   ) {
     this.logger = logger.child({ name: 'StreamProcessorService' });
@@ -183,101 +212,89 @@ export class StreamProcessorService {
   }
 
   /**
-   * Ingest a batch of record changes as a single bulk operation, firing only
-   * one coalesced `StreamUpdate` per affected query once every record has been
-   * ingested (instead of one update per record). Use this whenever multiple
-   * records land at once — e.g. sync fetching N missing rows — so a list query
-   * re-runs and the UI re-renders once for the whole batch rather than
-   * row-by-row.
+   * Ingest a batch of record changes, firing one coalesced `StreamUpdate` per
+   * affected query once every record has been ingested. Use this whenever
+   * multiple records land at once (sync fetching N rows, the boot prime).
    *
-   * Internally opens a coalescing window, ingests each record, then flushes;
-   * processor state is persisted once for the whole batch. No-op for an empty
-   * batch.
+   * The batch is fed to the wasm side in chunks of {@link INGEST_CHUNK}: one
+   * circuit step per chunk (a step walks every registered view, so per-record
+   * ingest paid that fixed cost N times), but never the whole batch at once,
+   * because the wasm side has to hold every parsed row of a call at the same
+   * time and wasm32 dlmalloc never returns that peak.
+   *
+   * Returns the records that were ingested. A chunk that fails is reported
+   * and skipped, not retried (a retry would double-apply whatever the failed
+   * step already committed), and the remaining chunks still run.
    */
-  ingestMany(
-    records: Array<{
-      table: string;
-      op: 'CREATE' | 'UPDATE' | 'DELETE';
-      id: string;
-      record: any;
-    }>
-  ): void {
-    if (records.length === 0) return;
+  ingestMany(records: IngestRecord[]): IngestRecord[] {
+    if (records.length === 0) return [];
 
     if (!this.processor) {
       this.logger.warn(
         { Category: 'sp00ky-client::StreamProcessorService::ingestMany' },
         'Not initialized, skipping ingest'
       );
-      return;
+      return [];
     }
 
-    // One circuit step for the whole batch when the WASM build offers it. A
-    // step walks every registered view, so the per-record path pays that fixed
-    // cost N times: a cold sync landing a few thousand rows spent seconds of
-    // main-thread time almost entirely on step overhead. Older builds have no
-    // `ingest_many`, hence the loop below.
     const bulkIngest = this.processor.ingest_many;
-    if (typeof bulkIngest === 'function') {
-      this.logger.debug(
-        { count: records.length, Category: 'sp00ky-client::StreamProcessorService::ingestMany' },
-        'Ingesting batch into ssp'
-      );
+    if (typeof bulkIngest !== 'function') {
+      // Stale wasm build: per-record steps, still coalesced into one update.
+      this.beginCoalescing();
       try {
-        const items = records.map((record) => ({
-          table: record.table,
-          op: record.op,
-          id: record.id,
-          record: this.normalizeValue(record.record),
-        }));
-        const t0 = performance.now();
-        const rawUpdates = bulkIngest.call(this.processor, items) ?? [];
-        const materializationTimeMs = performance.now() - t0;
-        this.logger.debug(
-          {
-            count: records.length,
-            rawUpdates: rawUpdates.length,
-            materializationTimeMs,
-            Category: 'sp00ky-client::StreamProcessorService::ingestMany',
-          },
-          'Ingesting batch into ssp done'
-        );
-        if (rawUpdates.length > 0) {
-          // `op: 'CREATE'` for the same reason the coalesced flush uses it: the
-          // batch's update takes DataModule's immediate (non-debounced) path.
-          this.dispatchUpdates(
-            rawUpdates.map((u: WasmStreamUpdate) => ({
-              queryHash: u.query_id,
-              localArray: u.result_data,
-              op: 'CREATE' as const,
-              materializationTimeMs,
-              storeApplyMs: u.timing_store_apply_ms,
-              circuitStepMs: u.timing_circuit_step_ms,
-              transformMs: u.timing_transform_ms,
-            }))
-          );
+        for (const record of records) {
+          this.ingest(record.table, record.op, record.id, record.record);
         }
-      } catch (e) {
-        // Same contract as the single-record path: report and move on rather
-        // than re-running the batch, which would double-apply whatever the
-        // failed step already committed to the store.
-        this.logger.error(
-          { error: e, count: records.length, Category: 'sp00ky-client::StreamProcessorService::ingestMany' },
-          'Ingesting batch into ssp failed'
-        );
+      } finally {
+        this.flushCoalescing();
       }
-      this.markSnapshotDirty();
-      return;
+      return records;
     }
 
+    const ingested: IngestRecord[] = [];
     this.beginCoalescing();
     try {
-      for (const record of records) {
-        this.ingest(record.table, record.op, record.id, record.record);
+      for (const chunk of chunks(records, INGEST_CHUNK)) {
+        try {
+          const items = chunk.map((record) => ({
+            table: record.table,
+            op: record.op,
+            id: record.id,
+            record: this.normalizeValue(record.record),
+          }));
+          const t0 = performance.now();
+          const rawUpdates = bulkIngest.call(this.processor, items) ?? [];
+          const materializationTimeMs = performance.now() - t0;
+          if (rawUpdates.length > 0) {
+            this.notifyUpdates(
+              rawUpdates.map((u: WasmStreamUpdate) => ({
+                queryHash: u.query_id,
+                localArray: u.result_data,
+                op: 'CREATE' as const,
+                materializationTimeMs,
+                storeApplyMs: u.timing_store_apply_ms,
+                circuitStepMs: u.timing_circuit_step_ms,
+                transformMs: u.timing_transform_ms,
+              }))
+            );
+          }
+          ingested.push(...chunk);
+        } catch (e) {
+          this.logger.error(
+            { error: e, count: chunk.length, Category: 'sp00ky-client::StreamProcessorService::ingestMany' },
+            'Ingesting chunk into ssp failed'
+          );
+        }
       }
     } finally {
       this.flushCoalescing();
     }
+    this.logger.debug(
+      { count: records.length, ingested: ingested.length, Category: 'sp00ky-client::StreamProcessorService::ingestMany' },
+      'Ingested batch into ssp'
+    );
+    this.markSnapshotDirty(ingested.length);
+    return ingested;
   }
 
   /**
@@ -308,7 +325,6 @@ export class StreamProcessorService {
     if (buffered.length > 0) {
       this.dispatchUpdates(buffered);
     }
-    this.markSnapshotDirty();
   }
 
   /**
@@ -326,9 +342,7 @@ export class StreamProcessorService {
       await init(); // Initialize the WASM module (web target)
       // We cast the generated Sp00kyProcessor to our interface which is safer
       this.processor = new Sp00kyProcessor() as unknown as WasmProcessor;
-
-      // Try to load state
-      await this.loadState();
+      this.applyProjection();
 
       this.isInitialized = true;
       this.logger.info(
@@ -344,25 +358,16 @@ export class StreamProcessorService {
     }
   }
 
-  /** Route the persisted circuit snapshot to a per-bucket key. */
-  setStateKeySuffix(bucketId: string) {
-    this.stateKeySuffix = bucketId;
-  }
-
-  private stateKey(): string {
-    return this.stateKeySuffix
-      ? `_00_stream_processor_state:${this.stateKeySuffix}`
-      : '_00_stream_processor_state';
-  }
-
   /**
    * Drop the current WASM processor and start a fresh, empty circuit. Used on
    * local-bucket switches: the old circuit holds the previous user's rows AND
    * views registered with the previous `$auth` context, so neither may survive.
-   * Deliberately does NOT `loadState()` — a persisted snapshot references views
-   * under a dead sessionId salt; the DataModule rebind re-registers every live
-   * view against this fresh processor. Caller must re-seed `setPermissions`
-   * afterwards (a fresh circuit default-denies every table).
+   * Deliberately loads nothing: the snapshot in the store being swapped away
+   * from belongs to the previous bucket; the caller primes the new bucket's
+   * circuit (`primeFromLocal`) once its store is open, and the DataModule
+   * rebind re-registers every live view against this fresh processor. Caller
+   * must re-seed `setPermissions` afterwards (a fresh circuit default-denies
+   * every table).
    */
   async reset(): Promise<void> {
     if (!this.isInitialized) return;
@@ -370,8 +375,11 @@ export class StreamProcessorService {
     this.batching = false;
     this.batchBuffer.clear();
     this.snapshotDirty = false;
+    this.dirtyRows = 0;
+    this.widenPending.clear();
     const previous = this.processor;
     this.processor = new Sp00kyProcessor() as unknown as WasmProcessor;
+    this.applyProjection();
     this.freeProcessor(previous);
     this.logger.info(
       { Category: 'sp00ky-client::StreamProcessorService::reset' },
@@ -418,9 +426,9 @@ export class StreamProcessorService {
   }
 
   /**
-   * Opt into snapshot persistence (`persistCircuit`). Off by default: see the
-   * `persistCircuit` field comment for why per-ingest snapshots were removed.
-   * Must be called before `init()` for a snapshot to be restored at boot.
+   * Snapshot persistence (`persistCircuit`). When on, the circuit's store is
+   * written to the local store on a checkpoint interval and when the page
+   * goes hidden, and restored by {@link primeFromLocal} on the next boot.
    */
   configureCircuitPersistence(enabled: boolean, checkpointMs?: number): void {
     this.persistCircuit = enabled;
@@ -429,87 +437,349 @@ export class StreamProcessorService {
   }
 
   /**
-   * Record that the circuit changed. Cheap and O(1), the expensive snapshot is
-   * deferred to the checkpoint timer, and skipped entirely when
-   * `persistCircuit` is off (the default).
+   * Field projection (`circuitProjection`, default on). Takes effect on the
+   * next processor (`init`/`reset`) and on rows written after that.
    */
-  private markSnapshotDirty(): void {
+  configureProjection(enabled: boolean): void {
+    this.projection = enabled;
+    this.applyProjection();
+  }
+
+  private applyProjection(): void {
+    if (!this.processor || typeof this.processor.set_projection !== 'function') return;
+    try {
+      this.processor.set_projection(this.projection);
+    } catch (e) {
+      this.logger.warn(
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::applyProjection' },
+        'set_projection failed'
+      );
+    }
+  }
+
+  /** Resolves once the boot-time prime has finished (or was skipped). */
+  whenPrimed(): Promise<void> {
+    return this.primed;
+  }
+
+  /**
+   * Fill the circuit from the LOCAL store, in the background.
+   *
+   * With a usable snapshot: install it under whatever views have registered
+   * meanwhile (`load_store_state` re-primes them), then `reconcile` each table
+   * against the store's `(id, rv)` list so rows deleted since the checkpoint
+   * are stepped out and only rows added or changed since are read back and
+   * ingested. Without one: read every row and ingest it, chunked.
+   *
+   * Either way the circuit ends up equal to the local store without touching
+   * the network, so the first sync diff is a real delta rather than "fetch
+   * everything". The returned promise never rejects; `whenPrimed` gates on it.
+   */
+  primeFromLocal(ctx: CircuitPrimeContext): Promise<void> {
+    this.schemaHash = ctx.schemaHash;
+    const run = this.runPrime(ctx).catch((e) => {
+      this.logger.warn(
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::primeFromLocal' },
+        'Circuit prime failed; the circuit fills from sync instead'
+      );
+    });
+    this.primed = run;
+    return run;
+  }
+
+  private async runPrime(ctx: CircuitPrimeContext): Promise<void> {
+    const processor = this.processor;
+    if (!processor || typeof this.db.scanVersions !== 'function') return;
+    const generation = this.stateGeneration;
+    const epoch = this.db.epoch;
+    // A bucket switch replaces the processor and the store under us; every
+    // step re-checks so a stale chunk never lands in the new bucket.
+    const alive = () =>
+      this.processor === processor && generation === this.stateGeneration && epoch === this.db.epoch;
+    const t0 = performance.now();
+
+    let restored = false;
+    if (
+      this.persistCircuit &&
+      typeof this.db.getSnapshot === 'function' &&
+      typeof processor.load_store_state === 'function'
+    ) {
+      const snapshot = await this.db.getSnapshot(CIRCUIT_SNAPSHOT_KEY);
+      if (!alive()) return;
+      if (snapshot) {
+        const { meta } = snapshot;
+        if (meta.formatVersion !== CIRCUIT_SNAPSHOT_FORMAT || meta.schemaHash !== ctx.schemaHash) {
+          this.logger.info(
+            { meta, Category: 'sp00ky-client::StreamProcessorService::primeFromLocal' },
+            'Circuit snapshot is from another format or schema; priming from rows'
+          );
+        } else {
+          try {
+            const tLoad = performance.now();
+            const updates = processor.load_store_state(snapshot.bytes);
+            this.dispatchWasmUpdates(updates);
+            restored = true;
+            this.logger.info(
+              {
+                bytes: snapshot.bytes.byteLength,
+                views: updates.length,
+                loadMs: Math.round(performance.now() - tLoad),
+                Category: 'sp00ky-client::StreamProcessorService::primeFromLocal',
+              },
+              'Circuit snapshot restored'
+            );
+          } catch (e) {
+            this.logger.warn(
+              { error: e, Category: 'sp00ky-client::StreamProcessorService::primeFromLocal' },
+              'Circuit snapshot unreadable; priming from rows'
+            );
+          }
+        }
+      }
+    }
+
+    // Read the versions AFTER the snapshot: a batch the leader writes between
+    // the two can only make the store side newer, which reconcile handles.
+    const versions = await this.db.scanVersions(ctx.tables);
+    if (!alive()) return;
+    const total = Object.values(versions).reduce((n, v) => n + v.length, 0);
+    if (!restored && this.db.engineKind !== 'sqlite' && total > SURREAL_PRIME_ROW_CAP) {
+      this.logger.warn(
+        { total, cap: SURREAL_PRIME_ROW_CAP, Category: 'sp00ky-client::StreamProcessorService::primeFromLocal' },
+        'Too many cached rows to prime through the main-thread engine; circuit fills from sync'
+      );
+      return;
+    }
+
+    let ingested = 0;
+    let fetched = 0;
+    let deleted = 0;
+    for (const table of ctx.tables) {
+      const entries = versions[table] ?? [];
+      let toFetch: string[];
+      if (restored && typeof processor.reconcile === 'function') {
+        const result = processor.reconcile(table, entries);
+        this.dispatchWasmUpdates(result.updates);
+        deleted += result.deleted;
+        toFetch = result.fetch;
+      } else {
+        toFetch = entries.map(([id]) => id);
+      }
+      for (const chunk of chunks(toFetch, PRIME_CHUNK)) {
+        const rows = await this.db.selectByIds(table, chunk);
+        if (!alive()) return;
+        fetched += rows.length;
+        ingested += this.ingestMany(
+          rows.map((row) => ({
+            table,
+            op: 'CREATE' as const,
+            id: idString(row.id),
+            record: row,
+          }))
+        ).length;
+      }
+      if (entries.length > 0) {
+        ctx.onVersions?.(
+          table,
+          entries.filter(([id]) => !ctx.pendingIds.has(id))
+        );
+      }
+    }
+    // A prime from rows leaves the store with no snapshot to fall back on;
+    // let the next checkpoint write one even if nothing else changes.
+    if (!restored && ingested > 0) this.markSnapshotDirty(Math.max(ingested, CHECKPOINT_MIN_ROWS));
+    this.logger.info(
+      {
+        restored,
+        rows: total,
+        fetched,
+        ingested,
+        deleted,
+        ms: Math.round(performance.now() - t0),
+        Category: 'sp00ky-client::StreamProcessorService::primeFromLocal',
+      },
+      'Circuit primed from the local store'
+    );
+  }
+
+  /** Publish wasm updates produced outside an ingest (restore, reconcile). */
+  private dispatchWasmUpdates(updates: WasmStreamUpdate[] | undefined): void {
+    if (!updates || updates.length === 0) return;
+    this.dispatchUpdates(
+      updates.map((u) => ({
+        queryHash: u.query_id,
+        localArray: u.result_data,
+        op: 'CREATE' as const,
+      }))
+    );
+  }
+
+  /**
+   * Record that the circuit changed by `rows` rows. Cheap; the snapshot is
+   * deferred to the checkpoint timer and skipped entirely when `persistCircuit`
+   * is off.
+   */
+  private markSnapshotDirty(rows = 1): void {
     if (!this.persistCircuit || !this.persistState) return;
     this.snapshotDirty = true;
+    this.dirtyRows += rows;
     this.startCheckpoints();
   }
 
   private startCheckpoints(): void {
     if (this.checkpointTimer) return;
     this.checkpointTimer = setInterval(() => {
-      if (!this.snapshotDirty) return;
-      this.snapshotDirty = false;
-      void this.saveState();
+      if (!this.snapshotDirty || this.dirtyRows < CHECKPOINT_MIN_ROWS) return;
+      void this.checkpoint('interval');
     }, this.checkpointMs);
     // Node/test environments have no `window`; the interval alone is enough there.
-    if (typeof window !== 'undefined' && !this.pagehideHandler) {
-      this.pagehideHandler = () => {
+    if (typeof window !== 'undefined' && !this.hideHandler) {
+      // `visibilitychange: hidden` is the reliable last chance: a 100 MB write
+      // cannot finish inside `pagehide`, which is kept only as best effort.
+      this.hideHandler = () => {
         if (!this.snapshotDirty) return;
-        this.snapshotDirty = false;
-        void this.saveState();
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') return;
+        void this.checkpoint('hidden');
       };
-      window.addEventListener('pagehide', this.pagehideHandler);
+      window.addEventListener('visibilitychange', this.hideHandler);
+      window.addEventListener('pagehide', this.hideHandler);
     }
   }
 
-  /** Stop checkpointing and drop the `pagehide` listener. */
+  /** Stop checkpointing and drop the visibility listeners. */
   stopCheckpoints(): void {
     if (this.checkpointTimer) {
       clearInterval(this.checkpointTimer);
       this.checkpointTimer = null;
     }
-    if (this.pagehideHandler && typeof window !== 'undefined') {
-      window.removeEventListener('pagehide', this.pagehideHandler);
+    if (this.hideHandler && typeof window !== 'undefined') {
+      window.removeEventListener('visibilitychange', this.hideHandler);
+      window.removeEventListener('pagehide', this.hideHandler);
     }
-    this.pagehideHandler = null;
+    this.hideHandler = null;
     this.snapshotDirty = false;
+    this.dirtyRows = 0;
   }
 
-  async loadState() {
-    if (!this.processor || !this.persistState || !this.persistCircuit) return;
-    try {
-      const result = await this.persistenceClient.get(this.stateKey());
+  /**
+   * Write the circuit's store to the local store as a snapshot. Compacts the
+   * row arena first when dead bytes outweigh live ones. Serialised: a second
+   * call while one is in flight joins it. No-op unless persistence is on, this
+   * tab owns the store, and the engine can hold a snapshot.
+   */
+  checkpoint(reason = 'manual'): Promise<void> {
+    if (this.checkpointInFlight) return this.checkpointInFlight;
+    const run = this.runCheckpoint(reason).finally(() => {
+      this.checkpointInFlight = null;
+    });
+    this.checkpointInFlight = run;
+    return run;
+  }
 
-      // `save_state` returns a JSON string and every PersistenceClient round-trips
-      // it as one: localStorage via JSON.parse(getItem(...)), surrealdb via
-      // `_00_kv:<key>.val`. This used to test for a raw SurrealDB result shape
-      // (`result[0][0].state`), which no shipped client can ever produce, so the
-      // browser wrote a snapshot on every ingest and never restored one. The legacy
-      // shape is still accepted so an old persisted row still loads.
-      const state = typeof result === 'string' ? result : extractLegacyState(result);
-      if (state) {
-        this.logger.info(
-          {
-            stateLength: state.length,
-            Category: 'sp00ky-client::StreamProcessorService::loadState',
-          },
-          'Loading state from DB'
-        );
-        // Assuming processor has a load_state method matching the save_state behavior
-        // If not, we might need to adjust based on the actual WASM API
-        if (typeof this.processor.load_state === 'function') {
-          this.processor.load_state(state);
-        } else {
-          this.logger.warn(
-            { Category: 'sp00ky-client::StreamProcessorService::loadState' },
-            'load_state method not found on processor'
-          );
-        }
-      } else {
-        this.logger.info(
-          { Category: 'sp00ky-client::StreamProcessorService::loadState' },
-          'No saved state found'
-        );
+  private async runCheckpoint(reason: string): Promise<void> {
+    const processor = this.processor;
+    if (!processor || !this.persistState || !this.persistCircuit || !this.schemaHash) return;
+    if (typeof this.db.putSnapshot !== 'function' || typeof processor.save_store_state !== 'function') {
+      return;
+    }
+    const generation = this.stateGeneration;
+    const epoch = this.db.epoch;
+    const rows = this.dirtyRows;
+    this.snapshotDirty = false;
+    this.dirtyRows = 0;
+    try {
+      const t0 = performance.now();
+      let reclaimed = 0;
+      if (
+        typeof processor.compact === 'function' &&
+        typeof processor.dead_bytes === 'function' &&
+        typeof processor.live_bytes === 'function'
+      ) {
+        const dead = processor.dead_bytes();
+        if (dead > 1_000_000 && dead > processor.live_bytes()) reclaimed = processor.compact();
       }
+      const bytes = processor.save_store_state();
+      const meta = {
+        formatVersion: CIRCUIT_SNAPSHOT_FORMAT,
+        schemaHash: this.schemaHash,
+        savedAt: Date.now(),
+        maxRv: typeof processor.max_row_versions === 'function' ? processor.max_row_versions() : undefined,
+      };
+      // A reset or bucket switch landed while we serialised: this snapshot
+      // describes the OLD bucket's circuit and must not be written into the
+      // new bucket's store.
+      if (generation !== this.stateGeneration || epoch !== this.db.epoch) return;
+      await this.db.putSnapshot(CIRCUIT_SNAPSHOT_KEY, bytes, meta);
+      this.logger.info(
+        {
+          reason,
+          rows,
+          bytes: bytes.byteLength,
+          reclaimed,
+          ms: Math.round(performance.now() - t0),
+          Category: 'sp00ky-client::StreamProcessorService::checkpoint',
+        },
+        'Circuit snapshot written'
+      );
     } catch (e) {
-      this.logger.error(
-        { error: e, Category: 'sp00ky-client::StreamProcessorService::loadState' },
-        'Failed to load state'
+      this.logger.warn(
+        { error: e, reason, Category: 'sp00ky-client::StreamProcessorService::checkpoint' },
+        'Circuit snapshot failed'
+      );
+    }
+  }
+
+  /**
+   * Projection widening: a newly registered view evaluates fields that rows
+   * already in the circuit were stored without. Merge just those fields in,
+   * table by table, from the local store. The view registered against what
+   * was present and converges as the merges step through.
+   */
+  private scheduleWiden(missing: Record<string, string[]>): void {
+    for (const [table, fields] of Object.entries(missing)) {
+      const set = this.widenPending.get(table) ?? new Set<string>();
+      for (const f of fields) set.add(f);
+      this.widenPending.set(table, set);
+    }
+    this.widenQueue = this.widenQueue.then(() => this.runWiden()).catch((e) => {
+      this.logger.warn(
+        { error: e, Category: 'sp00ky-client::StreamProcessorService::widen' },
+        'Projection widening failed'
+      );
+    });
+  }
+
+  private async runWiden(): Promise<void> {
+    const processor = this.processor;
+    if (!processor || typeof this.db.scanVersions !== 'function') {
+      this.widenPending.clear();
+      return;
+    }
+    const generation = this.stateGeneration;
+    const epoch = this.db.epoch;
+    while (this.widenPending.size > 0) {
+      const [table, fields] = this.widenPending.entries().next().value as [string, Set<string>];
+      this.widenPending.delete(table);
+      const select = Array.from(fields);
+      const versions = await this.db.scanVersions([table]);
+      if (this.processor !== processor || generation !== this.stateGeneration || epoch !== this.db.epoch) return;
+      const ids = (versions[table] ?? []).map(([id]) => id);
+      let merged = 0;
+      for (const chunk of chunks(ids, PRIME_CHUNK)) {
+        const rows = await this.db.selectByIds(table, chunk, { select });
+        if (this.processor !== processor || generation !== this.stateGeneration || epoch !== this.db.epoch) return;
+        merged += this.ingestMany(
+          rows.map((row) => ({
+            table,
+            op: 'MERGE' as const,
+            id: idString(row.id),
+            record: row,
+          }))
+        ).length;
+      }
+      this.logger.info(
+        { table, fields: select, merged, Category: 'sp00ky-client::StreamProcessorService::widen' },
+        'Widened projected rows with newly evaluated fields'
       );
     }
   }
@@ -560,32 +830,6 @@ export class StreamProcessorService {
     );
   }
 
-  async saveState() {
-    if (!this.processor || !this.persistState || !this.persistCircuit) return;
-    const generation = this.stateGeneration;
-    try {
-      // Assuming processor has a save_state method that returns the state string/bytes
-      if (typeof this.processor.save_state === 'function') {
-        const state = this.processor.save_state();
-        // A reset raced this snapshot — persisting it would write the previous
-        // user's circuit into the new bucket's key. Drop it.
-        if (generation !== this.stateGeneration) return;
-        if (state) {
-          await this.persistenceClient.set(this.stateKey(), state);
-          this.logger.trace(
-            { Category: 'sp00ky-client::StreamProcessorService::saveState' },
-            'State saved'
-          );
-        }
-      }
-    } catch (e) {
-      this.logger.error(
-        { error: e, Category: 'sp00ky-client::StreamProcessorService::saveState' },
-        'Failed to save state'
-      );
-    }
-  }
-
   /**
    * Ingest a record change into the processor.
    * Emits 'stream_update' event if materialized views are affected.
@@ -593,7 +837,7 @@ export class StreamProcessorService {
    */
   ingest(
     table: string,
-    op: 'CREATE' | 'UPDATE' | 'DELETE',
+    op: IngestRecord['op'],
     id: string,
     record: any
   ): WasmStreamUpdate[] {
@@ -637,7 +881,8 @@ export class StreamProcessorService {
         const updates: StreamUpdate[] = rawUpdates.map((u: WasmStreamUpdate) => ({
           queryHash: u.query_id,
           localArray: u.result_data,
-          op: op,
+          // A MERGE is a content update as far as consumers are concerned.
+          op: op === 'MERGE' ? 'UPDATE' : op,
           materializationTimeMs,
           storeApplyMs: u.timing_store_apply_ms,
           circuitStepMs: u.timing_circuit_step_ms,
@@ -726,7 +971,9 @@ export class StreamProcessorService {
           snapshotMs: initialUpdate.timing_snapshot_ms ?? 0,
         },
       };
-      this.markSnapshotDirty();
+      if (initialUpdate.missing_fields && Object.keys(initialUpdate.missing_fields).length > 0) {
+        this.scheduleWiden(initialUpdate.missing_fields);
+      }
       this.logger.debug(
         {
           queryHash: queryPlan.queryHash,
@@ -753,7 +1000,6 @@ export class StreamProcessorService {
     if (!this.processor) return;
     try {
       this.processor.unregister_view(queryHash);
-      this.markSnapshotDirty();
     } catch (e) {
       this.logger.error(
         { error: e, Category: 'sp00ky-client::StreamProcessorService::unregisterQueryPlan' },

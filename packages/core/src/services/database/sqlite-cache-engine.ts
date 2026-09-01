@@ -10,6 +10,7 @@ import {
 } from './sqlite-plan-sql';
 import type { Logger } from '../logger/index';
 import type { Sp00kyConfig, StorageHealth } from '../../types';
+import type { SnapshotMeta, StoredSnapshot } from './cache-engine';
 import type { SealedQuery } from '../../utils/surql';
 import { resolveRelations, stableKey } from './relation-resolver';
 import {
@@ -50,8 +51,13 @@ import type { EngineStorageDiagnostics } from '../../modules/devtools/storage-in
  * on a fresh bucket throws "no such table". Keep in sync with the systemSchema
  * block in `local-migrator.ts`.
  */
+const SNAPSHOT_TABLE = '_00_circuit_snapshot';
+
 const SYSTEM_TABLES = [
   '_00_stream_processor_state',
+  // In-browser circuit snapshot: one BLOB row (`circuit`) + a JSON meta row.
+  // Excluded from DevTools' table listing, since its data column is not JSON.
+  '_00_circuit_snapshot',
   '_00_query',
   '_00_preload',
   '_00_window',
@@ -197,7 +203,7 @@ export class SqliteCacheEngine implements LocalStore {
         const { rows: tables } = await this.call<{ rows: { name: string }[] }>('exec', {
           sql: "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
         });
-        const names = (tables ?? []).map((r) => r.name);
+        const names = (tables ?? []).map((r) => r.name).filter((n) => n !== SNAPSHOT_TABLE);
         if (names.length) {
           // Names come from sqlite_master itself; double-quoting is enough.
           const sql = names
@@ -835,6 +841,70 @@ export class SqliteCacheEngine implements LocalStore {
     await this.ensureTable(table);
     const rows = await this.execRows(`SELECT data FROM "${table}" WHERE id = ?`, [stableKey(id)]);
     return rows[0] ?? null;
+  }
+
+  /**
+   * `(id, _00_rv)` of every row per table, straight off the worker: no body
+   * parse, one round trip per table. A table that does not exist yet reads as
+   * empty rather than failing the whole scan.
+   */
+  async scanVersions(tables: string[]): Promise<Record<string, [string, number][]>> {
+    const out: Record<string, [string, number][]> = {};
+    for (const table of tables) {
+      try {
+        const { rows } = await this.call<{ rows: { id: string; rv: unknown }[] }>('exec', {
+          sql: `SELECT id, json_extract(data, '$._00_rv') AS rv FROM "${table.replace(/"/g, '""')}"`,
+        });
+        out[table] = (rows ?? []).map((r) => [r.id, Number(r.rv) || 0]);
+      } catch {
+        out[table] = [];
+      }
+    }
+    return out;
+  }
+
+  async getSnapshot(key: string): Promise<StoredSnapshot | null> {
+    const { rows } = await this.call<{ rows: { id: string; data: unknown }[] }>('exec', {
+      sql: `SELECT id, data FROM "${SNAPSHOT_TABLE}" WHERE id IN (?, ?)`,
+      bind: [key, `${key}:meta`],
+    });
+    let bytes: Uint8Array | null = null;
+    let meta: SnapshotMeta | null = null;
+    for (const r of rows ?? []) {
+      if (r.id === key) {
+        if (r.data instanceof Uint8Array) bytes = r.data;
+        else if (r.data instanceof ArrayBuffer) bytes = new Uint8Array(r.data);
+        else if (typeof r.data === 'string') bytes = new TextEncoder().encode(r.data);
+      } else if (typeof r.data === 'string') {
+        try {
+          meta = JSON.parse(r.data) as SnapshotMeta;
+        } catch {
+          meta = null;
+        }
+      }
+    }
+    return bytes && meta ? { bytes, meta } : null;
+  }
+
+  async putSnapshot(key: string, bytes: Uint8Array, meta: SnapshotMeta): Promise<void> {
+    // One transaction, so a reader never sees new bytes with old meta.
+    await this.call('batch', [
+      {
+        sql: `INSERT OR REPLACE INTO "${SNAPSHOT_TABLE}" (id, data) VALUES (?, ?)`,
+        bind: [key, bytes],
+      },
+      {
+        sql: `INSERT OR REPLACE INTO "${SNAPSHOT_TABLE}" (id, data) VALUES (?, ?)`,
+        bind: [`${key}:meta`, JSON.stringify(meta)],
+      },
+    ]);
+  }
+
+  async deleteSnapshot(key: string): Promise<void> {
+    await this.call('run', {
+      sql: `DELETE FROM "${SNAPSHOT_TABLE}" WHERE id IN (?, ?)`,
+      bind: [key, `${key}:meta`],
+    });
   }
 
   // ---- writes --------------------------------------------------------------

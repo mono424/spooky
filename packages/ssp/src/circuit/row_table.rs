@@ -303,6 +303,11 @@ impl RowTable {
     pub fn dead_bytes(&self) -> u64 {
         self.arena.dead_bytes()
     }
+
+    /// Bytes currently referenced by a live row.
+    pub fn live_bytes(&self) -> u64 {
+        self.arena.live_bytes()
+    }
 }
 
 impl Clone for RowTable {

@@ -8,6 +8,9 @@ import { SyncEventTypes, createSyncEventSystem } from './events/index';
 import { encodeRecordId } from '../../utils/index';
 import { cleanRecord } from '../../utils/parser';
 
+/** Ids per remote `SELECT * FROM $ids` round trip. */
+const FETCH_CHUNK = 500;
+
 /**
  * SyncEngine handles the core sync operations: fetching remote records,
  * caching them locally, and ingesting into DBSP.
@@ -55,10 +58,16 @@ export class SyncEngine {
       stillRemoteIds = await this.handleRemovedRecords(removed);
     }
 
-    // Fetch added/updated records from remote
-    const toFetch = [...added, ...updated];
-    const idsToFetch = toFetch.map((x) => x.id);
-    if (idsToFetch.length === 0) {
+    // Fetch added/updated records from remote. Skip ids whose body the local
+    // store already holds at this version (the circuit prime seeded the memo
+    // from `_00_rv`): after a reload every id in the server's list_ref used to
+    // classify as `added` against an empty circuit, and this fetched the
+    // whole working set again.
+    const toFetch = [...added, ...updated].filter((item) => {
+      const localVersion = this.cache.lookup(encodeRecordId(item.id));
+      return !(localVersion && item.version <= localVersion);
+    });
+    if (toFetch.length === 0) {
       return { remoteFetchMs: 0, stillRemoteIds };
     }
 
@@ -67,66 +76,75 @@ export class SyncEngine {
     for (const item of toFetch) {
       versionMap.set(encodeRecordId(item.id), item.version);
     }
+    const addedIds = new Set(added.map((item) => encodeRecordId(item.id)));
 
     // Fetch records from remote — avoid SELECT *, <subquery> FROM $param
     // pattern which drops the * fields in SurrealDB v3 (known bug).
     // Versions are already known from the diff's list_ref data.
-    const remoteFetchStart = performance.now();
-    const [remoteResults] = await this.remote.query<[RecordWithId[]]>(
-      'SELECT * FROM $idsToFetch',
-      { idsToFetch }
-    );
-    const remoteFetchMs = performance.now() - remoteFetchStart;
+    //
+    // Chunked so a genuinely cold load lands progressively: one response
+    // holding thousands of bodies, then one transaction MERGEing all of them,
+    // was a single main-thread stall and a memory spike on top of it.
+    let remoteFetchMs = 0;
+    const remoteResults: RecordWithId[] = [];
+    for (let i = 0; i < toFetch.length; i += FETCH_CHUNK) {
+      const idsToFetch = toFetch.slice(i, i + FETCH_CHUNK).map((x) => x.id);
+      const remoteFetchStart = performance.now();
+      const [chunkResults] = await this.remote.query<[RecordWithId[]]>(
+        'SELECT * FROM $idsToFetch',
+        { idsToFetch }
+      );
+      remoteFetchMs += performance.now() - remoteFetchStart;
 
-    // Prepare batch for cache (which handles both DB and DBSP)
-    const cacheBatch: CacheRecord[] = [];
+      // Prepare batch for cache (which handles both DB and DBSP)
+      const cacheBatch: CacheRecord[] = [];
+      for (const record of chunkResults ?? []) {
+        if (!record?.id) {
+          this.logger.warn(
+            {
+              record,
+              idsToFetch,
+              Category: 'sp00ky-client::SyncEngine::syncRecords',
+            },
+            'Remote record has no id (possibly deleted). Skipping record'
+          );
+          continue;
+        }
+        remoteResults.push(record);
+        const fullId = encodeRecordId(record.id);
+        const table = record.id.table.toString();
+        const version = versionMap.get(fullId) ?? 0;
 
-    for (const record of remoteResults) {
-      if (!record?.id) {
-        this.logger.warn(
-          {
-            record,
-            idsToFetch,
-            Category: 'sp00ky-client::SyncEngine::syncRecords',
-          },
-          'Remote record has no id (possibly deleted). Skipping record'
-        );
-        continue;
+        const localVersion = this.cache.lookup(fullId);
+        if (localVersion && version <= localVersion) {
+          this.logger.info(
+            {
+              recordId: fullId,
+              version,
+              localVersion,
+              Category: 'sp00ky-client::SyncEngine::syncRecords',
+            },
+            'Local version is higher than remote version. Skipping record'
+          );
+          continue;
+        }
+        const tableSchema = this.schema.tables.find((t) => t.name === table);
+        const cleanedRecord = tableSchema
+          ? cleanRecord(tableSchema.columns, record)
+          : record;
+
+        cacheBatch.push({
+          table,
+          op: addedIds.has(fullId) ? 'CREATE' : 'UPDATE',
+          record: cleanedRecord as RecordWithId,
+          version,
+        });
       }
-      const fullId = encodeRecordId(record.id);
-      const table = record.id.table.toString();
-      const isAdded = added.some((item) => encodeRecordId(item.id) === fullId);
-      const version = versionMap.get(fullId) ?? 0;
 
-      const localVersion = this.cache.lookup(fullId);
-      if (localVersion && version <= localVersion) {
-        this.logger.info(
-          {
-            recordId: fullId,
-            version,
-            localVersion,
-            Category: 'sp00ky-client::SyncEngine::syncRecords',
-          },
-          'Local version is higher than remote version. Skipping record'
-        );
-        continue;
+      // Use CacheModule to handle both local DB and DBSP ingestion
+      if (cacheBatch.length > 0) {
+        await this.cache.saveBatch(cacheBatch);
       }
-      const tableSchema = this.schema.tables.find((t) => t.name === table);
-      const cleanedRecord = tableSchema
-        ? cleanRecord(tableSchema.columns, record)
-        : record;
-
-      cacheBatch.push({
-        table,
-        op: isAdded ? 'CREATE' : 'UPDATE',
-        record: cleanedRecord as RecordWithId,
-        version,
-      });
-    }
-
-    // Use CacheModule to handle both local DB and DBSP ingestion
-    if (cacheBatch.length > 0) {
-      await this.cache.saveBatch(cacheBatch);
     }
 
     this.events.emit(SyncEventTypes.RemoteDataIngested, {

@@ -492,15 +492,16 @@ export class Sp00kyClient<S extends SchemaStructure> {
     this.streamProcessor = new StreamProcessorService(
       new EventSystem(['stream_update']),
       this.local,
-      this.persistenceClient,
       logger
     );
-    // Circuit snapshots are opt-in and checkpointed, never per-ingest. See
-    // `persistCircuit` in types.ts for the measurements behind that default.
+    // Circuit snapshots are checkpointed, never per-ingest, and on by default
+    // where the store can hold them (the OPFS SQLite engine). See
+    // `persistCircuit` / `circuitProjection` in types.ts.
     this.streamProcessor.configureCircuitPersistence(
-      config.persistCircuit ?? false,
+      config.persistCircuit ?? config.localEngine === 'sqlite',
       config.circuitCheckpointMs
     );
+    this.streamProcessor.configureProjection(config.circuitProjection ?? true);
     this.migrator = new LocalMigrator(this.local, logger);
 
     this.cache = new CacheModule(
@@ -560,6 +561,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
         connectionSupervisor: this.connectionSupervisor,
       }
     );
+    this.sync.setPrimeGate(() => this.streamProcessor.whenPrimed());
 
     // Initialize feature flags. Reuses the down-queue to register SSP plans
     // on `_00_user_feature` and the auth subscription to re-register handles
@@ -873,11 +875,14 @@ export class Sp00kyClient<S extends SchemaStructure> {
         }
       })();
 
-      this.streamProcessor.setStateKeySuffix(bootBucket);
       await this.streamProcessor.init();
       // Seed table `select` permissions from the schema before any query is
       // registered — otherwise the SSP default-denies every non-`_00_` table.
       this.streamProcessor.setPermissions(extractSelectPermissions(this.config.schemaSurql));
+      // Fill the circuit from the local store in the background (snapshot +
+      // reconcile, or every cached row). Not awaited: first paint reads the
+      // store directly; sync waits on `whenPrimed` before its first diff.
+      void this.primeCircuit();
       this.logger.debug(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
         'StreamProcessor initialized'
@@ -1190,10 +1195,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
           'Blob cache bucket switch failed'
         );
       }
-      this.streamProcessor.setStateKeySuffix(target);
       await this.streamProcessor.reset();
       this.streamProcessor.setPermissions(extractSelectPermissions(this.config.schemaSurql));
       this.cache.clearVersionLookups();
+      void this.primeCircuit();
       // Preload dedup is per-bucket: the `_00_preload` markers + cached rows it
       // guards live in the local store we just swapped away from. Keeping the
       // hashes would make `preload()` skip warming the NEW bucket (its store is
@@ -1237,6 +1242,8 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // Flush the blob manifest while the local store is still open — the flush
     // writes `_00_blob` rows through it — and revoke every object URL.
     await this.blobs.close().catch(() => {});
+    // Last chance to persist the circuit while the store is still ours.
+    await this.streamProcessor.checkpoint('close').catch(() => {});
     // Leaving the broker first hands leadership to another tab (and releases
     // the OPFS handles via the worker shutdown) before the store closes.
     if (this.tabsCoordinator) await this.tabsCoordinator.stop();
@@ -1644,6 +1651,34 @@ export class Sp00kyClient<S extends SchemaStructure> {
    * the former to `encodeRecordId` reads `.table` off a string and throws
    * during boot.
    */
+  /**
+   * Prime the in-browser circuit from the local store. Builds the context the
+   * stream processor needs: every synced table (the app schema plus the
+   * server-written meta tables that sync down), a schema hash so a snapshot
+   * projected under another schema is not trusted, and the ids whose local
+   * `_00_rv` was bumped by an unsettled mutation.
+   */
+  private async primeCircuit(): Promise<void> {
+    const tables = [
+      ...this.config.schema.tables.map((t) => t.name),
+      '_00_user_feature',
+      '_00_app_release',
+    ];
+    let pendingIds = new Set<string>();
+    try {
+      const pending = await this.dataModule.getPendingRecordIds();
+      pendingIds = new Set([...pending.writes, ...pending.deletes]);
+    } catch {
+      /* no outbox yet: nothing is pending */
+    }
+    await this.streamProcessor.primeFromLocal({
+      tables,
+      schemaHash: String(hash53(this.config.schemaSurql)),
+      pendingIds,
+      onVersions: (_table, entries) => this.cache.primeVersions(entries),
+    });
+  }
+
   private sessionAuthId(): string | null {
     const id = this.auth.currentUser?.id;
     if (!id) return null;

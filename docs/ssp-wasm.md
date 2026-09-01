@@ -103,11 +103,32 @@ const stateJson = processor.save_state();
 
 #### `load_state(state: string)`
 
-Restore circuit state from a previously saved JSON string. Rebuilds operator DAGs from the stored query plans.
+Restore circuit state from a previously saved JSON string. Rebuilds operator DAGs from the stored query plans. Permissions, link targets, opaque fields and the projection setting of the current processor are carried over (a snapshot holds state, not configuration).
 
 ```typescript
 processor.load_state(savedStateJson);
 ```
+
+#### `save_store_state() → Uint8Array` / `load_store_state(bytes) → WasmViewUpdate[]`
+
+The snapshot pair the browser client actually uses. `save_store_state` serializes ONLY the base collections, as bytes (a JS string would double to UTF-16 on the way across). `load_store_state` installs those rows UNDER the views that are already registered, keeps permissions and projection, re-primes every view against the restored rows and returns their new full results. That order matters: on a reload, queries register before the snapshot has been read from disk.
+
+```typescript
+const bytes = processor.save_store_state();      // checkpoint (leader tab, on a timer)
+const updates = processor.load_store_state(bytes); // next boot, after views registered
+```
+
+#### `reconcile(table, entries: [id, rv][]) → { fetch, deleted, updates }`
+
+Client-side `_00_rv` catch-up, the counterpart of the server's restore-then-catch-up. Compares one table against the durable store's `(id, rv)` list: rows the circuit holds that the list lacks are stepped out as deletes (with view updates), and ids the circuit lacks or holds at a lower `_00_rv` come back in `fetch` for the caller to read out of its store and `ingest_many`.
+
+#### `set_projection(enabled)`
+
+Keep only the fields registered plans evaluate (filter predicates, join keys, sort keys, subquery parent keys) plus `id`/`_00_rv` per stored row. The circuit never reads anything else and the client renders bodies from its own store. Measured on 7700 rows with 20 KB bodies: wasm heap peak ~500 MB → ~24 MB, snapshot 156 MB → 1.2 MB. `register_view`'s result carries `missing_fields` when a new plan evaluates fields that stored rows were kept without; the caller merges them in with `ingest_many` items whose `op` is `MERGE`.
+
+#### `compact() → number`, `dead_bytes()`, `live_bytes()`, `max_row_versions()`, `size_report()`
+
+Row-arena hygiene and diagnostics. Updates append a fresh copy of the row and orphan the old bytes; `compact()` rebuilds without them (and re-projects) and returns how many bytes were dead. Decodes every row, so checkpoint-time only. Unchanged writes (same canonical digest) never append in the first place.
 
 #### `free()`
 
@@ -155,8 +176,9 @@ interface WasmIngestItem {
 In the browser, `Sp00kyProcessor` is not used directly. It's wrapped by `StreamProcessorService` in `packages/core/src/services/stream-processor/index.ts` which provides:
 
 ### Lifecycle management
-- `init()` — Initializes WASM module, creates `Sp00kyProcessor`, loads persisted state from the database
-- State is auto-saved after every `ingest()` and `registerQueryPlan()` call
+- `init()` — Initializes WASM module, creates `Sp00kyProcessor`, applies projection
+- `primeFromLocal(ctx)` — Fills the circuit from the LOCAL store in the background: restores the snapshot (if any) under the registered views, then `reconcile`s each table against the store's `(id, rv)` list and ingests only what changed; without a snapshot it reads every cached row. `whenPrimed()` gates the sync layer's first diff so a reload never re-downloads the working set.
+- `checkpoint()` — Writes a store-only snapshot through the engine (`putSnapshot`), on a timer and when the page goes hidden, never per ingest
 
 ### Value normalization
 - Recursively converts SurrealDB `RecordId` objects to strings (e.g., `RecordId { table: "user", id: "123" }` → `"user:123"`)
@@ -167,7 +189,7 @@ In the browser, `Sp00kyProcessor` is not used directly. It's wrapped by `StreamP
 
 ```typescript
 // Usage in the Sp00ky client
-const service = new StreamProcessorService(events, db, persistenceClient, logger);
+const service = new StreamProcessorService(events, db, logger);
 await service.init();
 
 // Register a query
@@ -194,8 +216,9 @@ service.addReceiver({
 ```
 
 ### State persistence
-- Saves to `_00_stream_processor_state` record via `persistenceClient.set()`
-- Loads on init via `persistenceClient.get()`
+- Store-only snapshot bytes + a JSON meta row (`formatVersion`, `schemaHash`, `savedAt`, `maxRv`) in the local store's `_00_circuit_snapshot` table (OPFS SQLite; per-bucket by construction, atomic, readable by follower tabs over the port transport). Not available on the SurrealDB/IndexedDB engine, which primes from rows only.
+- Written by `checkpoint()` (leader/solo tab only) once at least ~50 rows changed, on the `circuitCheckpointMs` interval and on `visibilitychange: hidden`; `compact()` runs first when dead bytes outweigh live ones.
+- Read by `primeFromLocal()` on boot; a snapshot from another format version or schema hash is ignored.
 
 ---
 
@@ -305,7 +328,8 @@ Both share the same core: `ssp::circuit::Circuit` with its `Store`, `Graph`, `Vi
          │
 10. StreamProcessorService maps to StreamUpdate[], notifies receivers
          │
-11. service.saveState() → processor.save_state() → persistenceClient.set()
+11. StreamProcessorService marks the snapshot dirty; the checkpoint timer later runs
+    processor.save_store_state() → engine.putSnapshot()
 ```
 
 ---

@@ -8,15 +8,18 @@ The browser-side stream processor: a Rust crate compiled to WebAssembly via `was
 
 - You're debugging why a local query doesn't update after a mutation. `ingest()` is where new records land.
 - You're testing the surrealism (embedded WASM) generation mode of `spky generate` and need to inspect the bundled circuit.
-- You're saving/restoring local state across page loads outside the built-in IndexedDB persistence path (`save_state` / `load_state`).
+- You're saving/restoring local state across page loads outside the built-in snapshot path (`save_store_state` / `load_store_state`, with `reconcile` for the delta since).
 
 ## Public API (`pkg/ssp_wasm.d.ts`)
 
 - **`class Sp00kyProcessor`** (constructed once, stored on the client):
   - `register_view(config: WasmViewConfig)` — register a materialized view by ID + SurQL + params.
   - `unregister_view(id)` — remove a view.
-  - `ingest(table, op, id, record)` — push a row change; returns the affected views' deltas (`WasmViewUpdate[]`).
-  - `save_state()` / `load_state(json)` — serialize/restore the circuit.
+  - `ingest(table, op, id, record)` / `ingest_many(items)` — push row changes (`CREATE`/`UPDATE`/`MERGE`/`DELETE`); returns the affected views' deltas (`WasmViewUpdate[]`). Membership is presence-driven: the verb never double-counts or ghosts a row, and an unchanged write is a no-op.
+  - `save_store_state()` / `load_store_state(bytes)` — snapshot/restore the base rows as bytes, under the registered views; `reconcile(table, [id, rv][])` steps in the delta against the durable store.
+  - `set_projection(bool)` — keep only the fields registered plans evaluate per row; `register_view` reports `missing_fields` to widen with `MERGE`.
+  - `compact()` / `dead_bytes()` / `live_bytes()` / `size_report()` — row-arena hygiene and memory attribution.
+  - `save_state()` / `load_state(json)` — full circuit snapshot including views (server-shaped; the client uses the store-only pair).
   - `free()` / `[Symbol.dispose]` — release WASM memory.
 - **`init()`** — must be called once after the WASM module loads.
 - Types: `WasmViewConfig`, `WasmViewUpdate`, `WasmIngestItem`.

@@ -12,6 +12,24 @@ export class Sp00kyProcessor {
         wasm.__wbg_sp00kyprocessor_free(ptr, 0);
     }
     /**
+     * Rebuild row storage without the bytes orphaned by updates and deletes.
+     * Returns how many bytes were dead. Costs a decode of every row, so call
+     * it from a checkpoint, never per ingest.
+     * @returns {number}
+     */
+    compact() {
+        const ret = wasm.sp00kyprocessor_compact(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Bytes of row storage orphaned by updates and deletes.
+     * @returns {number}
+     */
+    dead_bytes() {
+        const ret = wasm.sp00kyprocessor_dead_bytes(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * Ingest a record into the stream processor
      * @param {string} table
      * @param {string} op
@@ -58,6 +76,14 @@ export class Sp00kyProcessor {
         return takeFromExternrefTable0(ret[0]);
     }
     /**
+     * Bytes of row storage referenced by live rows.
+     * @returns {number}
+     */
+    live_bytes() {
+        const ret = wasm.sp00kyprocessor_live_bytes(this.__wbg_ptr);
+        return ret;
+    }
+    /**
      * Load circuit state from a JSON string
      * @param {string} state
      */
@@ -69,11 +95,58 @@ export class Sp00kyProcessor {
             throw takeFromExternrefTable0(ret[0]);
         }
     }
+    /**
+     * Install a snapshot written by `save_store_state` UNDER the views that
+     * are already registered, keeping permissions and projection. Every
+     * registered view is re-primed against the restored rows; the returned
+     * `WasmViewUpdate[]` carries their new full results, so a query that
+     * registered against the empty pre-snapshot store catches up.
+     * @param {Uint8Array} bytes
+     * @returns {any}
+     */
+    load_store_state(bytes) {
+        const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.sp00kyprocessor_load_store_state(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    /**
+     * Highest `_00_rv` folded into each table, `{ [table]: rv }`.
+     * @returns {any}
+     */
+    max_row_versions() {
+        const ret = wasm.sp00kyprocessor_max_row_versions(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
     constructor() {
         const ret = wasm.sp00kyprocessor_new();
         this.__wbg_ptr = ret >>> 0;
         Sp00kyProcessorFinalization.register(this, this.__wbg_ptr, this);
         return this;
+    }
+    /**
+     * Compare one table against the caller's authoritative `[id, rv][]`.
+     * Rows the store holds but the list lacks are deleted (with view
+     * updates); ids the store lacks or holds at a lower `_00_rv` come back in
+     * `fetch` for the caller to ingest. See `Circuit::reconcile`.
+     * @param {string} table
+     * @param {any} entries
+     * @returns {any}
+     */
+    reconcile(table, entries) {
+        const ptr0 = passStringToWasm0(table, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.sp00kyprocessor_reconcile(this.__wbg_ptr, ptr0, len0, entries);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
     }
     /**
      * Register a new materialized view
@@ -110,6 +183,22 @@ export class Sp00kyProcessor {
         }
     }
     /**
+     * Snapshot the base collections only, as bytes (a `Uint8Array` in JS).
+     * Views are deliberately left out: the client re-registers every query
+     * under a fresh session id on boot, so persisted views would only be
+     * stepped and never read. Pair with `load_store_state`.
+     * @returns {Uint8Array}
+     */
+    save_store_state() {
+        const ret = wasm.sp00kyprocessor_save_store_state(this.__wbg_ptr);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
      * Seed per-table `select` permission predicates so `register_view` can
      * inject them (and so non-`_00_` tables aren't default-denied).
      *
@@ -124,6 +213,26 @@ export class Sp00kyProcessor {
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
+    }
+    /**
+     * Keep only the fields registered plans evaluate (plus `id`/`_00_rv`)
+     * per stored row. Off by default. Must be set before the first ingest
+     * to take effect on those rows; `compact` re-projects existing ones.
+     * @param {boolean} enabled
+     */
+    set_projection(enabled) {
+        wasm.sp00kyprocessor_set_projection(this.__wbg_ptr, enabled);
+    }
+    /**
+     * Per-table and per-view heap attribution, sorted heaviest first.
+     * @returns {any}
+     */
+    size_report() {
+        const ret = wasm.sp00kyprocessor_size_report(this.__wbg_ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
     }
     /**
      * Unregister a view by ID
@@ -149,6 +258,10 @@ function __wbg_get_imports() {
         __proto__: null,
         __wbg_Error_8c4e43fe74559d73: function(arg0, arg1) {
             const ret = Error(getStringFromWasm0(arg0, arg1));
+            return ret;
+        },
+        __wbg_Number_04624de7d0e8332d: function(arg0) {
+            const ret = Number(arg0);
             return ret;
         },
         __wbg_String_8f0eb39a4a4c2f66: function(arg0, arg1) {
@@ -191,6 +304,10 @@ function __wbg_get_imports() {
         __wbg___wbindgen_is_object_5ae8e5880f2c1fbd: function(arg0) {
             const val = arg0;
             const ret = typeof(val) === 'object' && val !== null;
+            return ret;
+        },
+        __wbg___wbindgen_is_string_cd444516edc5b180: function(arg0) {
+            const ret = typeof(arg0) === 'string';
             return ret;
         },
         __wbg___wbindgen_is_undefined_9e4d92534c42d778: function(arg0) {
@@ -307,6 +424,10 @@ function __wbg_get_imports() {
             const ret = new Array();
             return ret;
         },
+        __wbg_new_dca287b076112a51: function() {
+            const ret = new Map();
+            return ret;
+        },
         __wbg_new_dd2b680c8bf6ae29: function(arg0) {
             const ret = new Uint8Array(arg0);
             return ret;
@@ -333,6 +454,10 @@ function __wbg_get_imports() {
         },
         __wbg_prototypesetcall_bdcdcc5842e4d77d: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
+        },
+        __wbg_set_1eb0999cf5d27fc8: function(arg0, arg1, arg2) {
+            const ret = arg0.set(arg1, arg2);
+            return ret;
         },
         __wbg_set_3f1d0b984ed272ed: function(arg0, arg1, arg2) {
             arg0[arg1] = arg2;
@@ -508,6 +633,13 @@ function handleError(f, args) {
 
 function isLikeNone(x) {
     return x === undefined || x === null;
+}
+
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passStringToWasm0(arg, malloc, realloc) {

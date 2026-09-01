@@ -327,7 +327,9 @@ export class DevToolsService implements StreamUpdateReceiver {
         const info = this.unwrapInfo(res);
         this.localTablesAt = Date.now();
         if (info && info.tables) {
-          const names = Object.keys(info.tables);
+          // The circuit snapshot table holds a BLOB, not JSON rows; the
+          // explorer cannot render it and has nothing to show for it.
+          const names = Object.keys(info.tables).filter((n) => n !== '_00_circuit_snapshot');
           const changed =
             names.length !== this.localTables.length ||
             names.some((n, i) => n !== this.localTables[i]);

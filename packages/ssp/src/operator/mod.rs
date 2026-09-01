@@ -85,6 +85,30 @@ pub trait Operator: Debug + Send + Sync {
         false
     }
 
+    /// Re-place one key whose CONTENT changed, for operators whose output
+    /// depends on row content beyond membership (ordering, grouping).
+    ///
+    /// `evaluate_key` answers "is this key in the output now?", which is the
+    /// right question for Filter and Scan but not for TopK: a row can be
+    /// admitted upstream and still fall outside the window, and a row inside
+    /// the window can move out of it when its sort field changes. Answering
+    /// `true` from TopK over-emits a `+1` that nothing evicts, so an UPDATE of
+    /// any row outside a `LIMIT n` window used to grow the window by one.
+    ///
+    /// Returns the output delta of retracting the key's old placement (if
+    /// held) and re-inserting it with its current content (if `upstream_now`
+    /// admits it), or `None` for operators that have no such state, in which
+    /// case the circuit falls back to `evaluate_key`.
+    fn reorder_key(
+        &mut self,
+        _key: &str,
+        _upstream_now: bool,
+        _store: &Store,
+        _ctx: Option<&Sp00kyValue>,
+    ) -> Option<ZSet> {
+        None
+    }
+
     /// Approximate heap bytes held in this operator's Z⁻¹ state.
     ///
     /// This is the term that scales with *both* table size and query count:

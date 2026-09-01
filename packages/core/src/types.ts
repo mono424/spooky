@@ -205,21 +205,19 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    */
   sharedTabs?: boolean;
   /**
-   * Persist the in-browser SSP circuit (store + view caches) as a snapshot so a
-   * reload can restore it instead of re-materializing. Default `false`, and
-   * that default is deliberate.
+   * Persist the in-browser SSP circuit's store as a snapshot in the local
+   * store, so a reload restores it and only steps in what changed since.
+   * Defaults to `true` under `localEngine: 'sqlite'` (the OPFS-backed store
+   * can hold the bytes) and `false` otherwise.
    *
-   * The circuit is DERIVED state: the durable local store (OPFS SQLite) is the
-   * source of truth, and every first paint already reads row bodies from it
-   * (`DataManager.createNewQuery` / `materializeRecords`) using the circuit only
-   * for row identity and ordering. A snapshot buys nothing on reload while
-   * costing a full deep clone of every row of every ingested table plus a JSON
-   * encode of the result, `Circuit::save` in the Rust core, mirroring the
-   * server's rule in `ssp-node`: *never per-ingest*.
+   * Without a snapshot the circuit is primed by reading every cached row back
+   * out of the local store; either way a reload never re-downloads the working
+   * set, which is what an empty circuit used to force: every id in the
+   * server's list_ref classified as missing.
    *
-   * When enabled, snapshots are written on a checkpoint interval
-   * ({@link circuitCheckpointMs}) and on `pagehide`, never per ingest or per
-   * query registration. Enable only for a workload that has measured a win.
+   * Snapshots are store-only (views are re-registered per session) and written
+   * on a checkpoint interval ({@link circuitCheckpointMs}) and when the page
+   * goes hidden, never per ingest or per query registration.
    */
   persistCircuit?: boolean;
   /**
@@ -227,6 +225,16 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
    * 30000. Ignored when `persistCircuit` is off.
    */
   circuitCheckpointMs?: number;
+  /**
+   * Keep only the fields registered queries evaluate (filter predicates, join
+   * keys, sort keys, plus `id`/`_00_rv`) per row in the in-browser circuit.
+   * Default `true`. The circuit only ever reads those fields; bodies are
+   * rendered from the local store. Measured on 7700 rows with 20 KB bodies:
+   * the wasm heap peak went from ~500 MB to ~24 MB and the snapshot from
+   * 156 MB to 1.2 MB. A query that evaluates a field earlier rows were kept
+   * without has that field merged in from the local store on registration.
+   */
+  circuitProjection?: boolean;
   /** A pino browser transmit object for forwarding logs (e.g. via @spooky-sync/core/otel). */
   otelTransmit?: PinoTransmit;
   /**

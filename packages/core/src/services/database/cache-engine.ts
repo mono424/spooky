@@ -138,6 +138,39 @@ export interface LocalStore extends LocalCacheEngine {
   /** Fires immediately with the current snapshot, then on every change.
    *  Returns an unsubscribe function. */
   subscribeToStorageHealth?(cb: (health: StorageHealth) => void): () => void;
+  /**
+   * Every cached row's `(id, _00_rv)` per table, ids in stable `table:id`
+   * form. The in-browser circuit primes and reconciles itself from this on
+   * boot instead of re-downloading the working set. OPTIONAL: an engine
+   * without it boots the circuit empty, as before.
+   */
+  scanVersions?(tables: string[]): Promise<Record<string, [string, number][]>>;
+  /**
+   * Circuit snapshot storage, keyed. Lives in the same durable store as the
+   * rows (OPFS SQLite), so it is per-bucket by construction, atomic, and
+   * readable by follower tabs over the port transport. OPTIONAL: an engine
+   * without it primes from `scanVersions` alone.
+   */
+  getSnapshot?(key: string): Promise<StoredSnapshot | null>;
+  putSnapshot?(key: string, bytes: Uint8Array, meta: SnapshotMeta): Promise<void>;
+  deleteSnapshot?(key: string): Promise<void>;
+}
+
+/** Describes a stored circuit snapshot; what decides whether it is usable. */
+export interface SnapshotMeta {
+  /** Bump when the wire shape the circuit reads changes. */
+  formatVersion: number;
+  /** Hash of the schema the rows were projected under. */
+  schemaHash: string;
+  savedAt: number;
+  /** Highest `_00_rv` per table at save time (diagnostics). */
+  maxRv?: Record<string, number>;
+  [key: string]: unknown;
+}
+
+export interface StoredSnapshot {
+  bytes: Uint8Array;
+  meta: SnapshotMeta;
 }
 
 /** Selected local cache backend. Mirrors the `persistenceClient` config pattern. */

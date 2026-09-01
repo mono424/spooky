@@ -38,12 +38,7 @@ class RecordingReceiver implements StreamUpdateReceiver {
  * real WASM does), so coalescing's last-write-wins must yield the final array.
  */
 function makeService(queryHashesFor: (id: string) => string[]) {
-  const svc = new StreamProcessorService(
-    {} as any,
-    {} as any,
-    { get: async () => undefined, set: async () => {} } as any,
-    makeLogger()
-  );
+  const svc = new StreamProcessorService({} as any, {} as any, makeLogger());
 
   const ingestedByQuery = new Map<string, Array<[string, number]>>();
   const mockProcessor: Partial<WasmProcessor> = {
@@ -54,7 +49,7 @@ function makeService(queryHashesFor: (id: string) => string[]) {
         const arr = ingestedByQuery.get(queryHash) ?? [];
         arr.push([id, version]);
         ingestedByQuery.set(queryHash, arr);
-        updates.push({ query_id: queryHash, result_data: [...arr] });
+        updates.push({ query_id: queryHash, result_hash: '', result_data: [...arr] });
       }
       return updates;
     },
@@ -138,12 +133,7 @@ describe('StreamProcessor ingestMany bulk insert', () => {
   // batch. The per-record loop above stays as the fallback for older builds.
   describe('with a WASM build that supports bulk ingest', () => {
     function makeBulkService() {
-      const svc = new StreamProcessorService(
-        {} as any,
-        {} as any,
-        { get: async () => undefined, set: async () => {} } as any,
-        makeLogger()
-      );
+      const svc = new StreamProcessorService({} as any, {} as any, makeLogger());
       const calls: { items: any[] }[] = [];
       const mockProcessor: Partial<WasmProcessor> = {
         ingest: () => {

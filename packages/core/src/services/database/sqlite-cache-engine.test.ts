@@ -556,3 +556,61 @@ describe('create() tx result shaping (fast path parity)', () => {
     expect(outboxRow.data).toEqual(payload);
   });
 });
+
+
+// The circuit snapshot + version scan the boot-time prime reads through this
+// engine. Bytes and meta must round-trip as ONE batch (a reader must never see
+// new bytes with old meta) and a table that does not exist yet scans as empty.
+describe('SqliteCacheEngine circuit snapshot + scanVersions', () => {
+  it('stores bytes and meta in one batch and reads them back', async () => {
+    const stored = new Map<string, unknown>();
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger());
+    const types: string[] = [];
+    stubTransport(engine, (type: string, payload: any) => {
+      types.push(type);
+      if (type === 'open') return { persisted: true };
+      if (type === 'batch') {
+        for (const stmt of payload as { sql: string; bind: unknown[] }[]) {
+          stored.set(stmt.bind[0] as string, stmt.bind[1]);
+        }
+        return {};
+      }
+      if (type === 'exec') {
+        const ids = (payload.bind ?? []) as string[];
+        return { rows: ids.filter((id) => stored.has(id)).map((id) => ({ id, data: stored.get(id) })) };
+      }
+      return {};
+    });
+    await engine.connect('anon');
+
+    expect(await engine.getSnapshot('circuit')).toBeNull();
+    const bytes = new Uint8Array([1, 2, 3]);
+    await engine.putSnapshot('circuit', bytes, { formatVersion: 1, schemaHash: 'h', savedAt: 5 });
+    expect(types.filter((t) => t === 'batch')).toHaveLength(1);
+    const snap = await engine.getSnapshot('circuit');
+    expect(snap?.bytes).toEqual(bytes);
+    expect(snap?.meta).toEqual({ formatVersion: 1, schemaHash: 'h', savedAt: 5 });
+  });
+
+  it('scans (id, rv) per table and reads a missing table as empty', async () => {
+    const engine = new SqliteCacheEngine({ namespace: 'n', database: 'd' } as any, makeLogger());
+    stubTransport(engine, (type: string, payload: any) => {
+      if (type === 'open') return { persisted: true };
+      if (type === 'exec') {
+        if (String(payload.sql).includes('"thing"')) {
+          return { rows: [{ id: 'thing:a', rv: 3 }, { id: 'thing:b', rv: null }] };
+        }
+        throw new Error('no such table');
+      }
+      return {};
+    });
+    await engine.connect('anon');
+    expect(await engine.scanVersions(['thing', 'ghost'])).toEqual({
+      thing: [
+        ['thing:a', 3],
+        ['thing:b', 0],
+      ],
+      ghost: [],
+    });
+  });
+});
