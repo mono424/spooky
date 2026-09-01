@@ -200,6 +200,55 @@ describe('tabs broker: failover', () => {
     expect(grants[grants.length - 1].allowMemoryFallback).toBe(true);
   });
 
+  it('re-elects when a promoted tab never answers become-leader', async () => {
+    // The wedge this guards: a tab that hangs mid-promotion sends neither
+    // leader-ready nor leader-failed, and keeps answering pings, so without a
+    // deadline the namespace keeps a leader that is never `ready` - no follower
+    // ports are minted and no re-election ever runs.
+    const a = connectTab('tab-a');
+    const b = connectTab('tab-b');
+    await flush();
+    const grantedTo = a.ofType('become-leader').length > 0 ? a : b;
+    const other = grantedTo === a ? b : a;
+    expect(grantedTo.ofType('become-leader').length).toBe(1);
+    // Both tabs keep answering pings; the promoted one just never reports.
+    for (const t of [a, b]) {
+      t.port.onmessage = (ev) => {
+        t.received.push({ msg: ev.data, ports: ev.ports });
+        if (ev.data.type === 'ping') t.send({ type: 'pong', tabId: t.tabId });
+      };
+    }
+    await vi.advanceTimersByTimeAsync(21_000);
+    await flush();
+    // The other tab gets a shot, under a NEW leadership id.
+    const handover = other.ofType('become-leader');
+    expect(handover.length).toBeGreaterThan(0);
+    expect(handover[handover.length - 1].leadershipId).toBeGreaterThan(
+      grantedTo.ofType('become-leader')[0].leadershipId
+    );
+  });
+
+  it('stops the promotion deadline once leader-ready lands', async () => {
+    const a = connectTab('tab-a');
+    const id = await ackLeadership(a);
+    const b = connectTab('tab-b');
+    await flush();
+    a.port.onmessage = (ev) => {
+      a.received.push({ msg: ev.data, ports: ev.ports });
+      if (ev.data.type === 'ping') a.send({ type: 'pong', tabId: 'tab-a' });
+    };
+    b.port.onmessage = (ev) => {
+      b.received.push({ msg: ev.data, ports: ev.ports });
+      if (ev.data.type === 'ping') b.send({ type: 'pong', tabId: 'tab-b' });
+    };
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flush();
+    // A confirmed leader is never torn down by the promotion deadline.
+    expect(a.ofType('demote')).toHaveLength(0);
+    expect(b.ofType('become-leader')).toHaveLength(0);
+    expect(a.ofType('become-leader')[0].leadershipId).toBe(id);
+  });
+
   it('demotes a stale leader-ready from a superseded promotion', async () => {
     const a = connectTab('tab-a');
     const staleId = await ackLeadership(a);

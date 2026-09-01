@@ -20,6 +20,7 @@ interface HookLog {
   exposedPorts: string[];
   hub: LeaderSyncHub | null;
   forwarder: SyncForwarder | null;
+  leaderDuties: number;
 }
 
 function makeHooks(): { hooks: CoordinatorHooks; log: HookLog } {
@@ -31,6 +32,7 @@ function makeHooks(): { hooks: CoordinatorHooks; log: HookLog } {
     exposedPorts: [],
     hub: null,
     forwarder: null,
+    leaderDuties: 0,
   };
   const hooks: CoordinatorHooks = {
     async adoptOwner(bucketId, opts) {
@@ -50,8 +52,11 @@ function makeHooks(): { hooks: CoordinatorHooks; log: HookLog } {
       log.exposedPorts.push(clientId);
     },
     async removeClientPort() {},
-    async becomeSyncLeader(hub) {
+    becomeSyncLeader(hub) {
       log.hub = hub;
+    },
+    async resumeSyncLeaderDuties() {
+      log.leaderDuties++;
     },
     becomeSyncFollower(forwarder) {
       log.forwarder = forwarder;

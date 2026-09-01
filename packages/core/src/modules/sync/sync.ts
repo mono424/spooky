@@ -527,14 +527,27 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.tabId = tabId;
   }
 
-  /** Leader duties: drain the shared outbox, own the single list_ref LIVE,
-   *  relay LIVE events and rollbacks to followers via `hub`. Idempotent for a
-   *  boot-time leader; a runtime promotion (failover) reloads the outbox,
-   *  which now holds EVERY tab's rows, and restarts LIVE under this session. */
-  public async promoteToLeader(hub: LeaderSyncHub): Promise<void> {
+  /** In-flight {@link resumeLeaderDuties}, so a second call joins the first
+   *  instead of double-draining the outbox. */
+  private leaderDutiesInFlight: Promise<void> | null = null;
+
+  /**
+   * Leader WIRING only, and deliberately synchronous.
+   *
+   * The coordinator publishes the leader role and tells the broker
+   * `leader-ready` the moment the store is adopted, and the broker can mint a
+   * follower's ports on the very next tick. So the follower-message handler
+   * has to be live before this returns, or a mutation forwarded in that window
+   * is dropped. Everything that can block (outbox reload, LIVE restart) moved
+   * to {@link resumeLeaderDuties}: a promotion that waits on the network holds
+   * `leader-ready` back, and a broker whose leader never reports ready serves
+   * no follower ports and re-elects no one, which wedges the whole namespace.
+   */
+  public promoteToLeader(hub: LeaderSyncHub): void {
     this.tabRole = 'leader';
     this.hub = hub;
     this.forwarder = null;
+    this.leaderDutiesInFlight = null;
     hub.onFollowerMessage = (tabId, msg) => {
       void tabId;
       switch (msg.type) {
@@ -548,19 +561,34 @@ export class Sp00kySync<S extends SchemaStructure> {
           break;
       }
     };
-    if (this.isInit) {
+  }
+
+  /** Leader duties: drain the shared outbox, own the single list_ref LIVE,
+   *  relay LIVE events and rollbacks to followers. Idempotent for a boot-time
+   *  leader; a runtime promotion (failover) reloads the outbox, which now
+   *  holds EVERY tab's rows, and restarts LIVE under this session. Runs in the
+   *  background off the promotion path, so however long it takes (or if it
+   *  never finishes) the tab is already a working leader. */
+  public resumeLeaderDuties(): Promise<void> {
+    if (this.leaderDutiesInFlight) return this.leaderDutiesInFlight;
+    const run = (async () => {
+      if (!this.isInit || this.tabRole !== 'leader') return;
       await this.upQueue.loadFromDatabase();
       void this.scheduler.syncUp();
       if (this.currentUserId || this.anonLiveEnabled) {
         this.startListRefPoll();
         await this.restartRefLiveQuery().catch((err) => {
           this.logger.warn(
-            { err, Category: 'sp00ky-client::Sp00kySync::promoteToLeader' },
+            { err, Category: 'sp00ky-client::Sp00kySync::resumeLeaderDuties' },
             'LIVE restart failed on promotion; poll fallback covers it'
           );
         });
       }
-    }
+    })();
+    this.leaderDutiesInFlight = run;
+    return run.finally(() => {
+      if (this.leaderDutiesInFlight === run) this.leaderDutiesInFlight = null;
+    });
   }
 
   /** Follower duties: no outbox drain, no LIVE. Mutations forward to the
@@ -570,6 +598,9 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.tabRole = 'follower';
     this.hub = null;
     this.forwarder = forwarder;
+    // A still-running resumeLeaderDuties self-cancels on its `tabRole` guard;
+    // drop the handle so a later re-promotion starts a fresh drain.
+    this.leaderDutiesInFlight = null;
     void this.killRefLiveQuery();
     forwarder.onLeaderMessage = (msg) => {
       switch (msg.type) {

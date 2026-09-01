@@ -661,13 +661,14 @@ export class Sp00kyClient<S extends SchemaStructure> {
       onLeaderLost: (reason) => engine.onLeaderLost(reason),
       exposeClientPort: (clientId, port) => engine.exposeClientPort(clientId, port),
       removeClientPort: (clientId) => engine.removeClientPort(clientId),
-      becomeSyncLeader: async (hub) => {
+      becomeSyncLeader: (hub) => {
         this.streamProcessor.setPersistenceEnabled(true);
         this.cache.setIngestRelay((tuples) => hub.relayIngest(tuples));
         this.sync.setTabContext('leader', tabId);
         this.dataModule.setTabId(tabId);
-        await this.sync.promoteToLeader(hub);
+        this.sync.promoteToLeader(hub);
       },
+      resumeSyncLeaderDuties: () => this.sync.resumeLeaderDuties(),
       becomeSyncFollower: (forwarder) => {
         this.streamProcessor.setPersistenceEnabled(false);
         this.cache.setIngestRelay(null);
@@ -812,6 +813,16 @@ export class Sp00kyClient<S extends SchemaStructure> {
         // the current one instead of frozen at whatever boot saw.
         this.tabsCoordinator.onRoleChange((role) => {
           this.sharedActive = role !== 'solo';
+          // Surface the transition in DevTools. Reconstructing a failover from
+          // the `database.tabs` snapshot alone is guesswork after the fact; a
+          // discrete event gives `get_events` the leader handover directly.
+          this.devTools.logEvent('TABS_ROLE_CHANGED', {
+            role,
+            tabId: this.tabsCoordinator?.tabId,
+            leadershipId: this.tabsCoordinator?.leadershipId,
+            leaderTabId: this.tabsCoordinator?.leaderTabId,
+            promotionMs: this.tabsCoordinator?.lastPromotionMs,
+          });
         });
         try {
           const role = await this.tabsCoordinator.start(bootBucket);

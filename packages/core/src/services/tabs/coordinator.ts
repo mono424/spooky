@@ -53,7 +53,12 @@ export interface CoordinatorHooks {
   exposeClientPort(clientId: string, port: MessagePort): Promise<void>;
   removeClientPort(clientId: string): Promise<void>;
   /** Sync layer role changes (implemented in the sync module). */
-  becomeSyncLeader(hub: LeaderSyncHub): Promise<void>;
+  /** Synchronous leader WIRING. Must not block: the role is published and
+   *  `leader-ready` is sent right after it returns. */
+  becomeSyncLeader(hub: LeaderSyncHub): void;
+  /** The blocking half of the leader handover (outbox drain, LIVE restart),
+   *  run in the background once the tab is already a working leader. */
+  resumeSyncLeaderDuties(): Promise<void>;
   becomeSyncFollower(forwarder: SyncForwarder): void;
   becomeSyncSolo(): void;
   /** Current storage health, for db-ready sent to late-joining followers. */
@@ -208,6 +213,10 @@ export class TabsCoordinator {
   leadershipId = 0;
   leaderTabId: TabId | null = null;
   brokerRole: 'pending' | TabRole = 'pending';
+  /** Wall time from `become-leader` to `leader-ready` on the last promotion.
+   *  Reported in the DevTools role-change event: a slow store adopt (OPFS pool
+   *  contention after the previous leader died) shows up here as seconds. */
+  lastPromotionMs: number | null = null;
   private fingerprint: string;
   private bucketId: string;
   private broker: TabBrokerClient;
@@ -285,7 +294,12 @@ export class TabsCoordinator {
     if (this.role !== role) {
       this.role = role;
       this.deps.logger.info(
-        { role, leadershipId: this.leadershipId, Category: 'sp00ky-client::TabsCoordinator' },
+        {
+          role,
+          leadershipId: this.leadershipId,
+          promotionMs: role === 'leader' ? this.lastPromotionMs : undefined,
+          Category: 'sp00ky-client::TabsCoordinator',
+        },
         'Tab role changed'
       );
       for (const cb of this.roleListeners) cb(role);
@@ -379,6 +393,7 @@ export class TabsCoordinator {
     if (this.closed) return;
     if (msg.leadershipId <= this.leadershipId && !msg.resumeHeld) return;
     const previousRole = this.role;
+    const startedAt = Date.now();
     try {
       if (previousRole === 'follower') this.teardownFollower('promoted');
       this.leadershipId = msg.leadershipId;
@@ -408,13 +423,30 @@ export class TabsCoordinator {
       });
       void health;
       this.hub = new LeaderSyncHub(msg.leadershipId, this.deps.logger);
-      await this.deps.hooks.becomeSyncLeader(this.hub);
+      // Owning the store IS being the leader: it unparks this tab's ops and is
+      // everything a follower's ports need. Publish the role and tell the
+      // broker BEFORE any sync work. Waiting on the outbox drain and the LIVE
+      // restart here once left a tab that owned the OPFS pool but never sent
+      // `leader-ready`, so the broker minted no follower ports and re-elected
+      // no one (`assignFollowerPorts` and `electIfNeeded` both bail on that
+      // state) and the whole namespace stayed leaderless until a reload. Those
+      // duties are best-effort anyway: the list_ref poll covers a missing LIVE.
+      this.deps.hooks.becomeSyncLeader(this.hub);
+      this.lastPromotionMs = Date.now() - startedAt;
       this.setRole('leader');
       this.broker.send({
         type: 'leader-ready',
         tabId: this.deps.tabId,
         bucketId: this.bucketId,
         leadershipId: msg.leadershipId,
+      });
+      // Off the promotion chain on purpose: a hang here must not block the
+      // next role transition (demote, bucket switch) for the life of the tab.
+      void this.deps.hooks.resumeSyncLeaderDuties().catch((e) => {
+        this.deps.logger.error(
+          { err: e, Category: 'sp00ky-client::TabsCoordinator' },
+          'Leader duties failed after promotion'
+        );
       });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);

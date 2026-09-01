@@ -33,6 +33,13 @@ import type {
 // ---- constants duplicated from protocol.ts (keep in sync) -------------------
 const PING_INTERVAL_MS = 5000;
 const PONG_TIMEOUT_MS = 15_000;
+/** How long a tab has to answer `become-leader` with `leader-ready`. A tab
+ *  that hangs mid-promotion sends neither `leader-ready` nor `leader-failed`,
+ *  and keeps answering pings, so nothing else here would notice: the
+ *  namespace would keep a leader that is not `ready`, mint no follower ports,
+ *  and refuse to re-elect (`electIfNeeded` bails while `ns.leader` is set)
+ *  until every tab was reloaded. Treat the silence as a failed promotion. */
+const PROMOTION_TIMEOUT_MS = 20_000;
 const FORCE_TAKEOVER_TIMEOUT_MS = 1000;
 const LEADER_FAILURE_BACKOFF_MS = 1000;
 const FAILED_CYCLES_BEFORE_MEMORY = 3;
@@ -72,6 +79,8 @@ interface Namespace {
    *  lock (granted = the leader tab died; locks release instantly on death,
    *  unlike the pong timeout). */
   tabLockMonitor: AbortController | null;
+  /** Deadline for the pending `become-leader` to report `leader-ready`. */
+  promotionTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const brokerInstanceId =
@@ -116,6 +125,7 @@ function getNamespace(fingerprint: string, bucketId: string): Namespace {
       electing: false,
       attachRetry: new Map(),
       tabLockMonitor: null,
+      promotionTimer: null,
     };
     namespaces.set(key, ns);
   }
@@ -165,6 +175,7 @@ function clearLeader(
   const leader = ns.leader;
   if (!leader) return null;
   ns.leader = null;
+  clearPromotionTimer(ns);
   ns.tabLockMonitor?.abort();
   ns.tabLockMonitor = null;
   const tab = ns.tabs.get(leader.tabId);
@@ -186,6 +197,54 @@ function clearLeader(
   for (const [, retry] of ns.attachRetry) if (retry.timer) clearTimeout(retry.timer);
   ns.attachRetry.clear();
   return { tabId: leader.tabId, leadershipId: leader.leadershipId, workerLock };
+}
+
+function clearPromotionTimer(ns: Namespace): void {
+  if (ns.promotionTimer) clearTimeout(ns.promotionTimer);
+  ns.promotionTimer = null;
+}
+
+/**
+ * A promotion did not work out: back the tab off, clear the leadership, and
+ * re-elect. Shared by the tab's own `leader-failed` report and by the
+ * {@link PROMOTION_TIMEOUT_MS} deadline, so a tab that hangs mid-promotion
+ * costs the namespace the same 1s backoff as one that fails loudly, instead of
+ * owning it forever.
+ *
+ * Every reason counts toward `failedCycles`. Gating that on 'opfs-unavailable'
+ * left any other recurring failure (e.g. a tab lock nobody frees) looping at
+ * the backoff interval forever, with allowMemoryFallback never granted, so
+ * every tab timed out in start() and booted solo - each one then contending
+ * for the OPFS pool on its own, which is exactly what shared-tabs exists to
+ * stop.
+ */
+function failPromotion(
+  ns: Namespace,
+  tabId: string,
+  leadershipId: number,
+  opts: { timedOut: boolean }
+): void {
+  if (ns.leader?.tabId !== tabId || ns.leader.leadershipId !== leadershipId) return;
+  ns.failedCycles += 1;
+  ns.failedUntil.set(tabId, Date.now() + LEADER_FAILURE_BACKOFF_MS);
+  const previous = clearLeader(ns, { demote: false, removeTab: false });
+  const tab = ns.tabs.get(tabId);
+  if (tab) tab.heldLeadership = null;
+  // A tab that reported `leader-failed` has already given back its tab lock and
+  // any worker it opened, so there is nothing for the next candidate to wait
+  // on. A tab that went silent may have opened the OPFS pool and never told us,
+  // so hand the next election the lock name it would be holding: the probe in
+  // `waitForPreviousLeaderLocks` returns immediately when it is free, and
+  // steals it when it is not. `heldLeadership` is deliberately NOT used for
+  // this - it means "confirmed leader" and drives the broker-restart resume.
+  const stranded =
+    opts.timedOut && previous
+      ? {
+          ...previous,
+          workerLock: `sp00ky-tabs:${ns.fingerprint}:${ns.bucketId}:worker:${leadershipId}`,
+        }
+      : previous;
+  electIfNeeded(ns, stranded);
 }
 
 /**
@@ -277,6 +336,11 @@ function electIfNeeded(ns: Namespace, previous: ClearedLeader | null = null): vo
         allowMemoryFallback: ns.failedCycles >= FAILED_CYCLES_BEFORE_MEMORY,
         resumeHeld,
       });
+      clearPromotionTimer(ns);
+      ns.promotionTimer = setTimeout(() => {
+        ns.promotionTimer = null;
+        failPromotion(ns, candidate.tabId, leadershipId, { timedOut: true });
+      }, PROMOTION_TIMEOUT_MS);
     } finally {
       ns.electing = false;
     }
@@ -489,6 +553,7 @@ function handleTabMessage(port: MessagePort, msg: TabToBrokerMessage, ports: rea
       }
       ns.leader.ready = true;
       ns.failedCycles = 0;
+      clearPromotionTimer(ns);
       startTabLockMonitor(ns, msg.leadershipId);
       const tab = ns.tabs.get(msg.tabId);
       if (tab) {
@@ -511,18 +576,7 @@ function handleTabMessage(port: MessagePort, msg: TabToBrokerMessage, ports: rea
       break;
     }
     case 'leader-failed': {
-      if (ns.leader?.tabId !== msg.tabId || ns.leader.leadershipId !== msg.leadershipId) break;
-      // Every reason counts. Gating this on 'opfs-unavailable' left any other
-      // recurring failure (e.g. a tab lock nobody frees) looping at the backoff
-      // interval forever, with allowMemoryFallback never granted, so every tab
-      // timed out in start() and booted solo — each one then contending for the
-      // OPFS pool on its own, which is exactly what shared-tabs exists to stop.
-      ns.failedCycles += 1;
-      ns.failedUntil.set(msg.tabId, Date.now() + LEADER_FAILURE_BACKOFF_MS);
-      const previous = clearLeader(ns, { demote: false, removeTab: false });
-      const tab = ns.tabs.get(msg.tabId);
-      if (tab) tab.heldLeadership = null;
-      electIfNeeded(ns, previous);
+      failPromotion(ns, msg.tabId, msg.leadershipId, { timedOut: false });
       break;
     }
     case 'follower-port-attached': {
