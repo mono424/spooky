@@ -1463,6 +1463,55 @@ impl SspNode {
     }
 }
 
+/// SurrealDB runs optimistic (MVCC) transactions: a statement whose write set
+/// overlaps a transaction that committed while it was in flight fails with
+/// "Transaction conflict: Transaction write conflict. This transaction can be
+/// retried". Nothing is wrong and nothing is lost, the statement simply has to
+/// run again against the newer snapshot.
+///
+/// The TTL sweep hits this constantly under load because it writes exactly the
+/// rows the ingest path writes: `persist_view_metrics` UPDATEs `_00_query` for
+/// every view touched by every materialization, and clients heartbeat the same
+/// rows. Without a retry, one sweep logged one ERROR per contended row and left
+/// every one of those views behind (their circuit state, ~45MB of operator
+/// state each, held until a later sweep happened to win the race).
+fn is_write_conflict(e: &crate::ports::DbError) -> bool {
+    use crate::ports::DbError;
+    let msg = match e {
+        DbError::Query(m) | DbError::Transport(m) => m.to_ascii_lowercase(),
+        DbError::Auth(_) => return false,
+    };
+    msg.contains("write conflict")
+        || msg.contains("transaction conflict")
+        || msg.contains("can be retried")
+}
+
+/// Attempts for a statement that lost an optimistic-concurrency race. No sleep
+/// between tries: a conflict means the *other* transaction already committed,
+/// so the retry runs against a settled snapshot (and a sleep here is not
+/// portable to the wasm shell, which has no timer inside a request).
+const CONFLICT_RETRIES: usize = 5;
+
+/// `Db::query` with bounded retries on a write conflict. Any other error, and
+/// an exhausted budget, are returned to the caller unchanged.
+async fn query_retrying(
+    db: &dyn Db,
+    surql: &str,
+    binds: &[(&str, Value)],
+) -> Result<Vec<Value>, crate::ports::DbError> {
+    let mut attempt = 0usize;
+    loop {
+        match db.query(surql, binds).await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_write_conflict(&e) && attempt < CONFLICT_RETRIES => {
+                attempt += 1;
+                debug!(attempt, error = %e, "write conflict, retrying statement");
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// One TTL sweep: delete every expired query view (its `_00_query` row, its
 /// per-user `_00_list_ref` edges, the in-memory circuit view) + drop any
 /// per-user table that no longer backs a live query. Free fn over the `Db` +
@@ -1478,14 +1527,26 @@ pub async fn ttl_cleanup_sweep(
     // Drop subscriber entries that have gone stale, so a row that is
     // heartbeated rarely does not accumulate dead sessions between writes.
     // Purely hygiene: it never expires a row, only prunes the advisory array.
-    if let Err(e) = db
-        .query(
-            "UPDATE _00_query SET subscribers = array::filter(subscribers, |$s| \
-                 <datetime>$s.seenAt + ttl > time::now()) \
-             WHERE array::len(subscribers ?? []) > 0",
-            &[],
-        )
-        .await
+    // The WHERE matches only rows that actually carry a STALE entry, not every
+    // row that has subscribers: the matched rows are the write set this
+    // statement contends on, and the ingest path is UPDATEing `_00_query` rows
+    // continuously. Rewriting an unchanged array bought nothing but conflicts.
+    // `subscribers ?? []` in the SET, not just in the WHERE: SurrealDB 3
+    // evaluates the SET expression against rows the WHERE excludes, so a single
+    // row without a `subscribers` field (every row registered before the field
+    // existed, and every row whose registration predates its first heartbeat)
+    // failed the WHOLE statement with "Incorrect arguments for function
+    // array::filter() … Expected `array` but found `NONE`". Pruning has been
+    // dead in production for exactly that reason, warn-logged once per sweep.
+    if let Err(e) = query_retrying(
+        db,
+        "UPDATE _00_query SET subscribers = array::filter(subscribers ?? [], |$s| \
+             <datetime>$s.seenAt + ttl > time::now()) \
+         WHERE array::len(array::filter(subscribers ?? [], |$s| \
+             <datetime>$s.seenAt + ttl <= time::now())) > 0",
+        &[],
+    )
+    .await
     {
         warn!("TTL sweep: pruning stale subscribers failed: {}", e);
     }
@@ -1562,18 +1623,20 @@ async fn cleanup_expired_query(
     let list_ref = crate::tables::list_ref_table(ref_mode, auth_id);
 
     // Conditional delete; `RETURN array::len(...)` reads back the count.
-    let deleted: i64 = match db
-        .query(
-            "LET $d = (DELETE type::record('_00_query', $qid) \
-             WHERE lastActiveAt + ttl < time::now() RETURN BEFORE); \
-             RETURN array::len($d);",
-            &[("qid", json!(query_id))],
-        )
-        .await
+    let deleted: i64 = match query_retrying(
+        db,
+        "LET $d = (DELETE type::record('_00_query', $qid) \
+         WHERE lastActiveAt + ttl < time::now() RETURN BEFORE); \
+         RETURN array::len($d);",
+        &[("qid", json!(query_id))],
+    )
+    .await
     {
         Ok(results) => results.get(1).and_then(|v| v.as_i64()).unwrap_or(0),
         Err(e) => {
-            error!(query_id = %query_id, error = %e, "TTL cleanup: delete failed");
+            // Post-retry. A conflict that survives the budget is not fatal:
+            // the row stays expired and the next sweep picks it up again.
+            warn!(query_id = %query_id, error = %e, "TTL cleanup: delete failed (retries exhausted)");
             return;
         }
     };
@@ -1583,8 +1646,8 @@ async fn cleanup_expired_query(
     }
 
     let edge_delete = format!("DELETE type::record('_00_query', $qid)->{list_ref}");
-    if let Err(e) = db.query(&edge_delete, &[("qid", json!(query_id))]).await {
-        error!(query_id = %query_id, error = %e, "TTL cleanup: edge delete failed");
+    if let Err(e) = query_retrying(db, &edge_delete, &[("qid", json!(query_id))]).await {
+        warn!(query_id = %query_id, error = %e, "TTL cleanup: edge delete failed (retries exhausted)");
     }
 
     // Release, don't destroy: an expired row is one holder leaving, and the
