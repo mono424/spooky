@@ -401,6 +401,7 @@ fn build_node(platform: Platform, cfg: &NodeConfigCf) -> SspNode {
         advertise_ip: None,
         info_env: vec![],
         start_epoch_ms: now_epoch_ms(),
+        bootstrap_warnings: Arc::new(RwLock::new(Vec::new())),
         backend_health: None,
         crdt_cache: Arc::new(ssp_node::crdt::CrdtCache::new(
             8,

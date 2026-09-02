@@ -513,6 +513,11 @@ export interface QueryConfig {
    * "never established" has to fall back to a predicate scan of the local store
    * so a query first run on this device still paints offline. A
    * `remoteArray.length === 0` check cannot tell those apart.
+   *
+   * On a cold start it is seeded from the durable `_00_window` row when that
+   * row is non-empty, or empty but `confirmed` (the server reported zero rows
+   * for the query). An unconfirmed empty row is ignored, so a device poisoned
+   * by an old client that mirrored unflushed reads still self-heals.
    */
   membershipKnown?: boolean;
   /**
@@ -528,6 +533,9 @@ export interface QueryConfig {
    * genuine transition and must be honoured, or removed rows resurrect.
    *
    * In-memory only: a fresh session must re-earn the right to believe empties.
+   * What does persist is the `confirmed` marker on the `_00_window` row, which
+   * an empty set earns when it arrives with a server row count of zero or after
+   * a non-empty set in the same session.
    */
   remoteSeen?: boolean;
   /**

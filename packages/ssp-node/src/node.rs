@@ -57,6 +57,10 @@ pub struct SspNode {
     pub info_env: Vec<(String, String)>,
     /// Epoch-ms when the node started, for the `/info` uptime field.
     pub start_epoch_ms: u64,
+    /// Bootstrap anomalies worth an operator's eye, surfaced via `/info`. Today:
+    /// tables the bootstrap source served zero rows for while upstream has
+    /// rows (a drifted scheduler replica). Replaced on every bootstrap.
+    pub bootstrap_warnings: Arc<RwLock<Vec<String>>>,
     /// Backend health monitor — standalone mode only (`None` in cluster mode,
     /// where the scheduler owns backend health + `PUT /backends`).
     pub backend_health: Option<Arc<dyn BackendHealth>>,
@@ -585,6 +589,7 @@ impl SspNode {
             .collect();
 
         let uptime_seconds = crate::now_epoch_ms().saturating_sub(self.start_epoch_ms) / 1000;
+        let bootstrap_warnings = self.bootstrap_warnings.read().await.clone();
 
         json!([
             {
@@ -602,6 +607,7 @@ impl SspNode {
                 "catchup_hashes": catchup_hashes,
                 "ref_mode": ref_mode_str,
                 "env": env_vars,
+                "bootstrap_warnings": bootstrap_warnings,
             }
         ])
     }

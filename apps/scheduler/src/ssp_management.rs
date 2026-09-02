@@ -1283,7 +1283,7 @@ async fn fetch_ssp_catchup_rows(
 /// probe for minutes); phase 2 takes the write lock only for reset + local
 /// bulk load + rehash, so in-flight bootstrap reads still see a consistent
 /// snapshot (they block, then read the fresh clone).
-async fn reclone_replica_from_upstream(
+pub(crate) async fn reclone_replica_from_upstream(
     config: &SchedulerConfig,
     replica: &Arc<RwLock<Replica>>,
     seq_counter: &Arc<AtomicU64>,

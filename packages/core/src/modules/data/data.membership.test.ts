@@ -77,7 +77,7 @@ function makeLocal(pendingRows: Array<{ recordId: RecordId; mutationType: string
   const bodies = new Map(
     ['a', 'b', 'c'].map((k) => [`thread:${k}`, { id: new RecordId('thread', k), title: k }])
   );
-  const windowRows = new Map<string, { ids: RecordVersionArray }>();
+  const windowRows = new Map<string, { ids: RecordVersionArray; confirmed?: boolean }>();
   const local: any = {
     epoch: 1,
     bodies,
@@ -422,6 +422,67 @@ describe('membership-authoritative rendering', () => {
 
       await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
       expect(state.config.remoteArray).toEqual([]);
+    });
+
+    it('marks a non-empty set and a server-confirmed empty set as confirmed', async () => {
+      const { dm, local, hash } = setup({ membershipKey: 'stable-key' });
+
+      await dm.updateQueryRemoteArray(hash, [['thread:a', 1]]);
+      expect(local.windowRows.get('stable-key')).toMatchObject({ confirmed: true });
+
+      // The server reports zero rows: a real answer, durable.
+      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: 0 });
+      expect(local.windowRows.get('stable-key')).toEqual(
+        expect.objectContaining({ ids: [], confirmed: true })
+      );
+    });
+
+    it('marks an empty set that follows a seen set as confirmed', async () => {
+      // Everything the query matched was deleted while this session watched: the
+      // transition is genuine, so the next boot must not resurrect the rows.
+      const { dm, local, hash } = setup({ membershipKey: 'stable-key' });
+      await dm.updateQueryRemoteArray(hash, [['thread:a', 1]]);
+      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
+      expect(local.windowRows.get('stable-key')).toEqual(
+        expect.objectContaining({ ids: [], confirmed: true })
+      );
+    });
+
+    it('leaves the retry-budget empty unconfirmed', async () => {
+      // Two unreadable-row-count empties are believed for this session, but they
+      // are a guess: the durable row must not turn that guess into a permanent
+      // empty list on the next boot.
+      const { dm, local, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
+      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
+      expect(local.windowRows.get('stable-key')).toEqual(
+        expect.objectContaining({ ids: [], confirmed: false })
+      );
+    });
+
+    it('seeds a known-empty membership from a confirmed empty durable row', async () => {
+      // The reload after a server-confirmed empty: the list must stay empty
+      // instead of re-admitting every cached body until the next poll blanks it.
+      const { dm, local } = setup({ membershipKey: 'stable-key' });
+      local.windowRows.set('stable-key', { ids: [], confirmed: true });
+
+      const fresh = await (dm as any).createNewQuery({
+        recordId: new RecordId('_00_query', 'h-confirmed-empty'),
+        surql: 'SELECT * FROM thread WHERE done = false;',
+        params: {},
+        ttl: '10m',
+        tableName: 'thread',
+        plan,
+        membershipKey: 'stable-key',
+      });
+
+      expect(fresh.config.membershipKnown).toBe(true);
+      expect(fresh.config.remoteArray).toEqual([]);
+      expect(fresh.records).toEqual([]);
     });
 
     it('does not seed membership from an empty durable row', async () => {

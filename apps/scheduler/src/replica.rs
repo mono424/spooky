@@ -700,7 +700,7 @@ impl Replica {
     /// Field-level exclusions are discovered separately, by
     /// [`Self::discover_opaque_fields`] — they need `INFO FOR TABLE`, which
     /// `INFO FOR DB` does not include.
-    async fn discover_sync_tables<C>(remote_db: &surrealdb::Surreal<C>) -> Result<Vec<String>>
+    pub async fn discover_sync_tables<C>(remote_db: &surrealdb::Surreal<C>) -> Result<Vec<String>>
     where
         C: surrealdb::Connection,
     {
@@ -1460,7 +1460,7 @@ impl Replica {
         Ok(counts)
     }
 
-    async fn count_table(&self, table_name: &str) -> Result<usize> {
+    pub async fn count_table(&self, table_name: &str) -> Result<usize> {
         let mut response = self.db
             .query(format!("SELECT count() AS total FROM {} GROUP ALL", table_name))
             .await

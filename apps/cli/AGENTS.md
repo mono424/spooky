@@ -33,7 +33,7 @@ your-app/
 - **`spky migrate apply`** — apply pending migrations against the configured database. `--fix-checksums` updates stored checksums for legitimately-modified migration files.
 - **`spky migrate status`** — show pending vs applied vs modified-but-applied migrations.
 - **`spky migrate fix [--fix-checksums]`** — repair schema drift / checksum mismatches.
-- **`spky verify [--fix]`** — confirm SSP/scheduler snapshot matches upstream SurrealDB. `--fix` triggers a resync.
+- **`spky verify [--fix]`** — confirm SSP/scheduler snapshot matches upstream SurrealDB, and print the scheduler's own drift verdict (`/health/snapshot` `drift`). `--fix` re-clones the scheduler replica when its counts are off, otherwise forces every SSP to re-bootstrap. The scheduler runs the same count check itself at startup and after each snapshot drain and auto-reclones by default (`SPKY_DRIFT_AUTO_RECLONE`).
 - **`spky lint`** — validate `sp00ky.yml` and referenced files exist.
 - **`spky dev [--apply-migrations] [--clean]`** — boots a local SurrealDB + SSP + scheduler stack via Docker. `--clean` wipes SSP/scheduler state but preserves user data in SurrealDB.
 - **`spky create`** — scaffold a new sp00ky project.

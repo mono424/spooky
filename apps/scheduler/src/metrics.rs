@@ -70,6 +70,14 @@ pub struct SchedulerMetrics {
     /// with `heartbeat_stale`. A scraper that ignores staleness re-publishes a
     /// frozen latency forever and draws a healthy flat line over a dead
     /// pipeline, which is exactly how this probe failed on 2026-08-09.
+    /// Sync tables whose replica row count differed from upstream on the
+    /// last drift check (`crate::drift`). Non-zero for more than one check
+    /// means a re-clone is due or blocked (cooldown, disabled, stuck).
+    pub replica_drift_tables: usize,
+    /// Tables an automatic re-clone did not fix; they need an operator.
+    pub replica_stuck_tables: usize,
+    /// Automatic replica re-clones since the scheduler started.
+    pub replica_auto_reclones: u64,
     pub heartbeat_last_e2e_ms: Option<u64>,
     /// Epoch-ms of the last successful probe (`None` = never / off).
     pub heartbeat_last_ok_epoch_ms: Option<u64>,
@@ -110,6 +118,9 @@ pub struct MetricsState {
     pub surrealdb_version: Arc<RwLock<String>>,
     pub heartbeat: Arc<crate::heartbeat::HeartbeatStats>,
     pub heartbeat_config: crate::heartbeat::Config,
+    /// Replica-vs-upstream drift state (see `crate::drift`).
+    pub drift: Arc<RwLock<crate::drift::DriftState>>,
+    pub drift_config: crate::drift::DriftConfig,
 }
 
 /// Create metrics router
@@ -198,6 +209,14 @@ async fn get_metrics(
     let hb = &state.heartbeat;
     let hb_last_e2e = hb.last_e2e_ms.load(std::sync::atomic::Ordering::Relaxed);
     let hb_last_ok = hb.last_ok_epoch_ms.load(std::sync::atomic::Ordering::Relaxed);
+    let (drift_tables, stuck_tables, auto_reclones) = {
+        let d = state.drift.read().await;
+        (
+            d.last_report.as_ref().map(|r| r.mismatched_tables().len()).unwrap_or(0),
+            d.stuck.len(),
+            d.auto_reclones,
+        )
+    };
     let metrics = Metrics {
         scheduler: SchedulerMetrics {
             total_ssps,
@@ -209,6 +228,9 @@ async fn get_metrics(
             snapshot_seq: pending.snapshot_seq,
             latest_seq: pending.latest_seq,
             lag: pending.lag,
+            replica_drift_tables: drift_tables,
+            replica_stuck_tables: stuck_tables,
+            replica_auto_reclones: auto_reclones,
             heartbeat_last_e2e_ms: (hb_last_e2e != u64::MAX).then_some(hb_last_e2e),
             heartbeat_last_ok_epoch_ms: (hb_last_ok > 0).then_some(hb_last_ok),
             heartbeat_consecutive_failures: hb
@@ -381,6 +403,7 @@ async fn snapshot_check(
         (counts, hashes)
     };
     let pending = pending_events_snapshot(&state.ingest).await;
+    let drift = crate::drift::state_json(&*state.drift.read().await, &state.drift_config);
     match counts {
         Ok(counts) => {
             let total: usize = counts.iter().map(|(_, c)| c).sum();
@@ -401,6 +424,7 @@ async fn snapshot_check(
                     "snapshot_seq": pending.snapshot_seq,
                     "latest_seq": pending.latest_seq,
                     "lag": pending.lag,
+                    "drift": drift,
                 })),
             )
         }

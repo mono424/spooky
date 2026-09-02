@@ -28,6 +28,7 @@ pub mod proxy;
 pub mod feature_flags;
 pub mod heartbeat;
 pub mod schedule_engine;
+pub mod drift;
 
 use anyhow::{Context, Result};
 
@@ -200,6 +201,13 @@ pub struct Scheduler {
     pub heartbeat: Arc<crate::heartbeat::HeartbeatStats>,
     /// The probe's timing config (also drives `/health` staleness math).
     pub heartbeat_config: crate::heartbeat::Config,
+    /// Replica-vs-upstream drift bookkeeping (see `drift`), surfaced via
+    /// `/health/snapshot` and `/metrics`.
+    pub drift: Arc<RwLock<crate::drift::DriftState>>,
+    pub drift_config: crate::drift::DriftConfig,
+    /// Serializes replica re-clones (admin, breakers, drift) so two of them
+    /// can never reset + re-ingest the shared replica concurrently.
+    pub reclone_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Scheduler {
@@ -258,6 +266,10 @@ impl Scheduler {
             snapshot_seq_cell,
             heartbeat: crate::heartbeat::HeartbeatStats::new(),
             heartbeat_config: crate::heartbeat::Config::from_env(),
+
+            drift: Arc::new(RwLock::new(crate::drift::DriftState::default())),
+            drift_config: crate::drift::DriftConfig::from_env(),
+            reclone_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -319,7 +331,27 @@ impl Scheduler {
             surrealdb_version: Arc::clone(&self.surrealdb_version),
             heartbeat: Arc::clone(&self.heartbeat),
             heartbeat_config: self.heartbeat_config.clone(),
+            drift: Arc::clone(&self.drift),
+            drift_config: self.drift_config.clone(),
         }
+    }
+
+    /// The drift hook the snapshot updater and the startup pass run: upstream
+    /// counts through `db`, remediation through the same re-clone the admin
+    /// endpoint and the breakers use.
+    fn drift_hook(&self, db: Arc<maintenance::db::ReconnectingDb>) -> Arc<crate::drift::DriftHook> {
+        Arc::new(crate::drift::DriftHook {
+            cfg: self.drift_config.clone(),
+            upstream: Arc::new(crate::drift::SurrealUpstream { db }),
+            state: Arc::clone(&self.drift),
+            reclone: Arc::new(SchedulerRecloner {
+                config: self.config.clone(),
+                replica: Arc::clone(&self.replica),
+                seq_counter: Arc::clone(&self.seq_counter),
+                reclone_lock: Arc::clone(&self.reclone_lock),
+                ssp_pool: Arc::clone(&self.ssp_pool),
+            }),
+        })
     }
 
     /// Get proxy state for HTTP handlers
@@ -527,23 +559,36 @@ impl Scheduler {
             warn!(error = %e, "Startup integrity check encountered errors");
         }
 
-        // Transition to Ready
-        *self.status.write().await = SchedulerStatus::Ready;
-        info!("Scheduler is ready and running");
-
-        // Step 3: Spawn periodic snapshot update task
-        self.spawn_snapshot_updater();
-
         // Bootstrap is done with the raw handle; hand it to the long-lived
         // consumers wrapped so a SurrealDB restart (which drops the server-side
         // session this handle is pinned to) is recoverable without restarting
         // the scheduler.
         //
-        // One `ReconnectingDb` shared by both consumers, deliberately: each
+        // One `ReconnectingDb` shared by every consumer, deliberately: each
         // `Surreal::clone()` attaches its OWN server-side session, so the
         // previous `db.clone()` per consumer meant several independent sessions
         // to lose and several to re-establish.
         let shared_db = maintenance::db::ReconnectingDb::new(db, self.config.db.clone());
+        let drift_hook = self.drift_hook(Arc::clone(&shared_db));
+
+        // The check the integrity check above cannot do: compare the replica
+        // against UPSTREAM. A persisted snapshot that missed writes made while
+        // nothing was listening (a bulk migration with the stack down) is
+        // internally consistent and serves every SSP an empty table. Nothing
+        // is buffered yet, so counts are comparable, and no SSP can register
+        // until `Ready`, so a re-clone here costs nobody a bootstrap.
+        match crate::drift::run_check(&drift_hook, &self.replica).await {
+            crate::drift::Action::Clean => info!("Startup drift check passed"),
+            other => warn!(action = ?other, "Startup drift check acted"),
+        }
+
+        // Transition to Ready
+        *self.status.write().await = SchedulerStatus::Ready;
+        info!("Scheduler is ready and running");
+
+        // Step 3: Spawn periodic snapshot update task (which also runs the
+        // periodic drift check after each drain).
+        self.spawn_snapshot_updater(Some(drift_hook));
 
         // Keep the handle's HTTP auth token fresh, and replace the handle
         // outright if its session dies.
@@ -629,7 +674,7 @@ impl Scheduler {
     }
 
     /// Spawn a background task that periodically applies buffered events to the snapshot
-    fn spawn_snapshot_updater(&self) {
+    fn spawn_snapshot_updater(&self, drift: Option<Arc<crate::drift::DriftHook>>) {
         let interval_secs = self.config.snapshot_update_interval_secs;
         // Strictly larger than the bootstrap poll task's own timeout, so a
         // parked SSP is only evicted once its poll task is guaranteed dead.
@@ -659,10 +704,40 @@ impl Scheduler {
                     &wal,
                     &drain_lock,
                     stale_bootstrap_max_age,
+                    drift.as_deref(),
                 )
                 .await;
             }
         });
+    }
+}
+
+/// The drift module's remediation, bound to this scheduler's replica: the same
+/// re-clone the admin endpoint and the bootstrap/catch-up breakers run, plus
+/// flagging every SSP so it re-bootstraps on its next heartbeat.
+struct SchedulerRecloner {
+    config: SchedulerConfig,
+    replica: Arc<RwLock<Replica>>,
+    seq_counter: Arc<AtomicU64>,
+    reclone_lock: Arc<tokio::sync::Mutex<()>>,
+    ssp_pool: Arc<RwLock<SspPool>>,
+}
+
+#[async_trait::async_trait]
+impl crate::drift::Recloner for SchedulerRecloner {
+    async fn reclone_and_resync(&self) -> Result<bool> {
+        let done = crate::ssp_management::reclone_replica_from_upstream(
+            &self.config,
+            &self.replica,
+            &self.seq_counter,
+            &self.reclone_lock,
+        )
+        .await?;
+        if done {
+            let marked = self.ssp_pool.write().await.mark_all_for_resync();
+            info!(marked, "Drift re-clone: SSPs flagged for re-bootstrap");
+        }
+        Ok(done)
     }
 }
 
@@ -685,6 +760,7 @@ pub async fn snapshot_updater_tick(
     wal: &Arc<RwLock<EventWal>>,
     drain_lock: &Arc<tokio::sync::Mutex<()>>,
     stale_bootstrap_max_age: std::time::Duration,
+    drift: Option<&crate::drift::DriftHook>,
 ) {
     // Step 1: evict SSPs parked in Bootstrapping/Replaying past the bound —
     // their poll task is dead, and they would otherwise hold
@@ -762,6 +838,23 @@ pub async fn snapshot_updater_tick(
             *st = SchedulerStatus::Ready;
         }
     }
+
+    // Step 6: replica-vs-upstream drift check, only on a tick whose drain
+    // left nothing buffered (otherwise the replica legitimately trails
+    // upstream by exactly what is still buffered and the counts say nothing).
+    // The lock is released first: a re-clone takes the replica write lock for
+    // minutes and must not hold up registrations behind `drain_lock` with it.
+    let Some(hook) = drift else { return };
+    if !hook.cfg.enabled {
+        return;
+    }
+    let drained = event_buffer.read().await.is_empty();
+    drop(_guard);
+    if !drained {
+        debug!("Skipping drift check: events still buffered after the drain");
+        return;
+    }
+    crate::drift::run_check(hook, replica).await;
 }
 
 #[cfg(test)]

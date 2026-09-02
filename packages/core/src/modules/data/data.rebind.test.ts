@@ -122,6 +122,29 @@ describe('DataModule.rebindAfterBucketSwitch', () => {
   });
 });
 
+describe('DataModule.rebindAfterBucketSwitch durable seed', () => {
+  it('seeds a confirmed-empty membership from the new bucket, and ignores an unconfirmed one', async () => {
+    const harness = makeHarness();
+    const { dm, local } = harness as any;
+    const state = makeQueryState('h1', [{ id: 'user:a', name: 'Previous User Row' }]);
+    state.config.membershipKey = 'stable-key';
+    (dm as any).activeQueries.set('h1', state);
+    local.getById = vi.fn(async () => ({ ids: [], confirmed: true }));
+
+    await dm.rebindAfterBucketSwitch();
+    let qs = (dm as any).activeQueries.get('h1') as QueryState;
+    expect(qs.config.membershipKnown).toBe(true);
+    expect(qs.config.remoteArray).toEqual([]);
+    if (qs.ttlTimer) clearTimeout(qs.ttlTimer);
+
+    local.getById = vi.fn(async () => ({ ids: [] }));
+    await dm.rebindAfterBucketSwitch();
+    qs = (dm as any).activeQueries.get('h1') as QueryState;
+    expect(qs.config.membershipKnown).toBe(false);
+    if (qs.ttlTimer) clearTimeout(qs.ttlTimer);
+  });
+});
+
 describe('stale-epoch stream updates', () => {
   it('drops an update whose chain started before a bucket switch', async () => {
     const { dm, local } = makeHarness();

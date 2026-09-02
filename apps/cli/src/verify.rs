@@ -50,6 +50,7 @@ pub fn run(fix: bool) -> Result<()> {
         eprintln!("{} Warning: scheduler unavailable: {:#}", PREFIX, e);
         BTreeMap::new()
     });
+    print_scheduler_drift();
     let circuit = fetch_ssp_stats().unwrap_or_else(|e| {
         eprintln!("{} Warning: SSP unavailable: {:#}", PREFIX, e);
         BTreeMap::new()
@@ -236,6 +237,46 @@ fn base64_encode(input: &str) -> String {
         });
     }
     out
+}
+
+/// The scheduler's own replica-vs-upstream verdict (`drift` block of
+/// `/health/snapshot`, written by its periodic drift check). Printed next to
+/// this tool's comparison so an operator can tell "the scheduler already knows
+/// and is acting" from "the scheduler has not noticed". Silent when the
+/// scheduler is unreachable or predates the field.
+fn print_scheduler_drift() {
+    let url = format!("http://localhost:{}/health/snapshot", SCHEDULER_PORT);
+    let body: Value = match ureq::get(&url).timeout(HTTP_TIMEOUT).call() {
+        Ok(resp) => match resp.into_json() {
+            Ok(b) => b,
+            Err(_) => return,
+        },
+        Err(_) => return,
+    };
+    let Some(drift) = body.get("drift") else { return };
+    let list = |key: &str| -> Vec<String> {
+        drift
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default()
+    };
+    let mismatched = list("mismatched");
+    let stuck = list("stuck");
+    let auto = drift.get("auto_reclone_enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let reclones = drift.get("auto_reclones").and_then(|v| v.as_u64()).unwrap_or(0);
+    let mode = if auto { "on" } else { "off" };
+    if mismatched.is_empty() && stuck.is_empty() {
+        println!(
+            "{} Scheduler drift check: clean (auto-reclone {}, {} automatic re-clone(s) so far)",
+            PREFIX, mode, reclones
+        );
+    } else {
+        println!(
+            "{} Scheduler drift check: mismatched {:?}, stuck {:?} (auto-reclone {}, {} automatic re-clone(s) so far)",
+            PREFIX, mismatched, stuck, mode, reclones
+        );
+    }
 }
 
 /// Per-table counts + hashes from the scheduler's `/health/snapshot` endpoint.

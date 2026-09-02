@@ -22,7 +22,7 @@ somewhere else, and `spky <command> --help` for the flags of any single command.
 | `spky migrate` | Database migrations: `create`, `apply`, `prod`, `status`, `fix`. [Docs](/docs/schema/migrations) |
 | `spky lint` | Validate `sp00ky.yml`. |
 | `spky doctor [--json]` | Project health: config, codegen freshness, migrations, Docker. [Docs](/docs/dev/doctor) |
-| `spky verify [--fix]` | Check the SSP/scheduler snapshot against upstream SurrealDB; `--fix` forces a re-bootstrap. |
+| `spky verify [--fix]` | Check the SSP/scheduler snapshot against upstream SurrealDB and print the scheduler's own drift verdict; `--fix` re-clones the replica when its counts are off, else forces every SSP to re-bootstrap. |
 | `spky query [sql]` | Run SurrealQL once, or open a REPL. `--cloud` targets the deployment. |
 | `spky version` | Print version information. |
 

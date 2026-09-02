@@ -393,6 +393,55 @@ Health check endpoint.
 curl http://localhost:9667/health
 ```
 
+### GET /health/snapshot
+
+Per-table replica record counts and content hashes, plus the scheduler's
+own replica-vs-upstream verdict. `spky verify` reads this.
+
+The replica is cloned from upstream once and then fed only by the per-row
+ingest events, so rows written while nothing was listening (a bulk migration
+with the stack down) never reach it, and every SSP that bootstraps from it
+inherits the gap. The scheduler compares row counts against upstream at
+startup and after every snapshot drain that leaves nothing buffered, and by
+default re-clones the replica and re-bootstraps every SSP when a table is
+empty in the replica but not upstream, or when any other count mismatch
+persists across consecutive checks.
+
+**Response:**
+- `200 OK`
+  ```json
+  {
+    "tables": { "thread": 12, "user": 3 },
+    "hashes": { "thread": "ab12…", "user": "cd34…" },
+    "total_records": 15,
+    "snapshot_seq": 230046,
+    "latest_seq": 230046,
+    "lag": 0,
+    "drift": {
+      "enabled": true,
+      "auto_reclone_enabled": true,
+      "checked_at": 1788310193130,
+      "tables": { "thread": { "upstream": 12, "replica": 12 } },
+      "mismatched": [],
+      "stuck": [],
+      "last_auto_reclone": null,
+      "auto_reclones": 0,
+      "last_error": null
+    }
+  }
+  ```
+
+`drift.mismatched` lists tables whose counts differed on the last check.
+`drift.stuck` lists tables an automatic re-clone did not fix; those need an
+operator (a row the replica schema rejects, typically). `drift.upstream` is
+`null` for a table whose upstream count could not be read.
+
+**Example:**
+
+```bash
+curl http://localhost:9667/health/snapshot
+```
+
 ### GET /info
 
 Get entity information for the scheduler and all registered SSPs.
@@ -519,6 +568,10 @@ job_tables:
 - `SPKY_DB_USER` - SurrealDB username (overrides `db.username`)
 - `SPKY_DB_PASS` - SurrealDB password (overrides `db.password`)
 - `SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS` - Override for `snapshot_update_interval_secs` (default: `300`)
+- `SPKY_DRIFT_CHECK` - Compare replica row counts against upstream at startup and after each snapshot drain (default: `true`)
+- `SPKY_DRIFT_AUTO_RECLONE` - Re-clone the replica and re-bootstrap every SSP when the check finds the replica missing rows (default: `true`; `false` reports only, via `/health/snapshot`, `/metrics` and `spky verify`)
+- `SPKY_DRIFT_CONFIRM_TICKS` - Consecutive checks a non-zero count mismatch must persist before it is acted on; an empty replica table upstream has rows for is acted on at first sight (default: `2`)
+- `SPKY_DRIFT_RECLONE_COOLDOWN_SECS` - Minimum spacing between automatic re-clones (default: `3600`)
 - `SPKY_BACKENDS` - JSON-encoded backend health-check list (`SPKY_SCHEDULER_BACKENDS` accepted as legacy fallback)
 - `SPKY_BOOTSTRAP_PAGE_SIZE` - Rows read per bootstrap page from the replica (default: `500`)
 - `SPKY_AUTH_SECRET` - Optional shared secret; when set, SSP clients are required to send `Authorization: Bearer <secret>` on `/proxy/*`

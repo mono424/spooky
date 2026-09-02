@@ -269,6 +269,7 @@ async fn build(opts: HarnessOpts) -> Harness {
         advertise_ip: Some("10.0.0.7".to_string()),
         info_env: vec![("SPKY_SSP_ID".to_string(), "test-ssp".to_string())],
         start_epoch_ms: ssp_node::now_epoch_ms().saturating_sub(5000),
+        bootstrap_warnings: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         backend_health,
         crdt_cache: Arc::new(ssp_node::crdt::CrdtCache::new(8, ssp_node::crdt::CrdtAllowList::permissive())),
         view_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),

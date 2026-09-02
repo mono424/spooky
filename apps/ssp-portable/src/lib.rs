@@ -223,6 +223,7 @@ fn build_node(
         advertise_ip: None,
         info_env: vec![],
         start_epoch_ms: ssp_node::now_epoch_ms(),
+        bootstrap_warnings: Arc::new(RwLock::new(Vec::new())),
         backend_health: None,
         crdt_cache: Arc::new(ssp_node::crdt::CrdtCache::new(
             8,

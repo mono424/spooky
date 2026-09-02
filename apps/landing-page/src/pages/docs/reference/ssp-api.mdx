@@ -276,9 +276,15 @@ Get entity information for this SSP (no authentication required).
     "version": "0.0.1-canary.66",
     "uptime_seconds": 3204,
     "circuit_tables": { "thread": 12, "user": 3 },
-    "circuit_hashes": { "thread": "ab12…", "user": "cd34…" }
+    "circuit_hashes": { "thread": "ab12…", "user": "cd34…" },
+    "bootstrap_warnings": []
   }]
   ```
+
+`bootstrap_warnings` is non-empty when the last bootstrap loaded zero rows
+for a table that upstream SurrealDB has rows in. That is the scheduler's
+replica missing data (see the scheduler's `/health/snapshot` `drift`
+block); views on such a table compute empty until the replica is re-cloned.
 
 `ref_mode` reports the currently-active `_00_list_ref` storage
 layout, `"dedicated"` for per-user tables, `"single"` for the

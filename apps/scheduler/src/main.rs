@@ -78,7 +78,7 @@ async fn run() -> Result<()> {
         status: scheduler.status.clone(),
         event_buffer: scheduler.event_buffer.clone(),
         seq_counter: std::sync::Arc::clone(&scheduler.seq_counter),
-        reclone_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        reclone_lock: scheduler.reclone_lock.clone(),
         wal: scheduler.wal.clone(),
         drain_lock: scheduler.drain_lock.clone(),
     };

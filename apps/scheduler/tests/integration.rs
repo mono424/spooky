@@ -214,6 +214,8 @@ impl TestHarness {
                 ping_url: None,
                 webhook_url: None,
             },
+            drift: Arc::new(RwLock::new(scheduler::drift::DriftState::default())),
+            drift_config: scheduler::drift::DriftConfig::default(),
         };
         metrics::create_metrics_router(state)
     }
@@ -1396,6 +1398,7 @@ mod bootstrap_protocol_tests {
             &h.wal,
             &h.drain_lock,
             std::time::Duration::from_secs(300),
+            None,
         )
         .await;
 
@@ -1420,6 +1423,7 @@ mod bootstrap_protocol_tests {
             &h.wal,
             &h.drain_lock,
             std::time::Duration::from_secs(300),
+            None,
         )
         .await;
         assert_eq!(*h.status.read().await, SchedulerStatus::Ready);
@@ -1443,6 +1447,7 @@ mod bootstrap_protocol_tests {
             &h.wal,
             &h.drain_lock,
             std::time::Duration::from_secs(300),
+            None,
         )
         .await;
 
@@ -1465,6 +1470,7 @@ mod bootstrap_protocol_tests {
             &h.wal,
             &h.drain_lock,
             std::time::Duration::ZERO, // everything parked is instantly stale
+            None,
         )
         .await;
 
@@ -1885,5 +1891,145 @@ mod bootstrap_protocol_tests {
             &rep.compute_table_hashes().await.unwrap(),
             "chunked drain must leave cached hashes equal to content"
         );
+    }
+}
+
+
+// ── Replica drift detection ───────────────────────────────────────────────
+//
+// The replica is fed by ingest events only; rows written upstream while nothing
+// was listening never reach it, and every SSP that bootstraps from it inherits
+// the gap while every hash-based check passes (an empty table hashes the same
+// on both sides). The drift check compares row counts against upstream and
+// re-clones. These tests drive it with a stubbed upstream and a recording
+// recloner; the decision table itself is unit-tested in `drift.rs`.
+mod drift_tests {
+    use super::*;
+    use scheduler::drift::{self, Action, DriftConfig, DriftHook, DriftState, Recloner, UpstreamCounts};
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct StubUpstream(BTreeMap<String, Option<u64>>);
+
+    #[async_trait::async_trait]
+    impl UpstreamCounts for StubUpstream {
+        async fn upstream_counts(&self) -> anyhow::Result<BTreeMap<String, Option<u64>>> {
+            Ok(self.0.clone())
+        }
+    }
+
+    struct RecordingRecloner {
+        calls: AtomicUsize,
+        ssp_pool: Arc<RwLock<SspPool>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Recloner for RecordingRecloner {
+        async fn reclone_and_resync(&self) -> anyhow::Result<bool> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.ssp_pool.write().await.mark_all_for_resync();
+            Ok(true)
+        }
+    }
+
+    fn hook(h: &TestHarness, upstream: &[(&str, u64)], cfg: DriftConfig) -> (Arc<DriftHook>, Arc<RecordingRecloner>) {
+        let recloner = Arc::new(RecordingRecloner {
+            calls: AtomicUsize::new(0),
+            ssp_pool: Arc::clone(&h.ssp_pool),
+        });
+        let hook = Arc::new(DriftHook {
+            cfg,
+            upstream: Arc::new(StubUpstream(
+                upstream.iter().map(|(t, n)| (t.to_string(), Some(*n))).collect(),
+            )),
+            state: Arc::new(RwLock::new(DriftState::default())),
+            reclone: recloner.clone(),
+        });
+        (hook, recloner)
+    }
+
+    #[tokio::test]
+    async fn an_empty_replica_table_upstream_has_rows_for_reclones_and_flags_ssps() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-a", "http://localhost:9999").await;
+        // Upstream has contacts; the replica has never seen the table.
+        let (hook, recloner) = hook(&h, &[("contact", 5386)], DriftConfig::default());
+
+        let action = drift::run_check(&hook, &h.replica).await;
+        assert!(matches!(action, Action::Reclone { ref tables } if tables == &["contact".to_string()]), "{action:?}");
+        assert_eq!(recloner.calls.load(Ordering::SeqCst), 1);
+        assert!(h.ssp_pool.write().await.take_resync_flag("ssp-a"), "SSP flagged for re-bootstrap");
+
+        let st = hook.state.read().await;
+        assert_eq!(st.auto_reclones, 1);
+        let json = drift::state_json(&st, &hook.cfg);
+        assert_eq!(json["mismatched"], serde_json::json!(["contact"]));
+        assert_eq!(json["tables"]["contact"]["upstream"], 5386);
+        assert_eq!(json["tables"]["contact"]["replica"], 0);
+    }
+
+    #[tokio::test]
+    async fn reporting_only_never_reclones_but_shows_up_in_health_snapshot() {
+        let h = TestHarness::new().await;
+        let cfg = DriftConfig { auto_reclone: false, ..DriftConfig::default() };
+        let (hook, recloner) = hook(&h, &[("contact", 5)], cfg);
+
+        let action = drift::run_check(&hook, &h.replica).await;
+        assert!(matches!(action, Action::Report { .. }), "{action:?}");
+        assert_eq!(recloner.calls.load(Ordering::SeqCst), 0);
+
+        // The metrics router renders the same state under `/health/snapshot`.
+        let state = MetricsState {
+            ssp_pool: Arc::clone(&h.ssp_pool),
+            query_tracker: Arc::clone(&h.query_tracker),
+            job_tracker: Arc::clone(&h.job_tracker),
+            start_time: std::time::Instant::now(),
+            scheduler_id: "test-scheduler".to_string(),
+            status: Arc::clone(&h.status),
+            backend_health: scheduler::backend_health::create_health_cache(&[]),
+            shared_backend_configs: scheduler::backend_health::create_shared_configs(&[]),
+            ingest: IngestState {
+                replica: Arc::clone(&h.replica),
+                transport: Arc::clone(&h.transport),
+                ssp_pool: Arc::clone(&h.ssp_pool),
+                status: Arc::clone(&h.status),
+                event_buffer: Arc::clone(&h.event_buffer),
+                seq_counter: Arc::clone(&h.seq_counter),
+                wal: Arc::clone(&h.wal),
+                drain_lock: Arc::clone(&h.drain_lock),
+                db_config: Arc::new(h.config.db.clone()),
+                job_tables: Arc::new(vec![]),
+                observer_permits: Arc::new(tokio::sync::Semaphore::new(8)),
+                snapshot_seq: Arc::clone(&h.snapshot_seq_cell),
+            },
+            replica: Arc::clone(&h.replica),
+            surrealdb_version: Arc::new(RwLock::new("unknown".to_string())),
+            heartbeat: scheduler::heartbeat::HeartbeatStats::new(),
+            heartbeat_config: scheduler::heartbeat::Config {
+                interval_secs: 30,
+                timeout_secs: 25,
+                fail_threshold: 3,
+                ping_url: None,
+                webhook_url: None,
+            },
+            drift: Arc::clone(&hook.state),
+            drift_config: hook.cfg.clone(),
+        };
+        let app = metrics::create_metrics_router(state);
+        let (status, body) = get_json(app, "/health/snapshot").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["drift"]["auto_reclone_enabled"], false);
+        assert_eq!(body["drift"]["mismatched"], serde_json::json!(["contact"]));
+    }
+
+    #[tokio::test]
+    async fn matching_counts_are_clean_and_touch_nothing() {
+        let h = TestHarness::new().await;
+        // Nothing upstream, nothing in the replica: agreement.
+        let (hook, recloner) = hook(&h, &[("contact", 0)], DriftConfig::default());
+        assert_eq!(drift::run_check(&hook, &h.replica).await, Action::Clean);
+        assert_eq!(recloner.calls.load(Ordering::SeqCst), 0);
+        let st = hook.state.read().await;
+        assert!(drift::state_json(&st, &hook.cfg)["mismatched"].as_array().unwrap().is_empty());
     }
 }

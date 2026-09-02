@@ -82,6 +82,13 @@ function phaseStatOf(samples: number[], lastMs: number | null): PhaseStat {
  * Merges the functionality of QueryManager and MutationManager.
  * Uses CacheModule for all storage operations.
  */
+/** A `_00_window` row as read back: the id-set and whether the server vouched
+ *  for it (which is what allows an empty set to count as known membership). */
+export interface DurableMembership {
+  ids: RecordVersionArray;
+  confirmed: boolean;
+}
+
 export class DataModule<S extends SchemaStructure> {
   /** Tab identity baked into mutation ids (shared-tabs rollback routing);
    *  undefined in solo mode, where mutation-id falls back to a session id. */
@@ -1161,32 +1168,54 @@ export class DataModule<S extends SchemaStructure> {
   //
   // `_00_window` fixes that: same data, keyed by a session-independent hash, in
   // a table nothing wipes. Mirrors the durable `_00_preload` marker above.
+  //
+  // Row shape: `{ ids, confirmed, updatedAt }`. `confirmed` is the one bit that
+  // lets an EMPTY row be trusted on the next boot (see `getWindowMembership`).
 
   /**
    * Read the durable membership row, or `null` if this query has never had
    * authoritative membership on this device. Any read error is treated as
    * "unknown" so a broken row degrades to the predicate scan rather than
    * rendering an empty list.
+   *
+   * `confirmed` is true only for rows written after the server itself vouched
+   * for the set (a non-empty id-set, or an empty one it reported a row count of
+   * zero for, or an empty one that followed a non-empty one in the same
+   * session). Rows written before the marker existed, including the `[]` rows a
+   * pre-`ea56f50e` client mirrored from an unflushed read, read as unconfirmed.
    */
-  async getWindowMembership(key: string): Promise<RecordVersionArray | null> {
+  async getWindowMembership(key: string): Promise<DurableMembership | null> {
     try {
       const row = await this.local.getById('_00_window', new RecordId('_00_window', key));
       if (!row || typeof row !== 'object') return null;
       const ids = (row as any).ids;
-      return Array.isArray(ids) ? (ids as RecordVersionArray) : null;
+      if (!Array.isArray(ids)) return null;
+      return { ids: ids as RecordVersionArray, confirmed: (row as any).confirmed === true };
     } catch {
       return null;
     }
   }
 
-  /** Persist the durable membership row. Best-effort: callers must not fail a
-   *  sync round because the mirror write failed. */
-  async writeWindowMembership(key: string, ids: RecordVersionArray): Promise<void> {
+  /**
+   * Persist the durable membership row. Best-effort: callers must not fail a
+   * sync round because the mirror write failed.
+   *
+   * `confirmed` says whether a cold start may trust this row even when it is
+   * empty. A confirmed empty is a real answer ("the server says this query has
+   * no rows") and stays empty across a reload; an unconfirmed empty is the
+   * retry budget's guess and falls back to the predicate scan on the next boot,
+   * exactly as every empty row did before the marker existed.
+   */
+  async writeWindowMembership(
+    key: string,
+    ids: RecordVersionArray,
+    confirmed: boolean
+  ): Promise<void> {
     try {
       await this.local.upsert(
         '_00_window',
         new RecordId('_00_window', key),
-        { ids, updatedAt: Date.now() },
+        { ids, confirmed, updatedAt: Date.now() },
         'replace'
       );
     } catch (err) {
@@ -1389,9 +1418,16 @@ export class DataModule<S extends SchemaStructure> {
     // registration, well inside the flush window for a real collection, so
     // "believe it the second time" blanked exactly the lists this guard exists
     // to protect — reported as rows vanishing ~2s after a page load.
+    // Whether this write may be trusted by the NEXT session. Non-empty sets
+    // always; an empty set only when the server stood behind it (a zero row
+    // count, or a real set was seen this session and it is now gone). The
+    // retry-budget path below accepts an empty without that backing and must
+    // stay non-durable, or the poisoned-device self-heal is lost.
+    let confirmed = remoteArray.length > 0 || queryState.config.remoteSeen === true;
     if (remoteArray.length === 0 && !queryState.config.remoteSeen) {
       const serverRowCount = opts?.serverRowCount;
       const knownEmpty = serverRowCount === 0;
+      confirmed = knownEmpty;
       if (!knownEmpty) {
         // Unknown row count still gets a bounded escape hatch, so a server that
         // cannot report one never strands a device on a durable seed forever.
@@ -1429,7 +1465,7 @@ export class DataModule<S extends SchemaStructure> {
       queryState.config.emptyReads = 0;
     }
     if (queryState.config.membershipKey) {
-      await this.writeWindowMembership(queryState.config.membershipKey, remoteArray);
+      await this.writeWindowMembership(queryState.config.membershipKey, remoteArray, confirmed);
     }
     try {
       await this.local.query(
@@ -1499,10 +1535,10 @@ export class DataModule<S extends SchemaStructure> {
       config.emptyReads = 0;
       if (config.membershipKey) {
         const durable = await this.getWindowMembership(config.membershipKey);
-        // Length-checked for the same reason as the cold-start read above: an
-        // empty durable row is indistinguishable from "never had membership".
-        if (durable?.length) {
-          config.remoteArray = durable;
+        // Same rule as the cold-start read: a non-empty row, or an empty one
+        // the server confirmed, is membership; an unmarked empty row is not.
+        if (durable && (durable.ids.length > 0 || durable.confirmed)) {
+          config.remoteArray = durable.ids;
           config.membershipKnown = true;
         }
       }
@@ -2193,12 +2229,16 @@ export class DataModule<S extends SchemaStructure> {
     // removed row reappearing after a reload, and it works with no network.
     if (membershipKey && !config.remoteArray?.length) {
       const durable = await this.getWindowMembership(membershipKey);
-      // `durable.length` on purpose: an empty durable row cannot be told apart
-      // from one written before this device ever saw a real id-set, and treating
-      // it as known means the first paint is empty with no scan fallback. It
-      // also self-heals devices poisoned by the pre-fix `writeWindowMembership`.
-      if (durable?.length) {
-        config.remoteArray = durable;
+      // An empty durable row is trusted only when it carries the `confirmed`
+      // marker, i.e. the server itself reported the query empty. Without it an
+      // empty row cannot be told apart from one written before this device ever
+      // saw a real id-set (or by the pre-`ea56f50e` client that mirrored
+      // unflushed reads), and treating it as known would paint an empty list
+      // with no scan fallback. A confirmed empty is the opposite case: the
+      // server said "no rows", so a reload must stay empty rather than re-admit
+      // every cached body until the next poll blanks it again.
+      if (durable && (durable.ids.length > 0 || durable.confirmed)) {
+        config.remoteArray = durable.ids;
         config.membershipKnown = true;
       }
     } else if (config.remoteArray?.length) {

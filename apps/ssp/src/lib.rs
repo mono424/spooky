@@ -805,6 +805,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         advertise_ip,
         info_env,
         start_epoch_ms: ssp_node::now_epoch_ms(),
+        bootstrap_warnings: Arc::new(RwLock::new(Vec::new())),
         backend_health: node_backend_health,
         crdt_cache: crdt_cache.clone(),
         view_metrics: view_metrics.clone(),
@@ -880,7 +881,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         shared_backend_configs,
         platform: platform.clone(),
         auth_secret: config.auth_secret.clone(),
-        node,
+        node: Arc::clone(&node),
     };
 
     let mut app = create_app(state);
@@ -964,6 +965,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         let advertise_addr = config.advertise_addr.clone();
         let register_max_wait_secs = config.register_max_wait_secs;
         let bootstrap_page_size = config.bootstrap_page_size;
+        let bootstrap_warnings = Arc::clone(&node.bootstrap_warnings);
 
         tokio::spawn(async move {
             // Choose bootstrap source based on mode. The metadata source
@@ -1012,7 +1014,8 @@ pub async fn run_server() -> anyhow::Result<()> {
             loop {
                 attempt += 1;
                 match self_bootstrap_with_metadata(&metadata_source, &data_source, &processor, bootstrap_page_size).await {
-                    Ok(()) => {
+                    Ok(bootstrap_warnings_now) => {
+                        *bootstrap_warnings.write().await = bootstrap_warnings_now;
                         // Seed the catch-up XOR accumulators from the freshly
                         // bulk-loaded rows (`Circuit::load` bypasses the per-row
                         // `apply_mutation` maintenance). Must run before the SSP
@@ -1487,12 +1490,14 @@ mod bootstrap_pagination_tests {
 /// permission and gets default-denied at view-register time). Upstream
 /// SurrealDB is the source of truth for schema, so callers in cluster
 /// mode pass it explicitly here as `metadata_source`.
+/// Returns the bootstrap warnings to surface via `/info` (empty on a clean
+/// bootstrap). See `SspNode::bootstrap_warnings`.
 async fn self_bootstrap_with_metadata(
     metadata_source: &BootstrapSource,
     data_source: &BootstrapSource,
     processor: &Arc<RwLock<Circuit>>,
     page_size: usize,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<String>> {
     info!("Starting self-bootstrap");
 
     // Standalone (metadata + data both Direct against the local DB): the
@@ -1508,8 +1513,10 @@ async fn self_bootstrap_with_metadata(
             processor,
             page_size,
         )
-        .await;
+        .await
+        .map(|()| Vec::new());
     }
+    let mut warnings: Vec<String> = Vec::new();
 
     use ssp_node::bootstrap::{
         bootstrap_page_query, extract_select_permission_text, parse_link_target,
@@ -1698,6 +1705,25 @@ async fn self_bootstrap_with_metadata(
             }
         }
         info!(table = %table, records = record_count, "Loaded table data");
+
+        // The data source is the scheduler's replica, which is fed by the
+        // per-row ingest events and can be missing everything written while
+        // nothing was listening. Zero rows from it for a table upstream has
+        // rows in is exactly that gap, and every view on the table computes
+        // empty until the scheduler re-clones. Say so, loudly and in `/info`;
+        // the count is best-effort and must never fail or slow the bootstrap.
+        if record_count == 0 {
+            if let Some(upstream) = upstream_row_count(metadata_source, table).await {
+                if upstream > 0 {
+                    let msg = format!(
+                        "table `{table}` loaded 0 rows from the bootstrap source but upstream has {upstream}; \
+                         views on it stay empty until the scheduler replica is re-cloned"
+                    );
+                    error!(table = %table, upstream_rows = upstream, "{}", msg);
+                    warnings.push(msg);
+                }
+            }
+        }
     }
 
     // Step 3: Re-register views from the global `_00_query` table.
@@ -1802,7 +1828,30 @@ async fn self_bootstrap_with_metadata(
         }
     }
 
-    Ok(())
+    Ok(warnings)
+}
+
+/// Best-effort upstream row count for the bootstrap sanity check. `None` on
+/// any error or when the count takes too long: the check is advisory and the
+/// bootstrap budget is not to be spent on it.
+async fn upstream_row_count(source: &BootstrapSource, table: &str) -> Option<u64> {
+    let query = format!("SELECT count() AS total FROM {} GROUP ALL", table);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), source.query(&query)).await;
+    match result {
+        Ok(Ok(Value::Array(rows))) => rows
+            .first()
+            .and_then(|r| r.get("total"))
+            .and_then(|v| v.as_u64()),
+        Ok(Ok(_)) => None,
+        Ok(Err(e)) => {
+            warn!(table = %table, error = %e, "upstream row count for bootstrap check failed");
+            None
+        }
+        Err(_) => {
+            warn!(table = %table, "upstream row count for bootstrap check timed out");
+            None
+        }
+    }
 }
 
 // --- Middleware ---
