@@ -38,6 +38,7 @@ import {
   withRetry,
   surql,
   parseParams,
+  parseQueryParams,
   cleanRecord,
   extractTablePart,
   generateId,
@@ -2230,7 +2231,15 @@ export class DataModule<S extends SchemaStructure> {
       // In-memory only — carries the engine-neutral plan so non-SurrealQL local
       // engines materialize via `select(plan)` instead of parsing `surql`.
       plan,
-      params: parseParams(tableSchema.columns, configRecord.params),
+      // The CALLER's params, not the ones read back out of the local store: the
+      // store returns a RecordId as a plain `'table:id'` string, and
+      // `parseQueryParams` can only turn it back into a RecordId for a column
+      // the schema marks `recordId`. A union column (`string | record<x>`)
+      // codegens as a plain string, so its param stayed a string and the view
+      // compared a string against a record and matched nothing. The record id is
+      // the same query either way - `recordId` is the hash of surql + vars - so
+      // the in-memory value is the same one, with its types intact.
+      params: parseQueryParams(tableSchema.columns, params ?? configRecord.params),
       membershipKey,
     };
 

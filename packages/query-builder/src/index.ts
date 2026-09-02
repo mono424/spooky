@@ -13,6 +13,8 @@ export {
   type ExtractFieldNames,
   type RelatedFieldMapEntry,
   cyrb53,
+  orParamName,
+  baseFieldOfParam,
 } from './query-builder';
 
 // Type exports

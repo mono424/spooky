@@ -106,8 +106,10 @@ describe('QueryBuilder', () => {
     builder.where({ _or: [{ username: 'x' }, { email: 'x' }] });
     const result = builder.build().run();
 
-    expect(result.query).toBe('SELECT * FROM user WHERE (username = $or0 OR email = $or1);');
-    expect(result.vars).toEqual({ or0: 'x', or1: 'x' });
+    expect(result.query).toBe(
+      'SELECT * FROM user WHERE (username = $username__or0 OR email = $email__or1);'
+    );
+    expect(result.vars).toEqual({ username__or0: 'x', email__or1: 'x' });
   });
 
   it('should not collide an _or branch with a top-level condition on the same field', () => {
@@ -118,9 +120,10 @@ describe('QueryBuilder', () => {
     const result = builder.build().run();
 
     expect(result.query).toBe(
-      'SELECT * FROM user WHERE username = $username AND (username = $or0 OR email = $or1);'
+      'SELECT * FROM user WHERE username = $username AND ' +
+        '(username = $username__or0 OR email = $email__or1);'
     );
-    expect(result.vars).toEqual({ username: 'me', or0: 'opp', or1: 'opp' });
+    expect(result.vars).toEqual({ username: 'me', username__or0: 'opp', email__or1: 'opp' });
   });
 
   it('should combine equality + comparison + OR group + order/limit/offset', () => {
@@ -136,9 +139,14 @@ describe('QueryBuilder', () => {
 
     expect(result.query).toBe(
       'SELECT * FROM user WHERE email = $email AND created_at <= $created_at AND ' +
-        '(username = $or0 OR email = $or1) ORDER BY created_at asc LIMIT 50 START 0;'
+        '(username = $username__or0 OR email = $email__or1) ORDER BY created_at asc LIMIT 50 START 0;'
     );
-    expect(result.vars).toEqual({ email: 'e', created_at: 5, or0: 'p', or1: 'p' });
+    expect(result.vars).toEqual({
+      email: 'e',
+      created_at: 5,
+      username__or0: 'p',
+      email__or1: 'p',
+    });
   });
 
   it('should produce a stable hash for the same logical filtered query', () => {

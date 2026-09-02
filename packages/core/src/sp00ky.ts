@@ -52,7 +52,7 @@ import { AppReleaseModule, AppReleaseHandle } from './modules/app-release/index'
 import type { AppReleaseOptions } from './modules/app-release/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { ANON_USER_ID, bucketIdForUser } from './modules/ref-tables';
-import { parseParams, encodeRecordId, parseDuration } from './utils/index';
+import { parseQueryParams, encodeRecordId, parseDuration } from './utils/index';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
 import { detectSharedTabsSupport } from './services/tabs/support';
@@ -1358,7 +1358,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
       throw new Error(`Table ${table} not found`);
     }
 
-    const params = parseParams(tableSchema.columns, q.selectQuery.vars ?? {});
+    const params = parseQueryParams(tableSchema.columns, q.selectQuery.vars ?? {});
     const hash = await this.dataModule.query(
       table,
       q.selectQuery.query,
@@ -1470,7 +1470,7 @@ export class Sp00kyClient<S extends SchemaStructure> {
     if (!tableSchema) {
       throw new Error(`Table ${tableName} not found`);
     }
-    const params = parseParams(tableSchema.columns, q.selectQuery.vars ?? {});
+    const params = parseQueryParams(tableSchema.columns, q.selectQuery.vars ?? {});
     const hashKey = String(q.hash);
 
     const marker = await this.dataModule.getPreloadMarker(hashKey);

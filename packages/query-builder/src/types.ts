@@ -133,7 +133,7 @@ export type WhereConditions<TModel extends GenericModel> = {
  * WHERE input for `.where()`. Supports equality (`{ field: value }`), comparison
  * operators (`{ field: { _op, _val } }`), and a single top-level `_or` group of
  * condition fragments that compile to a parenthesised `(... OR ...)` conjunct —
- * e.g. `{ _or: [{ white: x }, { black: x }] }` → `(white = $or0 OR black = $or1)`.
+ * e.g. `{ _or: [{ white: x }, { black: x }] }` → `(white = $white__or0 OR black = $black__or1)`.
  * Backward-compatible with plain `Partial<TModel>` equality objects.
  */
 export type WhereInput<TModel extends GenericModel> = WhereConditions<TModel> & {

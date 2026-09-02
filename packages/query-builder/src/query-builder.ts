@@ -691,6 +691,28 @@ export class QueryBuilder<
   }
 }
 
+/**
+ * The surql param name an `_or` branch condition binds under: the branch FIELD,
+ * a `__or` marker and the branch's position. The position alone makes it unique
+ * within the query; the field prefix is what lets a consumer type the value by
+ * looking the column up (see {@link baseFieldOfParam}). Non-identifier
+ * characters (a nested path like `database.owner`) are folded to `_` so the
+ * result is a legal param name.
+ */
+export function orParamName(field: string, index: number): string {
+  return `${field.replace(/[^A-Za-z0-9_]/g, '_')}__or${index}`;
+}
+
+/**
+ * Inverse of {@link orParamName}: the field a param name was built from, or the
+ * name itself when it is a plain top-level param (`field = $field`). Lets a
+ * consumer resolve `white__or0` back to the `white` column.
+ */
+export function baseFieldOfParam(name: string): string {
+  const m = /^(.+)__or\d+$/.exec(name);
+  return m ? m[1] : name;
+}
+
 export function cyrb53(str: string, seed: number = 0): number {
   let h1 = 0xdeadbeef ^ seed,
     h2 = 0x41c6ce57 ^ seed;
@@ -867,17 +889,22 @@ export function buildQueryFromOptions<TModel extends GenericModel, IsOne extends
     for (const [key, value] of Object.entries(parsedWhere)) {
       // OR-group: `{ _or: [ {field: val}, {field: {_op,_val}}, ... ] }` compiles
       // to one parenthesised `(c1 OR c2 ...)` conjunct. Each branch condition gets
-      // a unique, position-indexed param name (`or0`, `or1`, …) so it never
-      // collides with a top-level condition on the same field (e.g. a `white =
-      // $white` filter alongside an opponent `_or` on white/black) — keeping the
-      // surql + vars, and thus the query hash, stable and deterministic.
+      // a unique, position-indexed param name (`white__or0`, `black__or1`, …) so
+      // it never collides with a top-level condition on the same field (e.g. a
+      // `white = $white` filter alongside an opponent `_or` on white/black) -
+      // keeping the surql + vars, and thus the query hash, stable and
+      // deterministic. The FIELD is part of the name on purpose: the consumer
+      // types a param by looking its name up in the table's columns
+      // (`parseQueryParams` in @spooky-sync/core), and a name it cannot resolve
+      // used to be dropped from the registration, which left `$or0` unbound and
+      // every `_or` query matching nothing.
       if (key === '_or' && Array.isArray(value)) {
         const orParts: string[] = [];
         let i = 0;
         for (const branch of value) {
           if (branch && typeof branch === 'object') {
             for (const [bField, bVal] of Object.entries(branch as Record<string, unknown>)) {
-              orParts.push(buildCondition(bField, bVal, `or${i++}`));
+              orParts.push(buildCondition(bField, bVal, orParamName(bField, i++)));
             }
           }
         }
@@ -1070,10 +1097,9 @@ function buildRelationPlan(
  *   baked `value` when the param is absent), so a query's rows are slaved to
  *   its `params` (its identity) and can never come from a different query's
  *   baked plan. Only safe at the TOP LEVEL, where the field is a schema column
- *   that survives `parseParams` and the caller passes `params`. NOT used for
- *   relation sub-wheres (rendered with a params-less ctx) or `_or` branches
- *   (bound under synthetic `or0…` names that `parseParams` strips) — those
- *   stay baked.
+ *   that survives `parseQueryParams` and the caller passes `params`. NOT used
+ *   for relation sub-wheres (rendered with a params-less ctx) or `_or` branches
+ *   (bound under synthetic `white__or0` names) - those stay baked.
  */
 function buildWhereNodes(
   parsedWhere: Record<string, unknown>,
@@ -1101,8 +1127,8 @@ function buildWhereNodes(
       for (const branch of value) {
         if (branch && typeof branch === 'object') {
           for (const [bField, bVal] of Object.entries(branch as Record<string, unknown>)) {
-            // OR branches bind under synthetic `or0…` names (see
-            // buildQueryFromOptions) that parseParams strips — keep them baked.
+            // OR branches bind under synthetic `white__or0` names (see
+            // orParamName / buildQueryFromOptions); the plan keeps them baked.
             or.push(toComparison(bField, bVal, false));
           }
         }
