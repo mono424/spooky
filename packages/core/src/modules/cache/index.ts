@@ -33,8 +33,11 @@ export class CacheModule implements StreamUpdateReceiver {
   private versionLookups: Record<string, number> = {};
   /** Shared-tabs leader: fan every committed ingest out to follower circuits.
    *  Fired AFTER the local tx (the rows are already in the shared store, so a
-   *  follower only needs the circuit feed). Never set on followers. */
+   *  follower only needs the circuit feed). A follower relays its own
+   *  mutations to the leader the same way, see {@link setIngestRelay}. */
   private ingestRelay: ((tuples: CacheIngestTuple[]) => void) | null = null;
+  /** See {@link setIngestRelay}. */
+  private relayLocalWritesOnly = false;
 
   constructor(
     private local: LocalStore,
@@ -64,8 +67,21 @@ export class CacheModule implements StreamUpdateReceiver {
     this.streamUpdateCallback(update);
   }
 
-  setIngestRelay(cb: ((tuples: CacheIngestTuple[]) => void) | null): void {
+  /**
+   * Fan every committed ingest out to the other tabs. The leader relays
+   * everything (its sync fetches are the only copy the followers get). A
+   * follower relays with `localWritesOnly`: just the mutation path, which is
+   * the only thing it knows that the leader does not. Its sync-fetched
+   * batches are the leader's data coming back and must not be re-broadcast,
+   * or every follower registration would fan its whole working set to
+   * every tab.
+   */
+  setIngestRelay(
+    cb: ((tuples: CacheIngestTuple[]) => void) | null,
+    opts: { localWritesOnly?: boolean } = {}
+  ): void {
     this.ingestRelay = cb;
+    this.relayLocalWritesOnly = opts.localWritesOnly === true;
   }
 
   /**
@@ -197,7 +213,11 @@ export class CacheModule implements StreamUpdateReceiver {
       // failed mid-batch is neither "known" here nor fanned out to followers.
       const ingested = this.streamProcessor.ingestMany(bulk);
       for (const t of ingested) this.versionLookups[t.id] = versionOf.get(t.id) ?? 0;
-      if (ingested.length > 0) this.ingestRelay?.(ingested as CacheIngestTuple[]);
+      // `skipDbInsert` is exactly the mutation path (the tx already wrote the
+      // row); sync-fetched batches pass false.
+      if (ingested.length > 0 && (!this.relayLocalWritesOnly || skipDbInsert)) {
+        this.ingestRelay?.(ingested as CacheIngestTuple[]);
+      }
 
       this.logger.debug(
         { count: records.length, Category: 'sp00ky-client::CacheModule::saveBatch' },
@@ -239,7 +259,9 @@ export class CacheModule implements StreamUpdateReceiver {
       // 2. Ingest deletion into DBSP (pass record data so predicates can be matched)
       delete this.versionLookups[id];
       this.streamProcessor.ingestMany([{ table, op: 'DELETE', id, record: recordData }]);
-      this.ingestRelay?.([{ table, op: 'DELETE', id, record: recordData }]);
+      if (!this.relayLocalWritesOnly || skipDbDelete) {
+        this.ingestRelay?.([{ table, op: 'DELETE', id, record: recordData }]);
+      }
 
       this.logger.debug(
         { table, id, Category: 'sp00ky-client::CacheModule::delete' },

@@ -2,11 +2,7 @@ use anyhow::{bail, Result};
 use std::collections::BTreeSet;
 use std::net::TcpListener;
 
-const ANSI_RESET: &str = "\x1b[0m";
-const ANSI_GREEN: &str = "\x1b[32m";
-const ANSI_RED: &str = "\x1b[31m";
-const ANSI_YELLOW: &str = "\x1b[33m";
-const ANSI_DIM: &str = "\x1b[2m";
+use crate::ui;
 
 pub struct PortCheck {
     pub port: u16,
@@ -29,11 +25,12 @@ impl PortStatus {
         }
     }
 
-    fn color(&self) -> &'static str {
+    fn style(&self) -> console::Style {
+        let s = ui::style();
         match self {
-            PortStatus::Free => ANSI_GREEN,
-            PortStatus::InUse => ANSI_RED,
-            PortStatus::Error(_) => ANSI_YELLOW,
+            PortStatus::Free => s.ok.clone(),
+            PortStatus::InUse => s.fail.clone(),
+            PortStatus::Error(_) => s.warn.clone(),
         }
     }
 }
@@ -64,8 +61,12 @@ pub fn parse_docker_host_port(spec: &str) -> Option<u16> {
     host.trim().parse().ok()
 }
 
-pub fn ensure_ports_free(checks: Vec<(u16, String)>, prefix: &str) -> Result<()> {
+/// Probe every port `spky dev` is about to bind. Finishes `step` as
+/// `✓ Ports free  8666 8667 …` on success; on a conflict, fails the step,
+/// prints the table + a hint and bails.
+pub fn ensure_ports_free(checks: Vec<(u16, String)>, step: ui::Step) -> Result<()> {
     if checks.is_empty() {
+        step.done_quiet();
         return Ok(());
     }
 
@@ -88,15 +89,18 @@ pub fn ensure_ports_free(checks: Vec<(u16, String)>, prefix: &str) -> Result<()>
         .any(|r| !matches!(r.status, PortStatus::Free));
 
     if !any_blocked {
-        println!(
-            "{} Port check: all {} required port(s) free.",
-            prefix,
-            results.len()
-        );
+        let ports: Vec<String> = results.iter().map(|r| r.port.to_string()).collect();
+        step.done(ports.join(" "));
         return Ok(());
     }
 
-    eprintln!("{} Some required ports are not available:\n", prefix);
+    let blocked: Vec<String> = results
+        .iter()
+        .filter(|r| !matches!(r.status, PortStatus::Free))
+        .map(|r| r.port.to_string())
+        .collect();
+    step.fail(format!("in use: {}", blocked.join(" ")));
+    ui::println("");
     print_table(&results);
 
     let first_busy = results
@@ -104,12 +108,12 @@ pub fn ensure_ports_free(checks: Vec<(u16, String)>, prefix: &str) -> Result<()>
         .find(|r| matches!(r.status, PortStatus::InUse))
         .map(|r| r.port);
     if let Some(p) = first_busy {
-        eprintln!(
-            "\n  {}Hint:{} find the listener with `lsof -nP -iTCP:{} -sTCP:LISTEN`,",
-            ANSI_DIM, ANSI_RESET, p
-        );
-        eprintln!("        and stop it (often a previous `spky dev` left a container running:");
-        eprintln!("        `docker ps` then `docker rm -f <name>`).");
+        ui::println("");
+        ui::hint(format!(
+            "Find the listener with `lsof -nP -iTCP:{} -sTCP:LISTEN` and stop it",
+            p
+        ));
+        ui::hint("(often a previous `spky dev` left a container running: `docker ps`, then `docker rm -f <name>`).");
     }
 
     bail!("port pre-check failed: one or more required ports are unavailable");
@@ -152,8 +156,8 @@ fn print_table(rows: &[PortCheck]) {
         )
     };
 
-    println!("{}", bar("┌", "┬", "┐"));
-    println!(
+    ui::println(bar("┌", "┬", "┐"));
+    ui::println(format!(
         "  │ {:<wp$} │ {:<ws$} │ {:<wst$} │",
         h_port,
         h_service,
@@ -161,14 +165,14 @@ fn print_table(rows: &[PortCheck]) {
         wp = w_port,
         ws = w_service,
         wst = w_status,
-    );
-    println!("{}", bar("├", "┼", "┤"));
+    ));
+    ui::println(bar("├", "┼", "┤"));
 
     for r in rows {
         let label = r.status.label();
-        let colored_status = format!("{}{}{}", r.status.color(), label, ANSI_RESET);
+        let colored_status = r.status.style().apply_to(label).to_string();
         let pad = w_status.saturating_sub(label.len());
-        println!(
+        ui::println(format!(
             "  │ {:<wp$} │ {:<ws$} │ {}{} │",
             r.port,
             r.service,
@@ -176,20 +180,20 @@ fn print_table(rows: &[PortCheck]) {
             " ".repeat(pad),
             wp = w_port,
             ws = w_service,
-        );
+        ));
     }
 
-    println!("{}", bar("└", "┴", "┘"));
+    ui::println(bar("└", "┴", "┘"));
 
     let errored: Vec<&PortCheck> = rows
         .iter()
         .filter(|r| matches!(r.status, PortStatus::Error(_)))
         .collect();
     if !errored.is_empty() {
-        eprintln!();
+        ui::println("");
         for r in errored {
             if let PortStatus::Error(msg) = &r.status {
-                eprintln!("  port {} probe error: {}", r.port, msg);
+                ui::warn(format!("port {} probe error: {}", r.port, msg));
             }
         }
     }

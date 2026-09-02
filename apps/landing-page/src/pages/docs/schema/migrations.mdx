@@ -77,13 +77,16 @@ export const code4 = `Schema changes detected:
     Continue anyway
     Abort`;
 
-export const code3 = `2 pending migration(s):
-  20240215093000_add_user_avatar
-  20240301140000_create_indexes
-
-  > Apply migrations
-    Skip migrations
-    Quit`;
+export const code3 = `  ! Migrations            2 pending
+      20240215093000_add_user_avatar
+      20240301140000_create_indexes
+? 2 pending migration(s) found. What would you like to do?
+> Apply migrations
+  Skip migrations (continue without applying)
+  Quit
+  ✓ 20240215093000_add_user_avatar
+  ✓ 20240301140000_create_indexes  1.1s
+  ✓ Migrations            2 applied · 1.4s`;
 
 export const code2 = `spky dev --apply-migrations --fix-checksums`;
 
@@ -307,7 +310,7 @@ If migration application fails (e.g., syntax error in a migration), you can choo
 
 <CodeBlock code={code2} lang="bash" />
 
-**3. Internal schema.** After user migrations, Sp00ky automatically applies its internal schema (meta tables, per-table events for record versioning, and remote functions). This is idempotent and not tracked in `_00_migrations`.
+**3. Internal schema.** After user migrations, Sp00ky automatically applies its internal schema (meta tables, per-table events for record versioning, and remote functions). This is idempotent and not tracked in `_00_migrations`. It shows as a single `Internal schema` line (`unchanged`, or `applied · N tables · M events`); run `spky dev --verbose` to see what went into it.
 
 ## Migrations During Cloud Deploy
 

@@ -724,12 +724,12 @@ impl SchemaParser {
             FieldType::Record(table_name) if table_name != "any" => {
                 // Check if this is a junction table and map it to the actual target table
                 let actual_table = if table_name == "commented_on" {
-                    println!("Mapping junction table {} to comment", table_name);
+                    crate::ui::detail(format!("mapping junction table {} to comment", table_name));
                     "comment".to_string()
                 } else if table_name.ends_with("_on") || table_name.contains("relation") {
                     // This is likely a junction table, try to find the actual target
                     // For now, use a simple heuristic
-                    println!("Junction table detected: {}", table_name);
+                    crate::ui::detail(format!("junction table detected: {}", table_name));
                     table_name.clone()
                 } else {
                     table_name.clone()
@@ -775,9 +775,7 @@ impl SchemaParser {
             || (perm_str.contains("SELECT") && perm_str.contains("false"));
 
         if should_strip {
-            println!(
-                "  → Field has 'FOR select WHERE false' - will be stripped from client schema"
-            );
+            crate::ui::detail("field has 'FOR select WHERE false': stripped from client schema");
         }
 
         (Some(perm_str), should_strip)

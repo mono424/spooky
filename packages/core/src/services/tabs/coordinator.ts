@@ -201,6 +201,18 @@ export class SyncForwarder {
   mutationEnqueued(mutationId: string): void {
     this.post({ type: 'mutation-enqueued', mutationId });
   }
+  /** An optimistic write this tab just ingested. Deliberately NOT queued while
+   *  detached: a new leader primes its circuit from the shared store, which
+   *  already holds the row, and replaying a stale tuple at it later would put
+   *  an older `_00_rv` in its version memo. */
+  ingest(tuples: IngestTuple[]): void {
+    if (!this.port) return;
+    try {
+      this.port.postMessage({ type: 'ingest', tuples });
+    } catch {
+      /* dead port; broker re-mints */
+    }
+  }
   requestPoll(): void {
     this.post({ type: 'request-poll' });
   }
@@ -545,6 +557,12 @@ export class TabsCoordinator {
     const forwarder = this.forwarder;
     await new Promise<void>((resolve) => {
       let adopted = false;
+      let attached = false;
+      // Relay traffic that lands between `db-ready` and the sync hooks being
+      // installed (the store adopt is async). Held and replayed, not dropped:
+      // on a first attach there is no previous handler, so an ingest-relay or
+      // settled notice in that window used to vanish.
+      const pending: LeaderToFollowerMessage[] = [];
       const previousHandler = forwarder.onLeaderMessage;
       forwarder.onLeaderMessage = (msg) => {
         if (msg.type === 'db-ready' && !adopted) {
@@ -557,9 +575,16 @@ export class TabsCoordinator {
             })
             .then(() => {
               this.deps.hooks.becomeSyncFollower(forwarder);
+              attached = true;
+              const backlog = pending.splice(0);
+              for (const m of backlog) forwarder.onLeaderMessage?.(m);
               this.setRole('follower');
               resolve();
             });
+          return;
+        }
+        if (!attached) {
+          pending.push(msg);
           return;
         }
         previousHandler?.(msg);

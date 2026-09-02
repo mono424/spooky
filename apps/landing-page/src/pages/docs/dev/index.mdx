@@ -46,6 +46,18 @@ Any app in `sp00ky.yml` with a `dev` block starts too. See
 | `--fix-checksums` | Update stored checksums for migration files that were edited after being applied. |
 | `--clean` | Wipe SSP and scheduler state so they re-bootstrap from SurrealDB. **Your data is preserved.** |
 | `--clean-db` | Also wipe the SurrealDB volume. Implies `--clean`. |
+| `--verbose`, `-v` | Show every log line after startup: SurrealDB / SSP / scheduler (compact-formatted) and your apps' dev servers. Also `SPKY_VERBOSE=1`. |
+
+By default, once the stack is ready, only **errors and crash traces** are shown, from the
+infrastructure services and from your own apps alike (stack frames stay attached to their error).
+The ready box leads with your frontend's URL. Declare `port:` on its `dev:` block to have it there
+immediately; otherwise `spky dev` starts the app dev servers first and reads the URL the frontend
+announces (vite's `Local: http://…`), waiting up to 20 s for it. Backends are
+listed below the infrastructure rows, from their `deploy.port` or docker port mapping. Warnings and
+everything else need `--verbose`. Startup itself is a checklist: each step is one line
+that updates in place (a spinner while it runs, then `✓`, `↷` for "nothing to do", `!` for "needs
+your attention", `✗` for a failure with the relevant container logs underneath). When output is
+piped (CI, `| cat`) the same steps print as plain one-line entries.
 
 <Warning title="--clean-db deletes your local data">
   `--clean` is the recovery tool: it clears derived state (views, snapshots) and rebuilds it from the
@@ -99,15 +111,28 @@ With `spky dev` running:
 
 export const devCode = `spky dev`;
 
-export const outputCode = `👻 Starting development environment...
-👻 Mode: singlenode
-👻 Phase 1: Creating Docker network...
-👻 Phase 2: Starting SurrealDB...
-👻 Phase 3: Waiting for SurrealDB health...
-👻 Phase 4: Applying migrations...
-👻 Phase 6: Starting SSP...
+export const outputCode = `👻 sp00ky dev  ·  singlenode  ·  v0.0.1
 
-👻 Development environment ready!
-👻 SurrealDB:  http://localhost:8666
-👻 SSP:        http://localhost:8667
-👻 Press Ctrl+C to stop.`;
+  ✓ Ports free            8666 8667
+  ✓ Schema drift          in sync
+  ✓ Docker network
+  ✓ SurrealDB             ready · 2.1s
+  ✓ Namespace / database  main/main
+  ✓ Migrations            up to date
+  ↷ Internal schema       unchanged
+  ✓ Remote functions      → http://ssp:8667
+  ✓ SSP                   started
+  ✓ Apps                  web, api
+
+  ╭──────────────────────────────────────────────╮
+  │  Development environment ready               │
+  │                                              │
+  │  web         http://localhost:5173/          │
+  │                                              │
+  │  SurrealDB   http://localhost:8666           │
+  │  SSP         http://localhost:8667           │
+  │                                              │
+  │  api         http://localhost:3001           │
+  │                                              │
+  │  Ctrl+C to stop  ·  errors only, --verbose for all logs │
+  ╰──────────────────────────────────────────────╯`;

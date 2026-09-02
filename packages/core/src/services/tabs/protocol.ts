@@ -215,7 +215,13 @@ export type FollowerToLeaderMessage =
    *  leader should drain it. Idempotent; a new leader's loadFromDatabase is
    *  the backstop for a notify lost in a failover window. */
   | { type: 'mutation-enqueued'; mutationId: string }
-  | { type: 'request-poll' };
+  | { type: 'request-poll' }
+  /** An optimistic write this follower committed to the SHARED store and
+   *  ingested into its own circuit. The leader ingests it (no DB write, the
+   *  row is already there) and fans it out to every OTHER follower as
+   *  `ingest-relay`, so a follower's write lands in every tab in one hop
+   *  instead of after the server round-trip. */
+  | { type: 'ingest'; tuples: IngestTuple[] };
 
 export type LeaderToFollowerMessage =
   | { type: 'db-ready'; leadershipId: number; bucketId: string; storageHealth: StorageHealth }
@@ -239,4 +245,14 @@ export type LeaderToFollowerMessage =
       recordId: string;
       eventType: 'create' | 'update' | 'delete';
       error: string;
+    }
+  /** The leader's drain pushed a mutation and deleted its outbox row from the
+   *  SHARED store. Every follower starts its settled-write grace so a row it
+   *  was rendering as a pending write does not blink out before its
+   *  `_00_list_ref` membership arrives. */
+  | {
+      type: 'mutation-settled';
+      mutationId: string;
+      recordId: string;
+      eventType: 'create' | 'update' | 'delete';
     };

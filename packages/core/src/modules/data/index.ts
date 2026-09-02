@@ -1929,20 +1929,8 @@ export class DataModule<S extends SchemaStructure> {
     }
 
     // DBSP may not emit view updates for DELETE ops — manually notify all queries
-    // that reference this table. Each is isolated so one failing re-materialize
-    // can't stop the others (or the sync emit below) from running.
-    for (const [queryHash, queryState] of this.activeQueries) {
-      if (queryState.config.tableName === tableName) {
-        try {
-          await this.notifyQuerySynced(queryHash);
-        } catch (err) {
-          this.logger.error(
-            { err, queryHash, Category: 'sp00ky-client::DataModule::delete' },
-            'notifyQuerySynced failed after delete'
-          );
-        }
-      }
-    }
+    // that reference this table.
+    await this.notifyTableQueries(tableName);
 
     // Emit mutation event
     const mutationEvent: DeleteEvent = {
@@ -2031,6 +2019,29 @@ export class DataModule<S extends SchemaStructure> {
         { err, id, tableName, Category: 'sp00ky-client::DataModule::rollbackUpdate' },
         'Failed to rollback update'
       );
+    }
+  }
+
+  /**
+   * Force a re-materialize + notify of every active query on `tableName`.
+   * Used after a DELETE landed in the local store (this tab's own, or one
+   * relayed from another tab): the SSP may not emit a view update for a
+   * DELETE ingest, and the re-materialize reads the store, which already
+   * excludes the row. Each query is isolated so one failing re-materialize
+   * can't stop the others.
+   */
+  async notifyTableQueries(tableName: string): Promise<void> {
+    for (const [queryHash, queryState] of this.activeQueries) {
+      if (queryState.config.tableName === tableName) {
+        try {
+          await this.notifyQuerySynced(queryHash);
+        } catch (err) {
+          this.logger.error(
+            { err, queryHash, tableName, Category: 'sp00ky-client::DataModule::notifyTableQueries' },
+            'notifyQuerySynced failed after delete'
+          );
+        }
+      }
     }
   }
 

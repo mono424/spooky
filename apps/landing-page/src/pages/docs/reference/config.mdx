@@ -38,7 +38,7 @@ For a fully annotated reference covering every option, see [`example/sp00ky.yml`
 | `buckets` | path[] | `[]` | Bucket definition files referenced from your schema. See [Buckets](/docs/client/buckets). |
 | `clientTypes` | array | `[]` | Codegen targets. Each entry has `format` (`typescript` or `dart`), an `output` path, and (dart only) an optional `workdir`. See [Client types](#client-types). |
 | `version` | string \| object | latest stable | Pin SSP and scheduler image tags. Accepts a single tag, a `{dev, cloud}` split, or a `path:` override pointing at a local binary. |
-| `logLevel` | string \| object | `info` | Log verbosity. Accepts `trace`, `debug`, `info`, `warn`, `error`, `off`, target=level directives, or a `{dev, cloud}` split. |
+| `logLevel` | string \| object | `info` | Log verbosity for the SSP and scheduler. Accepts `trace`, `debug`, `info`, `warn`, `error`, `off`, target=level directives, or a `{dev, cloud}` split. Under `spky dev` a bare level applies to the sp00ky crates only (third-party crates stay at `warn`); pass a full directive list such as `ssp=debug,hyper=info,warn` to control those too. |
 | `refMode` | `dedicated` \| `single` | `dedicated` | Storage layout for the SSP's `_00_list_ref` table. `dedicated` gives each user their own table and works around a SurrealDB v3 LIVE-permission gap. |
 | `apps` | map | `{}` | Your frontend and backend services. See [Apps](#apps) below. |
 | `schedules` | map \| path | `{}` | Server-side cron/interval jobs. See [Schedules](/docs/jobs/schedules). |

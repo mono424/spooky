@@ -110,6 +110,46 @@ describe('LIVE list_ref removal → membership', () => {
     ]);
   });
 
+  // Every tab that ingested a write optimistically (its own, or one relayed
+  // from another tab) already holds the row at the server's version, so the
+  // fetch diff is empty. Membership still has to be recorded, or the row lives
+  // on the settled-write grace alone until the poll catches it.
+  it('adds membership for a row the circuit already holds at the server version', async () => {
+    const { queryState, updateQueryRemoteArray, sync, live } = makeSync();
+    queryState.config.localArray = [
+      ['thread:a', 1],
+      ['thread:b', 1],
+      ['thread:c', 1],
+    ];
+
+    await live('CREATE', 'c', 1);
+
+    expect(updateQueryRemoteArray).toHaveBeenCalledWith('h1', [
+      ['thread:a', 1],
+      ['thread:b', 1],
+      ['thread:c', 1],
+    ]);
+    // …without a refetch: the diff handed to the sync is empty.
+    expect((sync as any).runSyncForQuery).toHaveBeenCalledWith('h1', {
+      added: [],
+      updated: [],
+      removed: [],
+    });
+  });
+
+  it('records a bumped version on UPDATE without rewriting an unchanged list', async () => {
+    const { updateQueryRemoteArray, live } = makeSync();
+
+    await live('UPDATE', 'b', 1);
+    expect(updateQueryRemoteArray).not.toHaveBeenCalled();
+
+    await live('UPDATE', 'b', 2);
+    expect(updateQueryRemoteArray).toHaveBeenCalledWith('h1', [
+      ['thread:a', 1],
+      ['thread:b', 2],
+    ]);
+  });
+
   it('leaves membership alone while it is still unknown', async () => {
     // Nothing authoritative has arrived yet, so there is no list to amend —
     // registration will supply the whole thing shortly.

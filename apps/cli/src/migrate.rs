@@ -10,8 +10,10 @@ use crate::schema_diff;
 use crate::schema_extract;
 use crate::sp00ky::generate_sp00ky_events;
 use crate::surreal_client::{MigrationDB, SurrealClient};
+use crate::ui;
 
-// Subtle ANSI colors for migration output
+// Subtle ANSI colors for the one-shot `migrate create` / `migrate fix`
+// output. The apply path renders through `crate::ui` instead.
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
@@ -312,7 +314,7 @@ fn apply_impl(
     // Integrity check: verify checksums of applied migrations
     let warnings = validate_applied_checksums(&applied, &filesystem)?;
     for warning in &warnings {
-        println!("{YELLOW}WARNING: {warning}{RESET}");
+        ui::warn(warning);
     }
 
     // Find pending migrations
@@ -323,11 +325,12 @@ fn apply_impl(
         .collect();
 
     if pending.is_empty() {
-        println!("{DIM}No pending migrations.{RESET}");
+        ui::step("Migrations").done("up to date");
         return Ok(());
     }
 
-    println!("Applying {} migration(s)...\n", pending.len());
+    let summary = ui::step("Migrations");
+    summary.set_message(format!("applying {} pending…", pending.len()));
 
     for migration in &pending {
         if !migration.path.exists() {
@@ -353,23 +356,28 @@ fn apply_impl(
             None => raw,
         };
 
-        println!("  Applying {}_{} ...", migration.version, migration.name);
+        let step = ui::step(format!("  {}_{}", migration.version, migration.name));
 
         // Apply migration statements directly (SurrealDB DDL doesn't support transactions)
-        client.execute(&sql).context(format!(
-            "Failed to apply migration {}_{}",
-            migration.version, migration.name
-        ))?;
+        if let Err(e) = client.execute(&sql) {
+            step.fail("failed");
+            summary.fail(format!("stopped at {}_{}", migration.version, migration.name));
+            return Err(e).context(format!(
+                "Failed to apply migration {}_{}",
+                migration.version, migration.name
+            ));
+        }
 
-        client.record_migration(&migration.version, &migration.name, &hash)?;
+        if let Err(e) = client.record_migration(&migration.version, &migration.name, &hash) {
+            step.fail("applied, but could not record");
+            summary.fail(format!("stopped at {}_{}", migration.version, migration.name));
+            return Err(e);
+        }
 
-        println!(
-            "  {GREEN}Applied  {}_{} [ok]{RESET}",
-            migration.version, migration.name
-        );
+        step.done("");
     }
 
-    println!("\n{GREEN}{BOLD}All migrations applied successfully.{RESET}");
+    summary.done(format!("{} applied", pending.len()));
     Ok(())
 }
 
@@ -671,7 +679,7 @@ fn record_schema_hash(client: &dyn MigrationDB, id: &str, hash: &str) {
         hash = hash
     );
     if let Err(e) = client.execute(&q) {
-        println!("  {YELLOW}Warning: failed to record schema hash for '{id}': {e:?}{RESET}");
+        ui::warn(format!("failed to record schema hash for '{id}': {e:?}"));
     }
 }
 
@@ -681,16 +689,18 @@ fn record_schema_hash(client: &dyn MigrationDB, id: &str, hash: &str) {
 /// (sp00ky_engine.rs) so the skip logic lives in one place.
 pub fn apply_remote_functions_if_changed(client: &dyn MigrationDB, sql: &str) -> Result<()> {
     let hash = checksum_str(sql);
+    let step = ui::step("Remote functions");
     if !force_schema_reapply() && read_stored_schema_hash(client, "remote_fns").as_deref() == Some(&hash)
     {
-        println!("  {DIM}Remote functions unchanged, skipping.{RESET}");
+        step.skip("unchanged");
         return Ok(());
     }
-    client
-        .execute(sql)
-        .context("Failed to apply remote functions")?;
+    if let Err(e) = client.execute(sql) {
+        step.fail("failed");
+        return Err(e).context("Failed to apply remote functions");
+    }
     record_schema_hash(client, "remote_fns", &hash);
-    println!("  Remote functions applied.");
+    step.done("applied");
     Ok(())
 }
 
@@ -706,7 +716,7 @@ pub fn apply_internal_schema(
     endpoint: Option<&str>,
     secret: Option<&str>,
 ) -> Result<()> {
-    println!("\n── Applying internal Sp00ky schema ─────────────────────");
+    let step = ui::step("Internal schema");
 
     // 1. Read source schema + process backends
     let mut content = fs::read_to_string(schema_input_path).context(format!(
@@ -729,17 +739,19 @@ pub fn apply_internal_schema(
         .parse_file(&content)
         .context("Failed to parse schema for internal schema generation")?;
 
-    println!(
-        "  Discovered {} user table(s): {}",
-        parser.tables.len(),
+    let table_count = parser.tables.len();
+    ui::detail(format!(
+        "{} user table(s): {}",
+        table_count,
         parser.tables.keys().cloned().collect::<Vec<_>>().join(", ")
-    );
+    ));
+    step.set_message(format!("assembling · {} tables", table_count));
 
     // 3. Build internal SQL
     let mut internal_sql = String::new();
 
     // 3a. Meta tables (remote)
-    println!("  + Applying meta tables (remote)...");
+    ui::detail("meta tables (remote)");
     let mut meta_tables_remote = include_str!("meta_tables_remote.surql").to_string();
 
     // Substitute the {{CRDT_UPDATE_RULE}} placeholder. Same code path used
@@ -769,7 +781,6 @@ pub fn apply_internal_schema(
     internal_sql.push('\n');
 
     // 3b. Per-table sp00ky events (mutation + delete for versioning & ingest)
-    println!("  + Generating per-table events...");
     let sp00ky_events = generate_sp00ky_events(
         &parser.tables,
         &content,
@@ -778,6 +789,8 @@ pub fn apply_internal_schema(
         endpoint,
         secret,
     );
+    let event_count = sp00ky_events.matches("DEFINE EVENT").count();
+    ui::detail(format!("{} per-table events", event_count));
     internal_sql.push_str(&sp00ky_events);
 
     // 3c. Platform job fields on outbox tables. The SSP stamps `assignee`
@@ -789,10 +802,10 @@ pub fn apply_internal_schema(
     // corrupt an IF NOT EXISTS clause with OVERWRITE.
     let outbox = crate::schema_builder::outbox_tables(&backend_processor);
     if !outbox.is_empty() {
-        println!(
-            "  + Injecting platform job fields on outbox table(s): {}",
+        ui::detail(format!(
+            "platform job fields on outbox table(s): {}",
             outbox.join(", ")
-        );
+        ));
         internal_sql.push('\n');
         internal_sql.push_str(&crate::schema_builder::build_outbox_platform_fields(
             outbox.iter().map(String::as_str),
@@ -809,31 +822,37 @@ pub fn apply_internal_schema(
     if !force_schema_reapply()
         && read_stored_schema_hash(client, "internal").as_deref() == Some(&hash)
     {
-        println!("  {DIM}Internal schema unchanged, skipping.{RESET}");
+        step.skip("unchanged");
         // Schedules still sync: their definitions live in sp00ky.yml, which
         // changes independently of the schema this hash covers.
         sync_schedules(client, config_path, &backend_processor);
-        println!("────────────────────────────────────────────────────────\n");
         return Ok(());
     }
 
     // 5. Execute against DB
-    println!(
-        "  + Executing internal schema ({} bytes)...",
-        internal_sql.len()
-    );
-    client
-        .execute(&internal_sql)
-        .context("Failed to apply internal Sp00ky schema")?;
+    ui::detail(format!("executing {} KB of DDL", internal_sql.len() / 1024));
+    step.set_message(format!(
+        "applying · {} tables · {} events",
+        table_count, event_count
+    ));
+    if let Err(e) = client.execute(&internal_sql) {
+        step.fail("failed");
+        return Err(e).context("Failed to apply internal Sp00ky schema");
+    }
 
     // Record the applied hash only after a successful execute. The
     // _00_schema_state table is defined by the internal_sql we just ran, so it
     // exists by now.
     record_schema_hash(client, "internal", &hash);
 
-    println!("  {GREEN}Internal Sp00ky schema applied successfully.{RESET}");
+    step.done(format!(
+        "applied{}{} tables{}{} events",
+        ui::glyphs().sep,
+        table_count,
+        ui::glyphs().sep,
+        event_count
+    ));
     sync_schedules(client, config_path, &backend_processor);
-    println!("────────────────────────────────────────────────────────\n");
     Ok(())
 }
 
@@ -855,20 +874,23 @@ fn sync_schedules(
         // stop firing.
         match crate::schedule_sync::sync(client, &config, processor, base_dir) {
             Ok(report) if report.removed > 0 => {
-                println!("  + Removed {} schedule(s) no longer in sp00ky.yml", report.removed);
+                ui::step("Schedules").done(format!(
+                    "removed {} no longer in sp00ky.yml",
+                    report.removed
+                ));
             }
             Ok(_) => {}
-            Err(e) => println!("  ▸ Warning: failed to sync schedules: {e:#}"),
+            Err(e) => ui::warn(format!("failed to sync schedules: {e:#}")),
         }
         return;
     }
 
     match crate::schedule_sync::sync(client, &config, processor, base_dir) {
         Ok(report) if report.is_noop() => {
-            println!("  {DIM}Schedules unchanged ({}).{RESET}", report.summary());
+            ui::detail(format!("schedules unchanged ({})", report.summary()));
         }
-        Ok(report) => println!("  + Synced schedules: {}", report.summary()),
-        Err(e) => println!("  ▸ Warning: failed to sync schedules: {e:#}"),
+        Ok(report) => ui::step("Schedules").done(format!("synced: {}", report.summary())),
+        Err(e) => ui::warn(format!("failed to sync schedules: {e:#}")),
     }
 }
 

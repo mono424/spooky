@@ -7,9 +7,19 @@ use opentelemetry_sdk::{
     logs::LoggerProvider as SdkLoggerProvider,
     Resource,
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Registry};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer, Registry};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::env;
+
+/// Console formatter. `SPKY_LOG_FORMAT=compact` (set by `spky dev`) drops the
+/// timestamp and span noise: the CLI prefixes and re-renders each line itself.
+fn fmt_layer() -> Box<dyn Layer<Registry> + Send + Sync> {
+    if env::var("SPKY_LOG_FORMAT").as_deref() == Ok("compact") {
+        Box::new(tracing_subscriber::fmt::layer().compact().without_time())
+    } else {
+        Box::new(tracing_subscriber::fmt::layer())
+    }
+}
 
 pub fn init_tracing() -> Result<(), anyhow::Error> {
     let otlp_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
@@ -64,17 +74,19 @@ pub fn init_tracing() -> Result<(), anyhow::Error> {
 
         let log_layer = OpenTelemetryTracingBridge::new(&logger_provider);
 
+        // The fmt layer sits directly on the Registry (boxed, see fmt_layer);
+        // EnvFilter is a global filter so its position in the stack is moot.
         Registry::default()
+            .with(fmt_layer())
             .with(env_filter)
-            .with(tracing_subscriber::fmt::layer())
             .with(telemetry_layer)
             .with(log_layer)
             .init();
     } else {
         // Console-only: no OTLP exporters
         Registry::default()
+            .with(fmt_layer())
             .with(env_filter)
-            .with(tracing_subscriber::fmt::layer())
             .init();
     }
 

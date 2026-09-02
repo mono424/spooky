@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { handleConnect, __resetBrokerForTests } from './tabs-broker-worker';
-import { installBrokerGlobals, installFakeLocks } from './fake-ports.fixture';
-import { TabsCoordinator, type CoordinatorHooks, type LeaderSyncHub, type SyncForwarder } from './coordinator';
+import { fakeChannel, flush, installBrokerGlobals, installFakeLocks } from './fake-ports.fixture';
+import {
+  TabsCoordinator,
+  SyncForwarder,
+  type CoordinatorHooks,
+  type LeaderSyncHub,
+} from './coordinator';
 import type { StorageHealth } from '../../types';
 import type { LeaderToFollowerMessage } from './protocol';
 
@@ -152,6 +157,117 @@ describe('TabsCoordinator integration', () => {
     const notify = seen.filter((s) => (s.msg as { type: string }).type === 'mutation-enqueued');
     expect(notify).toHaveLength(1);
     expect(notify[0].tabId).toBe('tab-2');
+    await b.coordinator.stop();
+    await a.coordinator.stop();
+  });
+
+  // A follower's optimistic write must reach the leader (which ingests it and
+  // fans it out) in one hop. Before this, only the mutation id was forwarded
+  // and every other tab waited on the server round-trip + LIVE delivery.
+  it('forwards a follower ingest to the leader hub tagged with the origin tab', async () => {
+    const a = makeCoordinator('tab-1');
+    await a.coordinator.start('anon');
+    const b = makeCoordinator('tab-2');
+    await b.coordinator.start('anon');
+
+    const seen: { tabId: string; msg: unknown }[] = [];
+    a.log.hub!.onFollowerMessage = (tabId, msg) => seen.push({ tabId, msg });
+    const tuples = [{ table: 'game', op: 'CREATE' as const, id: 'game:9', record: { id: 'game:9' } }];
+    b.log.forwarder!.ingest(tuples);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const ingest = seen.filter((s) => (s.msg as { type: string }).type === 'ingest');
+    expect(ingest).toHaveLength(1);
+    expect(ingest[0].tabId).toBe('tab-2');
+    expect((ingest[0].msg as { tuples: unknown }).tuples).toEqual(tuples);
+    await b.coordinator.stop();
+    await a.coordinator.stop();
+  });
+
+  it('fan-out with exceptTabId skips the origin follower and reaches the others', async () => {
+    const a = makeCoordinator('tab-1');
+    await a.coordinator.start('anon');
+    const b = makeCoordinator('tab-2');
+    await b.coordinator.start('anon');
+    const c = makeCoordinator('tab-3');
+    await c.coordinator.start('anon');
+
+    const seenB: LeaderToFollowerMessage[] = [];
+    const seenC: LeaderToFollowerMessage[] = [];
+    b.log.forwarder!.onLeaderMessage = (msg) => seenB.push(msg);
+    c.log.forwarder!.onLeaderMessage = (msg) => seenC.push(msg);
+    a.log.hub!.relayIngest(
+      [{ table: 'game', op: 'CREATE', id: 'game:9', record: { id: 'game:9' } }],
+      'tab-2'
+    );
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(seenB.filter((m) => m.type === 'ingest-relay')).toHaveLength(0);
+    expect(seenC.filter((m) => m.type === 'ingest-relay')).toHaveLength(1);
+    await c.coordinator.stop();
+    await b.coordinator.stop();
+    await a.coordinator.stop();
+  });
+
+  // Unlike a mutation notify, an ingest is NOT queued across a leaderless
+  // window: the next leader primes its circuit from the shared store, which
+  // already holds the row, and a stale replay would put an older `_00_rv` in
+  // its version memo.
+  it('drops an ingest while detached instead of queueing it', async () => {
+    const forwarder = new SyncForwarder('tab-x');
+    forwarder.ingest([{ table: 'game', op: 'CREATE', id: 'game:1', record: { id: 'game:1' } }]);
+
+    const { port1, port2 } = fakeChannel();
+    const seen: { type: string }[] = [];
+    port2.onmessage = (ev) => {
+      seen.push(ev.data as { type: string });
+    };
+    forwarder.rebind(port1 as unknown as MessagePort);
+    await flush();
+
+    expect(seen.map((m) => m.type)).toEqual(['sync-hello']);
+    forwarder.unbind();
+  });
+
+  // Relay traffic that lands between `db-ready` and the sync hooks being
+  // installed (the store adopt is async) used to hit a null handler on a
+  // first attach and vanish.
+  it('buffers leader messages that land before the follower hooks are installed', async () => {
+    const a = makeCoordinator('tab-1');
+    await a.coordinator.start('anon');
+
+    let adoptStartedResolve!: () => void;
+    const adoptStartedP = new Promise<void>((r) => {
+      adoptStartedResolve = r;
+    });
+    let releaseAdopt!: () => void;
+    const adoptGate = new Promise<void>((r) => {
+      releaseAdopt = r;
+    });
+    const seen: LeaderToFollowerMessage[] = [];
+    const b = makeCoordinator('tab-2', {
+      async adoptAttached() {
+        adoptStartedResolve();
+        await adoptGate;
+      },
+      becomeSyncFollower(forwarder) {
+        forwarder.onLeaderMessage = (msg) => seen.push(msg);
+      },
+    });
+    const started = b.coordinator.start('anon');
+    await adoptStartedP;
+    a.log.hub!.broadcast({
+      type: 'mutation-settled',
+      mutationId: '_00_pending_mutations:1_0001_tab-1',
+      recordId: 'game:1',
+      eventType: 'create',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(seen).toHaveLength(0);
+
+    releaseAdopt();
+    await started;
+    expect(seen.map((m) => m.type)).toEqual(['mutation-settled']);
     await b.coordinator.stop();
     await a.coordinator.stop();
   });

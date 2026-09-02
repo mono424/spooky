@@ -673,20 +673,18 @@ export class Sp00kyClient<S extends SchemaStructure> {
       resumeSyncLeaderDuties: () => this.sync.resumeLeaderDuties(),
       becomeSyncFollower: (forwarder) => {
         this.streamProcessor.setPersistenceEnabled(false);
-        this.cache.setIngestRelay(null);
+        // A follower's own mutations go to the leader, which ingests them and
+        // fans them out to the other followers: one hop, no server round-trip.
+        // Only the mutation path relays; this tab's sync fetches are the
+        // leader's data coming back and must not be re-broadcast.
+        this.cache.setIngestRelay((tuples) => forwarder.ingest(tuples), {
+          localWritesOnly: true,
+        });
         this.sync.setTabContext('follower', tabId);
         this.dataModule.setTabId(tabId);
+        // Installs the whole syncPort handler: ingest-relay, list_ref relay,
+        // settled writes, rollbacks.
         this.sync.demoteToFollower(forwarder);
-        // demoteToFollower installed the sync-level handler (list_ref relay,
-        // rollbacks); layer the cache-level ingest relay in front of it.
-        const inner = forwarder.onLeaderMessage;
-        forwarder.onLeaderMessage = (msg) => {
-          if (msg.type === 'ingest-relay') {
-            this.cache.applyRelayedIngest(msg.tuples);
-            return;
-          }
-          inner?.(msg);
-        };
       },
       becomeSyncSolo: () => {
         this.streamProcessor.setPersistenceEnabled(true);

@@ -23,6 +23,10 @@ tar = "0.4"
 zstd = "0.13"
 tempfile = "3.10"
 inquire = "0.7"
+# Terminal UI for `spky dev` / migrations: spinners + in-place step lines
+# (indicatif) and TTY/NO_COLOR-aware styling (console, indicatif's own dep).
+indicatif = "0.18"
+console = "0.16"
 serde_yaml = "0.9"
 openapiv3 = "2.0"
 ureq = { version = "2.9", features = ["json"] }

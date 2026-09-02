@@ -35,7 +35,7 @@ your-app/
 - **`spky migrate fix [--fix-checksums]`** — repair schema drift / checksum mismatches.
 - **`spky verify [--fix]`** — confirm SSP/scheduler snapshot matches upstream SurrealDB, and print the scheduler's own drift verdict (`/health/snapshot` `drift`). `--fix` re-clones the scheduler replica when its counts are off, otherwise forces every SSP to re-bootstrap. The scheduler runs the same count check itself at startup and after each snapshot drain and auto-reclones by default (`SPKY_DRIFT_AUTO_RECLONE`).
 - **`spky lint`** — validate `sp00ky.yml` and referenced files exist.
-- **`spky dev [--apply-migrations] [--clean]`** — boots a local SurrealDB + SSP + scheduler stack via Docker. `--clean` wipes SSP/scheduler state but preserves user data in SurrealDB.
+- **`spky dev [--apply-migrations] [--clean] [--verbose]`** — boots a local SurrealDB + SSP + scheduler stack via Docker. `--clean` wipes SSP/scheduler state but preserves user data in SurrealDB. Startup renders as step lines via `src/ui.rs` (indicatif/console; plain lines when not a TTY); after "ready" only ERROR/crash-looking lines (infra and app streams) show unless `--verbose` / `SPKY_VERBOSE=1`. A bare `logLevel` is scoped to sp00ky crates by `backend::scoped_rust_log`.
 - **`spky create`** — scaffold a new sp00ky project.
 - **`spky bucket add`** / **`spky api add`** — append a bucket or backend definition to `sp00ky.yml`.
 - **`spky mcp`** — start the bundled `@spooky-sync/devtools-mcp` server (so AI assistants can introspect the running app).

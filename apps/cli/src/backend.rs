@@ -1069,6 +1069,70 @@ impl Sp00kyConfig {
     }
 }
 
+/// Crates whose logs a bare `logLevel` applies to under `spky dev`.
+const DEV_LOG_TARGETS: &[&str] = &[
+    "ssp",
+    "ssp_server",
+    "scheduler",
+    "maintenance",
+    "schedule_core",
+    "ssp_protocol",
+];
+
+/// Dev only: widen a bare level (`info`, `debug`, `trace`) into per-crate
+/// directives so hyper/h2/tokio/surrealdb stay at `warn` instead of flooding
+/// the terminal. A bare level is a *global* `EnvFilter` directive, which is why
+/// `logLevel: debug` used to turn `spky dev` into a firehose.
+///
+/// - `warn` / `error` / `off` are already quiet: returned unchanged.
+/// - Anything containing `,` or `=` is a hand-written directive list: passed
+///   through untouched so power users keep full control.
+pub fn scoped_rust_log(level: &str) -> String {
+    let level = level.trim();
+    if level.contains(',') || level.contains('=') {
+        return level.to_string();
+    }
+    match level {
+        "trace" | "debug" | "info" => {
+            let mut parts: Vec<String> = DEV_LOG_TARGETS
+                .iter()
+                .map(|t| format!("{}={}", t, level))
+                .collect();
+            parts.push("warn".to_string());
+            parts.join(",")
+        }
+        _ => level.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod scoped_rust_log_tests {
+    use super::scoped_rust_log;
+
+    #[test]
+    fn bare_levels_are_scoped() {
+        let s = scoped_rust_log("info");
+        assert!(s.starts_with("ssp=info,"));
+        assert!(s.contains("scheduler=info"));
+        assert!(s.ends_with(",warn"));
+        assert!(scoped_rust_log("debug").contains("ssp_server=debug"));
+        assert!(scoped_rust_log(" trace ").contains("schedule_core=trace"));
+    }
+
+    #[test]
+    fn quiet_levels_pass_through() {
+        assert_eq!(scoped_rust_log("warn"), "warn");
+        assert_eq!(scoped_rust_log("error"), "error");
+        assert_eq!(scoped_rust_log("off"), "off");
+    }
+
+    #[test]
+    fn directives_pass_through() {
+        assert_eq!(scoped_rust_log("ssp=debug,warn"), "ssp=debug,warn");
+        assert_eq!(scoped_rust_log("a=b"), "a=b");
+    }
+}
+
 /// Per-component pin: either a Docker tag, or a path to a host binary.
 /// A bare string parses as `Tag`, the object form `{ path: "..." }` parses
 /// as `Path`. Path-mode opts that one component into "host process" launch;
@@ -1480,6 +1544,11 @@ pub enum BackendDevTypedConfig {
         script: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
+        /// Port the dev server listens on, so `spky dev` can print its URL
+        /// up front. Optional: without it the CLI reads the URL the server
+        /// announces (e.g. vite's `Local: http://…`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
     },
     #[serde(rename = "docker")]
     Docker {
@@ -1506,6 +1575,9 @@ pub enum BackendDevTypedConfig {
         script: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workdir: Option<String>,
+        /// See `Npm::port`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
     },
 }
 
@@ -2194,10 +2266,10 @@ impl BackendProcessor {
             // routes to apply, so skip schema processing. Mirrors
             // AppConfig::validate, which does not require a method.
             if app.method.is_none() {
-                println!(
-                    "Skipping backend '{}' schema (no method; direct-HTTP/deploy-only backend)",
+                crate::ui::detail(format!(
+                    "skipping backend '{}' schema (no method; direct-HTTP/deploy-only backend)",
                     name
-                );
+                ));
                 continue;
             }
             self.process_backend(name, app, base_dir)?;
@@ -2213,22 +2285,22 @@ impl BackendProcessor {
                 .context(format!("Failed to read bucket file: {:?}", bucket_path))?;
             for (bucket_name, backend) in detect_bucket_backends(&bucket_content) {
                 if storage_enabled && backend.eq_ignore_ascii_case("memory") {
-                    println!(
-                        "  ! Bucket '{}' uses the memory backend; files won't persist. \
+                    crate::ui::warn(format!(
+                        "Bucket '{}' uses the memory backend; files won't persist. \
                          Run `spky bucket backend {} persistent` to store them on disk.",
                         bucket_name, bucket_name
-                    );
+                    ));
                 } else if !storage_enabled && backend.starts_with("file:") {
-                    println!(
-                        "  ! Bucket '{}' uses a file backend but deployment.storage.sizeGB \
+                    crate::ui::warn(format!(
+                        "Bucket '{}' uses a file backend but deployment.storage.sizeGB \
                          is unset; no volume is mounted and files land on ephemeral storage.",
                         bucket_name
-                    );
+                    ));
                 }
             }
             self.bucket_schema.push('\n');
             self.bucket_schema.push_str(&bucket_content);
-            println!("  + Loaded bucket schema from {:?}", bucket_path);
+            crate::ui::detail(format!("loaded bucket schema from {:?}", bucket_path));
         }
 
         Ok(())
@@ -2240,7 +2312,7 @@ impl BackendProcessor {
         app_config: &AppConfig,
         base_dir: &Path,
     ) -> Result<()> {
-        println!("Processing backend config: {}", backend_name);
+        crate::ui::detail(format!("processing backend config: {}", backend_name));
 
         let method = app_config.method.as_ref().context(format!(
             "Backend '{}' is missing 'method' field",
@@ -2260,7 +2332,7 @@ impl BackendProcessor {
         self.schema_appends
             .push_str(&format!("-- Backend Schema: {}\n", backend_name));
         self.schema_appends.push_str(&schema_content);
-        println!("  + Appended schema from {:?}", schema_path);
+        crate::ui::detail(format!("appended schema from {:?}", schema_path));
 
         // 2. Parse OpenAPI Spec - resolve path relative to sp00ky.yml
         let spec_path = base_dir.join(spec);
@@ -2353,7 +2425,7 @@ impl BackendProcessor {
 
         self.backend_definitions
             .insert(backend_name.to_string(), backend_def);
-        println!("  + Parsed OpenAPI spec from {:?}", spec_path);
+        crate::ui::detail(format!("parsed OpenAPI spec from {:?}", spec_path));
 
         Ok(())
     }

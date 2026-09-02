@@ -34,6 +34,7 @@ mod schema_extract;
 mod sp00ky;
 mod stats_tui;
 mod surreal_client;
+mod ui;
 mod verify;
 
 use anyhow::{Context, Result};
@@ -106,6 +107,11 @@ enum Commands {
         /// SSP/scheduler corruption.
         #[arg(long)]
         clean_db: bool,
+        /// Show every log line after startup: SurrealDB / SSP / scheduler
+        /// (compact-formatted) and your apps' dev servers. By default only
+        /// errors and crash traces are shown.
+        #[arg(long, short = 'v', env = "SPKY_VERBOSE")]
+        verbose: bool,
     },
     /// Verify the SSP/scheduler snapshot matches the upstream SurrealDB
     Verify {
@@ -3019,13 +3025,17 @@ fn main() -> Result<()> {
             fix_checksums,
             clean,
             clean_db,
-        }) => dev::run(
-            skip_migrations,
-            apply_migrations,
-            fix_checksums,
-            clean,
-            clean_db,
-        ),
+            verbose,
+        }) => {
+            ui::init(ui::Options { verbose });
+            dev::run(
+                skip_migrations,
+                apply_migrations,
+                fix_checksums,
+                clean,
+                clean_db,
+            )
+        }
         Some(Commands::Generate { args: gen }) => run_generate(gen),
         Some(Commands::Migrate { action }) => handle_migrate(action),
         Some(Commands::Bucket { action }) => handle_bucket(action),

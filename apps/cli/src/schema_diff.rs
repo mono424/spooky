@@ -83,31 +83,28 @@ impl SchemaDiff {
 
     /// Print the diff in git-style colored format.
     pub fn print_colored(&self) {
-        const RED: &str = "\x1b[31m";
-        const GREEN: &str = "\x1b[32m";
-        const YELLOW: &str = "\x1b[33m";
-        const RESET: &str = "\x1b[0m";
+        let s = crate::ui::style();
 
         if !self.removed.is_empty() {
             for stmt in &self.removed {
-                println!("  {RED}- {stmt}{RESET}");
+                crate::ui::println(format!("  {}", s.fail.apply_to(format!("- {stmt}"))));
             }
-            println!();
+            crate::ui::println("");
         }
 
         if !self.added.is_empty() {
             for stmt in &self.added {
-                println!("  {GREEN}+ {stmt}{RESET}");
+                crate::ui::println(format!("  {}", s.ok.apply_to(format!("+ {stmt}"))));
             }
-            println!();
+            crate::ui::println("");
         }
 
         if !self.modified.is_empty() {
             for (old_stmt, new_stmt) in &self.modified {
-                println!("  {YELLOW}~ {old_stmt}{RESET}");
-                println!("  {YELLOW}~ {new_stmt}{RESET}");
+                crate::ui::println(format!("  {}", s.warn.apply_to(format!("~ {old_stmt}"))));
+                crate::ui::println(format!("  {}", s.warn.apply_to(format!("~ {new_stmt}"))));
             }
-            println!();
+            crate::ui::println("");
         }
     }
 }

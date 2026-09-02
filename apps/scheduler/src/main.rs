@@ -2,7 +2,7 @@ use anyhow::Result;
 use scheduler::config::SchedulerConfig;
 use scheduler::transport::HttpTransport;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
@@ -25,19 +25,31 @@ fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    // Initialize tracing. Without RUST_LOG, keep third-party crates at warn so
+    // the scheduler's own lines aren't buried. `SPKY_LOG_FORMAT=compact` (set
+    // by `spky dev`) drops the timestamp: the CLI re-prefixes each line anyway.
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("scheduler=info,warn"));
+    let compact = std::env::var("SPKY_LOG_FORMAT").as_deref() == Ok("compact");
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    if compact {
+        builder.compact().without_time().init();
+    } else {
+        builder.init();
+    }
 
     // Resolve the local IP once, off the runtime — `hostname -I` is a
     // blocking fork+exec and used to run on every `/info` request.
     scheduler::metrics::init_local_ip().await;
 
     info!(
-        "\n ____        _              _       _\n/ ___|  ___| |__   ___  __| |_   _| | ___ _ __\n\\___ \\ / __| '_ \\ / _ \\/ _` | | | | |/ _ \\ '__|\n ___) | (__| | | |  __/ (_| | |_| | |  __/ |\n|____/ \\___|_| |_|\\___\\|\\__,_|\\__,_|_|\\___|_|    v{}\n\nSp00ky Cluster Scheduler\nBuilt: {}",
+        "scheduler v{} starting (built {})",
         env!("CARGO_PKG_VERSION"),
         env!("SPOOKY_BUILD_TIMESTAMP"),
+    );
+    debug!(
+        "\n ____        _              _       _\n/ ___|  ___| |__   ___  __| |_   _| | ___ _ __\n\\___ \\ / __| '_ \\ / _ \\/ _` | | | | |/ _ \\ '__|\n ___) | (__| | | |  __/ (_| | |_| | |  __/ |\n|____/ \\___|_| |_|\\___\\|\\__,_|\\__,_|_|\\___|_|    v{}\n\nSp00ky Cluster Scheduler",
+        env!("CARGO_PKG_VERSION"),
     );
 
     // Load configuration

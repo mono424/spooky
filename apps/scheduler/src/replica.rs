@@ -1465,8 +1465,19 @@ impl Replica {
             .query(format!("SELECT count() AS total FROM {} GROUP ALL", table_name))
             .await
             .with_context(|| format!("count() query failed for table '{}'", table_name))?;
-        let sdk_val: surrealdb::types::Value = response.take(0)
-            .with_context(|| format!("take(0) failed for count of '{}'", table_name))?;
+        // A table with zero rows upstream is never created in the replica (the
+        // clone only inserts), so the statement fails here instead of
+        // returning an empty result. That is an empty table, the same way
+        // `hash_one_table` hashes a missing table as empty; erroring took
+        // `/health/snapshot` (and with it `spky verify`) down for every
+        // deployment whose meta tables were empty.
+        let sdk_val: surrealdb::types::Value = match response.take(0) {
+            Ok(v) => v,
+            Err(e) => {
+                debug!(table = table_name, error = %e, "count() on a table absent from the replica; treating as empty");
+                return Ok(0);
+            }
+        };
         let json = sdk_val.into_json_value();
         let count = json.as_array()
             .and_then(|arr| arr.first())

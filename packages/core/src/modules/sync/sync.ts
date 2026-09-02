@@ -43,6 +43,7 @@ import {
 import { ANON_USER_ID, DEFAULT_REF_MODE, listRefTableFor, RefMode } from '../ref-tables';
 import { mutationOwnerTabId } from '../data/mutation-id';
 import type { LeaderSyncHub, SyncForwarder } from '../../services/tabs/coordinator';
+import type { IngestTuple } from '../../services/tabs/protocol';
 import { parseRecordIdString } from '../../utils/index';
 
 /**
@@ -562,12 +563,23 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.forwarder = null;
     this.leaderDutiesInFlight = null;
     hub.onFollowerMessage = (tabId, msg) => {
-      void tabId;
       switch (msg.type) {
         case 'sync-hello':
           break;
         case 'mutation-enqueued':
+          // A write is activity: snap the poll back to its base cadence so the
+          // membership for it lands fast even if LIVE drops the event.
+          this.listRefIdleStreak = 0;
           void this.enqueueForwardedMutation(msg.mutationId);
+          break;
+        case 'ingest':
+          // A follower's optimistic write. The row is already in the shared
+          // store; feed this tab's circuit and fan it out to every OTHER
+          // follower, so the write shows up everywhere in one hop instead of
+          // after the server round-trip (which also depends on LIVE delivery).
+          this.applyRelayedIngest(msg.tuples);
+          hub.relayIngest(msg.tuples, tabId);
+          this.listRefIdleStreak = 0;
           break;
         case 'request-poll':
           this.listRefIdleStreak = 0;
@@ -617,6 +629,17 @@ export class Sp00kySync<S extends SchemaStructure> {
     void this.killRefLiveQuery();
     forwarder.onLeaderMessage = (msg) => {
       switch (msg.type) {
+        case 'ingest-relay':
+          this.applyRelayedIngest(msg.tuples);
+          break;
+        case 'mutation-settled':
+          // The leader pushed a write and deleted its outbox row from the
+          // shared store. Without this the row would leave this tab's render
+          // set (it is in neither membership nor pending writes) until the
+          // relayed `_00_list_ref` event lands: the blink the leader itself
+          // is already protected from by `handleMutationSettled`.
+          this.dataModule.noteWriteSettled(msg.recordId, msg.eventType);
+          break;
         case 'list-ref-change':
           void this.applyRelayedListRefChange(msg).catch((err) => {
             this.logger.error(
@@ -633,8 +656,8 @@ export class Sp00kySync<S extends SchemaStructure> {
           });
           break;
         default:
-          // db-ready and ingest-relay are handled by the engine/cache wiring
-          // in Sp00kyClient before messages reach this handler.
+          // db-ready is consumed by the coordinator's attach handshake before
+          // the sync handler is installed.
           break;
       }
     };
@@ -671,6 +694,26 @@ export class Sp00kySync<S extends SchemaStructure> {
   public async enqueueForwardedMutation(mutationId: string): Promise<void> {
     if (this.tabRole !== 'leader') return;
     await this.upQueue.enqueueFromDatabase(mutationId);
+  }
+
+  /**
+   * Tuples another tab already committed to the shared store: feed them to
+   * THIS tab's circuit (no local write). A DELETE additionally forces a
+   * re-materialize of the table's queries, exactly as the writing tab does
+   * for itself, because the SSP may not emit a view update for it.
+   */
+  private applyRelayedIngest(tuples: IngestTuple[]): void {
+    this.cache.applyRelayedIngest(tuples);
+    const deletedTables = new Set<string>();
+    for (const t of tuples) if (t.op === 'DELETE') deletedTables.add(t.table);
+    for (const table of deletedTables) {
+      void this.dataModule.notifyTableQueries(table).catch((err) => {
+        this.logger.warn(
+          { err, table, Category: 'sp00ky-client::Sp00kySync::applyRelayedIngest' },
+          'Re-materialize after relayed delete failed'
+        );
+      });
+    }
   }
 
   /** A relayed `_00_list_ref` LIVE event: resolve against THIS tab's queries
@@ -1282,8 +1325,19 @@ export class Sp00kySync<S extends SchemaStructure> {
     // until the next poll tick, which is up to 5s of showing a deleted row. This
     // also persists the durable `_00_window` mirror, so the removal survives a
     // reload with no network.
-    if (existing.config.membershipKnown && (diff.removed.length || diff.added.length)) {
-      const next = applyRecordVersionDiff(existing.config.remoteArray ?? [], diff);
+    //
+    // Derived from the raw action, NOT from `diff`: `createDiffFromDbOp` is
+    // empty when the circuit already holds the row at this version, which is
+    // every tab that ingested the write optimistically (its own, or one
+    // relayed from another tab). The fetch is rightly skipped then, but the
+    // membership still has to be recorded, or the row lives on the
+    // settled-write grace alone until the poll catches it.
+    if (existing.config.membershipKnown) {
+      const membershipDiff: RecordVersionDiff =
+        action === 'DELETE'
+          ? { added: [], updated: [], removed: [recordId] }
+          : { added: [{ id: recordId, version }], updated: [], removed: [] };
+      const next = applyRecordVersionDiff(existing.config.remoteArray ?? [], membershipDiff);
       if (!recordVersionArraysEqual(next, existing.config.remoteArray ?? [])) {
         await this.dataModule.updateQueryRemoteArray(hash, next);
       }
@@ -1437,7 +1491,18 @@ export class Sp00kySync<S extends SchemaStructure> {
    * vanish, and return, while every other client showed it throughout.
    */
   private handleMutationSettled(event: UpEvent): void {
-    this.dataModule.noteWriteSettled(encodeRecordId(event.record_id), event.type);
+    const recordId = encodeRecordId(event.record_id);
+    this.dataModule.noteWriteSettled(recordId, event.type);
+    // Shared-tabs: the outbox row just left the SHARED store, so every
+    // follower rendering the row as a pending write has the same gap. All of
+    // them, not just the owner: any tab whose query matched the row was
+    // showing it through `pendingWrites`.
+    this.hub?.broadcast({
+      type: 'mutation-settled',
+      mutationId: encodeRecordId(event.mutation_id),
+      recordId,
+      eventType: event.type,
+    });
   }
 
   private async handleRollback(event: UpEvent, error: Error): Promise<void> {

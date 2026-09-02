@@ -17,8 +17,7 @@ use crate::schema_builder::{self, SchemaBuilderConfig};
 use crate::schema_diff;
 use crate::schema_extract;
 use crate::surreal_client::{MigrationDB, SurrealClient};
-
-const PREFIX: &str = "[sp00ky dev]";
+use crate::ui::{self, LineSink, StreamKind};
 
 const NETWORK_NAME: &str = "sp00ky-dev-net";
 const SURREAL_CONTAINER: &str = "sp00ky-dev-surrealdb";
@@ -73,10 +72,10 @@ fn collect_dev_ports(
             for p in merge_docker_ports(port.as_deref(), ports.as_deref()) {
                 match port_check::parse_docker_host_port(&p) {
                     Some(host) => out.push((host, format!("{}:{}", label, name))),
-                    None => eprintln!(
-                        "{} Warning: could not parse docker port spec '{}' for {} '{}', skipping pre-check for it",
-                        PREFIX, p, label, name
-                    ),
+                    None => ui::warn(format!(
+                        "could not parse docker port spec '{}' for {} '{}', skipping pre-check for it",
+                        p, label, name
+                    )),
                 }
             }
         }
@@ -124,8 +123,6 @@ pub fn run(
     })
     .context("Failed to set Ctrl+C handler")?;
 
-    println!("{} Starting development environment...", PREFIX);
-
     // Load config first so the port pre-check below is mode-aware and so we
     // don't wipe local state in `--clean`/`--clean-db` if the pre-check fails.
     let config = backend::load_config(Path::new(DEFAULT_CONFIG_PATH));
@@ -140,11 +137,17 @@ pub fn run(
     let resolved_surreal = config.resolved_surrealdb();
     let migrations_path = resolved.migrations.to_string_lossy().to_string();
     let migrations_path = migrations_path.as_str();
-    println!("{} Mode: {}", PREFIX, mode);
+    ui::header(
+        "sp00ky dev",
+        &[&mode.to_string(), concat!("v", env!("CARGO_PKG_VERSION"))],
+    );
 
     // Pre-flight port check: bail before touching docker or local state if
     // any port we're about to bind is already taken.
-    port_check::ensure_ports_free(collect_dev_ports(&config, &mode, &resolved_surreal), PREFIX)?;
+    port_check::ensure_ports_free(
+        collect_dev_ports(&config, &mode, &resolved_surreal),
+        ui::step("Ports free"),
+    )?;
 
     // `--clean-db` implies `--clean`: wiping the DB while keeping SSP/
     // scheduler caches would leave them rebootstrapping into stale state.
@@ -166,52 +169,59 @@ pub fn run(
             subs.push("bucket_data");
         }
 
+        let mut removed: Vec<&str> = Vec::new();
         for sub in subs {
             let path = project_dir.join(".sp00ky").join(sub);
             if path.exists() {
                 std::fs::remove_dir_all(&path)
                     .with_context(|| format!("Failed to remove {}", path.display()))?;
-                println!("{} --clean: removed {}", PREFIX, path.display());
+                removed.push(sub);
             }
         }
 
-        if !clean_db {
-            println!(
-                "{} --clean: SurrealDB volume preserved (pass --clean-db for a full reset)",
-                PREFIX
-            );
+        let flag = if clean_db { "--clean-db" } else { "--clean" };
+        if removed.is_empty() {
+            ui::info(format!("{}: nothing to wipe under .sp00ky/", flag));
         } else {
-            println!(
-                "{} --clean-db: SurrealDB volume wiped — starting from an empty database",
-                PREFIX
-            );
+            ui::info(format!("{}: wiped .sp00ky/{{{}}}", flag, removed.join(", ")));
+        }
+        if !clean_db {
+            ui::hint("SurrealDB volume preserved (pass --clean-db for a full reset)");
+        } else {
+            ui::hint("SurrealDB volume wiped: starting from an empty database");
         }
     }
 
     // Check for schema drift before starting infrastructure
     if !skip_migrations {
-        println!("{} Checking for schema drift...", PREFIX);
-        if let Err(e) = check_schema_drift(&config) {
-            eprintln!("{} Warning: Schema drift check failed: {:#}", PREFIX, e);
-            eprintln!(
-                "{} Continuing without drift check. Run `sp00ky migrate create` to check manually.",
-                PREFIX
-            );
+        let step = ui::step("Schema drift");
+        if let Err(e) = check_schema_drift(&config, step) {
+            // Non-fatal: the step line already reads "failed while …"; show the
+            // cause as one indented block and move on.
+            let msg = format!("{:#}", e);
+            for (i, part) in msg.split(": ").enumerate() {
+                if i == 0 {
+                    ui::hint(part);
+                } else {
+                    ui::hint(format!("  {}", part));
+                }
+            }
+            ui::hint("Continuing without the drift check. Run `spky migrate create` to check manually.");
         }
     }
 
     // Check for compose files
     let compose_file = format!("docker-compose.{}.yml", mode.to_string());
     if Path::new(&compose_file).exists() {
-        println!("{} Found compose file: {}", PREFIX, compose_file);
+        ui::info(format!("using {}", compose_file));
         // Compose mode is driven by the YAML, not by `version.{ssp,scheduler}`.
         // A `path:` entry can't take effect there, so flag it loudly so the
         // user doesn't silently keep hitting the published image.
         if versions.ssp.is_local() || versions.scheduler.is_local() {
-            eprintln!(
-                "{} Warning: `version: {{ ssp/scheduler: {{ path: ... }} }}` is ignored in compose mode. The {} file controls those services. Either delete it (to use direct Docker mode with the path) or remove the path entry.",
-                PREFIX, compose_file
-            );
+            ui::warn(format!(
+                "`version: {{ ssp/scheduler: {{ path: ... }} }}` is ignored in compose mode. The {} file controls those services. Either delete it (to use direct Docker mode with the path) or remove the path entry.",
+                compose_file
+            ));
         }
         run_compose_mode(
             &compose_file,
@@ -225,10 +235,6 @@ pub fn run(
             migrations_path,
         )
     } else {
-        println!(
-            "{} No compose file found — using direct Docker mode",
-            PREFIX
-        );
         run_direct_mode(
             &mode,
             &versions,
@@ -245,14 +251,14 @@ pub fn run(
 
 // ── Schema drift detection ──────────────────────────────────────────────────
 
-fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
+fn check_schema_drift(config: &Sp00kyConfig, step: ui::Step) -> Result<()> {
     let resolved = config.resolved_schema();
     let schema_path = &resolved.schema;
     let migrations_dir = &resolved.migrations;
 
     // No schema file → nothing to check
     if !schema_path.exists() {
-        println!("{} No schema file found, skipping drift check.", PREFIX);
+        step.skip("no schema file");
         return Ok(());
     }
 
@@ -271,10 +277,12 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
         include_functions: false,
     };
 
+    step.set_message("building target schema…");
     let new_schema_sql = schema_builder::build_server_schema(&builder_config)
         .context("Failed to build schema from source files")?;
 
     // Extract old (from migrations) and new (from source) schemas via ephemeral DB
+    step.set_message("comparing migrations against schema…");
     let (old_schema, new_schema) =
         schema_extract::extract_old_and_new_schemas(migrations_dir, &new_schema_sql)
             .context("Failed to extract schemas for drift comparison")?;
@@ -283,54 +291,45 @@ fn check_schema_drift(config: &Sp00kyConfig) -> Result<()> {
     let diff = schema_diff::diff_schemas(&old_schema, &new_schema);
 
     if diff.is_empty() {
-        println!("{} Schema is in sync.", PREFIX);
+        step.done("in sync");
         return Ok(());
     }
 
     // Drift detected — show summary
-    println!(
-        "{} Schema drift detected: {} addition(s), {} removal(s), {} modification(s)",
-        PREFIX,
+    step.warn(format!(
+        "+{} -{} ~{}",
         diff.added.len(),
         diff.removed.len(),
         diff.modified.len(),
-    );
+    ));
     diff.print_colored();
 
     // Non-TTY: warn and continue (matches existing pattern in apply_migrations)
     if !std::io::stdin().is_terminal() {
-        println!(
-            "{} Non-TTY detected, continuing with schema drift. Run `sp00ky migrate create` to generate a migration.",
-            PREFIX,
-        );
+        ui::hint("Non-TTY: continuing with schema drift. Run `spky migrate create` to generate a migration.");
         return Ok(());
     }
 
     // Interactive prompt
     let options = vec!["Generate migration", "Continue anyway", "Abort"];
-    let choice = inquire::Select::new("Schema drift detected. What would you like to do?", options)
-        .prompt()
-        .unwrap_or("Abort");
+    let choice = ui::suspend(|| {
+        inquire::Select::new("Schema drift detected. What would you like to do?", options)
+            .prompt()
+            .unwrap_or("Abort")
+    });
 
     match choice {
         "Generate migration" => {
-            let name = inquire::Text::new("Migration name:")
-                .prompt()
+            let name = ui::suspend(|| inquire::Text::new("Migration name:").prompt())
                 .context("Failed to read migration name")?;
 
             migrate::create(migrations_dir, &name, None, Some(&builder_config), None)
                 .context("Failed to create migration")?;
 
-            println!(
-                "{} Migration created. It will be applied in the next step.",
-                PREFIX
-            );
+            ui::info("Migration created. It will be applied in the next step.");
         }
         "Continue anyway" => {
-            println!(
-                "{} Continuing with schema drift. Run `sp00ky migrate create` to generate a migration later.",
-                PREFIX,
-            );
+            ui::hint("Continuing with schema drift. Run `spky migrate create` to generate a migration later.");
         }
         _ => bail!("User chose to abort due to schema drift."),
     }
@@ -447,12 +446,20 @@ fn run_direct_mode(
     let surreal_url = surreal_connection_url(resolved_surreal, SURREAL_PORT);
 
     // Phase 1: Create Docker network
-    println!("\n{} Phase 1: Creating Docker network...", PREFIX);
-    docker(&["network", "create", NETWORK_NAME])?;
+    {
+        let step = ui::step("Docker network");
+        if let Err(e) = docker(&["network", "create", NETWORK_NAME]) {
+            step.fail("could not create");
+            return Err(e);
+        }
+        step.done_quiet();
+    }
 
     // Phase 2: Start SurrealDB (skip if using external instance)
     if use_local_surreal {
-        println!("{} Phase 2: Starting SurrealDB...", PREFIX);
+        let step = ui::step("SurrealDB");
+        ensure_image(&surreal_image, Some(&step))?;
+        step.set_message("starting container…");
         let surreal_data_dir = std::env::current_dir()
             .context("Failed to get current directory")?
             .join(".sp00ky/surrealdb_data");
@@ -523,22 +530,23 @@ fn run_direct_mode(
         ]);
 
         let surreal_args_ref: Vec<&str> = surreal_args.iter().map(|s| s.as_str()).collect();
-        docker(&surreal_args_ref)?;
+        if let Err(e) = docker(&surreal_args_ref) {
+            step.fail("docker run failed");
+            return Err(e);
+        }
 
         // Phase 3: Wait for health
-        println!("{} Phase 3: Waiting for SurrealDB health...", PREFIX);
         wait_for_health(
             &format!("http://localhost:{}/health", SURREAL_PORT),
             HEALTH_MAX_RETRIES,
             HEALTH_RETRY_INTERVAL,
             stop,
             "SurrealDB",
+            &step,
         )?;
+        step.done("ready");
     } else {
-        println!(
-            "{} Phase 2: Using external SurrealDB at {}",
-            PREFIX, surreal_url
-        );
+        ui::step("SurrealDB").skip(format!("external{}{}", ui::glyphs().sep, surreal_url));
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -552,7 +560,7 @@ fn run_direct_mode(
     // way of saying the target NS/DB is missing) and the internal-schema
     // apply later fails with "database '...' does not exist".
     if use_local_surreal {
-        println!("{} Phase 3a: Ensuring namespace/database...", PREFIX);
+        let step = ui::step("Namespace / database");
         let bootstrap_client = SurrealClient::new(
             &surreal_url,
             &resolved_surreal.namespace,
@@ -560,19 +568,17 @@ fn run_direct_mode(
             &resolved_surreal.username_literal(),
             &resolved_surreal.password_literal(),
         );
-        bootstrap_client
-            .ensure_ns_db()
-            .context("Failed to bootstrap SurrealDB namespace/database")?;
+        if let Err(e) = bootstrap_client.ensure_ns_db() {
+            step.fail("failed");
+            return Err(e).context("Failed to bootstrap SurrealDB namespace/database");
+        }
+        step.done(format!("{}/{}", resolved_surreal.namespace, resolved_surreal.database));
     }
 
     // Phase 4: Apply migrations
     if skip_migrations {
-        println!(
-            "{} Phase 4: Skipping migrations (--skip-migrations).",
-            PREFIX
-        );
+        ui::step("Migrations").skip("--skip-migrations");
     } else {
-        println!("{} Phase 4: Applying migrations...", PREFIX);
         apply_migrations(
             &surreal_url,
             auto_apply_migrations,
@@ -587,7 +593,6 @@ fn run_direct_mode(
     }
 
     // Phase 4a: Apply internal Sp00ky schema (meta tables + events)
-    println!("{} Phase 4a: Applying internal Sp00ky schema...", PREFIX);
     apply_internal_sp00ky_schema(&surreal_url, mode, versions, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
@@ -595,7 +600,6 @@ fn run_direct_mode(
     }
 
     // Phase 4b: Apply remote functions with Docker-internal endpoints
-    println!("{} Phase 4b: Applying remote functions...", PREFIX);
     apply_remote_functions(&surreal_url, mode, versions, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
@@ -605,7 +609,7 @@ fn run_direct_mode(
     // Resolved RUST_LOG for both scheduler and SSP. `logLevel:` in sp00ky.yml
     // (string or `{ dev, cloud }` map) overrides; default `info` matches the
     // pre-feature behavior so projects that don't opt in see no change.
-    let dev_log = config.resolved_log_level(DeployEnv::Dev);
+    let dev_log = backend::scoped_rust_log(&config.resolved_log_level(DeployEnv::Dev));
 
     // Phase 5 (cluster only): start the scheduler before the SSP so the SSP can
     // register. We keep the launch spec so the supervisor loop can respawn the
@@ -644,8 +648,8 @@ fn run_direct_mode(
             db_pass: resolved_surreal.password_literal(),
         };
 
-        println!("{} Phase 5: Starting scheduler...", PREFIX);
-        let guard = start_scheduler(&spec)?;
+        let step = ui::step("Scheduler");
+        let guard = start_scheduler(&spec, Some(&step))?;
 
         // Wait for /health/ready, which only flips to 200 after the scheduler
         // finishes cloning the upstream SurrealDB into its replica. Without this
@@ -653,18 +657,24 @@ fn run_direct_mode(
         // wrong list_refs. Container liveness is only meaningful in docker mode;
         // a host process streams its own stdio and has no container to inspect.
         let check_container = spec.kind_is_docker();
-        println!(
-            "{} Waiting for scheduler to clone replica from SurrealDB...",
-            PREFIX
-        );
-        wait_for_health_with_container(
+        step.set_message("cloning replica from SurrealDB…");
+        if let Err(e) = wait_for_health_with_container(
             &format!("http://localhost:{}/health/ready", SCHEDULER_PORT),
             HEALTH_MAX_RETRIES,
             HEALTH_RETRY_INTERVAL,
             stop,
             "Scheduler",
             check_container,
-        )?;
+            &step,
+        ) {
+            // Docker mode already printed the container tail; a host process
+            // only has what its sink buffered.
+            if !check_container {
+                guard.dump_ring("scheduler output");
+            }
+            return Err(e);
+        }
+        step.done(format!("replica cloned{}", spec.kind.detail()));
 
         scheduler_spec = Some(spec);
         scheduler_guard = Some(guard);
@@ -725,27 +735,29 @@ fn run_direct_mode(
         advertise: urls.ssp_advertise(),
     };
 
-    println!("{} Phase 6: Starting SSP...", PREFIX);
-    let ssp_guard = start_ssp(&ssp_spec)?;
+    let step = ui::step("SSP");
+    let ssp_guard = start_ssp(&ssp_spec, Some(&step))?;
+    step.done(format!("started{}", ssp_spec.kind.detail()));
 
-    // Ready!
-    println!("\n{} Development environment ready!", PREFIX);
-    println!("{} SurrealDB:  http://localhost:{}", PREFIX, SURREAL_PORT);
-    println!("{} SSP:        http://localhost:{}", PREFIX, SSP_PORT);
-    if *mode == DeployMode::Cluster {
-        println!("{} Scheduler:  http://localhost:{}", PREFIX, SCHEDULER_PORT);
-    }
-    println!("{} Press Ctrl+C to stop.\n", PREFIX);
+    // Infra is up: let infra/app sinks print (quiet-filtered) from here on.
+    ui::done_startup();
 
     // Tail logs from infra containers (SurrealDB always; SSP is already
     // captured inside `ssp_guard`).
     let surreal_log = spawn_log_tail(SURREAL_CONTAINER, "surrealdb");
 
-    // Start app dev servers (frontend + backends)
+    // Start app dev servers (frontend + backends) BEFORE the ready box so it
+    // can lead with the frontend's actual URL.
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let app_dev = spawn_frontend_dev(config, &project_dir, resolved_surreal, mode);
-    let backend_devs = spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode);
-    let docker_devs = spawn_docker_app_devs(config, &project_dir, resolved_surreal, mode);
+    let apps_step = ui::step("Apps");
+    let mut app_dev = spawn_frontend_dev(config, &project_dir, resolved_surreal, mode, &apps_step);
+    let backend_devs =
+        spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode, &apps_step);
+    let docker_devs = spawn_docker_app_devs(config, &project_dir, resolved_surreal, mode, &apps_step);
+    apps_step.done(dev_app_names(config).join(", "));
+
+    let frontend = wait_for_frontend_url(&mut app_dev, frontend_declared_port(config));
+    print_ready_banner(config, mode, &surreal_url, use_local_surreal, frontend);
 
     // Supervisor loop: keep the SSP (and, in cluster mode, the scheduler) alive
     // until Ctrl+C. Both are restart-driven by design: the SSP calls
@@ -762,7 +774,7 @@ fn run_direct_mode(
             guard,
             is_docker,
             SCHEDULER_CONTAINER,
-            move || start_scheduler(&spec),
+            move || start_scheduler(&spec, None),
         ));
     }
     {
@@ -772,7 +784,7 @@ fn run_direct_mode(
             ssp_guard,
             is_docker,
             SSP_CONTAINER,
-            move || start_ssp(&ssp_spec),
+            move || start_ssp(&ssp_spec, None),
         ));
     }
 
@@ -796,7 +808,9 @@ fn run_direct_mode(
 }
 
 fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
-    println!("\n{} Shutting down...", PREFIX);
+    ui::done_startup();
+    ui::println("");
+    ui::info("Shutting down…");
 
     // Remove every container we started this run. They all share the
     // `sp00ky-dev-` prefix: infra (`sp00ky-dev-{surrealdb,ssp,scheduler}`) and
@@ -831,7 +845,7 @@ fn cleanup_direct(_stop: &Arc<AtomicBool>) -> Result<()> {
     // Remove network
     let _ = docker(&["network", "rm", NETWORK_NAME]);
 
-    println!("{} Cleaned up. Goodbye! 👻", PREFIX);
+    ui::info(format!("Cleaned up. Goodbye! {}", ui::glyphs().ghost));
     Ok(())
 }
 
@@ -869,11 +883,8 @@ fn run_compose_mode(
     };
 
     if !infra_services.is_empty() {
-        println!(
-            "\n{} Phase 1: Starting infrastructure ({})...",
-            PREFIX,
-            infra_services.join(", ")
-        );
+        let step = ui::step("Infrastructure");
+        step.set_message(format!("docker compose up {}…", infra_services.join(" ")));
         let mut args = vec![
             "compose",
             "-f",
@@ -885,12 +896,13 @@ fn run_compose_mode(
         for svc in &infra_services {
             args.push(svc);
         }
-        docker(&args)?;
+        if let Err(e) = docker(&args) {
+            step.fail("docker compose up failed");
+            return Err(e);
+        }
+        step.done(infra_services.join(" "));
     } else {
-        println!(
-            "\n{} Phase 1: Using external SurrealDB, skipping local infrastructure.",
-            PREFIX
-        );
+        ui::step("Infrastructure").skip("external SurrealDB, nothing local to start");
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -899,7 +911,7 @@ fn run_compose_mode(
 
     // Phase 2: Wait for SurrealDB health
     if use_local_surreal {
-        println!("\n{} Phase 2: Waiting for SurrealDB health...", PREFIX);
+        let step = ui::step("SurrealDB");
         wait_for_health_with_container(
             &format!("http://localhost:{}/health", SURREAL_PORT),
             HEALTH_MAX_RETRIES,
@@ -907,12 +919,11 @@ fn run_compose_mode(
             stop,
             "SurrealDB",
             false,
+            &step,
         )?;
+        step.done("ready");
     } else {
-        println!(
-            "\n{} Phase 2: Using external SurrealDB at {}",
-            PREFIX, surreal_url
-        );
+        ui::step("SurrealDB").skip(format!("external{}{}", ui::glyphs().sep, surreal_url));
     }
 
     if stop.load(Ordering::SeqCst) {
@@ -921,12 +932,8 @@ fn run_compose_mode(
 
     // Phase 3: Apply migrations
     if skip_migrations {
-        println!(
-            "\n{} Phase 3: Skipping migrations (--skip-migrations).",
-            PREFIX
-        );
+        ui::step("Migrations").skip("--skip-migrations");
     } else {
-        println!("\n{} Phase 3: Applying migrations...", PREFIX);
         apply_migrations(
             &surreal_url,
             auto_apply_migrations,
@@ -941,7 +948,6 @@ fn run_compose_mode(
     }
 
     // Phase 3a: Apply internal Sp00ky schema (meta tables + events)
-    println!("{} Phase 3a: Applying internal Sp00ky schema...", PREFIX);
     // Compose mode launches both services in docker per the YAML, so the
     // SurrealDB-side endpoints stay at the docker-DNS aliases. Default
     // versions (Image-variants) selects exactly that.
@@ -953,7 +959,6 @@ fn run_compose_mode(
     }
 
     // Phase 3b: Apply remote functions with Docker-internal endpoints
-    println!("{} Phase 3b: Applying remote functions...", PREFIX);
     apply_remote_functions(&surreal_url, mode, &compose_versions, resolved_surreal)?;
 
     if stop.load(Ordering::SeqCst) {
@@ -961,14 +966,21 @@ fn run_compose_mode(
     }
 
     // Phase 4: Start remaining services (foreground)
-    println!("\n{} Phase 4: Starting remaining services...", PREFIX);
-    println!("{} Press Ctrl+C to stop.\n", PREFIX);
+    ui::done_startup();
 
-    // Start app dev servers (frontend + backends)
+    // Start app dev servers (frontend + backends) before the ready box so it
+    // can lead with the frontend's actual URL.
     let project_dir = std::env::current_dir().context("Failed to get current directory")?;
-    let app_dev = spawn_frontend_dev(config, &project_dir, resolved_surreal, mode);
-    let backend_devs = spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode);
-    let docker_devs = spawn_docker_app_devs(config, &project_dir, resolved_surreal, mode);
+    let apps_step = ui::step("Apps");
+    let mut app_dev = spawn_frontend_dev(config, &project_dir, resolved_surreal, mode, &apps_step);
+    let backend_devs =
+        spawn_backend_dev_commands(config, &project_dir, resolved_surreal, mode, &apps_step);
+    let docker_devs = spawn_docker_app_devs(config, &project_dir, resolved_surreal, mode, &apps_step);
+    apps_step.done(dev_app_names(config).join(", "));
+
+    let frontend = wait_for_frontend_url(&mut app_dev, frontend_declared_port(config));
+    print_ready_banner(config, mode, &surreal_url, use_local_surreal, frontend);
+    ui::info("docker compose output follows");
 
     let status = Command::new("docker")
         .args([
@@ -994,9 +1006,11 @@ fn run_compose_mode(
 }
 
 fn cleanup_compose(compose_file: &str) -> Result<()> {
-    println!("\n{} Stopping compose services...", PREFIX);
+    ui::done_startup();
+    ui::println("");
+    ui::info("Stopping compose services…");
     let _ = docker(&["compose", "-f", compose_file, "down", "--remove-orphans"]);
-    println!("{} Cleaned up. Goodbye! 👻", PREFIX);
+    ui::info(format!("Cleaned up. Goodbye! {}", ui::glyphs().ghost));
     Ok(())
 }
 
@@ -1008,10 +1022,14 @@ fn wait_for_health(
     interval: Duration,
     stop: &Arc<AtomicBool>,
     service_name: &str,
+    step: &ui::Step,
 ) -> Result<()> {
-    wait_for_health_with_container(url, max_retries, interval, stop, service_name, true)
+    wait_for_health_with_container(url, max_retries, interval, stop, service_name, true, step)
 }
 
+/// Poll `url` until it answers 200. Progress is shown on `step` (live message
+/// on a TTY, a heartbeat note every 10 attempts otherwise). The caller finishes
+/// the step on success; on failure this fails it and bails.
 fn wait_for_health_with_container(
     url: &str,
     max_retries: u32,
@@ -1019,6 +1037,7 @@ fn wait_for_health_with_container(
     stop: &Arc<AtomicBool>,
     service_name: &str,
     check_container: bool,
+    step: &ui::Step,
 ) -> Result<()> {
     // Try to infer container name from service name for liveness checks (direct mode only)
     let container_name = if check_container {
@@ -1032,6 +1051,7 @@ fn wait_for_health_with_container(
         None
     };
 
+    let started = Instant::now();
     for attempt in 1..=max_retries {
         if stop.load(Ordering::SeqCst) {
             bail!("Interrupted while waiting for {}", service_name);
@@ -1051,15 +1071,23 @@ fn wait_for_health_with_container(
         }
 
         match ureq::get(url).timeout(Duration::from_secs(5)).call() {
-            Ok(resp) if resp.status() == 200 => {
-                println!("{} {} is ready.", PREFIX, service_name);
-                return Ok(());
-            }
+            Ok(resp) if resp.status() == 200 => return Ok(()),
             _ => {
-                println!(
-                    "{} Waiting for {}... ({}/{})",
-                    PREFIX, service_name, attempt, max_retries
-                );
+                let waited = started.elapsed().as_secs();
+                step.set_message(format!(
+                    "waiting{}attempt {}/{}{}{}s",
+                    ui::glyphs().sep,
+                    attempt,
+                    max_retries,
+                    ui::glyphs().sep,
+                    waited
+                ));
+                if attempt % 10 == 0 {
+                    step.note(format!(
+                        "still waiting (attempt {}/{}, {}s)",
+                        attempt, max_retries, waited
+                    ));
+                }
                 thread::sleep(interval);
             }
         }
@@ -1112,14 +1140,12 @@ fn print_container_logs(name: &str, tail: u32) -> Result<()> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    println!("\n{} --- Last {} log lines from {} ---", PREFIX, tail, name);
-    if !stdout.is_empty() {
-        print!("{}", stdout);
-    }
-    if !stderr.is_empty() {
-        eprint!("{}", stderr);
-    }
-    println!("{} --- End of {} logs ---\n", PREFIX, name);
+    let lines = stdout
+        .lines()
+        .chain(stderr.lines())
+        .map(|l| l.to_string())
+        .collect::<Vec<_>>();
+    ui::block(&format!("last {} lines{}{}", tail, ui::glyphs().sep, name), lines.into_iter());
     Ok(())
 }
 
@@ -1134,12 +1160,10 @@ fn apply_migrations(
 ) -> Result<()> {
     use crate::migration::{self, MigrationState};
 
+    let step = ui::step("Migrations");
     let migrations_dir = Path::new(migrations_path);
     if !migrations_dir.exists() {
-        println!(
-            "{} No {}/ directory found, skipping.",
-            PREFIX, migrations_path
-        );
+        step.skip(format!("no {}/ directory", migrations_path));
         return Ok(());
     }
 
@@ -1169,22 +1193,19 @@ fn apply_migrations(
 
     // Fix checksums first if requested
     if fix_checksums {
+        step.set_message("fixing checksums…");
         if let Err(e) = engine.fix(true) {
-            eprintln!(
-                "{} \x1b[33mWARNING: checksum fix failed: {:#}\x1b[0m",
-                PREFIX, e
-            );
+            ui::warn(format!("checksum fix failed: {:#}", e));
         }
     }
 
     // Check for pending migrations
+    step.set_message("checking status…");
     let statuses = match engine.status() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
-                "{} \x1b[31mFailed to check migration status: {:#}\x1b[0m",
-                PREFIX, e
-            );
+            step.fail("could not check status");
+            ui::error(format!("{:#}", e));
             return Ok(());
         }
     };
@@ -1193,10 +1214,7 @@ fn apply_migrations(
     for info in &statuses {
         if info.state == MigrationState::Drift {
             let detail = info.detail.as_deref().unwrap_or("");
-            println!(
-                "{} \x1b[33mWARNING: Drift on {}_{}: {}\x1b[0m",
-                PREFIX, info.id, info.name, detail
-            );
+            ui::warn(format!("drift on {}_{}: {}", info.id, info.name, detail));
         }
     }
 
@@ -1206,39 +1224,41 @@ fn apply_migrations(
         .collect();
 
     if pending.is_empty() {
-        println!("{} No pending migrations.", PREFIX);
+        step.done("up to date");
         return Ok(());
     }
 
-    println!("{} Found {} pending migration(s):", PREFIX, pending.len());
+    step.warn(format!("{} pending", pending.len()));
     for m in &pending {
-        println!("  - {}_{}", m.id, m.name);
+        ui::hint(format!("  {}_{}", m.id, m.name));
     }
 
     if auto_apply {
-        println!("{} Auto-applying migrations (--apply-migrations).", PREFIX);
+        ui::info("auto-applying (--apply-migrations)");
     } else if !std::io::stdin().is_terminal() {
-        println!("{} Non-TTY detected, auto-applying migrations.", PREFIX);
+        ui::info("non-TTY: auto-applying pending migrations");
     } else {
         let options = vec![
             "Apply migrations",
             "Skip migrations (continue without applying)",
             "Quit",
         ];
-        let choice = inquire::Select::new(
-            &format!(
-                "{} pending migration(s) found. What would you like to do?",
-                pending.len()
-            ),
-            options,
-        )
-        .prompt()
-        .unwrap_or("Quit");
+        let choice = ui::suspend(|| {
+            inquire::Select::new(
+                &format!(
+                    "{} pending migration(s) found. What would you like to do?",
+                    pending.len()
+                ),
+                options,
+            )
+            .prompt()
+            .unwrap_or("Quit")
+        });
 
         match choice {
             "Apply migrations" => {}
             "Skip migrations (continue without applying)" => {
-                println!("{} Skipping migrations. Dev server will start without applying pending migrations.", PREFIX);
+                ui::info("Skipping migrations. Dev server will start without applying pending migrations.");
                 return Ok(());
             }
             _ => bail!("User chose to quit."),
@@ -1248,7 +1268,7 @@ fn apply_migrations(
     match engine.apply() {
         Ok(_) => Ok(()),
         Err(e) => {
-            println!("{} \x1b[31mMigration failed:\x1b[0m {:#}", PREFIX, e);
+            ui::error(format!("Migration failed: {:#}", e));
 
             // Reset-and-retry uses SurrealClient directly (dev-only escape hatch)
             let client = SurrealClient::new(
@@ -1260,10 +1280,7 @@ fn apply_migrations(
             );
 
             if auto_apply || !std::io::stdin().is_terminal() {
-                println!(
-                    "{} Auto-resetting database and retrying migrations.",
-                    PREFIX
-                );
+                ui::info("auto-resetting database and retrying migrations");
                 client.reset_database()?;
                 engine.apply().map(|_| ())
             } else {
@@ -1272,19 +1289,20 @@ fn apply_migrations(
                     "Skip migrations (continue without applying)",
                     "Quit",
                 ];
-                let choice =
+                let choice = ui::suspend(|| {
                     inquire::Select::new("Migration failed. What would you like to do?", options)
                         .prompt()
-                        .unwrap_or("Quit");
+                        .unwrap_or("Quit")
+                });
 
                 match choice {
                     "Reset database and retry" => {
-                        println!("{} Resetting database and retrying...", PREFIX);
+                        ui::info("Resetting database and retrying…");
                         client.reset_database()?;
                         engine.apply().map(|_| ())
                     }
                     "Skip migrations (continue without applying)" => {
-                        println!("{} Skipping migrations. Dev server will start without applying pending migrations.", PREFIX);
+                        ui::info("Skipping migrations. Dev server will start without applying pending migrations.");
                         Ok(())
                     }
                     _ => bail!("User chose to quit."),
@@ -1337,10 +1355,12 @@ fn apply_remote_functions(
         "root",
     );
 
-    client
-        .execute(&functions_sql)
-        .context("Failed to apply remote functions")?;
-    println!("{} Remote functions applied → {}", PREFIX, endpoint);
+    let step = ui::step("Remote functions");
+    if let Err(e) = client.execute(&functions_sql) {
+        step.fail("failed");
+        return Err(e).context("Failed to apply remote functions");
+    }
+    step.done(format!("{} {}", ui::glyphs().arrow, endpoint));
     Ok(())
 }
 
@@ -1360,9 +1380,236 @@ fn docker(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Make sure `image` is present locally before `docker run`, so a cold pull
+/// shows up as a live step message (and a log line in non-TTY mode) instead
+/// of minutes of silence. `docker()` swallows pull progress otherwise.
+fn ensure_image(image: &str, step: Option<&ui::Step>) -> Result<()> {
+    let present = Command::new("docker")
+        .args(["image", "inspect", image])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if present {
+        return Ok(());
+    }
+    if let Some(step) = step {
+        step.set_message(format!("pulling {} (one-time)…", image));
+        step.note(format!("pulling {} (one-time)", image));
+    }
+    let output = Command::new("docker")
+        .args(["pull", image])
+        .output()
+        .with_context(|| format!("Failed to run: docker pull {}", image))?;
+    if !output.status.success() {
+        if let Some(step) = step {
+            step.set_message(format!("pulling {}", image));
+        }
+        bail!(
+            "docker pull {} failed: {}",
+            image,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    if ui::is_verbose() {
+        for line in String::from_utf8_lossy(&output.stdout).lines().rev().take(2) {
+            ui::detail(line);
+        }
+    }
+    Ok(())
+}
+
+/// Names of the apps `spky dev` is about to launch, for the one-line summary
+/// that replaces per-app "Starting: …" chatter in quiet mode.
+fn dev_app_names(config: &Sp00kyConfig) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    match config.frontend().filter(|(_, fe)| fe.runs_in_dev()) {
+        Some((name, _)) => names.push(name.to_string()),
+        None => names.push("app (pnpm dev:app)".to_string()),
+    }
+    for (name, app) in config.backends() {
+        if app.runs_in_dev() && app.dev.is_some() {
+            names.push(name.to_string());
+        }
+    }
+    for (name, app) in config.docker_apps() {
+        if app.runs_in_dev() {
+            names.push(format!("{} (docker)", name));
+        }
+    }
+    names
+}
+
+/// Host port an app will be reachable on in dev, when the config says so:
+/// the first published port of a docker dev block / docker app, else the
+/// `deploy.port` the service listens on (npm/uv dev servers bind it too).
+/// None for a frontend dev server that picks its own port (vite); that one
+/// announces its URL in the `[app]` stream instead.
+fn dev_app_port(app: &backend::AppConfig) -> Option<u16> {
+    if let Some(p) = dev_block_port(&app.dev) {
+        return Some(p);
+    }
+    if let Some(p) = app.ports.iter().find_map(|p| p.host_port()) {
+        return Some(p);
+    }
+    app.deploy.as_ref().and_then(|d| d.port)
+}
+
+/// Host port declared on a `dev:` block: `port:` on npm/uv, the first
+/// published host port on docker. None for a string command or when unset.
+fn dev_block_port(dev: &Option<BackendDevConfig>) -> Option<u16> {
+    match dev {
+        Some(BackendDevConfig::Typed(BackendDevTypedConfig::Npm { port, .. }))
+        | Some(BackendDevConfig::Typed(BackendDevTypedConfig::Uv { port, .. })) => *port,
+        Some(BackendDevConfig::Typed(BackendDevTypedConfig::Docker { port, ports, .. })) => {
+            merge_docker_ports(port.as_deref(), ports.as_deref())
+                .iter()
+                .find_map(|p| port_check::parse_docker_host_port(p))
+        }
+        _ => None,
+    }
+}
+
+/// Port declared for the frontend dev server, if any. Without one a vite-style
+/// server picks its own port and announces it on its output instead. The
+/// frontend's `deploy.port` is the production nginx port, deliberately not used.
+fn frontend_declared_port(config: &Sp00kyConfig) -> Option<u16> {
+    let (_, fe) = config.frontend().filter(|(_, fe)| fe.runs_in_dev())?;
+    dev_block_port(&fe.dev)
+}
+
+/// The "ready" box: the app URL bright and first, then infra and backends dimmed.
+fn print_ready_banner(
+    config: &Sp00kyConfig,
+    mode: &DeployMode,
+    surreal_url: &str,
+    local_surreal: bool,
+    frontend: FrontendStatus,
+) {
+    use ui::BoxRow;
+    let mut rows: Vec<BoxRow> = Vec::new();
+
+    let app_name = config
+        .frontend()
+        .filter(|(_, fe)| fe.runs_in_dev())
+        .map(|(n, _)| n.to_string())
+        .unwrap_or_else(|| "app".to_string());
+    match frontend {
+        FrontendStatus::Url(url) => rows.push(BoxRow::kv(app_name, url)),
+        FrontendStatus::Pending => rows.push(BoxRow::dim(app_name, "starting… URL follows below")),
+        FrontendStatus::Failed => rows.push(BoxRow::dim(app_name, "failed to start (see errors above)")),
+    }
+    rows.push(BoxRow::Gap);
+
+    // Infra rows are dimmed too: the app URL is the one people open.
+    if local_surreal {
+        rows.push(BoxRow::dim("SurrealDB", format!("http://localhost:{}", SURREAL_PORT)));
+    } else {
+        rows.push(BoxRow::dim("SurrealDB", surreal_url));
+    }
+    rows.push(BoxRow::dim("SSP", format!("http://localhost:{}", SSP_PORT)));
+    if *mode == DeployMode::Cluster {
+        rows.push(BoxRow::dim("Scheduler", format!("http://localhost:{}", SCHEDULER_PORT)));
+    }
+
+    let mut backend_rows: Vec<BoxRow> = Vec::new();
+    for (name, app) in config.backends() {
+        if !app.runs_in_dev() || app.dev.is_none() {
+            continue;
+        }
+        if let Some(p) = dev_app_port(app) {
+            backend_rows.push(BoxRow::dim(name, format!("http://localhost:{}", p)));
+        }
+    }
+    for (name, app) in config.docker_apps() {
+        if !app.runs_in_dev() {
+            continue;
+        }
+        if let Some(p) = dev_app_port(app) {
+            backend_rows.push(BoxRow::dim(name, format!("http://localhost:{}", p)));
+        }
+    }
+    if !backend_rows.is_empty() {
+        rows.push(BoxRow::Gap);
+        rows.extend(backend_rows);
+    }
+
+    let mut footer: Vec<&str> = vec!["Ctrl+C to stop"];
+    if !ui::is_verbose() {
+        footer.push("errors only, --verbose for all logs");
+    }
+    ui::kv_box("Development environment ready", &rows, &footer);
+}
+
 /// Spawn a background thread that tails container logs.
-/// Returns a guard that kills the child process on drop.
-struct LogTailGuard(Option<std::process::Child>);
+/// Returns a guard that kills the child process on drop. Keeps the line sink
+/// so a startup failure can dump what the process printed before it died
+/// (quiet mode buffers infra output until the stack is ready).
+struct LogTailGuard {
+    child: Option<std::process::Child>,
+    sink: Option<Arc<LineSink>>,
+}
+
+impl LogTailGuard {
+    fn none() -> Self {
+        LogTailGuard { child: None, sink: None }
+    }
+
+    /// Render the pre-ready lines buffered by this guard's sink, if any.
+    fn dump_ring(&self, title: &str) {
+        if let Some(sink) = &self.sink {
+            sink.dump_ring(title);
+        }
+    }
+
+    fn announced_url(&self) -> Option<String> {
+        self.sink.as_ref().and_then(|s| s.announced_url())
+    }
+
+    fn print_urls(&self, on: bool) {
+        if let Some(s) = &self.sink {
+            s.print_urls(on);
+        }
+    }
+}
+
+/// What the ready box can say about the frontend dev server.
+enum FrontendStatus {
+    /// Dev server announced its URL (or it was known from a docker port).
+    Url(String),
+    /// Still starting when the box went out; its URL line will follow.
+    Pending,
+    /// Exited before announcing anything: look at the errors above.
+    Failed,
+}
+
+/// Wait (briefly) for the frontend dev server to announce where it listens,
+/// so the ready box can lead with the URL people actually open. Bounded so a
+/// slow server never blocks the box; its URL line prints later instead.
+fn wait_for_frontend_url(guard: &mut LogTailGuard, known_port: Option<u16>) -> FrontendStatus {
+    if let Some(p) = known_port {
+        return FrontendStatus::Url(format!("http://localhost:{}", p));
+    }
+    const MAX_WAIT: Duration = Duration::from_secs(20);
+    let step = ui::step("App dev server");
+    step.set_message("waiting for it to announce its URL…");
+    let started = Instant::now();
+    while started.elapsed() < MAX_WAIT {
+        if let Some(url) = guard.announced_url() {
+            step.done(url.clone());
+            return FrontendStatus::Url(url);
+        }
+        if !guard.poll().alive {
+            step.fail("exited before announcing a URL (see errors above)");
+            return FrontendStatus::Failed;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    step.warn("still starting; its URL will print when it's up");
+    guard.print_urls(true);
+    FrontendStatus::Pending
+}
 
 /// Outcome of a liveness probe: whether the service is up, and — when it is
 /// down — the process/container exit code if we could read it. The supervisor
@@ -1381,7 +1628,7 @@ impl LogTailGuard {
     /// than the service itself, so their liveness is tracked via the container
     /// (`is_container_running` / `container_exit_code`), not this handle.
     fn poll(&mut self) -> Liveness {
-        match self.0 {
+        match self.child {
             Some(ref mut child) => match child.try_wait() {
                 Ok(None) => Liveness {
                     alive: true,
@@ -1406,7 +1653,7 @@ impl LogTailGuard {
 
 impl Drop for LogTailGuard {
     fn drop(&mut self) {
-        if let Some(ref mut child) = self.0 {
+        if let Some(ref mut child) = self.child {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -1419,6 +1666,19 @@ impl Drop for LogTailGuard {
 enum LaunchKind {
     Docker { image: String },
     Host { binary: std::path::PathBuf },
+}
+
+impl LaunchKind {
+    /// Suffix for the step line: nothing for the published image, the binary
+    /// path when running a locally built host process.
+    fn detail(&self) -> String {
+        match self {
+            LaunchKind::Docker { .. } => String::new(),
+            LaunchKind::Host { binary } => {
+                format!("{}host{}{}", ui::glyphs().sep, ui::glyphs().sep, binary.display())
+            }
+        }
+    }
 }
 
 /// Owned launch parameters for the scheduler, kept so the supervisor can respawn
@@ -1469,9 +1729,13 @@ impl SspLaunchSpec {
 /// (Re)start the scheduler and return a fresh guard. No `wait_for_health`: a
 /// respawn must not block the supervisor loop, and the SSP tolerates a
 /// not-yet-ready scheduler via its own registration retry/backoff.
-fn start_scheduler(spec: &SchedulerLaunchSpec) -> Result<LogTailGuard> {
+fn start_scheduler(spec: &SchedulerLaunchSpec, step: Option<&ui::Step>) -> Result<LogTailGuard> {
     match &spec.kind {
         LaunchKind::Docker { image } => {
+            ensure_image(image, step)?;
+            if let Some(s) = step {
+                s.set_message("starting container…");
+            }
             // Clear any exited container still holding the name from a prior crash.
             let _ = docker(&["rm", "-f", SCHEDULER_CONTAINER]);
             let port_mapping = format!("{}:9667", SCHEDULER_PORT);
@@ -1516,6 +1780,8 @@ fn start_scheduler(spec: &SchedulerLaunchSpec) -> Result<LogTailGuard> {
                 // replica/SSP, unusable in dev.
                 "-e",
                 "SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS=2",
+                "-e",
+                "SPKY_LOG_FORMAT=compact",
                 image,
             ])?;
             Ok(spawn_log_tail(SCHEDULER_CONTAINER, "scheduler"))
@@ -1527,12 +1793,10 @@ fn start_scheduler(spec: &SchedulerLaunchSpec) -> Result<LogTailGuard> {
                     binary.display()
                 );
             }
-            println!(
-                "{} Starting scheduler (host process: {})...",
-                PREFIX,
-                binary.display()
-            );
-            let prefix = format!("{}[scheduler]{}", infra_color("scheduler"), ANSI_RESET);
+            if let Some(s) = step {
+                s.set_message("starting host process…");
+            }
+            let sink = LineSink::new("scheduler", ui::style().infra("scheduler"), StreamKind::Infra);
             let mut cmd = Command::new(binary);
             // The scheduler defaults `replica_db_path: ./data/replica` and
             // `wal_path: ./data/event_wal.log`, both relative to cwd. Run from
@@ -1547,17 +1811,22 @@ fn start_scheduler(spec: &SchedulerLaunchSpec) -> Result<LogTailGuard> {
                 .env("SPKY_DB_USER", &spec.db_user)
                 .env("SPKY_DB_PASS", &spec.db_pass)
                 .env("SPKY_AUTH_SECRET", "mysecret")
-                .env("SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS", "2");
-            Ok(spawn_prefixed(&mut cmd, &prefix))
+                .env("SPKY_SNAPSHOT_UPDATE_INTERVAL_SECS", "2")
+                .env("SPKY_LOG_FORMAT", "compact");
+            Ok(spawn_prefixed(&mut cmd, sink))
         }
     }
 }
 
 /// (Re)start the SSP and return a fresh guard. See `start_scheduler` for why
 /// there is no health wait here.
-fn start_ssp(spec: &SspLaunchSpec) -> Result<LogTailGuard> {
+fn start_ssp(spec: &SspLaunchSpec, step: Option<&ui::Step>) -> Result<LogTailGuard> {
     match &spec.kind {
         LaunchKind::Docker { image } => {
+            ensure_image(image, step)?;
+            if let Some(s) = step {
+                s.set_message("starting container…");
+            }
             let _ = docker(&["rm", "-f", SSP_CONTAINER]);
             let port_mapping = format!("{}:8667", SSP_PORT);
             let data_mount = format!("{}:/data", spec.data_dir.display());
@@ -1607,6 +1876,8 @@ fn start_ssp(spec: &SspLaunchSpec) -> Result<LogTailGuard> {
                 ref_mode,
                 "-e".into(),
                 anon_live,
+                "-e".into(),
+                "SPKY_LOG_FORMAT=compact".into(),
             ];
             if spec.cluster {
                 args.push("-e".into());
@@ -1631,12 +1902,10 @@ fn start_ssp(spec: &SspLaunchSpec) -> Result<LogTailGuard> {
                     binary.display()
                 );
             }
-            println!(
-                "{} Starting SSP (host process: {})...",
-                PREFIX,
-                binary.display()
-            );
-            let prefix = format!("{}[ssp]{}", infra_color("ssp"), ANSI_RESET);
+            if let Some(s) = step {
+                s.set_message("starting host process…");
+            }
+            let sink = LineSink::new("ssp", ui::style().infra("ssp"), StreamKind::Infra);
             let mut cmd = Command::new(binary);
             cmd.current_dir(&spec.data_dir);
             cmd.env("RUST_LOG", &spec.dev_log)
@@ -1650,6 +1919,7 @@ fn start_ssp(spec: &SspLaunchSpec) -> Result<LogTailGuard> {
                 .env("SPKY_JOB_CONFIG", &spec.job_config)
                 .env("SPKY_SSP_REF_MODE", &spec.ref_mode)
                 .env("SPKY_SSP_ANON_LIVE_QUERIES", &spec.anon_live)
+                .env("SPKY_LOG_FORMAT", "compact")
                 // The container Dockerfile binds 0.0.0.0:8667; on host we need
                 // the same port reachable from frontend dev servers and
                 // (optionally) the docker-side scheduler.
@@ -1659,7 +1929,7 @@ fn start_ssp(spec: &SspLaunchSpec) -> Result<LogTailGuard> {
                     .env("SPKY_SSP_ID", "ssp-1")
                     .env("SPKY_SSP_ADVERTISE_ADDR", &spec.advertise);
             }
-            Ok(spawn_prefixed(&mut cmd, &prefix))
+            Ok(spawn_prefixed(&mut cmd, sink))
         }
     }
 }
@@ -1790,6 +2060,8 @@ impl RestartPolicy {
 /// handle, a liveness probe, and a respawn closure.
 struct SupervisedService {
     label: &'static str,
+    /// Container name when docker-launched (for crash diagnostics), else None.
+    container: Option<&'static str>,
     guard: LogTailGuard,
     is_alive: Box<dyn FnMut(&mut LogTailGuard) -> Liveness>,
     respawn: Box<dyn FnMut() -> Result<LogTailGuard>>,
@@ -1825,6 +2097,7 @@ impl SupervisedService {
         };
         Self {
             label,
+            container: if is_docker { Some(container) } else { None },
             guard,
             is_alive,
             respawn: Box::new(respawn),
@@ -1841,16 +2114,24 @@ impl SupervisedService {
         match self.policy.tick(now, alive, exit_code) {
             SupervisorAction::None | SupervisorAction::Wait => {}
             SupervisorAction::GaveUp => {
-                eprintln!(
-                    "{} \x1b[31mFATAL: {} crashed {} times in a row without recovering, not restarting it. Fix the cause and rerun `spky dev` (Ctrl+C to stop).\x1b[0m",
-                    PREFIX, self.label, RESTART_MAX_CONSECUTIVE
-                );
+                ui::error(format!(
+                    "FATAL: {} crashed {} times in a row without recovering, not restarting it. Fix the cause and rerun `spky dev` (Ctrl+C to stop).",
+                    self.label, RESTART_MAX_CONSECUTIVE
+                ));
             }
             SupervisorAction::Restart => {
-                eprintln!(
-                    "{} \x1b[33m{} exited, restarting (attempt {} of {})...\x1b[0m",
-                    PREFIX, self.label, self.policy.consecutive_restarts, RESTART_MAX_CONSECUTIVE
-                );
+                ui::warn(format!(
+                    "{} exited (code {:?}), restarting (attempt {} of {})…",
+                    self.label, exit_code, self.policy.consecutive_restarts, RESTART_MAX_CONSECUTIVE
+                ));
+                // In quiet mode the crash output was filtered; show the tail
+                // so the user sees *why* without rerunning with --verbose.
+                // Once per crash streak, not on every backoff retry.
+                if !ui::is_verbose() && self.policy.consecutive_restarts == 1 {
+                    if let Some(c) = self.container {
+                        let _ = print_container_logs(c, 20);
+                    }
+                }
                 self.do_respawn();
             }
             SupervisorAction::RestartIntentional => {
@@ -1858,15 +2139,15 @@ impl SupervisedService {
                 // cause (e.g. a real integrity divergence); surface it loudly
                 // but keep the service alive.
                 if self.policy.intentional_restarts % INTENTIONAL_RESTART_WARN_EVERY == 0 {
-                    eprintln!(
-                        "{} \x1b[31m{} has re-bootstrapped {} times without staying up (exit code {:?}). It will keep restarting; check the scheduler integrity check.\x1b[0m",
-                        PREFIX, self.label, self.policy.intentional_restarts, exit_code
-                    );
+                    ui::error(format!(
+                        "{} has re-bootstrapped {} times without staying up (exit code {:?}). It will keep restarting; check the scheduler integrity check.",
+                        self.label, self.policy.intentional_restarts, exit_code
+                    ));
                 } else {
-                    eprintln!(
-                        "{} \x1b[33m{} re-bootstrapping (intentional exit {:?}), restarting...\x1b[0m",
-                        PREFIX, self.label, exit_code
-                    );
+                    ui::warn(format!(
+                        "{} re-bootstrapping (intentional exit {:?}), restarting…",
+                        self.label, exit_code
+                    ));
                 }
                 self.do_respawn();
             }
@@ -1878,10 +2159,7 @@ impl SupervisedService {
     fn do_respawn(&mut self) {
         match (self.respawn)() {
             Ok(guard) => self.guard = guard,
-            Err(e) => eprintln!(
-                "{} \x1b[31mrestart of {} failed: {:#}\x1b[0m",
-                PREFIX, self.label, e
-            ),
+            Err(e) => ui::error(format!("restart of {} failed: {:#}", self.label, e)),
         }
     }
 }
@@ -2159,17 +2437,20 @@ fn merge_spky_with_user_env(
 fn warn_frontend_vault_no_whitelist(name: &str, env: &Option<backend::EnvConfig>) {
     if let Some(backend::EnvConfig::Source(backend::EnvSource::Str(s))) = env {
         if s == "vault" {
-            eprintln!("  \x1b[33mwarning\x1b[0m: Frontend app '{}' uses vault without a whitelist. Consider using vault: [KEY1, KEY2] to avoid exposing all secrets to the frontend.", name);
+            ui::warn(format!("Frontend app '{}' uses vault without a whitelist. Consider using vault: [KEY1, KEY2] to avoid exposing all secrets to the frontend.", name));
         }
     }
 }
 
-const APP_COLOR: &str = "\x1b[97m"; // bright white
+/// Sink for the frontend app's dev server output (`[app]`).
+fn app_sink() -> Arc<LineSink> {
+    LineSink::new("app", ui::style().app.clone(), StreamKind::App)
+}
 
 fn spawn_pnpm_dev_app(script: &str, envs: Vec<(String, String)>) -> LogTailGuard {
-    let prefix = format!("{}[app]{}", APP_COLOR, ANSI_RESET);
-    println!("{} Starting: pnpm {}", prefix, script);
-    spawn_prefixed(Command::new("pnpm").args([script]).envs(envs), &prefix)
+    let sink = app_sink();
+    sink.push_verbose(&format!("Starting: pnpm {}", script));
+    spawn_prefixed(Command::new("pnpm").args([script]).envs(envs), sink)
 }
 
 /// Start the frontend app dev server from the apps config.
@@ -2178,35 +2459,37 @@ fn spawn_frontend_dev(
     project_dir: &Path,
     resolved_surreal: &ResolvedSurrealDb,
     mode: &DeployMode,
+    step: &ui::Step,
 ) -> LogTailGuard {
     if let Some((name, frontend)) = config.frontend().filter(|(_, fe)| fe.runs_in_dev()) {
+        step.set_message(format!("starting {}…", name));
         warn_frontend_vault_no_whitelist(name, &frontend.env);
         let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
         let user_envs = resolve_env_for_dev(&frontend.env, project_dir);
         let envs = merge_spky_with_user_env(&spky_vars, user_envs);
         // Use the same dev config dispatch as backends
         if let Some(ref dev_config) = frontend.dev {
-            let prefix = format!("{}[app]{}", APP_COLOR, ANSI_RESET);
+            let sink = app_sink();
             match dev_config {
                 BackendDevConfig::Command(cmd) => {
-                    println!("{} Starting: {}", prefix, cmd);
+                    sink.push_verbose(&format!("Starting: {}", cmd));
                     return spawn_prefixed(
                         Command::new("sh")
                             .args(["-c", cmd.as_str()])
                             .current_dir(project_dir)
                             .envs(envs),
-                        &prefix,
+                        sink,
                     );
                 }
-                BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir }) => {
+                BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir, .. }) => {
                     let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                    println!("{} Starting: pnpm run {}", prefix, script);
+                    sink.push_verbose(&format!("Starting: pnpm run {}", script));
                     return spawn_prefixed(
                         Command::new("pnpm")
                             .args(["run", script])
                             .current_dir(cwd)
                             .envs(envs),
-                        &prefix,
+                        sink,
                     );
                 }
                 BackendDevConfig::Typed(BackendDevTypedConfig::Docker {
@@ -2218,7 +2501,7 @@ fn spawn_frontend_dev(
                 }) => {
                     let cwd = resolve_workdir(project_dir, workdir.as_deref());
                     let all_ports = merge_docker_ports(port.as_deref(), ports.as_deref());
-                    println!("{} Building: docker build -f {}", prefix, file);
+                    sink.push_verbose(&format!("Building: docker build -f {}", file));
                     return spawn_docker_dev(
                         file,
                         &all_ports,
@@ -2226,18 +2509,19 @@ fn spawn_frontend_dev(
                         &envs,
                         &cwd,
                         "frontend",
-                        &prefix,
+                        sink,
+                        step,
                     );
                 }
-                BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir }) => {
+                BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir, .. }) => {
                     let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                    println!("{} Starting: uv run {}", prefix, script);
+                    sink.push_verbose(&format!("Starting: uv run {}", script));
                     return spawn_prefixed(
                         Command::new("uv")
                             .args(["run", script])
                             .current_dir(cwd)
                             .envs(envs),
-                        &prefix,
+                        sink,
                     );
                 }
             }
@@ -2246,6 +2530,7 @@ fn spawn_frontend_dev(
         return spawn_pnpm_dev_app("dev:app", envs);
     }
     // No frontend app defined — try default pnpm dev:app
+    step.set_message("starting app (pnpm dev:app)…");
     spawn_pnpm_dev_app("dev:app", Vec::new())
 }
 
@@ -2261,10 +2546,7 @@ fn apply_internal_sp00ky_schema(
     let resolved = config.resolved_schema();
 
     if !resolved.schema.exists() {
-        println!(
-            "{} No schema file found at {:?}, skipping internal schema.",
-            PREFIX, resolved.schema
-        );
+        ui::step("Internal schema").skip(format!("no schema file at {}", resolved.schema.display()));
         return Ok(());
     }
 
@@ -2298,26 +2580,12 @@ fn apply_internal_sp00ky_schema(
 
 // ── Backend dev command helpers ──────────────────────────────────────────────
 
-/// ANSI color codes cycled across backends for distinguishable output.
-const BACKEND_COLORS: &[&str] = &[
-    "\x1b[36m", // cyan
-    "\x1b[33m", // yellow
-    "\x1b[35m", // magenta
-    "\x1b[32m", // green
-    "\x1b[34m", // blue
-    "\x1b[91m", // bright red
-    "\x1b[96m", // bright cyan
-    "\x1b[93m", // bright yellow
-    "\x1b[95m", // bright magenta
-    "\x1b[92m", // bright green
-];
-const ANSI_RESET: &str = "\x1b[0m";
-
 fn spawn_backend_dev_commands(
     config: &Sp00kyConfig,
     project_dir: &Path,
     resolved_surreal: &ResolvedSurrealDb,
     mode: &DeployMode,
+    step: &ui::Step,
 ) -> Vec<LogTailGuard> {
     let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
     let mut guards = Vec::new();
@@ -2330,31 +2598,35 @@ fn spawn_backend_dev_commands(
             Some(cfg) => cfg,
             None => continue,
         };
-        let color = BACKEND_COLORS[color_idx % BACKEND_COLORS.len()];
+        step.set_message(format!("starting {}…", name));
+        let sink = LineSink::new(
+            &format!("app.{}.dev", name),
+            ui::style().app_cycle(color_idx),
+            StreamKind::App,
+        );
         color_idx += 1;
-        let prefix = format!("{}[app.{}.dev]{}", color, name, ANSI_RESET);
         let user_envs = resolve_env_for_dev(&app.env, project_dir);
         let envs = merge_spky_with_user_env(&spky_vars, user_envs);
         match dev_config {
             BackendDevConfig::Command(cmd) => {
-                println!("{} Starting: {}", prefix, cmd);
+                sink.push_verbose(&format!("Starting: {}", cmd));
                 guards.push(spawn_prefixed(
                     Command::new("sh")
                         .args(["-c", cmd])
                         .current_dir(project_dir)
                         .envs(envs),
-                    &prefix,
+                    sink,
                 ));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Npm { script, workdir, .. }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                println!("{} Starting: pnpm run {}", prefix, script);
+                sink.push_verbose(&format!("Starting: pnpm run {}", script));
                 guards.push(spawn_prefixed(
                     Command::new("pnpm")
                         .args(["run", script])
                         .current_dir(cwd)
                         .envs(envs),
-                    &prefix,
+                    sink,
                 ));
             }
             BackendDevConfig::Typed(BackendDevTypedConfig::Docker {
@@ -2366,7 +2638,7 @@ fn spawn_backend_dev_commands(
             }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
                 let all_ports = merge_docker_ports(port.as_deref(), ports.as_deref());
-                println!("{} Building: docker build -f {}", prefix, file);
+                sink.push_verbose(&format!("Building: docker build -f {}", file));
                 guards.push(spawn_docker_dev(
                     file,
                     &all_ports,
@@ -2374,18 +2646,19 @@ fn spawn_backend_dev_commands(
                     &envs,
                     &cwd,
                     name,
-                    &prefix,
+                    sink,
+                    step,
                 ));
             }
-            BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir }) => {
+            BackendDevConfig::Typed(BackendDevTypedConfig::Uv { script, workdir, .. }) => {
                 let cwd = resolve_workdir(project_dir, workdir.as_deref());
-                println!("{} Starting: uv run {}", prefix, script);
+                sink.push_verbose(&format!("Starting: uv run {}", script));
                 guards.push(spawn_prefixed(
                     Command::new("uv")
                         .args(["run", script])
                         .current_dir(cwd)
                         .envs(envs),
-                    &prefix,
+                    sink,
                 ));
             }
         }
@@ -2404,6 +2677,7 @@ fn spawn_docker_app_devs(
     project_dir: &Path,
     resolved_surreal: &ResolvedSurrealDb,
     mode: &DeployMode,
+    step: &ui::Step,
 ) -> Vec<LogTailGuard> {
     use std::collections::BTreeMap;
     let spky_vars = build_spky_dev_vars(resolved_surreal, mode);
@@ -2426,13 +2700,18 @@ fn spawn_docker_app_devs(
         // Gate on each dependency being ready before we start this app.
         for dep in &app.depends_on {
             if let Some(dep_app) = apps.get(dep.as_str()) {
+                step.set_message(format!("waiting for {} (needed by {})…", dep, name));
                 wait_for_ready(dep, dep_app);
             }
         }
+        step.set_message(format!("starting {} (docker)…", name));
 
-        let color = BACKEND_COLORS[color_idx % BACKEND_COLORS.len()];
+        let sink = LineSink::new(
+            &format!("app.{}.docker", name),
+            ui::style().app_cycle(color_idx),
+            StreamKind::App,
+        );
         color_idx += 1;
-        let prefix = format!("{}[app.{}.docker]{}", color, name, ANSI_RESET);
         let container = format!("sp00ky-dev-{}", name);
 
         // Clear any stale container from a previous (hard-killed) run.
@@ -2474,13 +2753,8 @@ fn spawn_docker_app_devs(
             args.push(a.clone());
         }
 
-        println!(
-            "{} Starting: docker run {} {}",
-            prefix,
-            image,
-            app.args.join(" ")
-        );
-        guards.push(spawn_prefixed(Command::new("docker").args(&args), &prefix));
+        sink.push_verbose(&format!("Starting: docker run {} {}", image, app.args.join(" ")));
+        guards.push(spawn_prefixed(Command::new("docker").args(&args), sink));
     }
     guards
 }
@@ -2561,10 +2835,10 @@ fn wait_for_ready(name: &str, app: &backend::AppConfig) {
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
-    eprintln!(
-        "  \x1b[33mwarning\x1b[0m: dependency '{}' not ready after timeout; starting dependents anyway",
+    ui::warn(format!(
+        "dependency '{}' not ready after timeout; starting dependents anyway",
         name
-    );
+    ));
 }
 
 fn resolve_workdir(project_dir: &Path, workdir: Option<&str>) -> std::path::PathBuf {
@@ -2580,7 +2854,7 @@ pub fn load_dotenv_file(path: &Path) -> Vec<(String, String)> {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("  Warning: Could not read env-file {:?}: {}", path, e);
+            ui::warn(format!("Could not read env-file {:?}: {}", path, e));
             return Vec::new();
         }
     };
@@ -2616,7 +2890,7 @@ fn resolve_env_source(source: &backend::EnvSource, project_dir: &Path) -> Vec<(S
             let path = project_dir.join(file_path);
             let envs = load_dotenv_file(&path);
             if !envs.is_empty() {
-                println!("  Loaded env-file: {}", path.display());
+                ui::detail(format!("loaded env-file: {}", path.display()));
             }
             envs
         }
@@ -2686,8 +2960,10 @@ pub fn resolve_env_for_dev(
     }
 }
 
-/// Spawn a command with its stdout/stderr prefixed line-by-line.
-fn spawn_prefixed(cmd: &mut Command, prefix: &str) -> LogTailGuard {
+/// Spawn a command with its stdout/stderr routed line-by-line through `sink`,
+/// which prefixes, filters (infra streams) and prints without tearing the
+/// spinner region.
+fn spawn_prefixed(cmd: &mut Command, sink: Arc<LineSink>) -> LogTailGuard {
     let child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -2696,34 +2972,37 @@ fn spawn_prefixed(cmd: &mut Command, prefix: &str) -> LogTailGuard {
     match child {
         Ok(mut c) => {
             if let Some(stdout) = c.stdout.take() {
-                let p = prefix.to_string();
+                let sink = sink.clone();
                 thread::spawn(move || {
                     let reader = BufReader::new(stdout);
                     for line in reader.lines() {
                         match line {
-                            Ok(l) => println!("{} {}", p, l),
+                            Ok(l) => sink.push(&l, false),
                             Err(_) => break,
                         }
                     }
                 });
             }
             if let Some(stderr) = c.stderr.take() {
-                let p = prefix.to_string();
+                let sink = sink.clone();
                 thread::spawn(move || {
                     let reader = BufReader::new(stderr);
                     for line in reader.lines() {
                         match line {
-                            Ok(l) => eprintln!("{} {}", p, l),
+                            Ok(l) => sink.push(&l, true),
                             Err(_) => break,
                         }
                     }
                 });
             }
-            LogTailGuard(Some(c))
+            LogTailGuard {
+                child: Some(c),
+                sink: Some(sink),
+            }
         }
         Err(e) => {
-            eprintln!("{} Warning: Could not start process: {}", prefix, e);
-            LogTailGuard(None)
+            ui::warn(format!("Could not start process: {}", e));
+            LogTailGuard::none()
         }
     }
 }
@@ -2741,6 +3020,7 @@ fn merge_docker_ports(port: Option<&str>, ports: Option<&[String]>) -> Vec<Strin
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_docker_dev(
     file: &str,
     ports: &[String],
@@ -2748,10 +3028,12 @@ fn spawn_docker_dev(
     envs: &[(String, String)],
     cwd: &Path,
     name: &str,
-    prefix: &str,
+    sink: Arc<LineSink>,
+    step: &ui::Step,
 ) -> LogTailGuard {
     let tag = format!("sp00ky-dev-{}", name);
     let container_name = format!("sp00ky-dev-app-{}", name);
+    step.set_message(format!("building {} (docker build)…", name));
 
     // Build the image (blocking, with prefixed output). `--platform` (when set)
     // builds for the host arch so the image's toolchain runs natively instead
@@ -2772,22 +3054,19 @@ fn spawn_docker_dev(
     match build_result {
         Ok(output) => {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
-                println!("{} {}", prefix, line);
+                sink.push(line, false);
             }
             for line in String::from_utf8_lossy(&output.stderr).lines() {
-                eprintln!("{} {}", prefix, line);
+                sink.push(line, true);
             }
             if !output.status.success() {
-                eprintln!(
-                    "{} Warning: docker build exited with {}",
-                    prefix, output.status
-                );
-                return LogTailGuard(None);
+                ui::warn(format!("docker build for '{}' exited with {}", name, output.status));
+                return LogTailGuard::none();
             }
         }
         Err(e) => {
-            eprintln!("{} Warning: Could not run docker build: {}", prefix, e);
-            return LogTailGuard(None);
+            ui::warn(format!("Could not run docker build for '{}': {}", name, e));
+            return LogTailGuard::none();
         }
     }
 
@@ -2826,28 +3105,16 @@ fn spawn_docker_dev(
 
     args.push(tag);
 
-    spawn_prefixed(Command::new("docker").args(&args).current_dir(cwd), prefix)
+    spawn_prefixed(Command::new("docker").args(&args).current_dir(cwd), sink)
 }
 
-/// Fixed colors for infrastructure services.
-const INFRA_COLORS: &[(&str, &str)] = &[
-    ("surrealdb", "\x1b[38;5;208m"), // orange
-    ("ssp", "\x1b[38;5;75m"),        // light blue
-    ("scheduler", "\x1b[38;5;213m"), // pink
-];
-
-fn infra_color(label: &str) -> &'static str {
-    INFRA_COLORS
-        .iter()
-        .find(|(name, _)| *name == label)
-        .map(|(_, color)| *color)
-        .unwrap_or("\x1b[37m")
-}
-
+/// Follow a container's logs through an infra sink. `--tail 0`: no backlog
+/// dump on attach; the sink filters to WARN+ unless `--verbose`.
 fn spawn_log_tail(container: &str, label: &str) -> LogTailGuard {
-    let prefix = format!("{}[{}]{}", infra_color(label), label, ANSI_RESET);
+    let sink = LineSink::new(label, ui::style().infra(label), StreamKind::Infra);
     spawn_prefixed(
-        Command::new("docker").args(["logs", "-f", "--tail", "50", container]),
-        &prefix,
+        Command::new("docker").args(["logs", "-f", "--tail", "0", container]),
+        sink,
     )
 }
+

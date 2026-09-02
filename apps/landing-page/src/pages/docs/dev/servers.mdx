@@ -20,6 +20,7 @@ export const npmCode = `apps:
       type: npm
       script: dev           # runs \`pnpm run dev\`
       workdir: ../api       # optional: directory to run from (relative to sp00ky.yml)
+      port: 3001            # optional: shown in the ready box; otherwise read from the server's output
     # ...other fields...`;
 
 export const dockerCode = `apps:
@@ -39,6 +40,7 @@ export const uvCode = `apps:
       type: uv
       script: server.py      # runs \`uv run server.py\`
       workdir: ../ml-service  # optional: directory to run from (relative to sp00ky.yml)
+      port: 8000             # optional: shown in the ready box
     # ...other fields...`;
 
 export const envCode = `apps:

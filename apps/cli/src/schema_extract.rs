@@ -93,17 +93,25 @@ fn ensure_image_present(image: &str) -> Result<()> {
         return Ok(());
     }
 
-    println!("  Pulling {} (one-time, ~hundreds of MB)...", image);
-    let status = Command::new("docker")
+    let step = crate::ui::step("SurrealDB image");
+    step.set_message(format!("pulling {} (one-time, ~hundreds of MB)…", image));
+    step.note(format!("pulling {} (one-time, ~hundreds of MB)", image));
+    let output = Command::new("docker")
         .args(["pull", image])
-        .status()
+        .output()
         .context(
             "Failed to invoke `docker pull`. Is Docker installed and running?\n\
              Install Docker from https://docs.docker.com/get-docker/.",
         )?;
-    if !status.success() {
-        bail!("`docker pull {}` failed", image);
+    if !output.status.success() {
+        step.fail("pull failed");
+        bail!(
+            "`docker pull {}` failed:\n{}",
+            image,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
+    step.done("pulled");
     Ok(())
 }
 
@@ -123,6 +131,17 @@ fn start_ephemeral_surreal_docker(port: u16) -> Result<String> {
             &format!("{}:8000", port),
             "-e",
             "SURREAL_CAPS_ALLOW_EXPERIMENTAL=surrealism,files",
+            // Bucket migrations with a file backend (`file:/buckets/<name>`)
+            // must apply here too, or every drift check fails with "File
+            // access denied". Same allowlist as the dev/cloud containers,
+            // backed by a throwaway tmpfs since nothing is read back.
+            "--tmpfs",
+            crate::backend::BUCKET_VOLUME_PATH,
+            "-e",
+            &format!(
+                "SURREAL_BUCKET_FOLDER_ALLOWLIST={}",
+                crate::backend::BUCKET_VOLUME_PATH
+            ),
             SURREALDB_IMAGE,
             "start",
             "--bind",
@@ -328,6 +347,9 @@ pub fn extract_old_and_new_schemas(
         );
         old_client.ensure_ns_db()?;
         if migrations_dir.exists() {
+            // Replay into the throwaway DB silently: this is a diff input,
+            // not a real apply, so per-migration progress would only confuse.
+            let _quiet = crate::ui::silenced();
             migrate::apply(&old_client, migrations_dir)?;
         }
         // Restore redacted signing keys on BOTH sides from the same source, so an
@@ -377,6 +399,7 @@ pub fn extract_expected_schema_from_migrations(migrations_dir: &Path) -> Result<
         client.ensure_ns_db()?;
 
         if migrations_dir.exists() {
+            let _quiet = crate::ui::silenced();
             migrate::apply(&client, migrations_dir)?;
         }
 
