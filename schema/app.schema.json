@@ -243,6 +243,12 @@
         "workdir": {
           "type": "string",
           "description": "Working directory relative to sp00ky.yml."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port the dev server listens on, so `spky dev` can show its URL in the ready box. Optional: without it the CLI uses the URL the server announces (e.g. vite's `Local: http://…`)."
         }
       },
       "additionalProperties": false
@@ -304,6 +310,12 @@
         "workdir": {
           "type": "string",
           "description": "Working directory relative to sp00ky.yml."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Port the dev server listens on, so `spky dev` can show its URL in the ready box. Optional: without it the CLI uses the URL the server announces (e.g. vite's `Local: http://…`)."
         }
       },
       "additionalProperties": false
