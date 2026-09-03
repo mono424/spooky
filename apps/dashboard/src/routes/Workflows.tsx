@@ -147,18 +147,24 @@ export function Workflows() {
                           {run.id}
                         </div>
                       </td>
-                      <td>
+                      <td data-label="Status">
                         <Pill tone={runTone(run.status)}>
                           {run.kill_requested && run.status === 'running'
                             ? 'stopping'
                             : run.status}
                         </Pill>
                       </td>
-                      <td class="dim">{relativeStamp(run.created_at)}</td>
-                      <td class="dim">
+                      <td class="dim" data-label="Started">{relativeStamp(run.created_at)}</td>
+                      <td class="dim" data-label="Duration">
                         {elapsed(run.created_at, run.finished_at)}
                       </td>
-                      <td class="ghost">{run.schedule_name ?? '—'}</td>
+                      <td
+                        class="ghost"
+                        data-label="Schedule"
+                        data-empty={!run.schedule_name}
+                      >
+                        {run.schedule_name ?? '—'}
+                      </td>
                     </tr>
                   )}
                 </For>

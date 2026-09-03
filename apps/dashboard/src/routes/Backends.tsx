@@ -68,12 +68,12 @@ export function Backends() {
                               </div>
                             </A>
                           </td>
-                          <td>
+                          <td data-label="Status">
                             <Pill tone={backendTone(b.status)}>{b.status}</Pill>
                           </td>
-                          <td class="dim">{formatMs(b.response_time_ms)}</td>
-                          <td class="dim">{relativeStamp(b.last_healthy)}</td>
-                          <td class="ghost truncate">{b.healthcheck_url}</td>
+                          <td class="dim" data-label="Response">{formatMs(b.response_time_ms)}</td>
+                          <td class="dim" data-label="Last healthy">{relativeStamp(b.last_healthy)}</td>
+                          <td class="ghost truncate" data-label="Healthcheck">{b.healthcheck_url}</td>
                         </tr>
                       )}
                     </For>

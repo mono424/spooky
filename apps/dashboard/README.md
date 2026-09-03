@@ -63,6 +63,15 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
 - **The timeline must not draw work that did not happen.** `_00_step_run`
   defaults `created_at` at row creation, so a `blocked` step has a timestamp;
   plotting from it invents a bar. See `hasStarted` in `WorkflowDetail.tsx`.
+- **Responsive by breakpoint, not by device.** Below 860px the sidebar becomes
+  an off-canvas drawer; below 560px tables turn into stacked records via
+  `data-label` on each `<td>` (a horizontally scrolling table on a phone hides
+  the columns that matter). A table that should keep scrolling instead opts out
+  with `class="keep-table"`. Add `data-label` to any new cell, and
+  `data-empty={!value}` to ones worth omitting entirely when blank.
+- **Nav active state comes from the router**, via `<A activeClass end>`. Do not
+  hand-roll `location.pathname === href`: the router prefixes every href with
+  the `/admin` base, so a manual compare silently matches nothing.
 - **`type::string(NONE)` is the string `"NONE"`, not null.** Any nullable column
   a query stringifies — timestamps and record links alike — must go through
   `isAbsent` / `orNull` in `lib/format.ts`, or an unset link becomes a dead

@@ -1033,3 +1033,340 @@ select:focus {
   background: var(--rule);
   margin: 14px 0;
 }
+
+/* ================================================================
+   MOBILE TOP BAR + DRAWER
+
+   Desktop keeps the permanent rail. Below the breakpoint the rail
+   becomes an off-canvas drawer behind a top bar, because 208px of a
+   375px screen is more than half the viewport spent on navigation.
+   ================================================================ */
+
+.mobile-bar {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 12px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--rule);
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+
+.burger {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 34px;
+  height: 34px;
+  padding: 0 7px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  flex: none;
+}
+
+.burger span {
+  display: block;
+  height: 1.5px;
+  background: var(--ink-dim);
+  border-radius: 1px;
+  transition: transform 0.18s ease, opacity 0.15s ease;
+}
+
+/* The bars fold into an X while the drawer is open, so the control
+   reads as a toggle rather than a one-way "open". */
+.burger.open span:nth-child(1) {
+  transform: translateY(5.5px) rotate(45deg);
+}
+.burger.open span:nth-child(2) {
+  opacity: 0;
+}
+.burger.open span:nth-child(3) {
+  transform: translateY(-5.5px) rotate(-45deg);
+}
+
+.mobile-title {
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scrim {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 40;
+  animation: fade 0.15s ease;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 860px) {
+  .mobile-bar {
+    display: flex;
+  }
+
+  .shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 232px;
+    max-width: 82vw;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    border-right: 1px solid var(--rule-strong);
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.45);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .scrim.show {
+    display: block;
+  }
+
+  /* Nav rows get finger-sized on touch. */
+  .nav-link {
+    padding: 10px 10px;
+    font-size: 13px;
+  }
+
+  .page-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 16px 12px;
+    margin-bottom: 14px;
+  }
+
+  /* Header actions wrap and start at the left edge once they are on
+     their own line, rather than hanging right under the title. */
+  .page-head > .row {
+    flex-wrap: wrap;
+  }
+
+  .page-body {
+    padding: 0 16px;
+  }
+
+  h1 {
+    font-size: 16px;
+  }
+
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+
+  .rail {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* With two per row, the left-hairline rule has to become a grid:
+     every cell needs a top border except the first row, and a left
+     border only in the second column. */
+  .rail > * + * {
+    border-left: none;
+  }
+  .rail > *:nth-child(even) {
+    border-left: 1px solid var(--rule);
+  }
+  .rail > *:nth-child(n + 3) {
+    border-top: 1px solid var(--rule);
+  }
+
+  .rail-value {
+    font-size: 20px;
+  }
+
+  .logs {
+    height: 56vh;
+    font-size: 11px;
+  }
+
+  /* On a phone the four-column log line leaves the message wrapping in a
+     narrow right-hand gutter. Put the metadata on its own line and give the
+     message the full width. */
+  .log-line {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    grid-template-areas:
+      "ts level target"
+      "msg msg msg";
+    gap: 2px 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+  }
+
+  .log-line > :nth-child(1) {
+    grid-area: ts;
+  }
+  .log-line > :nth-child(2) {
+    grid-area: level;
+  }
+  .log-line > :nth-child(3) {
+    grid-area: target;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .log-line > :nth-child(4) {
+    grid-area: msg;
+  }
+
+  .kv {
+    grid-template-columns: minmax(90px, 40%) 1fr;
+  }
+
+  /* The timeline gutter is a fixed pixel width; on a phone it would
+     eat the whole track. Shrink it and let the track scroll. */
+  .tl-axis,
+  .tl-row {
+    --tl-gutter: 118px;
+  }
+
+  .tl-label {
+    padding: 8px 6px 8px 10px;
+    font-size: 11px;
+  }
+
+  .tl-duration {
+    font-size: 9px;
+  }
+}
+
+@media (max-width: 560px) {
+  .page-head {
+    padding: 12px 12px 10px;
+  }
+
+  .page-body {
+    padding: 0 12px;
+  }
+
+  .panel-body,
+  .panel-head {
+    padding: 11px;
+  }
+
+  .login-card {
+    padding: 18px;
+  }
+
+  /* ---- tables become stacked records ----
+     A horizontally scrolling table on a phone hides the columns that
+     matter. Each row becomes a block, and every cell carries its own
+     label from the `data-label` the markup sets. Tables that opt out
+     (`.keep-table`) keep scrolling instead. */
+  table:not(.keep-table),
+  table:not(.keep-table) tbody,
+  table:not(.keep-table) tr,
+  table:not(.keep-table) td {
+    display: block;
+    width: 100%;
+  }
+
+  table:not(.keep-table) thead {
+    display: none;
+  }
+
+  table:not(.keep-table) tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  table:not(.keep-table) tr:last-child {
+    border-bottom: none;
+  }
+
+  table:not(.keep-table) td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 3px 0;
+    border-bottom: none;
+    text-align: right;
+  }
+
+  table:not(.keep-table) td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 9.5px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-ghost);
+    text-align: left;
+  }
+
+  /* The first cell is the record's identity, so it reads as a heading
+     rather than another label/value pair. */
+  table:not(.keep-table) td:first-child {
+    display: block;
+    text-align: left;
+    padding-bottom: 7px;
+    font-size: 13px;
+  }
+
+  table:not(.keep-table) td:first-child::before {
+    display: none;
+  }
+
+  /* A cell with nothing in it is noise on a phone; drop the whole row
+     rather than printing "SCHEDULE —". */
+  table:not(.keep-table) td[data-empty="true"] {
+    display: none;
+  }
+
+  .tl-axis,
+  .tl-row {
+    --tl-gutter: 96px;
+  }
+
+  .tl-track {
+    height: 30px;
+  }
+}
+
+/* Genuinely narrow: one readout per row, and a smaller value so a long
+   figure does not overflow its cell. */
+@media (max-width: 400px) {
+  .rail {
+    grid-template-columns: 1fr;
+  }
+  .rail > *:nth-child(even) {
+    border-left: none;
+  }
+  .rail > * + * {
+    border-top: 1px solid var(--rule);
+  }
+  .rail-value {
+    font-size: 19px;
+  }
+  .brand-mark {
+    font-size: 12px;
+  }
+}

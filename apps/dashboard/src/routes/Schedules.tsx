@@ -92,14 +92,14 @@ export function Schedules() {
                                 {s.name}
                               </div>
                             </td>
-                            <td class="ghost">{s.kind}</td>
-                            <td class="dim">{cadence(s)}</td>
-                            <td>
+                            <td class="ghost" data-label="Kind">{s.kind}</td>
+                            <td class="dim" data-label="Cadence">{cadence(s)}</td>
+                            <td data-label="State">
                               <Pill tone={scheduleState(s).tone}>
                                 {scheduleState(s).label}
                               </Pill>
                             </td>
-                            <td>
+                            <td data-label="Last run">
                               <Show
                                 when={s.last_run_status}
                                 fallback={<span class="ghost">never</span>}
@@ -114,7 +114,7 @@ export function Schedules() {
                                 </div>
                               </Show>
                             </td>
-                            <td class="dim">{relativeStamp(s.next_fire_at)}</td>
+                            <td class="dim" data-label="Next fire">{relativeStamp(s.next_fire_at)}</td>
                           </tr>
                         )}
                       </For>
@@ -328,15 +328,17 @@ export function ScheduleDetail() {
                                     {relativeStamp(r.fire_at ?? r.created_at)}
                                   </div>
                                 </td>
-                                <td>
+                                <td data-label="Status">
                                   <Pill tone={runTone(r.status)}>{r.status}</Pill>
                                 </td>
-                                <td class="dim">
+                                <td class="dim" data-label="Duration">
                                   {elapsed(r.created_at, r.finished_at)}
                                 </td>
-                                <td class="ghost">{orNull(r.trigger) ?? 'schedule'}</td>
-                                <td class="ghost truncate">{r.key || '—'}</td>
-                                <td class="ghost">
+                                <td class="ghost" data-label="Trigger">{orNull(r.trigger) ?? 'schedule'}</td>
+                                <td class="ghost truncate" data-label="Key" data-empty={!r.key}>
+                                  {r.key || '—'}
+                                </td>
+                                <td class="ghost" data-label="Run" data-empty={!runRef()}>
                                   {runRef() ? 'open →' : '—'}
                                 </td>
                               </tr>

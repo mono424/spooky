@@ -195,16 +195,16 @@ export function Overview(props: { data: OverviewData | undefined; error?: string
                                   {ssp.ip ?? '—'} · v{ssp.version}
                                 </div>
                               </td>
-                              <td>
+                              <td data-label="Status">
                                 <Pill tone={sspTone(ssp.status)}>
                                   {ssp.status}
                                 </Pill>
                               </td>
-                              <td>{formatCount(ssp.views)}</td>
-                              <td class="dim">
+                              <td data-label="Views">{formatCount(ssp.views)}</td>
+                              <td class="dim" data-label="Uptime">
                                 {formatUptime(ssp.uptime_seconds)}
                               </td>
-                              <td>
+                              <td data-label="Progress">
                                 <Show
                                   when={ssp.status !== 'ready'}
                                   fallback={
@@ -259,13 +259,13 @@ export function Overview(props: { data: OverviewData | undefined; error?: string
                                   </div>
                                 </A>
                               </td>
-                              <td>
+                              <td data-label="Status">
                                 <Pill tone={backendTone(b.status)}>
                                   {b.status}
                                 </Pill>
                               </td>
-                              <td class="dim">{formatMs(b.response_time_ms)}</td>
-                              <td class="ghost truncate">{b.url}</td>
+                              <td class="dim" data-label="Response">{formatMs(b.response_time_ms)}</td>
+                              <td class="ghost truncate" data-label="URL">{b.url}</td>
                             </tr>
                           )}
                         </For>
