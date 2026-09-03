@@ -432,6 +432,103 @@ pub enum BootstrapSource {
     },
 }
 
+/// Publishes bootstrap progress to the scheduler so the admin dashboard can
+/// render a real progress bar instead of a spinner.
+///
+/// Deliberately advisory: every post is fire-and-forget, failures are swallowed
+/// at `debug`, and nothing about the bootstrap waits on it. It is also
+/// throttled to one post per `MIN_POST_INTERVAL`, because a table of a few
+/// million rows pages fast enough to otherwise turn a progress bar into a
+/// denial-of-service against our own scheduler. The final post of each table is
+/// forced through the throttle so the bar always lands on a truthful number.
+pub struct BootstrapReporter {
+    client: reqwest::Client,
+    url: String,
+    ssp_id: String,
+    state: std::sync::Mutex<ssp_protocol::BootstrapProgress>,
+    /// Last time a post actually went out. `None` = never.
+    last_post: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+impl BootstrapReporter {
+    const MIN_POST_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
+
+    pub fn new(client: reqwest::Client, scheduler_base: &str, ssp_id: String) -> Self {
+        Self {
+            client,
+            url: format!("{}/ssp/bootstrap-progress", scheduler_base.trim_end_matches('/')),
+            ssp_id,
+            state: std::sync::Mutex::new(ssp_protocol::BootstrapProgress::default()),
+            last_post: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Total table count, known once `INFO FOR DB` has been read.
+    pub async fn set_total(&self, total: usize) {
+        {
+            let mut st = self.state.lock().expect("bootstrap progress poisoned");
+            st.tables_total = total;
+            st.tables_done = 0;
+            st.rows_loaded = 0;
+            st.current_table = None;
+        }
+        self.post(true).await;
+    }
+
+    pub async fn start_table(&self, table: &str) {
+        {
+            let mut st = self.state.lock().expect("bootstrap progress poisoned");
+            st.current_table = Some(table.to_string());
+        }
+        self.post(true).await;
+    }
+
+    /// One page landed. Throttled — this is the hot call.
+    pub async fn add_rows(&self, n: usize) {
+        {
+            let mut st = self.state.lock().expect("bootstrap progress poisoned");
+            st.rows_loaded = st.rows_loaded.saturating_add(n as u64);
+        }
+        self.post(false).await;
+    }
+
+    pub async fn finish_table(&self) {
+        {
+            let mut st = self.state.lock().expect("bootstrap progress poisoned");
+            st.tables_done = st.tables_done.saturating_add(1);
+            st.current_table = None;
+        }
+        self.post(true).await;
+    }
+
+    async fn post(&self, force: bool) {
+        let payload = {
+            // Both locks are held for a handful of instructions and never
+            // across the await below.
+            if !force {
+                let mut last = self.last_post.lock().expect("bootstrap progress poisoned");
+                let now = std::time::Instant::now();
+                match *last {
+                    Some(t) if now.duration_since(t) < Self::MIN_POST_INTERVAL => return,
+                    _ => *last = Some(now),
+                }
+            } else {
+                *self.last_post.lock().expect("bootstrap progress poisoned") =
+                    Some(std::time::Instant::now());
+            }
+            let st = self.state.lock().expect("bootstrap progress poisoned");
+            ssp_protocol::SspBootstrapProgressRequest {
+                ssp_id: self.ssp_id.clone(),
+                progress: st.clone(),
+            }
+        };
+
+        if let Err(e) = self.client.post(&self.url).json(&payload).send().await {
+            debug!(error = %e, "Bootstrap progress post failed (advisory, ignoring)");
+        }
+    }
+}
+
 impl BootstrapSource {
     async fn query(&self, surql: &str) -> anyhow::Result<Value> {
         match self {
@@ -577,7 +674,8 @@ pub async fn run_server() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     // Initialize observability
-    open_telemetry::init_tracing().context("Failed to initialize OpenTelemetry tracing")?;
+    let log_ring =
+        open_telemetry::init_tracing().context("Failed to initialize OpenTelemetry tracing")?;
     let (meter_provider, metrics) =
         metrics::init_metrics().context("Failed to initialize metrics")?;
     let metrics = Arc::new(metrics);
@@ -891,6 +989,22 @@ pub async fn run_server() -> anyhow::Result<()> {
 
     let mut app = create_app(state);
 
+    // `/logs` is the one route that cannot live in the portable core: it is an
+    // open-ended SSE stream, and `ssp_node::ApiBody` models only fully buffered
+    // JSON/text responses. Giving the core a streaming body type would touch
+    // every host (including the CF Worker shell) for the benefit of this single
+    // endpoint, so the axum shell serves it directly — with the same bearer
+    // auth the core applies to its own non-public routes.
+    app = app.merge(
+        Router::new()
+            .route("/logs", axum::routing::get(logs_stream_handler))
+            .layer(middleware::from_fn_with_state(
+                config.auth_secret.clone(),
+                auth_middleware,
+            ))
+            .with_state(Arc::clone(&log_ring)),
+    );
+
     if standalone {
         // Backup/restore plane (same routes as the scheduler's port 9667,
         // but behind this SSP's bearer auth — spooky-cloud must send
@@ -978,10 +1092,18 @@ pub async fn run_server() -> anyhow::Result<()> {
             // regardless of mode, because the scheduler's replica is
             // records-only and won't carry DEFINE TABLE strings.
             let metadata_source = BootstrapSource::Direct(db.clone());
+            // Only cluster mode has a scheduler to report progress to; in
+            // standalone there is nobody listening and this stays `None`.
+            let mut reporter: Option<BootstrapReporter> = None;
             let (data_source, mut expected_hashes) = if let Some(ref scheduler_url) = scheduler_url {
                 // Cluster mode: register with scheduler, then bootstrap from proxy
                 let client = reqwest::Client::new();
                 let scheduler_base = scheduler_url.trim_end_matches('/');
+                reporter = Some(BootstrapReporter::new(
+                    client.clone(),
+                    scheduler_base,
+                    ssp_id.clone(),
+                ));
 
                 info!("Registering SSP {} with scheduler at {}", ssp_id, scheduler_base);
 
@@ -1018,7 +1140,15 @@ pub async fn run_server() -> anyhow::Result<()> {
             let mut integrity_attempt = 0;
             loop {
                 attempt += 1;
-                match self_bootstrap_with_metadata(&metadata_source, &data_source, &processor, bootstrap_page_size).await {
+                match self_bootstrap_with_metadata(
+                    &metadata_source,
+                    &data_source,
+                    &processor,
+                    bootstrap_page_size,
+                    reporter.as_ref(),
+                )
+                .await
+                {
                     Ok(bootstrap_warnings_now) => {
                         *bootstrap_warnings.write().await = bootstrap_warnings_now;
                         // Seed the catch-up XOR accumulators from the freshly
@@ -1513,6 +1643,7 @@ async fn self_bootstrap_with_metadata(
     data_source: &BootstrapSource,
     processor: &Arc<RwLock<Circuit>>,
     page_size: usize,
+    reporter: Option<&BootstrapReporter>,
 ) -> anyhow::Result<Vec<String>> {
     info!("Starting self-bootstrap");
 
@@ -1577,6 +1708,9 @@ async fn self_bootstrap_with_metadata(
     let tables: Vec<String> = table_defs.iter().map(|(n, _)| n.clone()).collect();
 
     info!(count = tables.len(), "Discovered tables: {:?}", tables);
+    if let Some(r) = reporter {
+        r.set_total(tables.len()).await;
+    }
 
     // Step 1b: Pull `PERMISSIONS FOR select WHERE <expr>` text out of each
     // DEFINE TABLE string and stash it on the circuit. Stored as raw text so
@@ -1670,6 +1804,9 @@ async fn self_bootstrap_with_metadata(
     // `page_size` comes from NodeConfig (env: SPKY_SSP_BOOTSTRAP_PAGE_SIZE).
     let no_omit = BTreeSet::new();
     for table in &tables {
+        if let Some(r) = reporter {
+            r.start_table(table).await;
+        }
         let omit = opaque_by_table.get(table).unwrap_or(&no_omit);
         let mut record_count: usize = 0;
         // Keyset cursor: the highest `id` loaded so far. `None` = first page.
@@ -1711,6 +1848,9 @@ async fn self_bootstrap_with_metadata(
             }
 
             record_count += n;
+            if let Some(r) = reporter {
+                r.add_rows(n).await;
+            }
             if n < page_size {
                 break;
             }
@@ -1721,6 +1861,9 @@ async fn self_bootstrap_with_metadata(
             }
         }
         info!(table = %table, records = record_count, "Loaded table data");
+        if let Some(r) = reporter {
+            r.finish_table().await;
+        }
 
         // The data source is the scheduler's replica, which is fed by the
         // per-row ingest events and can be missing everything written while
@@ -1868,6 +2011,68 @@ async fn upstream_row_count(source: &BootstrapSource, table: &str) -> Option<u64
             None
         }
     }
+}
+
+/// `GET /logs` — recent history then a live tail, as SSE.
+///
+/// Mirrors the scheduler's `/admin/api/logs` exactly, because the scheduler
+/// relays this response through to the dashboard byte for byte. Behind bearer
+/// auth: the scheduler attaches `SPKY_AUTH_SECRET` like it does for every other
+/// SSP call.
+async fn logs_stream_handler(
+    State(ring): State<Arc<maintenance::log_ring::LogRing>>,
+    axum::extract::Query(q): axum::extract::Query<LogsQuery>,
+) -> impl IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use futures::stream::{self, StreamExt};
+    use tokio::sync::broadcast::error::RecvError;
+
+    let backfill = q.backfill.unwrap_or(500).min(10_000);
+    let tail = q.tail.unwrap_or(true);
+
+    fn line_event(line: &maintenance::log_ring::LogLine) -> axum::response::sse::Event {
+        axum::response::sse::Event::default()
+            .event("line")
+            .json_data(line)
+            .unwrap_or_else(|_| axum::response::sse::Event::default().comment("unserialisable line"))
+    }
+
+    let history = ring.snapshot(backfill);
+    let rx = ring.subscribe();
+    let backlog = stream::iter(
+        history
+            .into_iter()
+            .map(|l| Ok::<_, std::convert::Infallible>(line_event(&l))),
+    );
+
+    let keep_alive = KeepAlive::new().interval(std::time::Duration::from_secs(15));
+
+    if !tail {
+        return Sse::new(backlog.boxed()).keep_alive(keep_alive);
+    }
+
+    let live = stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Ok(line) => Some((Ok::<_, std::convert::Infallible>(line_event(&line)), rx)),
+            // Report the gap rather than hiding it; the dashboard renders this
+            // as an explicit "N lines dropped" marker.
+            Err(RecvError::Lagged(n)) => Some((
+                Ok(Event::default().event("dropped").data(n.to_string())),
+                rx,
+            )),
+            Err(RecvError::Closed) => None,
+        }
+    });
+
+    Sse::new(backlog.chain(live).boxed()).keep_alive(keep_alive)
+}
+
+#[derive(serde::Deserialize)]
+struct LogsQuery {
+    #[serde(default)]
+    tail: Option<bool>,
+    #[serde(default)]
+    backfill: Option<usize>,
 }
 
 // --- Middleware ---

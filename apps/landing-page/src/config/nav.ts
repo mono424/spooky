@@ -97,6 +97,7 @@ export const docsNav = [
       { text: 'Vault architecture', href: `${basePath}/docs/reference/vault` },
       { text: 'SSP API', href: `${basePath}/docs/reference/ssp-api` },
       { text: 'Scheduler API', href: `${basePath}/docs/reference/scheduler-api` },
+      { text: 'Admin dashboard', href: `${basePath}/docs/reference/admin-dashboard` },
     ],
   },
 ];

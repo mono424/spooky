@@ -165,8 +165,31 @@ impl SspPool {
                 cpu_usage,
                 memory_usage,
                 env: None,
+                bootstrap: None,
             };
             self.ssps.insert(ssp_id.to_string(), info);
+        }
+    }
+
+    /// When this SSP last changed lifecycle state. Drives the "how long has it
+    /// been bootstrapping" reading on the admin dashboard.
+    pub fn state_since(&self, ssp_id: &str) -> Option<Instant> {
+        self.state_since.get(ssp_id).copied()
+    }
+
+    /// Record an advisory bootstrap-progress report. Ignored for an SSP we do
+    /// not know (a report can outlive a removal) and for one already `Ready`,
+    /// so a late in-flight post can never resurrect a finished progress bar.
+    pub fn set_bootstrap_progress(
+        &mut self,
+        ssp_id: &str,
+        progress: ssp_protocol::BootstrapProgress,
+    ) {
+        if self.ssp_states.get(ssp_id) == Some(&SspState::Ready) {
+            return;
+        }
+        if let Some(ssp) = self.ssps.get_mut(ssp_id) {
+            ssp.bootstrap = Some(progress);
         }
     }
 
@@ -220,6 +243,10 @@ impl SspPool {
         self.state_since.insert(ssp_id.to_string(), Instant::now());
         self.buffer_overflowed.remove(ssp_id);
         self.bootstrap_failures.remove(ssp_id);
+        // The bar is done; drop it so `/info` never shows a stale one.
+        if let Some(ssp) = self.ssps.get_mut(ssp_id) {
+            ssp.bootstrap = None;
+        }
 
         // Return and clear buffered messages
         self.message_buffers

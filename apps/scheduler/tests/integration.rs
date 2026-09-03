@@ -181,7 +181,11 @@ impl TestHarness {
     }
 
     fn metrics_router(&self) -> Router {
-        let state = MetricsState {
+        metrics::create_metrics_router(self.metrics_state())
+    }
+
+    fn metrics_state(&self) -> MetricsState {
+        MetricsState {
             ssp_pool: Arc::clone(&self.ssp_pool),
             query_tracker: Arc::clone(&self.query_tracker),
             job_tracker: Arc::clone(&self.job_tracker),
@@ -216,8 +220,7 @@ impl TestHarness {
             },
             drift: Arc::new(RwLock::new(scheduler::drift::DriftState::default())),
             drift_config: scheduler::drift::DriftConfig::default(),
-        };
-        metrics::create_metrics_router(state)
+        }
     }
 
     fn full_app(&self) -> Router {
@@ -242,6 +245,7 @@ impl TestHarness {
             cpu_usage: None,
             memory_usage: None,
             env: None,
+            bootstrap: None,
         };
         let mut pool = self.ssp_pool.write().await;
         pool.upsert(ssp_info);
@@ -261,6 +265,7 @@ impl TestHarness {
             cpu_usage: None,
             memory_usage: None,
             env: None,
+            bootstrap: None,
         };
         let mut pool = self.ssp_pool.write().await;
         pool.upsert(ssp_info);
@@ -2031,5 +2036,635 @@ mod drift_tests {
         assert_eq!(recloner.calls.load(Ordering::SeqCst), 0);
         let st = hook.state.read().await;
         assert!(drift::state_json(&st, &hook.cfg)["mismatched"].as_array().unwrap().is_empty());
+    }
+}
+
+// ===========================================================================
+// Admin plane (`/admin/api/*`)
+// ===========================================================================
+
+mod admin_plane {
+    use super::*;
+    use axum::extract::ConnectInfo;
+    use scheduler::admin::{self, AdminConfig};
+    use std::net::SocketAddr;
+
+    /// The admin router over the shared harness.
+    ///
+    /// `dir` deliberately points at a path that does not exist in most tests:
+    /// a scheduler built from a checkout has no dashboard bundle, and that
+    /// must be a working API with a placeholder page rather than a failure.
+    fn admin_app(h: &TestHarness, password: Option<&str>) -> Router {
+        let config = AdminConfig {
+            enabled: true,
+            host: "127.0.0.1".to_string(),
+            port: 9668,
+            dir: std::path::PathBuf::from("/nonexistent/dashboard"),
+            password: password.map(str::to_string),
+            access: None,
+            session_ttl: std::time::Duration::from_secs(3600),
+        };
+        let (_state, router) = admin::build(
+            config,
+            h.metrics_state(),
+            Arc::clone(&h.transport),
+            maintenance::log_ring::LogRing::new(128),
+            h.config.db.clone(),
+            // Never populated: these tests cover the plane's behaviour when the
+            // scheduler has no database handle yet, which is also its behaviour
+            // during the initial replica clone.
+            admin::new_db_slot(),
+            300,
+            15,
+        );
+        router
+    }
+
+    /// `oneshot` carries no connection info, but the login handler rate-limits
+    /// per peer address, so tests have to supply one.
+    fn with_peer(mut req: Request<axum::body::Body>, ip: &str) -> Request<axum::body::Body> {
+        let addr: SocketAddr = format!("{ip}:40000").parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        req
+    }
+
+    fn get(path: &str) -> Request<axum::body::Body> {
+        Request::builder()
+            .uri(path)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    fn get_auth(path: &str, token: &str) -> Request<axum::body::Body> {
+        Request::builder()
+            .uri(path)
+            .header("Authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    fn login_req(body: Value, ip: &str) -> Request<axum::body::Body> {
+        with_peer(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/api/session")
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+            ip,
+        )
+    }
+
+    async fn body_json(res: axum::response::Response) -> Value {
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    }
+
+    /// Sign in with the break-glass password and return the bearer token.
+    ///
+    /// Takes the router rather than the harness: each `admin_app` call builds
+    /// its own `SessionStore`, so a token is only valid against the router that
+    /// minted it. Tests must therefore build one router and clone it.
+    async fn breakglass_token(app: &Router, password: &str) -> String {
+        let res = app
+            .clone()
+            .oneshot(login_req(json!({ "password": password }), "10.0.0.1"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        body_json(res).await["token"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn config_is_reachable_without_a_token() {
+        let h = TestHarness::new().await;
+        let res = admin_app(&h, None)
+            .oneshot(get("/admin/api/config"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = body_json(res).await;
+        assert_eq!(body["scheduler_id"], "test-scheduler");
+        assert!(body["version"].is_string());
+        // This is what tells the frontend whether to offer the break-glass
+        // toggle at all.
+        assert_eq!(body["breakglass_available"], false);
+    }
+
+    #[tokio::test]
+    async fn config_reports_breakglass_when_a_password_is_set() {
+        let h = TestHarness::new().await;
+        let res = admin_app(&h, Some("pw"))
+            .oneshot(get("/admin/api/config"))
+            .await
+            .unwrap();
+        assert_eq!(body_json(res).await["breakglass_available"], true);
+    }
+
+    #[tokio::test]
+    async fn every_other_endpoint_requires_a_token() {
+        let h = TestHarness::new().await;
+        for path in [
+            "/admin/api/me",
+            "/admin/api/overview",
+            "/admin/api/backends",
+            "/admin/api/backends/api",
+            "/admin/api/logs",
+            "/admin/api/workflows/runs",
+            "/admin/api/workflows/runs/x",
+            "/admin/api/workflows/stream",
+            "/admin/api/schedules",
+        ] {
+            let res = admin_app(&h, None).oneshot(get(path)).await.unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::UNAUTHORIZED,
+                "{path} must be behind auth"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_malformed_or_unknown_token_is_rejected() {
+        let h = TestHarness::new().await;
+        for token in ["", "nonsense", "Bearer nested"] {
+            let res = admin_app(&h, None)
+                .oneshot(get_auth("/admin/api/overview", token))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "token {token:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn breakglass_login_succeeds_and_the_token_works() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("hunter2"));
+        let token = breakglass_token(&app, "hunter2").await;
+
+        let res = app
+            .oneshot(get_auth("/admin/api/me", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let me = body_json(res).await;
+        assert_eq!(me["mode"], "breakglass");
+        assert_eq!(me["subject"], "breakglass");
+    }
+
+    #[tokio::test]
+    async fn breakglass_rejects_a_wrong_password() {
+        let h = TestHarness::new().await;
+        let res = admin_app(&h, Some("hunter2"))
+            .oneshot(login_req(json!({ "password": "wrong" }), "10.0.0.2"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn password_only_login_is_refused_when_no_password_is_configured() {
+        let h = TestHarness::new().await;
+        // Not merely "wrong password" — with SPKY_ADMIN_PASSWORD unset the
+        // whole path must be closed, never fall back to some default.
+        let res = admin_app(&h, None)
+            .oneshot(login_req(json!({ "password": "" }), "10.0.0.3"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn an_empty_password_never_matches_an_unset_one() {
+        let h = TestHarness::new().await;
+        let res = admin_app(&h, None)
+            .oneshot(login_req(json!({ "username": "alice", "password": "" }), "10.0.0.4"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_roster_login_without_a_database_fails_closed() {
+        let h = TestHarness::new().await;
+        // No database handle, so no access method can be discovered. This must
+        // deny, not fall through to the break-glass branch.
+        let res = admin_app(&h, Some("hunter2"))
+            .oneshot(login_req(
+                json!({ "username": "alice", "password": "hunter2" }),
+                "10.0.0.5",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn failures_do_not_disclose_why() {
+        let h = TestHarness::new().await;
+
+        let wrong_password = admin_app(&h, Some("hunter2"))
+            .oneshot(login_req(json!({ "password": "nope" }), "10.0.0.6"))
+            .await
+            .unwrap();
+        let unknown_user = admin_app(&h, Some("hunter2"))
+            .oneshot(login_req(
+                json!({ "username": "ghost", "password": "nope" }),
+                "10.0.0.7",
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(wrong_password.status(), unknown_user.status());
+        assert_eq!(
+            body_json(wrong_password).await,
+            body_json(unknown_user).await,
+            "a login failure must not reveal whether the account exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_is_rate_limited_per_address() {
+        let h = TestHarness::new().await;
+        // One router across the attempts, so they share a rate limiter.
+        let app = admin_app(&h, Some("hunter2"));
+
+        for i in 0..10 {
+            let res = app
+                .clone()
+                .oneshot(login_req(json!({ "password": "wrong" }), "10.9.9.9"))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "attempt {i}");
+        }
+
+        let blocked = app
+            .clone()
+            .oneshot(login_req(json!({ "password": "wrong" }), "10.9.9.9"))
+            .await
+            .unwrap();
+        assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // A different address is unaffected — the limiter must not become a
+        // denial of service against every other operator.
+        let other = app
+            .oneshot(login_req(json!({ "password": "hunter2" }), "10.9.9.10"))
+            .await
+            .unwrap();
+        assert_eq!(other.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn logout_revokes_the_token() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("hunter2"));
+
+        let res = app
+            .clone()
+            .oneshot(login_req(json!({ "password": "hunter2" }), "10.0.0.8"))
+            .await
+            .unwrap();
+        let token = body_json(res).await["token"].as_str().unwrap().to_string();
+
+        let logout = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/api/logout")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(logout.status(), StatusCode::NO_CONTENT);
+
+        let after = app
+            .oneshot(get_auth("/admin/api/overview", &token))
+            .await
+            .unwrap();
+        assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn overview_carries_the_whole_cluster() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(get_auth("/admin/api/overview", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = body_json(res).await;
+        assert_eq!(body["scheduler"]["entity"], "scheduler");
+        assert_eq!(body["ssps"].as_array().unwrap().len(), 1);
+        assert_eq!(body["totals"]["ssps"], 1);
+        assert_eq!(body["totals"]["ssps_ready"], 1);
+        // The dashboard draws its deadline bar against this.
+        assert_eq!(body["bootstrap_timeout_secs"], 300);
+        assert!(body["server_time_ms"].as_u64().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn overview_and_info_agree_about_ssp_state() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let admin = body_json(
+            app.oneshot(get_auth("/admin/api/overview", &token))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let info = body_json(h.metrics_router().oneshot(get("/info")).await.unwrap()).await;
+
+        let info_ssp = info
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == "ssp")
+            .unwrap();
+
+        // Both are built from `metrics::build_entities`, and that must stay
+        // true: an operator comparing the two must never see them disagree.
+        assert_eq!(admin["ssps"][0]["id"], info_ssp["id"]);
+        assert_eq!(admin["ssps"][0]["status"], info_ssp["status"]);
+    }
+
+    #[tokio::test]
+    async fn ssp_entities_carry_the_progress_fields() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+
+        let info = body_json(h.metrics_router().oneshot(get("/info")).await.unwrap()).await;
+        let ssp = info
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entity"] == "ssp")
+            .unwrap();
+
+        assert!(ssp.get("state_seconds").is_some());
+        assert_eq!(ssp["buffered_events"], 0);
+        // A ready SSP has no bootstrap in flight.
+        assert!(ssp["bootstrap"].is_null());
+    }
+
+    #[tokio::test]
+    async fn backends_list_is_empty_but_well_formed() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let body = body_json(
+            app.oneshot(get_auth("/admin/api/backends", &token))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(body["backends"].as_array().unwrap().len(), 0);
+        assert_eq!(body["check_interval_secs"], 15);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_backend_is_a_404() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(get_auth("/admin/api/backends/ghost", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn workflow_endpoints_are_unavailable_until_the_database_handle_lands() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        // The admin plane comes up with the HTTP servers, before
+        // `Scheduler::start()` has built the shared handle. That window must
+        // be a clean 503, matching how every other endpoint behaves while the
+        // scheduler is still cloning.
+        for path in [
+            "/admin/api/workflows/runs",
+            "/admin/api/workflows/runs/abc",
+            "/admin/api/workflows/stream",
+            "/admin/api/schedules",
+        ] {
+            let res = app
+                .clone()
+                .oneshot(get_auth(path, &token))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_log_source_is_rejected() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(get_auth("/admin/api/logs?source=backend:api", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn logs_for_an_unknown_ssp_are_a_404() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(get_auth("/admin/api/logs?source=ssp:ghost", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_scheduler_log_stream_replays_history() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(get_auth(
+                "/admin/api/logs?source=scheduler&tail=false",
+                &token,
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream")
+        );
+        // `tail=false` closes on its own, so the body is finite and safe to
+        // collect here — a tailing stream would hang this test forever.
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&bytes).len() < 10_000);
+    }
+
+    #[tokio::test]
+    async fn a_missing_dashboard_bundle_serves_a_placeholder_not_a_broken_api() {
+        let h = TestHarness::new().await;
+
+        let page = admin_app(&h, None).oneshot(get("/admin")).await.unwrap();
+        assert_eq!(page.status(), StatusCode::NOT_FOUND);
+        let body = page.into_body().collect().await.unwrap().to_bytes();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("Dashboard not bundled"), "{html}");
+
+        // The API on the same port keeps working, which is the whole point of
+        // serving the bundle from disk rather than embedding it.
+        let api = admin_app(&h, None)
+            .oneshot(get("/admin/api/config"))
+            .await
+            .unwrap();
+        assert_eq!(api.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn the_admin_plane_does_not_serve_the_ingest_routes() {
+        let h = TestHarness::new().await;
+        // The separation is the security boundary: publishing the admin port
+        // must not publish `/proxy/query`, which runs arbitrary SurrealQL.
+        for path in ["/proxy/query", "/ingest", "/metrics", "/health", "/info"] {
+            let res = admin_app(&h, None).oneshot(get(path)).await.unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::NOT_FOUND,
+                "{path} must not exist on the admin port"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_ingest_plane_does_not_serve_the_admin_api() {
+        let h = TestHarness::new().await;
+        for path in ["/admin/api/config", "/admin/api/overview"] {
+            let res = h.full_app().oneshot(get(path)).await.unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::NOT_FOUND,
+                "{path} must not exist on the ingest port"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn bootstrap_progress_is_recorded_and_cleared_on_ready() {
+        let h = TestHarness::new().await;
+
+        // A registered but still-bootstrapping SSP.
+        {
+            let mut pool = h.ssp_pool.write().await;
+            pool.upsert(SspInfo {
+                id: "ssp-boot".to_string(),
+                url: "http://10.0.0.9:8667".to_string(),
+                version: "test".to_string(),
+                connected_at: std::time::Instant::now(),
+                last_heartbeat: std::time::Instant::now(),
+                query_count: 0,
+                views: 0,
+                cpu_usage: None,
+                memory_usage: None,
+                env: None,
+                bootstrap: None,
+            });
+            pool.mark_bootstrapping("ssp-boot");
+        }
+
+        let res = h
+            .ssp_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/ssp/bootstrap-progress")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(
+                        json!({
+                            "ssp_id": "ssp-boot",
+                            "tables_done": 3,
+                            "tables_total": 10,
+                            "rows_loaded": 4200,
+                            "current_table": "message"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let info = body_json(h.metrics_router().oneshot(get("/info")).await.unwrap()).await;
+        let ssp = info
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == "ssp-boot")
+            .unwrap();
+        assert_eq!(ssp["status"], "bootstrapping");
+        assert_eq!(ssp["bootstrap"]["tables_done"], 3);
+        assert_eq!(ssp["bootstrap"]["tables_total"], 10);
+        assert_eq!(ssp["bootstrap"]["rows_loaded"], 4200);
+        assert_eq!(ssp["bootstrap"]["current_table"], "message");
+
+        // Going ready must drop the bar rather than leave a stale one behind.
+        h.ssp_pool.write().await.mark_ready("ssp-boot");
+        let info = body_json(h.metrics_router().oneshot(get("/info")).await.unwrap()).await;
+        let ssp = info
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == "ssp-boot")
+            .unwrap();
+        assert_eq!(ssp["status"], "ready");
+        assert!(ssp["bootstrap"].is_null());
+    }
+
+    #[tokio::test]
+    async fn progress_for_an_unknown_ssp_is_accepted_and_ignored() {
+        let h = TestHarness::new().await;
+        // Advisory: a report can outlive the SSP it describes, and that must
+        // never be an error the bootstrapping SSP has to handle.
+        let res = h
+            .ssp_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/ssp/bootstrap-progress")
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(
+                        json!({ "ssp_id": "ghost", "tables_done": 1, "tables_total": 2 })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
     }
 }

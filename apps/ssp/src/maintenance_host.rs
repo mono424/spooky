@@ -73,8 +73,17 @@ impl MaintenanceHost for SspHost {
         // 3. Re-bootstrap directly from the restored DB. No expected hashes —
         //    hash verification only applies in cluster mode.
         let source = BootstrapSource::Direct(self.db.clone());
-        crate::self_bootstrap_with_metadata(&source, &source, &self.processor, self.bootstrap_page_size)
-            .await
+        // No progress reporting: this is a post-restore rebuild against the
+        // local DB, not a cluster bootstrap, so there is no scheduler waiting
+        // to render a bar for it.
+        crate::self_bootstrap_with_metadata(
+            &source,
+            &source,
+            &self.processor,
+            self.bootstrap_page_size,
+            None,
+        )
+        .await
             .context("Failed to re-bootstrap circuit from restored database")?;
         {
             let mut guard = self.processor.write().await;

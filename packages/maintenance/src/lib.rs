@@ -11,6 +11,7 @@ pub mod backend_health;
 pub mod backup;
 pub mod db;
 pub mod host;
+pub mod log_ring;
 pub mod restore;
 pub mod routes;
 pub mod s3;

@@ -81,6 +81,22 @@ impl BackendStatus {
     }
 }
 
+/// How many probe results each backend keeps. At the 15s default interval this
+/// is a 30-minute window — enough for the admin dashboard's detail page to show
+/// a shape the moment it opens, small enough to stay a rounding error in RAM
+/// (a `Vec` of 120 small structs per backend).
+pub const HISTORY_LEN: usize = 120;
+
+/// One recorded health probe. `ms` is present even for a failure, because the
+/// time a failing check took to fail is itself diagnostic (a 3s timeout and an
+/// instant connection-refused are very different problems).
+#[derive(Debug, Clone, Copy)]
+pub struct HealthSample {
+    pub at: SystemTime,
+    pub ms: u64,
+    pub status: BackendStatus,
+}
+
 /// Cached health state for a single backend
 #[derive(Debug, Clone)]
 pub struct BackendHealthEntry {
@@ -93,6 +109,10 @@ pub struct BackendHealthEntry {
     pub last_checked: Option<SystemTime>,
     pub last_healthy: Option<SystemTime>,
     pub response_time_ms: Option<u64>,
+    /// Rolling probe history, oldest first, capped at [`HISTORY_LEN`].
+    /// Ephemeral like the rest of this struct: a scheduler restart starts the
+    /// window over.
+    pub history: std::collections::VecDeque<HealthSample>,
 }
 
 impl BackendHealthEntry {
@@ -107,6 +127,7 @@ impl BackendHealthEntry {
             last_checked: None,
             last_healthy: None,
             response_time_ms: None,
+            history: std::collections::VecDeque::with_capacity(HISTORY_LEN),
         }
     }
 
@@ -187,6 +208,14 @@ pub async fn check_backends_once(
             if status == BackendStatus::Healthy {
                 entry.last_healthy = Some(now);
             }
+            if entry.history.len() == HISTORY_LEN {
+                entry.history.pop_front();
+            }
+            entry.history.push_back(HealthSample {
+                at: now,
+                ms: response_time_ms,
+                status,
+            });
         }
     }
 }

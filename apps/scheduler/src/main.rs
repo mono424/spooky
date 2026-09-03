@@ -3,6 +3,8 @@ use scheduler::config::SchedulerConfig;
 use scheduler::transport::HttpTransport;
 use std::sync::Arc;
 use tracing::{debug, error, info};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<()> {
@@ -31,11 +33,21 @@ async fn run() -> Result<()> {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("scheduler=info,warn"));
     let compact = std::env::var("SPKY_LOG_FORMAT").as_deref() == Ok("compact");
-    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+
+    // A second sink beside stdout: a bounded in-memory ring the admin
+    // dashboard tails over SSE. Composed as a layer so `docker logs` behaviour
+    // — including the compact/no-timestamp form `spky dev` relies on — is
+    // completely unchanged.
+    let log_ring = maintenance::log_ring::LogRing::new(10_000);
+    let ring_layer = maintenance::log_ring::LogRingLayer::new(Arc::clone(&log_ring));
+
+    let registry = tracing_subscriber::registry().with(filter).with(ring_layer);
     if compact {
-        builder.compact().without_time().init();
+        registry
+            .with(tracing_subscriber::fmt::layer().compact().without_time())
+            .init();
     } else {
-        builder.init();
+        registry.with(tracing_subscriber::fmt::layer()).init();
     }
 
     // Resolve the local IP once, off the runtime — `hostname -I` is a
@@ -107,6 +119,11 @@ async fn run() -> Result<()> {
         config.health_check_interval_secs,
     );
 
+    // The admin plane builds its own MetricsState over the SAME caches, so the
+    // dashboard and `/info` can never disagree about backend health.
+    let backend_health_cache_for_admin = backend_health_cache.clone();
+    let shared_backend_configs_for_admin = shared_backend_configs.clone();
+
     let metrics_router = scheduler::metrics::create_metrics_router(
         scheduler.metrics_state(
             std::sync::Arc::clone(&query_tracker),
@@ -159,6 +176,38 @@ async fn run() -> Result<()> {
         scheduler.config().ingest_host.as_deref().unwrap_or("0.0.0.0"),
         scheduler.config().ingest_port
     );
+
+    // Admin plane, on its OWN listener. Everything merged into `app` above is
+    // unauthenticated on the assumption that the ingest port is private; the
+    // dashboard is the first surface meant for a browser, so it gets a port an
+    // operator can publish without publishing `/proxy/query` alongside it.
+    let admin_config = scheduler::admin::AdminConfig::from_env();
+    let admin_server = if admin_config.enabled {
+        let admin_addr = admin_config.bind_addr();
+        let (_admin_state, admin_router) = scheduler::admin::build(
+            admin_config,
+            scheduler.metrics_state(
+                std::sync::Arc::clone(&query_tracker),
+                std::sync::Arc::clone(&job_tracker),
+                backend_health_cache_for_admin,
+                shared_backend_configs_for_admin,
+            ),
+            std::sync::Arc::clone(&transport),
+            std::sync::Arc::clone(&log_ring),
+            scheduler.config().db.clone(),
+            std::sync::Arc::clone(&scheduler.db_slot),
+            scheduler.config().bootstrap_timeout_secs,
+            scheduler.config().health_check_interval_secs,
+        );
+        // No global TimeoutLayer here, unlike the ingest app: `/admin/api/logs`
+        // and `/admin/api/workflows/stream` are SSE streams that are SUPPOSED
+        // to stay open indefinitely, and a request deadline would sever them on
+        // a timer. The admin plane has no long-blocking handlers to protect.
+        Some((admin_addr, admin_router))
+    } else {
+        info!("Admin dashboard disabled (SPKY_ADMIN_ENABLED)");
+        None
+    };
     
     // Start background monitors
     scheduler::metrics::start_query_reassignment_monitor(
@@ -227,6 +276,36 @@ async fn run() -> Result<()> {
             .await
             .expect("HTTP server failed");
     });
+
+    // Spawn the admin server. A failure to bind it is loud but NOT fatal: an
+    // occupied admin port must not take down sync for every client just to
+    // deny an operator a dashboard.
+    let admin_handle = tokio::spawn(async move {
+        let Some((addr, router)) = admin_server else {
+            // Nothing to serve; park forever so the select! arm never fires.
+            std::future::pending::<()>().await;
+            return;
+        };
+        info!("Starting admin server on {}...", addr);
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(listener) => {
+                // `into_make_service_with_connect_info` so the login handler
+                // can see the peer address it rate-limits on.
+                if let Err(e) = axum::serve(
+                    listener,
+                    router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                .await
+                {
+                    error!(error = %e, "Admin server failed");
+                }
+            }
+            Err(e) => {
+                error!(addr = %addr, error = %e, "Failed to bind the admin port; dashboard unavailable");
+            }
+        }
+        std::future::pending::<()>().await;
+    });
     
     // Handle graceful shutdown
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
@@ -259,6 +338,7 @@ async fn run() -> Result<()> {
             info!("Shutting down...");
         }
         _ = server_handle => info!("HTTP server stopped"),
+        _ = admin_handle => info!("Admin server stopped"),
         _ = scheduler_handle => info!("Scheduler stopped"),
     }
 

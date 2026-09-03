@@ -22,12 +22,22 @@ pub struct SspInfo {
     pub memory_usage: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::HashMap<String, String>>,
+    /// Last bootstrap progress this SSP reported, if any. Advisory only —
+    /// nothing in the bootstrap handshake reads it. Cleared when the SSP goes
+    /// Ready so a later `/info` never shows a stale bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap: Option<ssp_protocol::BootstrapProgress>,
 }
 
 /// HTTP-based transport for communicating with SSP sidecars
 #[derive(Clone)]
 pub struct HttpTransport {
     client: Client,
+    /// Separate client for responses that are *meant* to stay open (SSE log
+    /// tails). `client`'s 30s request timeout is correct for every RPC-shaped
+    /// call and fatal for a stream, and reqwest applies it to the whole
+    /// response, not just the headers.
+    stream_client: Client,
     ssp_auth_secret: Option<String>,
 }
 
@@ -39,9 +49,30 @@ impl HttpTransport {
             .build()
             .expect("Failed to create HTTP client");
 
+        let stream_client = Client::builder()
+            // No overall timeout; a connect timeout still bounds the one part
+            // of a stream that should never take long.
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("Failed to create streaming HTTP client");
+
         let ssp_auth_secret = std::env::var("SPKY_AUTH_SECRET").ok();
 
-        Self { client, ssp_auth_secret }
+        Self { client, stream_client, ssp_auth_secret }
+    }
+
+    /// GET a long-lived response (an SSE stream) from an absolute URL, with the
+    /// SSP bearer attached. The response is returned unread so the caller can
+    /// relay its body as it arrives.
+    pub async fn get_stream(&self, url: &str) -> Result<reqwest::Response> {
+        let mut request = self.stream_client.get(url);
+        if let Some(ref secret) = self.ssp_auth_secret {
+            request = request.bearer_auth(secret);
+        }
+        request
+            .send()
+            .await
+            .with_context(|| format!("Failed to open stream at {}", url))
     }
 
     /// POST a JSON payload to a specific SSP endpoint

@@ -286,6 +286,42 @@ pub struct SspBootstrapVerifyResponse {
     pub recloned: bool,
 }
 
+/// How far along an SSP is in loading its circuit from the scheduler's frozen
+/// snapshot.
+///
+/// This rides its own fire-and-forget message rather than the heartbeat,
+/// because the heartbeat loop deliberately stays silent until the SSP reaches
+/// `Ready` (see `apps/ssp/src/lib.rs`) — which is exactly the window this
+/// describes. Every field is `serde(default)`-friendly, so an older SSP that
+/// never sends it and a newer one that does both work against either
+/// scheduler; a dashboard with no progress falls back to rendering the phase
+/// and its elapsed time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BootstrapProgress {
+    /// Tables fully loaded so far.
+    #[serde(default)]
+    pub tables_done: usize,
+    /// Tables the bootstrap intends to load in total. 0 ⇒ not yet known.
+    #[serde(default)]
+    pub tables_total: usize,
+    /// Rows loaded across all tables so far.
+    #[serde(default)]
+    pub rows_loaded: u64,
+    /// The table currently being loaded, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_table: Option<String>,
+}
+
+/// `POST /ssp/bootstrap-progress` — advisory, best-effort, and never retried.
+/// Losing one costs a slightly stale progress bar and nothing else, so the
+/// scheduler answers it without touching any bootstrap decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SspBootstrapProgressRequest {
+    pub ssp_id: String,
+    #[serde(flatten)]
+    pub progress: BootstrapProgress,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SspHeartbeat {
     pub ssp_id: String,

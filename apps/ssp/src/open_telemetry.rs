@@ -9,7 +9,13 @@ use opentelemetry_sdk::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer, Registry};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use maintenance::log_ring::{LogRing, LogRingLayer};
 use std::env;
+use std::sync::Arc;
+
+/// Lines of history the SSP keeps for `GET /logs`. Same size as the
+/// scheduler's; see `maintenance::log_ring`.
+const LOG_RING_CAPACITY: usize = 10_000;
 
 /// Console formatter. `SPKY_LOG_FORMAT=compact` (set by `spky dev`) drops the
 /// timestamp and span noise: the CLI prefixes and re-renders each line itself.
@@ -21,7 +27,13 @@ fn fmt_layer() -> Box<dyn Layer<Registry> + Send + Sync> {
     }
 }
 
-pub fn init_tracing() -> Result<(), anyhow::Error> {
+/// Initialise tracing and return the in-memory ring that `GET /logs` serves.
+///
+/// The ring is a third sink beside stdout and (when configured) OTLP; adding it
+/// changes nothing about either.
+pub fn init_tracing() -> Result<Arc<LogRing>, anyhow::Error> {
+    let log_ring = LogRing::new(LOG_RING_CAPACITY);
+    let ring_layer = LogRingLayer::new(Arc::clone(&log_ring));
     let otlp_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -78,6 +90,7 @@ pub fn init_tracing() -> Result<(), anyhow::Error> {
         // EnvFilter is a global filter so its position in the stack is moot.
         Registry::default()
             .with(fmt_layer())
+            .with(ring_layer)
             .with(env_filter)
             .with(telemetry_layer)
             .with(log_layer)
@@ -86,9 +99,10 @@ pub fn init_tracing() -> Result<(), anyhow::Error> {
         // Console-only: no OTLP exporters
         Registry::default()
             .with(fmt_layer())
+            .with(ring_layer)
             .with(env_filter)
             .init();
     }
 
-    Ok(())
+    Ok(log_ring)
 }

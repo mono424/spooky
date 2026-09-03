@@ -33,6 +33,7 @@ somewhere else, and `spky <command> --help` for the flags of any single command.
 | `spky api add` | Register a backend and generate its outbox table. [Docs](/docs/backend/add) |
 | `spky bucket` | `add` a file bucket, or configure its storage `backend`. [Docs](/docs/client/buckets) |
 | `spky flag` | Feature flags: `list`, `create`, `get`, `delete`, `enable`, `disable`, `set`, `unset`, `eval`. `set` adds a targeting rule, `eval` dry-runs one user. [Docs](/docs/client/feature-flags) |
+| `spky admin` | Operator roster (`_00_admin`): `list`, `add <user>`, `remove <user>`. Grants access to the feature-flag editor and the [admin dashboard](/docs/reference/admin-dashboard). Root-only — nobody promotes themselves. |
 | `spky recipe <name>` | Render a cookbook snippet (`live-list`, `optimistic-mutation`, `crdt-text-field`). `spky recipe list` for the index. |
 | `spky agents init` | Generate `AGENTS.md`, parameterized by your schema. [Docs](/docs/reference/ai-agents) |
 | `spky mcp` | MCP server for editors and agents: `serve`, `token`, `tokens`, `revoke`, `install`. [Docs](/docs/reference/mcp) |

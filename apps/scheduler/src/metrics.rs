@@ -442,7 +442,7 @@ const SENSITIVE_PATTERNS: &[&str] = &[
 ];
 
 /// Mask values in an env map where the key matches any sensitive pattern.
-fn mask_sensitive_env(
+pub fn mask_sensitive_env(
     env: serde_json::Map<String, serde_json::Value>,
 ) -> serde_json::Map<String, serde_json::Value> {
     env.into_iter()
@@ -459,7 +459,7 @@ fn mask_sensitive_env(
 }
 
 /// Convert `["KEY=value", ...]` to a `serde_json::Map`.
-fn vec_env_to_map(entries: &[String]) -> serde_json::Map<String, serde_json::Value> {
+pub fn vec_env_to_map(entries: &[String]) -> serde_json::Map<String, serde_json::Value> {
     entries
         .iter()
         .map(|entry| {
@@ -485,6 +485,15 @@ fn hashmap_env_to_map(
 async fn info_handler(
     State(state): State<MetricsState>,
 ) -> Json<serde_json::Value> {
+    Json(serde_json::Value::Array(build_entities(&state).await))
+}
+
+/// Assemble the `/info` entity list: one `scheduler` entity, one per SSP, one
+/// per health-checked backend.
+///
+/// Split out of `info_handler` so the admin dashboard's `/admin/api/overview`
+/// serves the *same* view of the cluster rather than a second, drifting one.
+pub async fn build_entities(state: &MetricsState) -> Vec<serde_json::Value> {
     let scheduler_status = match *state.status.read().await {
         SchedulerStatus::Cloning => "cloning",
         SchedulerStatus::Ready => "ready",
@@ -519,6 +528,13 @@ async fn info_handler(
                     .map(|s| s.to_string());
                 let ssp_env = ssp.env.as_ref()
                     .map(|e| serde_json::Value::Object(mask_sensitive_env(hashmap_env_to_map(e))));
+                // How long this SSP has held its current phase. For a
+                // bootstrapping or replaying one this is the only universally
+                // available progress signal (`bootstrap` below is richer but
+                // only arrives from an SSP new enough to report it).
+                let state_seconds = pool
+                    .state_since(&ssp.id)
+                    .map(|t| now.duration_since(t).as_secs());
                 serde_json::json!({
                     "entity": "ssp",
                     "id": ssp.id,
@@ -528,6 +544,9 @@ async fn info_handler(
                     "version": ssp.version,
                     "uptime_seconds": now.duration_since(ssp.connected_at).as_secs(),
                     "last_heartbeat_seconds_ago": last_heartbeat_seconds_ago,
+                    "state_seconds": state_seconds,
+                    "buffered_events": pool.buffer_size(&ssp.id),
+                    "bootstrap": ssp.bootstrap,
                     "env": ssp_env,
                 })
             })
@@ -607,7 +626,7 @@ async fn info_handler(
         }
     }
 
-    Json(serde_json::Value::Array(entities))
+    entities
 }
 
 /// Update backend health check configs at runtime (called by orchestrator on redeploy).

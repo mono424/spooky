@@ -1,6 +1,6 @@
 [package]
 name = "maintenance"
-version = "0.0.1-canary.209"
+version = "0.0.1-canary.210"
 edition = "2021"
 
 [dependencies]
@@ -17,6 +17,7 @@ surrealdb = { version = "3.1.2", default-features = false, features = ["protocol
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

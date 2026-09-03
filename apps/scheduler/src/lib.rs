@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod config;
 pub mod maintenance_host;
 pub mod replica;
@@ -176,6 +177,11 @@ pub enum SchedulerStatus {
 /// Main Scheduler service that orchestrates SurrealDB and SSP sidecars
 pub struct Scheduler {
     config: SchedulerConfig,
+    /// Filled in by `start()` once the shared root handle exists. The admin
+    /// plane reads it through `admin::SharedDbSlot`; nothing else needs it,
+    /// because every other consumer is handed the `Arc` directly at the point
+    /// `start()` creates it.
+    pub db_slot: crate::admin::SharedDbSlot,
     transport: Arc<HttpTransport>,
     pub replica: Arc<RwLock<Replica>>,
     pub ssp_pool: Arc<RwLock<SspPool>>,
@@ -252,6 +258,7 @@ impl Scheduler {
         let snapshot_seq_cell = replica.snapshot_seq_cell();
         Ok(Self {
             config,
+            db_slot: crate::admin::new_db_slot(),
             transport,
             replica: Arc::new(RwLock::new(replica)),
             ssp_pool: Arc::new(RwLock::new(SspPool::new(strategy, max_buffer_per_ssp))),
@@ -569,6 +576,9 @@ impl Scheduler {
         // previous `db.clone()` per consumer meant several independent sessions
         // to lose and several to re-establish.
         let shared_db = maintenance::db::ReconnectingDb::new(db, self.config.db.clone());
+        // Publish it for the admin plane, which came up with the HTTP servers
+        // (before this point) and answers 503 until this lands.
+        *self.db_slot.write().await = Some(Arc::clone(&shared_db));
         let drift_hook = self.drift_hook(Arc::clone(&shared_db));
 
         // The check the integrity check above cannot do: compare the replica

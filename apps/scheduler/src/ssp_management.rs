@@ -51,9 +51,23 @@ pub fn create_ssp_router(state: SspManagementState) -> Router {
         .route("/ssp/register", post(handle_register))
         .route("/ssp/bootstrap-verify", post(handle_bootstrap_verify))
         .route("/ssp/heartbeat", post(handle_heartbeat))
+        .route("/ssp/bootstrap-progress", post(handle_bootstrap_progress))
         .route("/admin/ssp/resync-all", post(handle_resync_all))
         .route("/admin/resync", post(handle_resync))
         .with_state(state)
+}
+
+/// Record an SSP's bootstrap progress. Purely advisory: the value is surfaced
+/// on `/info` and the admin dashboard and read by nothing else, so this always
+/// answers 200 — a bootstrapping SSP must never be made to care whether its
+/// progress bar landed.
+async fn handle_bootstrap_progress(
+    State(state): State<SspManagementState>,
+    Json(req): Json<ssp_protocol::SspBootstrapProgressRequest>,
+) -> StatusCode {
+    let mut pool = state.ssp_pool.write().await;
+    pool.set_bootstrap_progress(&req.ssp_id, req.progress);
+    StatusCode::OK
 }
 
 /// Force every connected SSP to re-bootstrap on its next heartbeat.
@@ -407,6 +421,7 @@ async fn handle_register(
         cpu_usage: None,
         memory_usage: None,
         env: request.env.clone(),
+        bootstrap: None,
     };
 
     // Under `drain_lock`: wait out any in-flight drain, freeze the snapshot,

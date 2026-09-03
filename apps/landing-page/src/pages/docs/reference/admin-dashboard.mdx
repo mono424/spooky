@@ -1,0 +1,192 @@
+---
+layout: ../../../layouts/DocsLayout.astro
+title: Admin dashboard
+description: "The operator dashboard the scheduler serves at /admin: sign-in, cluster overview, backend health, live logs and workflow runs."
+---
+
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+
+Every scheduler serves an operator dashboard. It shows the health of the
+scheduler and its SSPs, the end-to-end sync latency, the status of your
+backends, live logs, and workflow runs as they happen.
+
+## Opening it
+
+The dashboard is bundled into the official `mono424/spooky-scheduler` image and
+served on its own port:
+
+```
+http://<scheduler-host>:9668/admin
+```
+
+### Why a second port
+
+Everything on the ingest port (`9667`) is unauthenticated by design — including
+`POST /proxy/query`, which runs arbitrary SurrealQL against the scheduler's
+replica. That port is meant to be reachable only from inside your deployment's
+private network.
+
+The dashboard is the first surface intended for a browser, so it gets a listener
+of its own. Publish `9668`; keep `9667` private.
+
+```bash
+docker run -p 9668:9668 mono424/spooky-scheduler   # dashboard reachable
+# 9667 stays on the internal network
+```
+
+## Signing in
+
+Two ways in.
+
+### Admin accounts (the normal path)
+
+Any account on the `_00_admin` roster can sign in with its ordinary application
+credentials. Grant access with the CLI:
+
+```bash
+spky admin add alice
+spky admin list
+spky admin remove alice
+```
+
+The scheduler signs in to your database through your app's own record-access
+method, then checks the resulting user against `_00_admin`. Nothing extra to
+configure, and no second password to manage.
+
+The access method is discovered from `INFO FOR DB`. If your schema defines
+several record accesses and you want to pin one, set `SPKY_ADMIN_ACCESS`. Both
+`$username` and `$email` are tried as the identifier parameter, so either
+spelling of a `SIGNIN` clause works.
+
+### Break-glass password
+
+Set `SPKY_ADMIN_PASSWORD` to enable a password-only login that needs no
+database:
+
+```bash
+SPKY_ADMIN_PASSWORD='…'
+```
+
+This exists because the roster path needs a working database, and a database
+that is down is exactly when you most want the dashboard. A session established
+this way is flagged with a persistent banner in the UI.
+
+Leave the variable unset to disable this path entirely; there is no default
+password.
+
+### Session behaviour
+
+Sessions are held in the scheduler's memory and **do not survive a restart** —
+you will be asked to sign in again. Persisting them would mean writing an auth
+artifact into the very database you may be debugging, which is a worse trade.
+
+Failed logins are rate limited to 10 attempts per address per 5 minutes, and
+every failure returns the same response regardless of cause, so the endpoint
+cannot be used to discover which usernames exist.
+
+## Standalone use
+
+The same bundle runs outside a scheduler. Opened from anywhere else, the sign-in
+form grows an **endpoint** field; point it at a scheduler's admin port and it
+behaves identically.
+
+```bash
+pnpm --filter @spooky-sync/dashboard dev
+# then enter http://your-scheduler:9668 in the endpoint field
+```
+
+The dashboard authenticates with a bearer token in `localStorage`, keyed per
+endpoint, rather than a cookie — a cross-origin cookie would need
+`SameSite=None; Secure`, which browsers refuse over plain HTTP, and plain HTTP
+at an IP address is exactly how a scheduler is usually reached.
+
+## What it shows
+
+**Overview** — scheduler status, SSPs ready, backends healthy, ingest lag, and
+the end-to-end sync latency with a 30-minute sparkline. That latency is the
+scheduler's own heartbeat probe: it writes `_00_heartbeat:probe` upstream and
+times the full round trip through `/ingest`, the WAL, the broadcast and every
+SSP's circuit. It measures the real sync path, not a synthetic ping.
+
+**SSPs** — per-processor status, live view count, uptime and environment. An SSP
+that is bootstrapping or replaying shows a progress bar: tables loaded and rows
+read when the SSP reports it, and otherwise the phase with its elapsed time
+against the scheduler's bootstrap budget.
+
+**Backends** — status and response time for everything in `SPKY_BACKENDS`, with
+a detail page carrying a ~30-minute response-time history and the resolved
+healthcheck URL. Environment values are masked by the scheduler before they
+leave it.
+
+**Workflows** — runs updating in real time, and a run page built around a
+timeline: every step plotted on one shared axis, so where the time went is
+visible at a glance rather than reconstructed from timestamps. Click a step to
+expand its job id, output and error inline. A step still waiting on its
+dependencies is drawn hatched at the origin rather than as a bar, because it
+has not run. The scheduler runs a single shared poller behind the live list, so
+ten open dashboards cost your database exactly what one does, and a closed one
+costs nothing.
+
+**Schedules** — the definition, the next fire, recent fires, and a
+success/failure tally. The tally comes from `_00_run_rollup` rather than
+counting run rows, so it stays accurate after retention has pruned them.
+
+**Logs** — a live tail of the scheduler's or any SSP's log output, with level
+and text filters. If a viewer falls behind, the gap is shown explicitly rather
+than hidden.
+
+Backends have no log stream: the scheduler reaches them with HTTP health checks
+and has no access to their output.
+
+## Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SPKY_ADMIN_ENABLED` | `true` | Set to `0`/`false`/`off` to disable the admin listener entirely |
+| `SPKY_ADMIN_PORT` | `9668` | Admin listener port |
+| `SPKY_ADMIN_HOST` | `0.0.0.0` | Admin listener bind address |
+| `SPKY_ADMIN_DIR` | `/usr/share/spooky/dashboard` | Where the built dashboard lives |
+| `SPKY_ADMIN_PASSWORD` | unset | Break-glass password. Unset disables password-only login |
+| `SPKY_ADMIN_ACCESS` | auto | Pins the record-access method used for sign-in |
+| `SPKY_ADMIN_SESSION_TTL_SECS` | `28800` | Session lifetime (8 hours) |
+
+## Running from a checkout
+
+The dashboard is shipped as files rather than embedded in the binary, so
+`cargo build -p scheduler` needs no Node toolchain. A scheduler with no bundle
+starts normally, logs one warning, and serves a short placeholder page at
+`/admin`; the API on that port is unaffected.
+
+To build and serve it locally:
+
+```bash
+pnpm --filter @spooky-sync/dashboard build
+SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
+```
+
+## API
+
+Every endpoint is under `/admin/api` on the admin port. All require
+`Authorization: Bearer <token>` except `GET /admin/api/config`.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /admin/api/config` | Scheduler id, version, whether break-glass is available. Unauthenticated |
+| `POST /admin/api/session` | Sign in. `{username, password}` or `{password}` for break-glass |
+| `POST /admin/api/logout` | Revoke the current token |
+| `GET /admin/api/me` | Current session's subject, label and mode |
+| `GET /admin/api/overview` | Scheduler, SSP and backend entities plus totals |
+| `GET /admin/api/backends` | Backend list |
+| `GET /admin/api/backends/:name` | One backend with probe history and masked env |
+| `GET /admin/api/logs` | SSE. `?source=scheduler` or `ssp:<id>`, `&tail=`, `&backfill=` |
+| `GET /admin/api/workflows/runs` | Run list. `?name=`, `?schedule=`, `?status=`, `?limit=` |
+| `GET /admin/api/workflows/runs/:id` | One run with its steps and DAG |
+| `GET /admin/api/workflows/stream` | SSE. Run list, pushed on change |
+| `GET /admin/api/schedules` | Schedule definitions with next/last fire |
+| `GET /admin/api/schedules/:name` | One schedule, its recent fires, and its `_00_run_rollup` tally |
+
+The workflow endpoints are served by the scheduler rather than read from the
+database directly because `_00_workflow_run`, `_00_step_run` and
+`_00_schedule_run` are `PERMISSIONS NONE` — no record-auth token can read them.
+The scheduler holds root and is the cluster's only schedule ticker, which makes
+it the right place to serve them.

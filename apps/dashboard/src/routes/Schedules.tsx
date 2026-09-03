@@ -1,0 +1,358 @@
+import { For, Show, createResource, onCleanup } from 'solid-js';
+import { useNavigate, useParams } from '@solidjs/router';
+import { api } from '../api/client';
+import {
+  Cell,
+  Empty,
+  KeyValue,
+  PageHead,
+  Panel,
+  Pill,
+  Rail,
+  StatusDot,
+} from '../components/Chrome';
+import {
+  elapsed,
+  formatCount,
+  formatDuration,
+  formatStamp,
+  orNull,
+  relativeStamp,
+} from '../lib/format';
+import { runTone } from '../lib/status';
+import type { Schedule, ScheduleDetailData, ScheduleRun } from '../api/types';
+
+/**
+ * Two ways a schedule can be off, and they mean different things: `paused` is
+ * an operator decision, `config_disabled` came from the config file and will
+ * come back on the next `spky schedules sync`.
+ */
+function scheduleState(s: Pick<Schedule, 'paused' | 'config_disabled'>) {
+  if (s.config_disabled) return { label: 'disabled', tone: 'idle' };
+  if (s.paused) return { label: 'paused', tone: 'warn' };
+  return { label: 'active', tone: 'ok' };
+}
+
+function cadence(s: Pick<Schedule, 'cron' | 'every_ms'>) {
+  if (s.cron) return s.cron;
+  if (s.every_ms) return `every ${formatDuration(s.every_ms)}`;
+  return '—';
+}
+
+export function Schedules() {
+  const navigate = useNavigate();
+  const [data, { refetch }] = createResource(() =>
+    api.get<{ schedules: Schedule[] }>('/schedules'),
+  );
+
+  const timer = setInterval(refetch, 5000);
+  onCleanup(() => clearInterval(timer));
+
+  return (
+    <>
+      <PageHead crumb="Dashboard" title="Schedules" />
+
+      <div class="page-body">
+        <Show when={data()} fallback={<Empty>Loading…</Empty>}>
+          {(d) => (
+            <Panel flush>
+              <Show
+                when={d().schedules.length > 0}
+                fallback={
+                  <Empty>
+                    No schedules defined. They are declared in your config and
+                    applied with <span class="dim">spky schedules sync</span>.
+                  </Empty>
+                }
+              >
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Kind</th>
+                        <th>Cadence</th>
+                        <th>State</th>
+                        <th>Last run</th>
+                        <th>Next fire</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <For each={d().schedules}>
+                        {(s) => (
+                          <tr
+                            class="clickable"
+                            onClick={() =>
+                              navigate(`/schedules/${encodeURIComponent(s.name)}`)
+                            }
+                          >
+                            <td>
+                              <div class="row">
+                                <StatusDot tone={scheduleState(s).tone} />
+                                {s.name}
+                              </div>
+                            </td>
+                            <td class="ghost">{s.kind}</td>
+                            <td class="dim">{cadence(s)}</td>
+                            <td>
+                              <Pill tone={scheduleState(s).tone}>
+                                {scheduleState(s).label}
+                              </Pill>
+                            </td>
+                            <td>
+                              <Show
+                                when={s.last_run_status}
+                                fallback={<span class="ghost">never</span>}
+                              >
+                                <div class="row">
+                                  <Pill tone={runTone(s.last_run_status!)}>
+                                    {s.last_run_status}
+                                  </Pill>
+                                  <span class="ghost">
+                                    {relativeStamp(s.last_run_at)}
+                                  </span>
+                                </div>
+                              </Show>
+                            </td>
+                            <td class="dim">{relativeStamp(s.next_fire_at)}</td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+              </Show>
+            </Panel>
+          )}
+        </Show>
+      </div>
+    </>
+  );
+}
+
+/**
+ * One schedule: its definition, its recent fires, and the retention-proof
+ * tally from `_00_run_rollup`.
+ *
+ * The rollup matters because run rows are pruned. Counting `_00_schedule_run`
+ * would quietly under-report every schedule with a short history window; the
+ * engine maintains hourly buckets precisely so a view like this does not have
+ * to.
+ */
+export function ScheduleDetail() {
+  const params = useParams<{ name: string }>();
+  const name = () => decodeURIComponent(params.name);
+  const navigate = useNavigate();
+
+  const [result, { refetch }] = createResource(name, (n) =>
+    api.getResult<ScheduleDetailData>(`/schedules/${encodeURIComponent(n)}`),
+  );
+
+  const data = () => {
+    const r = result();
+    return r?.ok ? r.value : undefined;
+  };
+  const error = () => {
+    const r = result();
+    return r && !r.ok ? r.message : undefined;
+  };
+
+  const timer = setInterval(refetch, 5000);
+  onCleanup(() => clearInterval(timer));
+
+  const totals = () => {
+    const rollup = data()?.rollup ?? [];
+    return rollup.reduce(
+      (acc, b) => ({
+        success: acc.success + (b.success ?? 0),
+        failed: acc.failed + (b.failed ?? 0),
+        skipped: acc.skipped + (b.skipped ?? 0),
+        killed: acc.killed + (b.killed ?? 0),
+      }),
+      { success: 0, failed: 0, skipped: 0, killed: 0 },
+    );
+  };
+
+  const s = () => data()?.schedule;
+
+  return (
+    <>
+      <PageHead
+        crumb="Schedules"
+        title={name()}
+        subtitle={<Show when={s()}>{(v) => <>{cadence(v())}</>}</Show>}
+        actions={
+          <Show when={s()}>
+            {(v) => (
+              <Pill tone={scheduleState(v()).tone} dot>
+                {scheduleState(v()).label}
+              </Pill>
+            )}
+          </Show>
+        }
+      />
+
+      <div class="page-body">
+        <Show
+          when={!error()}
+          fallback={
+            <div class="panel">
+              <Empty>{error()}</Empty>
+            </div>
+          }
+        >
+          <Show when={data()} fallback={<Empty>Loading…</Empty>}>
+            {(d) => (
+              <div class="stack">
+                <Rail>
+                  <Cell
+                    label="Next fire"
+                    value={relativeStamp(d().schedule.next_fire_at)}
+                    foot={formatStamp(d().schedule.next_fire_at)}
+                    tone={scheduleState(d().schedule).tone}
+                  />
+                  <Cell
+                    label="Last run"
+                    value={d().schedule.last_run_status ?? 'never'}
+                    foot={relativeStamp(d().schedule.last_run_at)}
+                    tone={
+                      d().schedule.last_run_status
+                        ? runTone(d().schedule.last_run_status!)
+                        : undefined
+                    }
+                  />
+                  <Cell
+                    label="Succeeded"
+                    value={formatCount(totals().success)}
+                    foot="rolled up hourly"
+                    tone="ok"
+                  />
+                  <Cell
+                    label="Failed"
+                    value={formatCount(totals().failed)}
+                    foot={
+                      totals().skipped > 0
+                        ? `${formatCount(totals().skipped)} skipped`
+                        : 'rolled up hourly'
+                    }
+                    tone={totals().failed > 0 ? 'bad' : undefined}
+                  />
+                </Rail>
+
+                <Show when={d().schedule.last_error}>
+                  <Panel title="Last error">
+                    <pre class="json bad">{d().schedule.last_error}</pre>
+                  </Panel>
+                </Show>
+
+                <div class="grid grid-2">
+                  <Panel title="Definition">
+                    <KeyValue
+                      rows={[
+                        ['Kind', d().schedule.kind],
+                        ['Cadence', cadence(d().schedule)],
+                        ['Timezone', d().schedule.timezone ?? 'UTC'],
+                        ['Concurrency', d().schedule.concurrency],
+                        [
+                          'Timeout',
+                          d().schedule.timeout
+                            ? formatDuration(d().schedule.timeout! * 1000)
+                            : '—',
+                        ],
+                        [
+                          'Retries',
+                          d().schedule.max_retries != null
+                            ? `${d().schedule.max_retries} (${d().schedule.retry_strategy ?? 'default'})`
+                            : '—',
+                        ],
+                        ['History', d().schedule.history_mode ?? 'all'],
+                      ]}
+                    />
+                  </Panel>
+
+                  <Panel title="Target">
+                    <KeyValue
+                      rows={[
+                        ['Table', d().schedule.target_table ?? '—'],
+                        ['Path', d().schedule.path ?? '—'],
+                        ['For each', d().schedule.for_each ?? '—'],
+                        ['Key', d().schedule.for_each_key ?? '—'],
+                        ['Created', formatStamp(d().schedule.created_at)],
+                        ['Updated', formatStamp(d().schedule.updated_at)],
+                      ]}
+                    />
+                  </Panel>
+                </div>
+
+                <Panel
+                  title="Recent fires"
+                  sub="Newest first. Rows are pruned by your retention policy; the tally above is not."
+                  flush
+                >
+                  <Show
+                    when={d().runs.length > 0}
+                    fallback={<Empty>No fires recorded.</Empty>}
+                  >
+                    <div class="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Fired</th>
+                            <th>Status</th>
+                            <th>Duration</th>
+                            <th>Trigger</th>
+                            <th>Key</th>
+                            <th>Run</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <For each={d().runs}>
+                            {(r: ScheduleRun) => {
+                              // `type::string(NONE)` is the string "NONE", so a
+                              // fire that produced no workflow run must be
+                              // filtered here or every row grows a dead link.
+                              const runRef = () => orNull(r.workflow_run);
+                              return (
+                              <tr
+                                class={runRef() ? 'clickable' : undefined}
+                                onClick={() =>
+                                  runRef() &&
+                                  navigate(
+                                    `/workflows/${encodeURIComponent(runRef()!)}`,
+                                  )
+                                }
+                              >
+                                <td>
+                                  <div class="row">
+                                    <StatusDot tone={runTone(r.status)} />
+                                    {relativeStamp(r.fire_at ?? r.created_at)}
+                                  </div>
+                                </td>
+                                <td>
+                                  <Pill tone={runTone(r.status)}>{r.status}</Pill>
+                                </td>
+                                <td class="dim">
+                                  {elapsed(r.created_at, r.finished_at)}
+                                </td>
+                                <td class="ghost">{orNull(r.trigger) ?? 'schedule'}</td>
+                                <td class="ghost truncate">{r.key || '—'}</td>
+                                <td class="ghost">
+                                  {runRef() ? 'open →' : '—'}
+                                </td>
+                              </tr>
+                              );
+                            }}
+                          </For>
+                        </tbody>
+                      </table>
+                    </div>
+                  </Show>
+                </Panel>
+              </div>
+            )}
+          </Show>
+        </Show>
+      </div>
+    </>
+  );
+}
