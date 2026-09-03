@@ -1,4 +1,5 @@
 import type { Diagnostic} from 'surrealdb';
+import { DEFAULT_LOCAL_OP_TIMEOUT_MS, LocalOpTimeoutError } from './errors';
 import { applyDiagnostics, DateTime, RecordId, Surreal } from 'surrealdb';
 import type { Sp00kyConfig } from '../../types';
 import type { Logger } from '../logger/index';
@@ -110,6 +111,11 @@ export class LocalDatabaseService extends AbstractDatabaseService {
     // engine-backed client (built lazily) before any query is issued.
     super(createBareSurrealClient(), logger, events);
     this.config = config;
+    this.queryTimeoutMs = Math.max(0, config.localOpTimeoutMs ?? DEFAULT_LOCAL_OP_TIMEOUT_MS);
+  }
+
+  protected override timeoutError(query: string): Error {
+    return new LocalOpTimeoutError(query.slice(0, 80), this.queryTimeoutMs);
   }
 
   getConfig(): Sp00kyConfig<any>['database'] {

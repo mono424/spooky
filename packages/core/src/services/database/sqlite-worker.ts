@@ -47,6 +47,7 @@
  * hot path; the per-statement ops remain for the write/shim paths.
  */
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
+import { verifyLockStillHeld as verifyLockStillHeldBounded } from './sqlite-lock-verify';
 import {
   openDb,
   type OpenDbOptions,
@@ -201,17 +202,16 @@ function noteTick(): void {
 }
 setInterval(noteTick, 1000);
 
-async function verifyLockStillHeld(): Promise<void> {
-  const locks = workerLocks();
-  const name = currentLock?.name;
-  if (!locks || !name || typeof locks.query !== 'function') return;
-  try {
-    const state = await locks.query();
-    const stillHeld = (state.held ?? []).some((l) => l.name === name);
-    if (!stillHeld) await fence('lock missing after suspected freeze');
-  } catch {
-    /* query unavailable: fall back to the steal callback */
-  }
+// Bounded (see sqlite-lock-verify.ts): every op on the chain awaits this, and
+// a `locks.query()` that never answered stopped every reply to every client.
+function verifyLockStillHeld(): Promise<void> {
+  return verifyLockStillHeldBounded(
+    workerLocks() as any,
+    currentLock?.name,
+    (reason) => fence(reason),
+    undefined,
+    (msg) => console.warn(`[sqlite-worker] ${msg}`)
+  );
 }
 
 // ==================== db ops ====================

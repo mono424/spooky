@@ -23,6 +23,7 @@ export type {
   BlobUrlLease,
 } from './services/blobs/index';
 export { semverGt } from './utils/semver';
+export { LocalOpTimeoutError, DEFAULT_LOCAL_OP_TIMEOUT_MS } from './services/database/errors';
 export { fileToUint8Array, textToHtml } from './utils/index';
 export {
   blurhashSidecarPath,

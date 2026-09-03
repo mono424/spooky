@@ -246,6 +246,7 @@ async function handleBridgeRequest(msg: any) {
   const methodToType: Record<string, string> = {
     runQuery: 'RUN_QUERY',
     getTableData: 'GET_TABLE_DATA',
+    getQueryRows: 'GET_QUERY_ROWS',
     updateTableRow: 'UPDATE_TABLE_ROW',
     deleteTableRow: 'DELETE_TABLE_ROW',
     clearHistory: 'CLEAR_HISTORY',

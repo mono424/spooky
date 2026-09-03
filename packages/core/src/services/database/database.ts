@@ -11,12 +11,21 @@ export abstract class AbstractDatabaseService {
   protected logger: Logger;
   protected events: DatabaseEventSystem;
   /**
-   * Per-query deadline in ms; `0` disables. Only the remote service sets this
-   * (see `RemoteDatabaseService`) — a local query can be legitimately slow and
-   * has its own retry ladders, and there is no half-open-socket failure mode
-   * for an in-process engine.
+   * Per-query deadline in ms; `0` disables. The remote service sets it from
+   * `queryTimeoutMs` (see `RemoteDatabaseService`), the local one from
+   * `localOpTimeoutMs` (see `LocalDatabaseService`): a local query can be
+   * legitimately slow, but it must never be endless - every query waits on the
+   * previous link of {@link query}'s chain, and one that never settled wedged
+   * every later local op behind it.
    */
   protected queryTimeoutMs = 0;
+
+  /** The error a deadline expiry rejects with; the local service substitutes
+   *  its typed `LocalOpTimeoutError`. "timed out" in the message is
+   *  load-bearing either way: `classifySyncError` keys off it. */
+  protected timeoutError(_query: string): Error {
+    return new Error(`Remote query timed out after ${this.queryTimeoutMs}ms`);
+  }
   protected abstract eventType:
     | typeof DatabaseEventTypes.LocalQuery
     | typeof DatabaseEventTypes.RemoteQuery;
@@ -71,7 +80,7 @@ export abstract class AbstractDatabaseService {
             const result = (await withTimeout(
               pending as unknown as Promise<T>,
               this.queryTimeoutMs,
-              `Remote query timed out after ${this.queryTimeoutMs}ms`
+              () => this.timeoutError(query)
             )) as T;
             const duration = performance.now() - startTime;
 

@@ -140,6 +140,16 @@ export interface Sp00kyConfig<S extends SchemaStructure> {
      * failure the queue retries. `0` disables. Defaults to `60_000`.
      */
     queryTimeoutMs?: number;
+    /**
+     * Deadline (ms) for every LOCAL store operation (a SQLite worker round trip,
+     * or a query on the in-process surrealdb engine). Local ops are serialized
+     * too, and one that never answered - a worker starved behind a long select,
+     * a lock verification with no clock - left every `db.create`/`db.update`
+     * promise pending for the tab's lifetime. On expiry the call rejects with
+     * `LocalOpTimeoutError` (the op itself keeps running in the engine and is
+     * not retried). `0` disables. Defaults to `30_000`.
+     */
+    localOpTimeoutMs?: number;
   };
   /** The schema definition. */
   schema: S;

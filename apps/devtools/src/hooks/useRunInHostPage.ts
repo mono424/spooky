@@ -74,6 +74,36 @@ export function useRunInHostPage(
   };
 
   /**
+   * Rows of one active query, pulled on demand (the pushed state carries only
+   * counts and capped ids).
+   */
+  const getQueryRows = (
+    queryHash: number,
+    onSuccess: (rows: { data?: unknown; localArray?: unknown; remoteArray?: unknown } | null) => void,
+    onError?: (error: any) => void
+  ): void => {
+    run(
+      `(async function() {
+        try {
+          if (window.__00__ && window.__00__.getQueryRows) {
+            return { success: true, rows: await window.__00__.getQueryRows(${Number(queryHash)}) };
+          }
+          return { success: false, error: 'Sp00ky not found' };
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      })()`,
+      {
+        onSuccess: (result: any) => {
+          if (result?.success) onSuccess(result.rows ?? null);
+          else onError?.(result?.error ?? 'unknown');
+        },
+        onError,
+      }
+    );
+  };
+
+  /**
    * Get table data from the host page
    */
   const getTableData = (
@@ -296,6 +326,7 @@ export function useRunInHostPage(
     run,
     getSp00kyState,
     getTableData,
+    getQueryRows,
     runQuery,
     storageOp,
     flagOp,

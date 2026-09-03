@@ -7,7 +7,7 @@ import {
   type Accessor,
   type JSX,
 } from 'solid-js';
-import { useDevTools } from '../../context/DevToolsContext';
+import { useDevTools, type QueryRows } from '../../context/DevToolsContext';
 import { formatTime, formatRelativeTime, formatBytes } from '../../utils/formatters';
 import { TimingBreakdown } from '../timing/TimingBreakdown';
 import { QueryTimeline } from './QueryTimeline';
@@ -107,8 +107,10 @@ function Section(props: { title: string; children: JSX.Element }) {
 }
 
 function QueryDetail() {
-  const { state, selectedQueryHash, setSelectedQueryHash } = useDevTools();
+  const { state, selectedQueryHash, setSelectedQueryHash, fetchQueryRows } = useDevTools();
   const [tab, setTab] = createSignal<DetailTab>('overview');
+  // Rows arrive on demand: the pushed state carries counts and capped ids only.
+  const [rows, setRows] = createSignal<{ hash: number; rows: QueryRows | null; error?: string } | null>(null);
 
   const selectedQuery = createMemo(() => {
     const hash = selectedQueryHash();
@@ -122,9 +124,7 @@ function QueryDetail() {
     if (!q) return ['overview'];
     const t: DetailTab[] = ['overview'];
     if (q.query || (q.variables !== undefined && q.variables !== null)) t.push('query');
-    if (q.data !== undefined || q.localArray !== undefined || q.remoteArray !== undefined) {
-      t.push('data');
-    }
+    if (q.dataSize !== undefined || q.localCount !== undefined) t.push('data');
     if (q.timings) t.push('timing');
     return t;
   });
@@ -133,6 +133,18 @@ function QueryDetail() {
   // falls back to Overview only when the new query lacks that tab's content.
   // Closing the panel unmounts this component, so reopening starts at Overview.
   const active = createMemo<DetailTab>(() => (available().includes(tab()) ? tab() : 'overview'));
+
+  createEffect(() => {
+    const q = selectedQuery();
+    if (active() !== 'data' || !q) return;
+    const hash = q.queryHash;
+    if (rows()?.hash === hash) return;
+    setRows({ hash, rows: null });
+    fetchQueryRows(hash).then(
+      (r) => setRows((cur) => (cur?.hash === hash ? { hash, rows: r } : cur)),
+      (err) => setRows((cur) => (cur?.hash === hash ? { hash, rows: null, error: String(err) } : cur))
+    );
+  });
 
   return (
     <div class="query-detail">
@@ -231,20 +243,35 @@ function QueryDetail() {
               </Show>
 
               <Show when={active() === 'data'}>
-                <Show when={query().data !== undefined}>
-                  <Section title="Result data">
-                    <JsonView class="code-block" value={query().data} />
-                  </Section>
-                </Show>
-                <Show when={query().localArray !== undefined}>
-                  <Section title="Local array">
-                    <JsonView class="code-block" value={query().localArray} />
-                  </Section>
-                </Show>
-                <Show when={query().remoteArray !== undefined}>
-                  <Section title="Remote array">
-                    <JsonView class="code-block" value={query().remoteArray} />
-                  </Section>
+                <Show
+                  when={rows()?.hash === query().queryHash && rows()?.rows}
+                  fallback={
+                    <div class="detail-section-body">
+                      {rows()?.hash === query().queryHash && rows()?.error
+                        ? `Could not load rows: ${rows()?.error}`
+                        : 'Loading rows…'}
+                    </div>
+                  }
+                >
+                  {(r) => (
+                    <>
+                      <Show when={r().data !== undefined}>
+                        <Section title="Result data">
+                          <JsonView class="code-block" value={r().data} />
+                        </Section>
+                      </Show>
+                      <Show when={r().localArray !== undefined}>
+                        <Section title="Local array">
+                          <JsonView class="code-block" value={r().localArray} />
+                        </Section>
+                      </Show>
+                      <Show when={r().remoteArray !== undefined}>
+                        <Section title="Remote array">
+                          <JsonView class="code-block" value={r().remoteArray} />
+                        </Section>
+                      </Show>
+                    </>
+                  )}
                 </Show>
               </Show>
 

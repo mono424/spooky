@@ -28,6 +28,7 @@ export const BRIDGE_METHODS = {
   GET_STATE: 'getState',
   RUN_QUERY: 'runQuery',
   GET_TABLE_DATA: 'getTableData',
+  GET_QUERY_ROWS: 'getQueryRows',
   UPDATE_TABLE_ROW: 'updateTableRow',
   DELETE_TABLE_ROW: 'deleteTableRow',
   CLEAR_HISTORY: 'clearHistory',

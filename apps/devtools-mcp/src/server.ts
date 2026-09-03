@@ -80,6 +80,21 @@ export function createServer(bridge: Bridge, surreal?: SurrealClient | null): Mc
   );
 
   server.tool(
+    'get_query_rows',
+    'Fetch the rows (data, localArray, remoteArray) of ONE active query by its queryHash. ' +
+      'The state from get_active_queries carries counts and capped ids only.',
+    {
+      queryHash: z.number().describe('queryHash from get_active_queries'),
+      tabId: z.number().optional().describe('Browser tab ID'),
+    },
+    async ({ queryHash, tabId }) => {
+      if (!bridge.isConnected) throw new Error('No extension connected.');
+      const result = await bridge.request(BRIDGE_METHODS.GET_QUERY_ROWS, { queryHash }, tabId);
+      return json(result);
+    }
+  );
+
+  server.tool(
     'get_table_data',
     'Fetch records from a database table',
     {
@@ -155,7 +170,8 @@ export function createServer(bridge: Bridge, surreal?: SurrealClient | null): Mc
 
   server.tool(
     'get_active_queries',
-    'Get all active live queries and their data',
+    'Get all active live queries: surql, params, counts, capped membership ids and timings ' +
+      '(rows are not included; use get_query_rows for one query)',
     { tabId: z.number().optional().describe('Browser tab ID') },
     async ({ tabId }) => {
       if (bridge.isConnected) {

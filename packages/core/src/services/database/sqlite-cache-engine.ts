@@ -1,4 +1,6 @@
 import { applyPatch, type Operation } from 'fast-json-patch';
+import { DEFAULT_LOCAL_OP_TIMEOUT_MS, LocalOpTimeoutError } from './errors';
+import { withTimeout } from '../../utils/index';
 import type { QueryPlan, RelationPlan, WhereNode } from '@spooky-sync/query-builder';
 import {
   renderOrderSql,
@@ -117,6 +119,8 @@ export class SqliteCacheEngine implements LocalStore {
   private workerSelectConfigured: boolean;
   private events: DatabaseEventSystem = createDatabaseEventSystem();
   private bucketId = 'anon';
+  /** Deadline for one worker round trip; see `localOpTimeoutMs`. */
+  private readonly localOpTimeoutMs: number;
   /** Durability of the local store, set on every open. A plain Set of callbacks
    *  rather than a `DatabaseEventSystem` event: this changes at most once per
    *  open, and the typed event map is about query traffic. */
@@ -140,6 +144,7 @@ export class SqliteCacheEngine implements LocalStore {
     private logger: Logger,
     opts: { useOpfs?: boolean; workerSelect?: boolean; shared?: boolean } = {}
   ) {
+    this.localOpTimeoutMs = Math.max(0, config.localOpTimeoutMs ?? DEFAULT_LOCAL_OP_TIMEOUT_MS);
     this.useOpfs = opts.useOpfs ?? true;
     this.workerSelect = opts.workerSelect ?? config.workerSelect ?? true;
     this.workerSelectConfigured = this.workerSelect;
@@ -322,7 +327,19 @@ export class SqliteCacheEngine implements LocalStore {
       this.inFlightCalls.delete(tracked);
       settle();
     };
-    const result = this.transport.call<T>(type, payload).then(
+    // Deadline per op. The transport parks a call until the worker replies,
+    // and a worker starved behind a long op (or wedged on an unbounded lock
+    // check) answered never; every caller up the stack then waited forever.
+    // Reject the CALLER only: the op is still queued in the worker and its
+    // late reply is dropped by the transport (no pending entry left to
+    // resolve). Deliberately no teardown here - a slow worker is not a dead
+    // one, and killing it mid-write would cost more than the wait.
+    const timeoutMs = this.localOpTimeoutMs;
+    const result = withTimeout(
+      this.transport.call<T>(type, payload),
+      timeoutMs,
+      () => new LocalOpTimeoutError(type, timeoutMs)
+    ).then(
       (v: T) => {
         finish();
         s.inFlight--;
@@ -338,6 +355,13 @@ export class SqliteCacheEngine implements LocalStore {
       (e: unknown) => {
         finish();
         s.inFlight--;
+        if (e instanceof LocalOpTimeoutError) {
+          s.timeouts = (s.timeouts ?? 0) + 1;
+          this.logger.error(
+            { type, timeoutMs, Category: 'sp00ky-client::SqliteCacheEngine::rawCall' },
+            'Local store op did not answer within its deadline; rejecting the caller'
+          );
+        }
         throw e;
       }
     );
@@ -1224,6 +1248,8 @@ interface SqliteStats {
   inFlight: number;
   maxInFlight: number;
   byType: Record<string, number>;
+  /** Worker round trips that hit `localOpTimeoutMs` (see rawCall). */
+  timeouts?: number;
   /** Time ops spent waiting behind the opQueue before dispatch. */
   queueWaitMs: number;
   /** Time inside the worker's message handler (actual SQLite work). */

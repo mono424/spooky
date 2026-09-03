@@ -44,6 +44,7 @@ function makeSync(opts: { membershipKnown?: boolean } = {}) {
   });
   const notifyQuerySynced = vi.fn().mockResolvedValue(undefined);
   const dataModule: any = {
+    scheduleRematerialize: vi.fn(),
     getQueryById: vi.fn().mockReturnValue(queryState),
     getQueryByHash: vi.fn().mockReturnValue(queryState),
     updateQueryRemoteArray,

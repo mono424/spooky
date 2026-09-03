@@ -140,11 +140,19 @@ export interface ActiveQuery {
   listenerCount?: number;
   connectedQueries?: number[];
   dataHash?: number;
+  /** Rows: NOT in the pushed state; filled by `getQueryRows` when the Data tab is opened. */
   data?: any;
   localHash?: string;
   localArray?: any;
   remoteHash?: string;
   remoteArray?: any;
+  /** Membership sizes, always pushed. */
+  localCount?: number;
+  remoteCount?: number;
+  /** First ids of each membership array (capped; see `idsTruncated`). */
+  localIds?: string[];
+  remoteIds?: string[];
+  idsTruncated?: boolean;
   /** Detailed per-phase processing-time breakdown (DevTools/MCP debugging). */
   timings?: QueryTimings;
 }

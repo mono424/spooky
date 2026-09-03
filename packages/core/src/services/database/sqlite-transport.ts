@@ -128,13 +128,16 @@ export class WorkerSqliteTransport extends BaseTransport {
       this.handleMessage(ev.data);
     };
     // Surface a worker crash (wasm abort / OOM) instead of leaving every
-    // pending call hung forever — reject them all with a clear error.
+    // pending call hung forever — reject them all with a clear error, AND
+    // close: `failAll` alone left `connected` true, so every later call was
+    // posted to the dead worker and parked in `pending` for good. Closed, the
+    // engine sees `!connected` and spawns a fresh worker on its next open.
     const crash = (msg: string) => {
       this.logger.error(
         { err: this.makeError(msg), Category: 'sp00ky-client::SqliteCacheEngine::worker' },
         'Worker error'
       );
-      this.failAll(msg);
+      this.close(msg);
     };
     this.worker.onerror = (e: ErrorEvent) => crash(e.message || 'onerror');
     this.worker.onmessageerror = () => crash('messageerror');

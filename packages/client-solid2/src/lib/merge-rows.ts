@@ -15,6 +15,32 @@ import { snapshot } from 'solid-js';
  * inserted as-is and trailing rows are dropped, so add / remove / reorder all
  * reach coarse readers.
  */
+/**
+ * Field-level equality for the merge. `===` is not enough: the decoder hands
+ * out a fresh RecordId / Date instance for every record-link and datetime
+ * column on every emission, so by identity every one of those fields "changed"
+ * on every update - and a store write on an unchanged `id` re-ran everything a
+ * page keyed on that row (a thread's anchor, its composer, its whole subtree).
+ * Compare those wrappers by value; everything else stays identity (nested
+ * objects and arrays are reconciled by their own writes).
+ */
+export function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+  // RecordId (and the SDK's other value wrappers: Duration, Decimal, Uuid…)
+  // all carry a stable `toString`; two of the same class that print alike ARE
+  // the same value. Plain objects are excluded: their `toString` is
+  // "[object Object]" and would make every object equal to every other.
+  if (typeof a === 'object' && typeof b === 'object') {
+    const ctor = (a as any).constructor;
+    if (ctor && ctor === (b as any).constructor && ctor !== Object && ctor !== Array) {
+      return String(a) === String(b);
+    }
+  }
+  return false;
+}
+
 export function mergeRows(draft: any[], next: any[], key = 'id'): void {
   const byKey = new Map<any, any>();
   for (const row of draft) {
@@ -29,7 +55,7 @@ export function mergeRows(draft: any[], next: any[], key = 'id'): void {
 
     if (reuse) {
       for (const field of Object.keys(incoming)) {
-        if (reuse[field] !== incoming[field]) reuse[field] = incoming[field];
+        if (!sameValue(reuse[field], incoming[field])) reuse[field] = incoming[field];
       }
       // `snapshot` first: iterating the proxy's own keys while deleting from it
       // is not safe, and the raw object is what carries the stale fields.

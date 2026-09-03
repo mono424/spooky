@@ -128,6 +128,12 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
         detail: message.payload,
       })
     );
+  } else if (message.type === 'GET_QUERY_ROWS') {
+    window.dispatchEvent(
+      new CustomEvent('SP00KY_GET_QUERY_ROWS', {
+        detail: message.payload,
+      })
+    );
   } else if (message.type === 'GET_TABLE_DATA') {
     window.dispatchEvent(
       new CustomEvent('SP00KY_GET_TABLE_DATA', {

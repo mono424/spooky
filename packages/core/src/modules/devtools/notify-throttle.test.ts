@@ -74,9 +74,13 @@ afterEach(() => {
 });
 
 describe('DevToolsService state-push coalescing', () => {
-  it('pushes once immediately on connect', () => {
+  it('pushes once on connect, on the next macrotask', () => {
     vi.useFakeTimers();
     const { statePushes } = harness();
+    // Never inline: a push serializes the state, and the request can come
+    // from inside an ingest or a mutation the app is awaiting.
+    expect(statePushes().length).toBe(0);
+    vi.advanceTimersByTime(0);
     expect(statePushes().length).toBe(1);
   });
 
@@ -117,6 +121,7 @@ describe('DevToolsService state-push coalescing', () => {
     // straight away, so the panel never waits on a quiet app.
     vi.advanceTimersByTime(1000);
     (service as any).logEvent('C', {});
+    vi.advanceTimersByTime(0);
     expect(statePushes().length).toBe(before + 3);
   });
 

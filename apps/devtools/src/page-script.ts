@@ -219,6 +219,27 @@
     }, 3000);
   }
 
+  // Rows of one view, on demand: the pushed state carries counts + capped ids
+  // only (see core's DevToolsService.getActiveQueries).
+  window.addEventListener('SP00KY_GET_QUERY_ROWS', async (event: any) => {
+    const { requestId, queryHash } = event.detail;
+    const sp00ky = (window as any).__00__;
+    const respond = (body: Record<string, unknown>) =>
+      window.postMessage(
+        { type: 'SP00KY_BRIDGE_RESPONSE', source: 'sp00ky-devtools-page', requestId, ...body },
+        '*'
+      );
+    if (!sp00ky?.getQueryRows) {
+      respond({ success: false, error: 'Sp00ky not found or getQueryRows not supported' });
+      return;
+    }
+    try {
+      respond({ success: true, data: await sp00ky.getQueryRows(Number(queryHash)) });
+    } catch (err: any) {
+      respond({ success: false, error: err?.message || String(err) });
+    }
+  });
+
   // Listen for GET_TABLE_DATA requests from content script
   window.addEventListener('SP00KY_GET_TABLE_DATA', async (event: any) => {
     const { requestId, tableName } = event.detail;

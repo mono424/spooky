@@ -30,6 +30,14 @@ export interface StreamUpdate {
   localArray: RecordVersionArray;
   op?: 'CREATE' | 'UPDATE' | 'DELETE'; // Operation type for conditional debouncing
   /**
+   * Client-internal: not from the circuit. A membership-only change that
+   * needed no fetch is re-materialized through this same path so it cannot
+   * race a real update (DataModule.scheduleRematerialize). Carries the last
+   * known `localArray`; consumers that describe an INGEST (persist, metrics,
+   * devtools events) skip it.
+   */
+  synthetic?: boolean;
+  /**
    * End-to-end ingest latency for the WASM call that produced this update,
    * in milliseconds. Populated by StreamProcessorService.ingest. Undefined
    * for the initial register_view snapshot.

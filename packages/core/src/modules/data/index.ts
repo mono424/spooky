@@ -428,6 +428,12 @@ export class DataModule<S extends SchemaStructure> {
       return;
     }
 
+    this.queueStreamUpdate(update);
+  }
+
+  /** Coalesce `update` onto the query's trailing timer (see onStreamUpdate). */
+  private queueStreamUpdate(update: StreamUpdate): void {
+    const { queryHash } = update;
     // Clear existing timer if any
     if (this.debounceTimers.has(queryHash)) {
       // oxlint-disable-next-line no-non-null-assertion -- guarded by .has() check above
@@ -443,6 +449,31 @@ export class DataModule<S extends SchemaStructure> {
     }, this.streamDebounceTime);
 
     this.debounceTimers.set(queryHash, timer);
+  }
+
+  /**
+   * Re-materialize + notify a query whose MEMBERSHIP changed without any row
+   * needing to be fetched, i.e. without the SSP stream update that normally
+   * carries the notify. That is every row this client wrote itself: the local
+   * CREATE memoized it at `_00_rv = 1`, the server publishes it at 1, so the
+   * sync engine rightly fetches nothing - and then nobody told the subscribers
+   * that `remoteArray` now holds the id. The row appeared on reload only.
+   *
+   * Routed through the same per-query debounce as a real stream update, so it
+   * cannot race one: a pending real update already materializes against the
+   * current `remoteArray` and wins. The synthetic update re-uses the circuit's
+   * last `localArray` and skips the persist/metrics that describe an ingest.
+   */
+  scheduleRematerialize(queryHash: string): void {
+    if (this.debounceTimers.has(queryHash)) return;
+    const queryState = this.activeQueries.get(queryHash);
+    if (!queryState) return;
+    this.queueStreamUpdate({
+      queryHash,
+      localArray: queryState.config.localArray ?? [],
+      op: 'UPDATE',
+      synthetic: true,
+    });
   }
 
   /**
@@ -614,11 +645,24 @@ export class DataModule<S extends SchemaStructure> {
   private pendingIdsAt = 0;
   private pendingIdsInflight: Promise<{ writes: Set<string>; deletes: Set<string> }> | null = null;
   private static readonly PENDING_IDS_TTL_MS = 250;
+  // Bumped by every invalidation. A read carries the generation it started
+  // under, and a result from an older generation is neither cached nor
+  // returned to a caller that asked after the invalidation: it was taken
+  // before the outbox row it needs existed. Without this, a materialization
+  // that joined a read already in flight when `create()` invalidated saw the
+  // pre-create set, found "no change", and skipped its notify - the one
+  // stream update a CREATE gets, so the row stayed invisible until reload.
+  private pendingIdsGen = 0;
+  private static readonly PENDING_IDS_MAX_REREADS = 3;
 
   /** Drop the cached outbox ids. Cheap; call it on anything that could change
    *  `_00_pending_mutations`. */
   private invalidatePendingIds(): void {
     this.pendingIds = null;
+    this.pendingIdsGen++;
+    // The in-flight read (if any) predates this invalidation; whoever joins
+    // next starts a fresh one. Its own joiners re-read via the generation check.
+    this.pendingIdsInflight = null;
   }
 
   /**
@@ -770,7 +814,7 @@ export class DataModule<S extends SchemaStructure> {
       // normal re-query path.
       const newRecords = await this.materializeRecords(queryState, localArray);
       if (epoch !== this.local.epoch) return;
-      queryState.config.localArray = localArray;
+      if (!update.synthetic) queryState.config.localArray = localArray;
 
       const prevJson = JSON.stringify(queryState.records);
       const newJson = JSON.stringify(newRecords);
@@ -785,30 +829,34 @@ export class DataModule<S extends SchemaStructure> {
         queryState.lastUpdatedAt = Date.now();
       }
 
-      await this.local.query(
-        surql.seal(
-          surql.updateSet('id', [
-            'localArray',
-            'rowCount',
-            'updateCount',
-            'lastIngestLatency',
-            'materializationP55',
-            'materializationP90',
-            'materializationP99',
-          ])
-        ),
-        {
-          id: queryState.config.id,
-          localArray,
-          rowCount: localArray.length,
-          updateCount: queryState.updateCount,
-          lastIngestLatency: queryState.lastIngestLatencyMs,
-          materializationP55: percentiles.p55,
-          materializationP90: percentiles.p90,
-          materializationP99: percentiles.p99,
-        },
-        { epoch }
-      );
+      // A synthetic re-materialize did not come from an ingest: nothing about
+      // the circuit's view changed, so there is nothing to persist for it.
+      if (!update.synthetic) {
+        await this.local.query(
+          surql.seal(
+            surql.updateSet('id', [
+              'localArray',
+              'rowCount',
+              'updateCount',
+              'lastIngestLatency',
+              'materializationP55',
+              'materializationP90',
+              'materializationP99',
+            ])
+          ),
+          {
+            id: queryState.config.id,
+            localArray,
+            rowCount: localArray.length,
+            updateCount: queryState.updateCount,
+            lastIngestLatency: queryState.lastIngestLatencyMs,
+            materializationP55: percentiles.p55,
+            materializationP90: percentiles.p90,
+            materializationP99: percentiles.p99,
+          },
+          { epoch }
+        );
+      }
 
       if (!recordsChanged) {
         this.logger.debug(
@@ -1249,18 +1297,32 @@ export class DataModule<S extends SchemaStructure> {
     }
     // Single-flight: one ingest fans out to many queries materializing at once,
     // and without this they all queue their own identical read behind each other.
-    if (!this.pendingIdsInflight) {
-      this.pendingIdsInflight = this.readPendingRecordIds().finally(() => {
-        this.pendingIdsInflight = null;
-      });
+    // Bounded re-read: a result from a generation older than the one current
+    // by the time it lands was taken before some outbox row existed, so it is
+    // re-issued rather than returned. Bounded, because a write on every tick
+    // must not spin this forever - the last read is returned then.
+    let fresh: { writes: Set<string>; deletes: Set<string> } | null = null;
+    for (let attempt = 0; attempt < DataModule.PENDING_IDS_MAX_REREADS; attempt++) {
+      const gen = this.pendingIdsGen;
+      if (!this.pendingIdsInflight) {
+        const read = this.readPendingRecordIds(gen).finally(() => {
+          // Only clear the slot this read still owns; an invalidation in the
+          // meantime has replaced it (with null) for a newer read to fill.
+          if (this.pendingIdsInflight === read) this.pendingIdsInflight = null;
+        });
+        this.pendingIdsInflight = read;
+      }
+      fresh = await this.pendingIdsInflight;
+      if (gen === this.pendingIdsGen) break;
     }
-    const fresh = await this.pendingIdsInflight;
-    return { writes: new Set(fresh.writes), deletes: new Set(fresh.deletes) };
+    // oxlint-disable-next-line no-non-null-assertion -- the loop runs at least once
+    return { writes: new Set(fresh!.writes), deletes: new Set(fresh!.deletes) };
   }
 
   /** The uncached read. Also the reload path after an invalidation, so the ids
-   *  still survive a reload exactly as before. */
-  private async readPendingRecordIds(): Promise<{
+   *  still survive a reload exactly as before. `gen` is the generation the read
+   *  was issued under; the result is cached only if it is still current. */
+  private async readPendingRecordIds(gen: number): Promise<{
     writes: Set<string>;
     deletes: Set<string>;
   }> {
@@ -1285,8 +1347,10 @@ export class DataModule<S extends SchemaStructure> {
       // not a statement that the outbox is empty.
       return { writes, deletes };
     }
-    this.pendingIds = { writes, deletes };
-    this.pendingIdsAt = Date.now();
+    if (gen === this.pendingIdsGen) {
+      this.pendingIds = { writes, deletes };
+      this.pendingIdsAt = Date.now();
+    }
     return { writes, deletes };
   }
 
@@ -1757,18 +1821,36 @@ export class DataModule<S extends SchemaStructure> {
       })
     );
 
+    // The local tx has committed: the row and its outbox entry exist. The
+    // cached pending-id sets no longer describe the outbox, so drop them HERE,
+    // before the ingest below fans out to every view's materialization (which
+    // is exactly when they are read).
+    this.invalidatePendingIds();
+
     const parsedRecord = parseParams(tableSchema.columns, target) as RecordWithId;
 
-    // Save to cache (which handles DBSP ingestion)
-    await this.cache.save(
-      {
-        table: tableName,
-        op: 'CREATE',
-        record: parsedRecord,
-        version: 1,
-      },
-      true
-    );
+    // Save to cache (which handles DBSP ingestion). Best-effort, like
+    // `delete()`: the local write is durable and the outbox row exists, so a
+    // throw from the in-browser ingest must not abort the rest of this method -
+    // it used to, and then the mutation was never handed to sync, the row sat
+    // in the outbox until the next leader promotion re-scanned it, and the
+    // caller's promise rejected after the write had already happened.
+    try {
+      await this.cache.save(
+        {
+          table: tableName,
+          op: 'CREATE',
+          record: parsedRecord,
+          version: 1,
+        },
+        true
+      );
+    } catch (err) {
+      this.logger.error(
+        { err, id, Category: 'sp00ky-client::DataModule::create' },
+        'SSP create-ingest failed; the row is written and queued, but views only see it once membership arrives'
+      );
+    }
 
     // Emit mutation event for sync
     const mutationEvent: CreateEvent = {
@@ -1780,8 +1862,6 @@ export class DataModule<S extends SchemaStructure> {
       tableName,
     };
 
-    // A new outbox row: the cached pending-id sets no longer describe it.
-    this.invalidatePendingIds();
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }
@@ -1849,18 +1929,28 @@ export class DataModule<S extends SchemaStructure> {
     }
     this.replaceRecordInQueries(updatedFields);
 
+    // Committed: see create() for why this precedes the ingest.
+    this.invalidatePendingIds();
+
     const parsedRecord = parseParams(tableSchema.columns, target) as RecordWithId;
 
-    // Save to cache
-    await this.cache.save(
-      {
-        table: table,
-        op: 'UPDATE',
-        record: parsedRecord,
-        version: target._00_rv as number,
-      },
-      true
-    );
+    // Save to cache. Best-effort for the same reason as in create().
+    try {
+      await this.cache.save(
+        {
+          table: table,
+          op: 'UPDATE',
+          record: parsedRecord,
+          version: target._00_rv as number,
+        },
+        true
+      );
+    } catch (err) {
+      this.logger.error(
+        { err, id, Category: 'sp00ky-client::DataModule::update' },
+        'SSP update-ingest failed; the row is written and queued'
+      );
+    }
 
     const pushEventOptions = parseUpdateOptions(id, data, options);
 
@@ -1875,8 +1965,6 @@ export class DataModule<S extends SchemaStructure> {
       options: pushEventOptions,
     };
 
-    // A new outbox row: the cached pending-id sets no longer describe it.
-    this.invalidatePendingIds();
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }
@@ -1912,6 +2000,10 @@ export class DataModule<S extends SchemaStructure> {
 
     await withRetry(this.logger, () => this.local.execute(query, { id: rid, mid: mutationId }));
 
+    // Committed: the outbox row exists, drop the cached pending-id sets before
+    // the re-materialize below reads them (see create()).
+    this.invalidatePendingIds();
+
     // The local DELETE has now committed. Everything below must reflect that in
     // active live queries — so the deleted row disappears optimistically without
     // a reload — even if the optimistic SSP-view ingest below fails. Previously a
@@ -1940,8 +2032,6 @@ export class DataModule<S extends SchemaStructure> {
       record_id: rid,
     };
 
-    // A new outbox row: the cached pending-id sets no longer describe it.
-    this.invalidatePendingIds();
     for (const callback of this.mutationCallbacks) {
       callback([mutationEvent]);
     }

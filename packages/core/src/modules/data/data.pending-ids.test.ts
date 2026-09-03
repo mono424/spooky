@@ -123,3 +123,77 @@ describe('DataModule pending-id cache', () => {
     expect([...deletes]).toEqual(['game:b']);
   });
 });
+
+describe('DataModule pending-id cache: generations', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  // The outbox read is a round trip down the local op queue, so it can be
+  // queued BEFORE a create's outbox row commits and resolve AFTER
+  // `invalidatePendingIds()` ran for it. Cached as-is, that pre-create set
+  // hid the new row from every materialization that joined the read - the one
+  // stream update a CREATE gets, so the row was invisible until reload.
+  function makeDeferredModule() {
+    const pendingReads: Array<(rows: any[]) => void> = [];
+    const state = { reads: 0 };
+    const local = {
+      query: vi.fn(
+        () =>
+          new Promise<any[]>((resolve) => {
+            state.reads++;
+            pendingReads.push((rows) => resolve([rows]));
+          })
+      ),
+    };
+    const dm = new DataModule({} as any, local as any, { tables: [] } as any, makeLogger(), 100);
+    return { dm, state, pendingReads };
+  }
+  // Let the awaiting loop observe a resolved read and issue the next one.
+  const settle = async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  };
+
+  it('does not cache a read that was in flight when the outbox changed', async () => {
+    const { dm, state, pendingReads } = makeDeferredModule();
+    const first = dm.getPendingRecordIds();
+    expect(state.reads).toBe(1);
+    // The create commits and invalidates while the read is still out.
+    (dm as any).invalidatePendingIds();
+    // The stale read answers with the pre-create outbox...
+    pendingReads[0]!([]);
+    await settle();
+    // ...so the joiner re-read under the new generation and gets the fresh one.
+    expect(state.reads).toBe(2);
+    pendingReads[1]!([pending('new', 'create')]);
+    expect([...(await first).writes]).toEqual(['game:new']);
+  });
+
+  it('a stale in-flight result never repopulates the cache', async () => {
+    const { dm, state, pendingReads } = makeDeferredModule();
+    const first = dm.getPendingRecordIds();
+    (dm as any).invalidatePendingIds();
+    pendingReads[0]!([]);
+    await settle();
+    pendingReads[1]!([pending('new', 'create')]);
+    await first;
+    // A fresh call must be served from the cache the CURRENT generation's
+    // read wrote, i.e. see the new row without another read.
+    const again = await dm.getPendingRecordIds();
+    expect(state.reads).toBe(2);
+    expect([...again.writes]).toEqual(['game:new']);
+  });
+
+  it('bounds the re-read when the outbox changes on every tick', async () => {
+    const { dm, state, pendingReads } = makeDeferredModule();
+    const call = dm.getPendingRecordIds();
+    for (let i = 0; i < 5; i++) {
+      (dm as any).invalidatePendingIds();
+      pendingReads[i]?.([pending(`r${i}`)]);
+      await settle();
+    }
+    const result = await call;
+    // Three reads at most, and the caller still gets an answer.
+    expect(state.reads).toBeLessThanOrEqual(3);
+    expect(result.writes.size).toBe(1);
+  });
+});

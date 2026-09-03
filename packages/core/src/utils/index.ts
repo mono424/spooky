@@ -176,6 +176,9 @@ export async function withRetry<T>(
       return await operation();
     } catch (err: any) {
       lastError = err;
+      // A deadline expiry is explicitly not retryable: the op is still running
+      // in the engine, and a retry only queues a second copy behind it.
+      if (err?.retryable === false) throw err;
       if (
         err?.message?.includes('Can not open transaction') ||
         err?.message?.includes('transaction') ||
@@ -220,11 +223,14 @@ export async function withRetry<T>(
 export function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  message: string
+  message: string | (() => Error)
 ): Promise<T> {
   if (!(timeoutMs > 0)) return promise;
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    const timer = setTimeout(
+      () => reject(typeof message === 'function' ? message() : new Error(message)),
+      timeoutMs
+    );
     promise.then(
       (value) => {
         clearTimeout(timer);

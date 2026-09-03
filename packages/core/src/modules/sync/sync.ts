@@ -1017,6 +1017,11 @@ export class Sp00kySync<S extends SchemaStructure> {
         'syncQuery failed during poll'
       );
     }
+    // Membership moved but a row may have needed no fetch (this client wrote
+    // it, so the engine already holds it at the published version): nothing
+    // then re-materializes the query. Ask for one; it is a no-op behind a
+    // stream update that a fetch above already queued.
+    if (changed) this.dataModule.scheduleRematerialize(queryHash);
     // Cross-session fallback for `.related()` child rows: the LIVE-permission
     // gap can drop child-edge notifications, so converge their bodies on the
     // poll too (idempotent — no-op when nothing changed).
@@ -1351,6 +1356,11 @@ export class Sp00kySync<S extends SchemaStructure> {
     // path already does for its own removals (`refetchListRefForQuery`).
     if (diff.removed.length > 0 && diff.added.length === 0 && diff.updated.length === 0) {
       await this.dataModule.notifyQuerySynced(hash);
+    } else if (diff.added.length === 0 && diff.updated.length === 0) {
+      // Empty diff: the circuit already holds the row at this version (this
+      // tab wrote it), so no fetch and no stream update - but the membership
+      // recorded above is new, and the subscribers have to hear about it.
+      this.dataModule.scheduleRematerialize(hash);
     }
   }
 

@@ -63,6 +63,10 @@ export class DevToolsService implements StreamUpdateReceiver {
   private static readonly NOTIFY_MIN_INTERVAL_MS = 250;
   private notifyTimer: ReturnType<typeof setTimeout> | null = null;
   private lastNotifyAt = 0;
+  /** How many ids a pushed state carries per view; the rest is on demand. */
+  private static readonly STATE_IDS_CAP = 200;
+  /** devtools numeric hash -> the query's `_00_query` id, for on-demand rows. */
+  private hashToQuery = new Map<number, unknown>();
 
   /** Shared-tabs snapshot for the panel, wired by Sp00kyClient whenever the
    *  feature was REQUESTED (so an inactive/degraded tab still reports why). */
@@ -123,6 +127,7 @@ export class DevToolsService implements StreamUpdateReceiver {
         const type = (e.data as { type?: string } | undefined)?.type;
         if (type === 'SP00KY_DEVTOOLS_CONNECT') {
           this.enabled = true;
+          this.refreshLocalTables();
           this.notifyDevTools();
         } else if (type === 'SP00KY_DEVTOOLS_DISCONNECT') {
           this.enabled = false;
@@ -189,6 +194,9 @@ export class DevToolsService implements StreamUpdateReceiver {
         q.config.lastActiveAt instanceof Date
           ? q.config.lastActiveAt.getTime()
           : new Date(q.config.lastActiveAt || Date.now()).getTime();
+      this.hashToQuery.set(queryHash, q.config.id);
+      const localArray = q.config.localArray ?? [];
+      const remoteArray = q.config.remoteArray ?? [];
       result.set(queryHash, {
         queryHash,
         status: 'active',
@@ -205,9 +213,18 @@ export class DevToolsService implements StreamUpdateReceiver {
         query: q.config.surql,
         variables: q.config.params || {},
         dataSize: q.records?.length || 0,
-        data: q.records,
-        localArray: q.config.localArray,
-        remoteArray: q.config.remoteArray,
+        // Counts and (capped) ids only. The rows themselves used to ride along
+        // here: every push then deep-cloned every view's records twice
+        // (serialize + postMessage), on a 4k-row client dataset up to four
+        // times a second, from inside the ingest call stack. The panel pulls
+        // rows on demand through `getQueryRows` instead.
+        localCount: localArray.length,
+        remoteCount: remoteArray.length,
+        localIds: localArray.slice(0, DevToolsService.STATE_IDS_CAP).map(([id]) => id),
+        remoteIds: remoteArray.slice(0, DevToolsService.STATE_IDS_CAP).map(([id]) => id),
+        idsTruncated:
+          localArray.length > DevToolsService.STATE_IDS_CAP ||
+          remoteArray.length > DevToolsService.STATE_IDS_CAP,
         // Membership state, so "why is this list empty" is answerable from
         // the panel: is the server's set known, has a non-empty one been seen
         // this session, how many empty reads were ignored.
@@ -250,18 +267,28 @@ export class DevToolsService implements StreamUpdateReceiver {
 
     this.addEvent('QUERY_UPDATED', {
       queryHash,
-      data: payload.records,
+      recordCount: Array.isArray(payload.records) ? payload.records.length : 0,
     });
     this.notifyDevTools();
   }
 
   public onStreamUpdate(update: StreamUpdate) {
+    // A synthetic re-materialize is not an ingest (DataModule.scheduleRematerialize).
+    if (update.synthetic) return;
     this.logger.debug(
-      { update, Category: 'sp00ky-client::DevToolsService::onStreamUpdate' },
+      { queryHash: update.queryHash, Category: 'sp00ky-client::DevToolsService::onStreamUpdate' },
       'StreamUpdate'
     );
+    // Counts and timings, not the `localArray` itself: that is one [id, version]
+    // pair per row of the view, serialized on every single update.
     this.addEvent('STREAM_UPDATE', {
-      updates: [update],
+      queryHash: update.queryHash,
+      op: update.op,
+      localCount: update.localArray?.length ?? 0,
+      materializationTimeMs: update.materializationTimeMs,
+      storeApplyMs: update.storeApplyMs,
+      circuitStepMs: update.circuitStepMs,
+      transformMs: update.transformMs,
     });
     this.notifyDevTools();
   }
@@ -271,8 +298,10 @@ export class DevToolsService implements StreamUpdateReceiver {
     payloads.forEach((p) => {
       this.addEvent('MUTATION_REQUEST_EXECUTION', {
         mutation: {
-          type: 'create', // simplifying
-          data: 'data' in p ? p.data : undefined,
+          type: p.type ?? 'create',
+          // Field names only; a payload body (a PGN, a document) is not
+          // something to clone on every write.
+          fields: 'data' in p && p.data && typeof p.data === 'object' ? Object.keys(p.data) : [],
           selector: encodeRecordId(p.record_id),
         },
       });
@@ -325,7 +354,7 @@ export class DevToolsService implements StreamUpdateReceiver {
   private refreshLocalTables(): void {
     if (this.localTablesFetching) return;
     const now = Date.now();
-    if (now - this.localTablesAt < 3000) return;
+    if (now - this.localTablesAt < 30_000) return;
     this.localTablesFetching = true;
     void this.databaseService
       .query<any>('INFO FOR DB')
@@ -351,9 +380,12 @@ export class DevToolsService implements StreamUpdateReceiver {
       });
   }
 
-  private getState() {
-    // Keep the full local-table list fresh (throttled, non-blocking).
-    this.refreshLocalTables();
+  private getState(opts: { refreshTables?: boolean } = {}) {
+    // The local-table list (`INFO FOR DB`, a local round trip) is refreshed on
+    // an explicit pull only, never by the push path: pushes follow every sync
+    // event, and a local query per push competed with the app's own writes for
+    // the single local op queue.
+    if (opts.refreshTables) this.refreshLocalTables();
     return this.serializeForDevTools({
       eventsHistory: [...this.eventsHistory],
       activeQueries: Object.fromEntries(this.getActiveQueries()),
@@ -481,16 +513,17 @@ export class DevToolsService implements StreamUpdateReceiver {
     // A trailing push is already queued; it will carry this change too.
     if (this.notifyTimer !== null) return;
 
+    // Always a macrotask, never inline: this is called from inside the ingest
+    // and mutation call stacks (onStreamUpdate / onMutation), i.e. inside the
+    // `await db.create(...)` the app is waiting on. A push that serializes the
+    // state right there charged every write for the panel's refresh.
     const waited = Date.now() - this.lastNotifyAt;
-    if (waited >= DevToolsService.NOTIFY_MIN_INTERVAL_MS) {
-      this.flushNotify();
-      return;
-    }
+    const delay = Math.max(0, DevToolsService.NOTIFY_MIN_INTERVAL_MS - waited);
     this.notifyTimer = setTimeout(() => {
       this.notifyTimer = null;
       // Still gated on `enabled`: the panel may have disconnected while queued.
       if (this.enabled) this.flushNotify();
-    }, DevToolsService.NOTIFY_MIN_INTERVAL_MS - waited);
+    }, delay);
   }
 
   private flushNotify() {
@@ -569,7 +602,21 @@ export class DevToolsService implements StreamUpdateReceiver {
     if (typeof window !== 'undefined') {
       (window as any).__00__ = {
         version: this.version,
-        getState: () => this.getState(),
+        getState: () => this.getState({ refreshTables: true }),
+        // The rows of ONE view, on demand. The pushed state carries counts and
+        // capped ids only (see getActiveQueries); the panel's Data tab and the
+        // MCP fetch the rows here when somebody actually looks at them.
+        getQueryRows: (queryHash: number) => {
+          const id = this.hashToQuery.get(Number(queryHash));
+          const q = id !== undefined ? this.dataManager?.getQueryById(id as any) : undefined;
+          if (!q) return null;
+          return this.serializeForDevTools({
+            queryHash: Number(queryHash),
+            data: q.records,
+            localArray: q.config.localArray,
+            remoteArray: q.config.remoteArray,
+          });
+        },
         // ---- Feature flags (Access tab) --------------------------------
         // Remote reads/writes are admin-gated by SurrealDB, not here: a
         // non-admin gets an empty flag list, and the `fn::feature::*` calls

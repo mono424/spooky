@@ -29,6 +29,8 @@ interface McpStatus {
   port: number;
 }
 
+export type QueryRows = { data?: unknown; localArray?: unknown; remoteArray?: unknown };
+
 interface DevToolsContextValue {
   // State
   state: DevToolsState;
@@ -68,6 +70,8 @@ interface DevToolsContextValue {
   setFetchingRows: (value: boolean) => void;
   refreshVersions: () => void;
   fetchTableData: (tableName: string) => void;
+  /** Rows of one active query, on demand (the pushed state has counts only). */
+  fetchQueryRows: (queryHash: number) => Promise<QueryRows | null>;
   updateTableRow: (tableName: string, recordId: string, updates: Record<string, unknown>) => void;
   deleteTableRow: (tableName: string, recordId: string) => void;
   runQuery?: (query: string, target: 'local' | 'remote') => Promise<any>;
@@ -883,6 +887,26 @@ export const DevToolsProvider: ParentComponent = (props) => {
   }
 
   /**
+   * Rows of one active query. The pushed state carries counts and capped ids
+   * only, so the Data tab asks for the rows when it is actually opened.
+   */
+  function fetchQueryRows(queryHash: number): Promise<QueryRows | null> {
+    if (!isMainFrame()) {
+      const requestId = `rows-${queryHash}-${Date.now()}`;
+      return new Promise((resolve, reject) => {
+        pendingQueries.set(requestId, {
+          resolve: (data: any) => resolve((data ?? null) as QueryRows | null),
+          reject: (err: any) => reject(err),
+        });
+        sendMessage({ type: 'GET_QUERY_ROWS', payload: { queryHash, requestId } } as any);
+      });
+    }
+    return new Promise((resolve, reject) => {
+      hostPage.getQueryRows(queryHash, (rows) => resolve((rows ?? null) as QueryRows | null), reject);
+    });
+  }
+
+  /**
    * Update a table row
    */
   function updateTableRow(tableName: string, recordId: string, updates: Record<string, unknown>) {
@@ -1401,6 +1425,7 @@ export const DevToolsProvider: ParentComponent = (props) => {
     setFetchingRows,
     refreshVersions,
     fetchTableData,
+    fetchQueryRows,
     updateTableRow,
     deleteTableRow,
     runQuery: runQuery as any, // Cast to match interface if needed
