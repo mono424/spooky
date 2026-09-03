@@ -163,6 +163,31 @@ pub fn step_job(table: &str, run_key: &str, step: &str) -> Ref {
     Ref::new(table, format!("wf_{}_{}", sanitize_job(run_key), sanitize_job(step)))
 }
 
+/// Job row for one step's Nth operator retry.
+///
+/// A retry cannot reuse the step's previous job id: every SSP keeps an in-memory
+/// kill flag keyed by job id that only dequeue clears, and `dispatch_step` reads
+/// an existing row as "already dispatched". So each attempt gets its own row.
+/// Attempt 0 is exactly [`step_job`], so ids minted before retries existed are
+/// unchanged.
+pub fn step_job_attempt(table: &str, run_key: &str, step: &str, attempt: i64) -> Ref {
+    let base = step_job(table, run_key, step);
+    if attempt <= 0 {
+        base
+    } else {
+        Ref::new(table, format!("{}_r{}", base.key, attempt))
+    }
+}
+
+/// Run key for an operator rerun: `<workflow>_<now_ms>_<hash("rerun:<source>")>`.
+///
+/// The source key goes into the hash so a rerun and a cron fire of the same
+/// workflow in the same millisecond cannot collide, and so two reruns of
+/// different sources stay distinct.
+pub fn rerun_key(workflow_name: &str, fire_at_ms: i64, source_run_key: &str) -> String {
+    run_key(workflow_name, fire_at_ms, &format!("rerun:{source_run_key}"))
+}
+
 /// Key for one rollup bucket: `<scope>_<name>_<hour>`.
 ///
 /// Deterministic so a fold is a blind `UPSERT ... SET n += x` with no read first:
@@ -260,6 +285,33 @@ mod tests {
         assert!(Ref::parse("no-colon").is_none());
         assert!(Ref::parse(":empty-table").is_none());
         assert!(Ref::parse("empty-key:").is_none());
+    }
+
+    #[test]
+    fn attempt_zero_is_the_original_step_job_id() {
+        let key = run_key("report", 1, "");
+        assert_eq!(step_job_attempt("job", &key, "transform", 0), step_job("job", &key, "transform"));
+    }
+
+    #[test]
+    fn later_attempts_are_distinct_and_still_hyphen_free() {
+        let key = run_key("game-sync", 1, "connection:alice");
+        let r1 = step_job_attempt("job", &key, "extract-orders", 1);
+        let r2 = step_job_attempt("job", &key, "extract-orders", 2);
+        assert_ne!(r1, step_job("job", &key, "extract-orders"));
+        assert_ne!(r1, r2);
+        assert!(r1.key.ends_with("_r1"), "got {}", r1.key);
+        assert!(!r1.key.contains('-') && !r2.key.contains('-'));
+    }
+
+    /// A rerun landing in the same millisecond as a cron fire must not collide
+    /// with it, or the rerun would be read as "already fired".
+    #[test]
+    fn a_rerun_key_never_collides_with_a_cron_key_at_the_same_instant() {
+        let cron = run_key("report", 1_769_337_000_000, "");
+        let rerun = rerun_key("report", 1_769_337_000_000, &cron);
+        assert_ne!(cron, rerun);
+        assert_ne!(rerun, rerun_key("report", 1_769_337_000_000, "other_source"));
     }
 
     #[test]

@@ -184,6 +184,71 @@ impl TestHarness {
         metrics::create_metrics_router(self.metrics_state())
     }
 
+    /// Everything `admin::build` needs, over this harness's shared state.
+    ///
+    /// The db slot is never populated: these tests cover the plane's
+    /// behaviour when the scheduler has no database handle yet, which is
+    /// also its behaviour during the initial replica clone.
+    fn admin_deps(
+        &self,
+        cloud_api_url: Option<&str>,
+        auth_secret: Option<&str>,
+    ) -> scheduler::admin::AdminDeps {
+        let host: Arc<dyn maintenance::MaintenanceHost> =
+            Arc::new(scheduler::maintenance_host::SchedulerHost {
+                ingest: IngestState {
+                    replica: Arc::clone(&self.replica),
+                    transport: Arc::clone(&self.transport),
+                    ssp_pool: Arc::clone(&self.ssp_pool),
+                    status: Arc::clone(&self.status),
+                    event_buffer: Arc::clone(&self.event_buffer),
+                    seq_counter: Arc::clone(&self.seq_counter),
+                    wal: Arc::clone(&self.wal),
+                    drain_lock: Arc::clone(&self.drain_lock),
+                    db_config: Arc::new(self.config.db.clone()),
+                    job_tables: Arc::new(vec![]),
+                    observer_permits: Arc::new(tokio::sync::Semaphore::new(8)),
+                    snapshot_seq: Arc::clone(&self.snapshot_seq_cell),
+                },
+            });
+        let (backup_tx, _backup_rx) = maintenance::backup::create_backup_channel();
+        let (restore_tx, _restore_rx) = maintenance::restore::create_restore_channel();
+        let backup = Arc::new(maintenance::BackupState {
+            host,
+            config: Arc::new(maintenance::BackupConfig::from_env()),
+            registry: Arc::new(maintenance::backup::BackupRegistry::new()),
+            tx: backup_tx,
+            restore_registry: Arc::new(maintenance::restore::RestoreRegistry::new()),
+            restore_tx,
+            backup_restore_lock: Arc::new(tokio::sync::Mutex::new(())),
+        });
+        scheduler::admin::AdminDeps {
+            metrics: self.metrics_state(),
+            transport: Arc::clone(&self.transport),
+            logs: maintenance::log_ring::LogRing::new(128),
+            db_config: self.config.db.clone(),
+            db_slot: scheduler::admin::new_db_slot(),
+            backup,
+            resync: ssp_management::ResyncArgs {
+                ssp_pool: Arc::clone(&self.ssp_pool),
+                replica: Arc::clone(&self.replica),
+                config: Arc::clone(&self.config),
+                status: Arc::clone(&self.status),
+                seq_counter: Arc::clone(&self.seq_counter),
+                reclone_lock: Arc::clone(&self.reclone_lock),
+            },
+            cloud: cloud_api_url.and_then(|url| {
+                scheduler::admin::cloud::CloudLink::new(
+                    url.to_string(),
+                    "test-project".to_string(),
+                    "cluster-secret".to_string(),
+                )
+            }),
+            auth_secret: auth_secret.map(str::to_string),
+            supervised: false,
+        }
+    }
+
     fn metrics_state(&self) -> MetricsState {
         MetricsState {
             ssp_pool: Arc::clone(&self.ssp_pool),
@@ -2064,19 +2129,28 @@ mod admin_plane {
             access: None,
             session_ttl: std::time::Duration::from_secs(3600),
         };
-        let (_state, router) = admin::build(
-            config,
-            h.metrics_state(),
-            Arc::clone(&h.transport),
-            maintenance::log_ring::LogRing::new(128),
-            h.config.db.clone(),
-            // Never populated: these tests cover the plane's behaviour when the
-            // scheduler has no database handle yet, which is also its behaviour
-            // during the initial replica clone.
-            admin::new_db_slot(),
-            300,
-            15,
-        );
+        let (_state, router) = admin::build(config, h.admin_deps(None, None));
+        router
+    }
+
+    /// The admin router with a Sp00ky Cloud link pointed at `api_url` and a
+    /// cluster secret, for the tests that need either.
+    fn admin_app_with(
+        h: &TestHarness,
+        password: Option<&str>,
+        cloud_api_url: Option<&str>,
+        auth_secret: Option<&str>,
+    ) -> Router {
+        let config = AdminConfig {
+            enabled: true,
+            host: "127.0.0.1".to_string(),
+            port: 9668,
+            dir: std::path::PathBuf::from("/nonexistent/dashboard"),
+            password: password.map(str::to_string),
+            access: None,
+            session_ttl: std::time::Duration::from_secs(3600),
+        };
+        let (_state, router) = admin::build(config, h.admin_deps(cloud_api_url, auth_secret));
         router
     }
 
@@ -2368,7 +2442,10 @@ mod admin_plane {
         assert_eq!(body["totals"]["ssps"], 1);
         assert_eq!(body["totals"]["ssps_ready"], 1);
         // The dashboard draws its deadline bar against this.
-        assert_eq!(body["bootstrap_timeout_secs"], 300);
+        assert_eq!(body["bootstrap_timeout_secs"], h.config.bootstrap_timeout_secs);
+        // Running operations ride along on the poll.
+        assert!(body["operations"].is_array());
+        assert_eq!(body["cloud_linked"], false);
         assert!(body["server_time_ms"].as_u64().unwrap() > 0);
     }
 
@@ -2666,5 +2743,483 @@ mod admin_plane {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    // -----------------------------------------------------------------------
+    // Actions
+    // -----------------------------------------------------------------------
+
+    fn post_auth(path: &str, token: &str, body: Value) -> Request<axum::body::Body> {
+        Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    fn post_auth_empty(path: &str, token: &str) -> Request<axum::body::Body> {
+        Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("Authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    fn admin_heartbeat(ssp_id: &str) -> Value {
+        json!({
+            "ssp_id": ssp_id,
+            "timestamp": 1000,
+            "views": 5,
+            "cpu_usage": 45.0,
+            "memory_usage": 60.0,
+            "version": "test"
+        })
+    }
+
+    #[tokio::test]
+    async fn every_action_requires_a_token() {
+        let h = TestHarness::new().await;
+        for path in [
+            "/admin/api/ssps/x/restart",
+            "/admin/api/ssps/restart-all",
+            "/admin/api/scheduler/restart",
+            "/admin/api/cloud/restart",
+            "/admin/api/backups",
+            "/admin/api/backups/x/restore",
+            "/admin/api/workflows/runs/x/cancel",
+            "/admin/api/workflows/runs/x/rerun",
+            "/admin/api/workflows/runs/x/retry",
+            "/admin/api/schedules/x/pause",
+            "/admin/api/schedules/x/resume",
+            "/admin/api/schedules/x/trigger",
+            "/admin/api/jobs/x/kill",
+            "/admin/api/jobs/x/retry",
+        ] {
+            let res = admin_app(&h, None)
+                .oneshot(post_auth_empty(path, "nope"))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{path} must be behind auth");
+        }
+        for path in ["/admin/api/operations", "/admin/api/operations/stream", "/admin/api/cloud/deployment"] {
+            let res = admin_app(&h, None).oneshot(get(path)).await.unwrap();
+            assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{path} must be behind auth");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_ingest_plane_does_not_serve_the_actions() {
+        let h = TestHarness::new().await;
+        for path in ["/admin/api/ssps/restart-all", "/admin/api/scheduler/restart", "/admin/api/backups"] {
+            let res = h
+                .full_app()
+                .oneshot(post_auth_empty(path, "x"))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path} must not exist on the ingest port");
+        }
+    }
+
+    #[tokio::test]
+    async fn config_reports_link_supervision_and_session_persistence() {
+        let h = TestHarness::new().await;
+        let res = admin_app(&h, None).oneshot(get("/admin/api/config")).await.unwrap();
+        let body = body_json(res).await;
+        assert_eq!(body["cloud_linked"], false);
+        assert_eq!(body["supervised"], false);
+        assert_eq!(body["sessions_persistent"], false);
+
+        let res = admin_app_with(&h, None, Some("http://127.0.0.1:1"), Some("secret"))
+            .oneshot(get("/admin/api/config"))
+            .await
+            .unwrap();
+        let body = body_json(res).await;
+        assert_eq!(body["cloud_linked"], true);
+        assert_eq!(body["sessions_persistent"], true);
+    }
+
+    #[tokio::test]
+    async fn a_signed_session_survives_a_rebuilt_plane() {
+        let h = TestHarness::new().await;
+        let first = admin_app_with(&h, Some("pw"), None, Some("cluster-secret"));
+        let token = breakglass_token(&first, "pw").await;
+        assert!(token.contains('.'), "signed tokens are payload.signature");
+
+        // A "restart": a brand new router and session store, same secret.
+        let second = admin_app_with(&h, Some("pw"), None, Some("cluster-secret"));
+        let res = second.oneshot(get_auth("/admin/api/me", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(body_json(res).await["mode"], "breakglass");
+
+        // And not with a different secret.
+        let other = admin_app_with(&h, Some("pw"), None, Some("other"));
+        let res = other.oneshot(get_auth("/admin/api/me", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn restarting_an_unknown_ssp_is_a_404() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        let res = app
+            .oneshot(post_auth("/admin/api/ssps/ghost/restart", &token, json!({ "mode": "restart" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert!(body_json(res).await["error"].as_str().unwrap().contains("ghost"));
+    }
+
+    #[tokio::test]
+    async fn an_unknown_restart_mode_is_a_400() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/ssps/ssp-1/restart", &token, json!({ "mode": "explode" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let res = app
+            .oneshot(post_auth("/admin/api/scheduler/restart", &token, json!({ "mode": "explode" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn restarting_an_ssp_flags_it_and_the_next_heartbeat_carries_the_directive() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/ssps/ssp-1/restart", &token, json!({ "mode": "restart" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        let body = body_json(res).await;
+        assert_eq!(body["operation"]["kind"], "ssp_restart");
+        assert_eq!(body["operation"]["target"], "ssp-1");
+        assert_eq!(body["operation"]["status"], "running");
+        let op_id = body["operation"]["id"].as_str().unwrap().to_string();
+
+        // The flag is consumed by the SSP's next heartbeat as a 409 whose body
+        // is the directive, not prose.
+        let (status, hb) = post_json(h.ssp_router(), "/ssp/heartbeat", &admin_heartbeat("ssp-1")).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(hb["clean"], false, "{hb}");
+        assert!(hb["reason"].as_str().unwrap().contains("re-bootstrap"));
+
+        // Consumed: a second heartbeat is plain.
+        let (status, _) = post_json(h.ssp_router(), "/ssp/heartbeat", &admin_heartbeat("ssp-1")).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The operation is listed and still running (the SSP has not come back).
+        let res = app.oneshot(get_auth("/admin/api/operations", &token)).await.unwrap();
+        let ops = body_json(res).await;
+        assert_eq!(ops["operations"][0]["id"], op_id);
+        assert_eq!(ops["operations"][0]["status"], "running");
+    }
+
+    #[tokio::test]
+    async fn a_clean_restart_asks_the_ssp_to_drop_its_snapshot() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(post_auth("/admin/api/ssps/ssp-1/restart", &token, json!({ "mode": "clean" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        assert_eq!(body_json(res).await["operation"]["kind"], "ssp_clean");
+
+        let (status, hb) = post_json(h.ssp_router(), "/ssp/heartbeat", &admin_heartbeat("ssp-1")).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(hb["clean"], true, "{hb}");
+        // And the SSP side parses exactly this.
+        let directive = ssp_protocol::ResyncDirective::parse(&hb.to_string());
+        assert!(directive.clean);
+    }
+
+    #[tokio::test]
+    async fn a_clean_flag_is_not_downgraded_by_a_later_plain_resync() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        {
+            let mut pool = h.ssp_pool.write().await;
+            pool.mark_for_resync_with("ssp-1", scheduler::router::ResyncKind::Clean);
+            pool.mark_for_resync("ssp-1");
+            assert_eq!(pool.pending_resync("ssp-1"), Some(scheduler::router::ResyncKind::Clean));
+        }
+        let (status, hb) = post_json(h.ssp_router(), "/ssp/heartbeat", &admin_heartbeat("ssp-1")).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(hb["clean"], true);
+    }
+
+    #[tokio::test]
+    async fn restart_all_at_once_flags_every_ssp() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        h.add_ready_ssp("ssp-2", "http://10.0.0.2:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(post_auth("/admin/api/ssps/restart-all", &token, json!({ "mode": "restart", "rolling": false })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        let body = body_json(res).await;
+        assert_eq!(body["operation"]["kind"], "rolling_restart");
+        assert_eq!(body["operation"]["detail"]["total"], 2);
+
+        let pool = h.ssp_pool.read().await;
+        assert!(pool.pending_resync("ssp-1").is_some());
+        assert!(pool.pending_resync("ssp-2").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_rolling_restart_flags_one_ssp_at_a_time_and_refuses_a_second() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        h.add_ready_ssp("ssp-2", "http://10.0.0.2:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/ssps/restart-all", &token, json!({ "rolling": true })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        // Give the roll task a moment to flag its first target.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        {
+            let pool = h.ssp_pool.read().await;
+            let flagged = ["ssp-1", "ssp-2"]
+                .iter()
+                .filter(|id| pool.pending_resync(id).is_some())
+                .count();
+            assert_eq!(flagged, 1, "a roll takes down one SSP at a time");
+            assert!(pool.pending_resync("ssp-1").is_some(), "in id order");
+        }
+
+        let res = app
+            .oneshot(post_auth("/admin/api/ssps/restart-all", &token, json!({ "rolling": true })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn restart_all_with_no_ssps_is_a_409() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        let res = app
+            .oneshot(post_auth_empty("/admin/api/ssps/restart-all", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn a_resync_is_refused_while_cloning_or_restoring() {
+        for status in [SchedulerStatus::Cloning, SchedulerStatus::Restoring] {
+            let h = TestHarness::with_status(status).await;
+            let app = admin_app(&h, Some("pw"));
+            let token = breakglass_token(&app, "pw").await;
+            let res = app
+                .oneshot(post_auth("/admin/api/scheduler/restart", &token, json!({ "mode": "rehash" })))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "{status:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rehash_runs_as_an_operation_and_flags_every_ssp() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/scheduler/restart", &token, json!({ "mode": "rehash" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        let op_id = body_json(res).await["operation"]["id"].as_str().unwrap().to_string();
+
+        // The rehash is quick on an empty replica; wait for the op to settle.
+        let mut settled = None;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            let res = app.clone().oneshot(get_auth("/admin/api/operations", &token)).await.unwrap();
+            let ops = body_json(res).await;
+            let op = ops["operations"].as_array().unwrap().iter().find(|o| o["id"] == op_id).cloned().unwrap();
+            if op["status"] != "running" {
+                settled = Some(op);
+                break;
+            }
+        }
+        let op = settled.expect("rehash op should settle");
+        assert_eq!(op["status"], "done", "{op}");
+        assert_eq!(op["detail"]["mode"], "rehash");
+        assert!(h.ssp_pool.read().await.pending_resync("ssp-1").is_some());
+    }
+
+    #[tokio::test]
+    async fn cloud_actions_are_refused_when_unlinked() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        for (method, path) in [
+            ("POST", "/admin/api/cloud/restart"),
+            ("GET", "/admin/api/cloud/deployment"),
+            ("DELETE", "/admin/api/backups/x"),
+            ("PUT", "/admin/api/backups/config"),
+        ] {
+            let req = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .body(axum::body::Body::from("{}"))
+                .unwrap();
+            let res = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::CONFLICT, "{method} {path}");
+            assert_eq!(body_json(res).await["error"], scheduler::admin::cloud::NOT_LINKED);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_linked_scheduler_relays_the_control_planes_answer() {
+        // A stand-in control plane that refuses with its own words.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let fake = Router::new().route(
+            "/v1/internal/projects/test-project/restart",
+            axum::routing::post(|req: Request<axum::body::Body>| async move {
+                let auth = req.headers().get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                if auth != "Bearer cluster-secret" {
+                    return (StatusCode::UNAUTHORIZED, axum::Json(json!({ "error": "invalid project credentials" })));
+                }
+                (StatusCode::CONFLICT, axum::Json(json!({ "error": "a restart is already in progress for this project", "code": "conflict" })))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, fake).await.unwrap() });
+
+        let h = TestHarness::new().await;
+        let app = admin_app_with(&h, Some("pw"), Some(&format!("http://{addr}")), None);
+        let token = breakglass_token(&app, "pw").await;
+        let res = app
+            .oneshot(post_auth("/admin/api/cloud/restart", &token, json!({ "roles": ["ssp"], "upgrade": true })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        assert_eq!(body_json(res).await["error"], "a restart is already in progress for this project");
+    }
+
+    #[tokio::test]
+    async fn backups_list_works_unlinked_and_says_what_is_missing() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        let res = app.clone().oneshot(get_auth("/admin/api/backups", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = body_json(res).await;
+        assert_eq!(body["linked"], false);
+        assert_eq!(body["project_slug"], "default");
+        assert!(body["catalog"].is_array());
+        assert!(body["config"].is_null(), "schedules live in the control plane");
+        assert_eq!(body["local"]["queue_len"], 0);
+
+        // Creating without storage configured is refused with the env names.
+        if !maintenance::BackupConfig::env_configured() {
+            let res = app
+                .oneshot(post_auth("/admin/api/backups", &token, json!({ "name": "x" })))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert!(body_json(res).await["error"].as_str().unwrap().contains("S3_ENDPOINT"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_restore_status_for_an_unknown_backup_is_a_404() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        let res = app.oneshot(get_auth("/admin/api/backups/nope/restore", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn database_backed_actions_answer_503_without_a_handle() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        for path in [
+            "/admin/api/workflows/runs/_00_workflow_run:x/cancel",
+            "/admin/api/workflows/runs/_00_workflow_run:x/rerun",
+            "/admin/api/workflows/runs/_00_workflow_run:x/retry",
+            "/admin/api/schedules/x/pause",
+            "/admin/api/schedules/x/resume",
+            "/admin/api/schedules/x/trigger",
+        ] {
+            let res = app.clone().oneshot(post_auth_empty(path, &token)).await.unwrap();
+            assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_action_on_a_non_run_id_is_a_400() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        let res = app
+            .oneshot(post_auth_empty("/admin/api/workflows/runs/_00_schedule:x/cancel", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn job_actions_without_a_ready_ssp_are_a_503_in_admin_words() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        for path in ["/admin/api/jobs/job:1/kill", "/admin/api/jobs/job:1/retry"] {
+            let res = app.clone().oneshot(post_auth_empty(path, &token)).await.unwrap();
+            assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            let body = body_json(res).await;
+            assert!(body["error"].as_str().unwrap().contains("no ready SSP"), "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_operations_stream_opens_with_a_snapshot() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+        let res = app.oneshot(get_auth("/admin/api/operations/stream", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .starts_with("text/event-stream"));
     }
 }

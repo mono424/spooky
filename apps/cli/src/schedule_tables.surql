@@ -190,6 +190,19 @@ DEFINE FIELD OVERWRITE error ON TABLE _00_workflow_run TYPE option<object> FLEXI
 -- _00_schedule_run may already be gone -- so the mode cannot be read back from
 -- there and has to live here.
 DEFINE FIELD OVERWRITE history_mode ON TABLE _00_workflow_run TYPE option<string>;
+-- How this run was started: 'cron' for a schedule fire, 'manual' for an operator
+-- rerun. NONE on rows written before the field existed; readers treat that as
+-- 'cron'.
+DEFINE FIELD OVERWRITE trigger ON TABLE _00_workflow_run TYPE option<string>;
+-- The run an operator reran to produce this one. A link rather than a copy: the
+-- source may be pruned later, and a dangling link is harmless.
+DEFINE FIELD OVERWRITE rerun_of ON TABLE _00_workflow_run TYPE option<record<_00_workflow_run>>;
+-- Operator retries applied to this run. Doubles as the attempt number baked into
+-- step job ids, so a retried step never collides with its previous job row (an
+-- SSP keeps kill flags keyed by job id, so re-creating the same id would fail on
+-- arrival).
+DEFINE FIELD OVERWRITE retry_count ON TABLE _00_workflow_run TYPE int DEFAULT 0;
+DEFINE FIELD OVERWRITE last_retry_at ON TABLE _00_workflow_run TYPE option<datetime>;
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_workflow_run TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_workflow_run TYPE datetime VALUE time::now();
 DEFINE FIELD OVERWRITE finished_at ON TABLE _00_workflow_run TYPE option<datetime>;

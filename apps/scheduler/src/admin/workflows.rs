@@ -70,7 +70,8 @@ fn esc(s: &str) -> String {
 }
 
 const RUN_FIELDS: &str = "type::string(id) AS id, workflow_name, schedule_name, status, \
-     kill_requested, error, \
+     kill_requested, error, trigger, retry_count, \
+     type::string(rerun_of) AS rerun_of, \
      type::string(created_at) AS created_at, \
      type::string(updated_at) AS updated_at, \
      type::string(finished_at) AS finished_at";
@@ -86,6 +87,9 @@ pub struct RunsQuery {
     pub schedule: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    /// Only the reruns of one run, for the provenance panel on its page.
+    #[serde(default)]
+    pub rerun_of: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
 }
@@ -100,6 +104,11 @@ fn runs_surql(q: &RunsQuery) -> String {
     }
     if let Some(status) = q.status.as_ref().filter(|s| !s.is_empty()) {
         filters.push(format!("status = '{}'", esc(status)));
+    }
+    if let Some(src) = q.rerun_of.as_ref().filter(|s| !s.is_empty()) {
+        // `rerun_of` is a record link; compare its string form so the caller
+        // can pass the id exactly as the list handed it out.
+        filters.push(format!("type::string(rerun_of) = '{}'", esc(src)));
     }
     let where_clause = if filters.is_empty() {
         String::new()
@@ -375,9 +384,294 @@ pub async fn stream_runs(
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
+// ---------------------------------------------------------------------------
+// Actions
+// ---------------------------------------------------------------------------
+
+use axum::Extension;
+use schedule_core::{ids, ScheduleEngine, WorkflowOpError};
+
+use super::CurrentSession;
+
+fn parse_run_id(id: &str) -> Result<ids::Ref, ApiError> {
+    match ids::Ref::parse(id) {
+        Some(r) if r.table == ids::WORKFLOW_RUN => Ok(r),
+        Some(r) => Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!("'{}' is a {} record, not a workflow run", id, r.table),
+        )),
+        None => Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!("'{}' is not a record id", id),
+        )),
+    }
+}
+
+/// A per-request engine over the admin plane's shared root handle. Cheap to
+/// build, and it means an operator action runs through exactly the code the
+/// 5s sweep runs, rather than a hand-written imitation of it.
+fn engine(state: &AdminState) -> Result<ScheduleEngine, ApiError> {
+    let db = state.db().ok_or_else(db_unavailable)?;
+    Ok(crate::schedule_engine::build_engine_over(
+        Arc::new(crate::schedule_engine::SharedDb(db)),
+        Arc::clone(&state.metrics.ssp_pool),
+        Arc::clone(&state.transport),
+    ))
+}
+
+fn op_error(e: WorkflowOpError) -> ApiError {
+    match e {
+        WorkflowOpError::NotFound(id) => {
+            api_error(StatusCode::NOT_FOUND, format!("No workflow run {id}"))
+        }
+        WorkflowOpError::BadDag(msg) => {
+            api_error(StatusCode::UNPROCESSABLE_ENTITY, format!("Frozen DAG is invalid: {msg}"))
+        }
+        WorkflowOpError::Db(err) => {
+            let unknown_field = err
+                .downcast_ref::<schedule_core::ScheduleDbError>()
+                .map(|d| d.is_unknown_field())
+                .unwrap_or_else(|| err.to_string().contains("found no field"));
+            if unknown_field {
+                api_error(
+                    StatusCode::CONFLICT,
+                    "The schedule tables predate this action; run `spky deploy` to migrate them",
+                )
+            } else {
+                api_error(StatusCode::BAD_GATEWAY, format!("Database error: {err:#}"))
+            }
+        }
+        // Everything else is a state the operator can read and act on.
+        other => api_error(StatusCode::CONFLICT, other.to_string()),
+    }
+}
+
+/// `POST /admin/api/workflows/runs/:id/cancel`
+pub async fn cancel_run(
+    State(state): State<AdminState>,
+    Extension(CurrentSession(session)): Extension<CurrentSession>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let run = parse_run_id(&id)?;
+    let out = engine(&state)?
+        .cancel_workflow(&run)
+        .await
+        .map_err(op_error)?;
+    tracing::info!(run = %run, status = %out.status, by = %session.subject, "Workflow run cancelled from the dashboard");
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "run": out.run.as_string(), "status": out.status })),
+    ))
+}
+
+/// `POST /admin/api/workflows/runs/:id/rerun`
+pub async fn rerun_run(
+    State(state): State<AdminState>,
+    Extension(CurrentSession(session)): Extension<CurrentSession>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let run = parse_run_id(&id)?;
+    let out = engine(&state)?
+        .rerun_workflow(&run, chrono::Utc::now())
+        .await
+        .map_err(op_error)?;
+    tracing::info!(source = %run, run = %out.run, by = %session.subject, "Workflow rerun from the dashboard");
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "run": out.run.as_string(), "rerun_of": out.rerun_of.as_string() })),
+    ))
+}
+
+/// `POST /admin/api/workflows/runs/:id/retry`
+pub async fn retry_run(
+    State(state): State<AdminState>,
+    Extension(CurrentSession(session)): Extension<CurrentSession>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let run = parse_run_id(&id)?;
+    let out = engine(&state)?
+        .retry_workflow(&run)
+        .await
+        .map_err(op_error)?;
+    tracing::info!(run = %run, retry_count = out.retry_count, reset = ?out.reset, by = %session.subject, "Workflow retried from the dashboard");
+    Ok(Json(json!({
+        "run": out.run.as_string(),
+        "retry_count": out.retry_count,
+        "reset": out.reset,
+        "kept": out.kept,
+    })))
+}
+
+/// `_00_schedule:⟨name⟩`, the same literal the CLI writes. The ⟨⟩ form quotes
+/// any key, which matters because schedule names routinely carry hyphens (a
+/// bare `_00_schedule:game-sync` parses as a subtraction).
+fn schedule_literal(name: &str) -> String {
+    format!("_00_schedule:⟨{}⟩", name.replace('⟩', ""))
+}
+
+async fn load_schedule(db: &Arc<ReconnectingDb>, name: &str) -> Result<Value, ApiError> {
+    rows(
+        db,
+        &format!(
+            "SELECT name, paused, config_disabled FROM _00_schedule WHERE name = '{}' LIMIT 1;",
+            esc(name)
+        ),
+    )
+    .await?
+    .into_iter()
+    .next()
+    .ok_or_else(|| api_error(StatusCode::NOT_FOUND, format!("No schedule named '{name}'")))
+}
+
+async fn set_paused(
+    state: &AdminState,
+    session: &CurrentSession,
+    name: &str,
+    paused: bool,
+) -> Result<Json<Value>, ApiError> {
+    let db = state.db().ok_or_else(db_unavailable)?;
+    load_schedule(&db, name).await?;
+    rows(
+        &db,
+        &format!("UPDATE {} SET paused = {};", schedule_literal(name), paused),
+    )
+    .await?;
+    tracing::info!(schedule = %name, paused, by = %session.0.subject, "Schedule pause state changed from the dashboard");
+    Ok(Json(json!({ "name": name, "paused": paused })))
+}
+
+/// `POST /admin/api/schedules/:name/pause`
+pub async fn schedule_pause(
+    State(state): State<AdminState>,
+    Extension(session): Extension<CurrentSession>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    set_paused(&state, &session, &name, true).await
+}
+
+/// `POST /admin/api/schedules/:name/resume`
+pub async fn schedule_resume(
+    State(state): State<AdminState>,
+    Extension(session): Extension<CurrentSession>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    set_paused(&state, &session, &name, false).await
+}
+
+/// `POST /admin/api/schedules/:name/trigger`
+pub async fn schedule_trigger(
+    State(state): State<AdminState>,
+    Extension(CurrentSession(session)): Extension<CurrentSession>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let db = state.db().ok_or_else(db_unavailable)?;
+    let schedule = load_schedule(&db, &name).await?;
+    // Pause wins over a queued trigger in the engine (`SELECT_TRIGGERED`
+    // requires `paused = false`), so accepting one here would queue a fire
+    // that silently never happens.
+    if schedule["paused"].as_bool() == Some(true) {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!("Schedule '{name}' is paused; resume it before triggering"),
+        ));
+    }
+    if schedule["config_disabled"].as_bool() == Some(true) {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!("Schedule '{name}' is disabled in its config; enable it and run `spky schedules sync`"),
+        ));
+    }
+    let updated = rows(
+        &db,
+        &format!(
+            "UPDATE {} SET trigger_requested_at = time::now() RETURN type::string(trigger_requested_at) AS trigger_requested_at;",
+            schedule_literal(&name)
+        ),
+    )
+    .await?;
+    let at = updated
+        .first()
+        .and_then(|r| r["trigger_requested_at"].as_str())
+        .map(str::to_string);
+    tracing::info!(schedule = %name, by = %session.subject, "Schedule triggered from the dashboard");
+    Ok(Json(json!({ "name": name, "triggered_at": at })))
+}
+
+/// `POST /admin/api/jobs/:id/kill`
+pub async fn job_kill(
+    State(state): State<AdminState>,
+    Extension(CurrentSession(session)): Extension<CurrentSession>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    tracing::info!(job = %id, by = %session.subject, "Job kill from the dashboard");
+    let (status, body) =
+        crate::job_scheduler::kill_job(&state.metrics.ssp_pool, &state.transport, &id).await;
+    relay(status, body)
+}
+
+/// `POST /admin/api/jobs/:id/retry`
+pub async fn job_retry(
+    State(state): State<AdminState>,
+    Extension(CurrentSession(session)): Extension<CurrentSession>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    tracing::info!(job = %id, by = %session.subject, "Job retry from the dashboard");
+    let (status, body) =
+        crate::job_scheduler::retry_job(&state.metrics.ssp_pool, &state.transport, &id).await;
+    relay(status, body)
+}
+
+/// The job routes speak `{code, message}`; the admin plane speaks `{error}`.
+/// Translate on failure, pass through on success.
+fn relay(status: StatusCode, body: Value) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if status.is_success() {
+        Ok((status, Json(body)))
+    } else {
+        let message = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Job action failed ({})", status.as_u16()));
+        Err(api_error(status, message))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_ids_must_be_workflow_runs() {
+        assert_eq!(parse_run_id("_00_workflow_run:abc").unwrap().key, "abc");
+        assert_eq!(parse_run_id("_00_workflow_run:⟨a-b⟩").unwrap().key, "a-b");
+        assert_eq!(parse_run_id("_00_schedule:abc").unwrap_err().0, StatusCode::BAD_REQUEST);
+        assert_eq!(parse_run_id("nonsense").unwrap_err().0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn op_errors_map_to_statuses() {
+        assert_eq!(op_error(WorkflowOpError::NotFound("x".into())).0, StatusCode::NOT_FOUND);
+        assert_eq!(op_error(WorkflowOpError::BadDag("cycle".into())).0, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(op_error(WorkflowOpError::NotTerminal { status: "running".into() }).0, StatusCode::CONFLICT);
+        assert_eq!(op_error(WorkflowOpError::Conflict).0, StatusCode::CONFLICT);
+        let behind = op_error(WorkflowOpError::Db(anyhow::anyhow!("found no field `retry_count`")));
+        assert_eq!(behind.0, StatusCode::CONFLICT);
+        assert!(behind.1["error"].as_str().unwrap().contains("spky deploy"));
+        assert_eq!(op_error(WorkflowOpError::Db(anyhow::anyhow!("boom"))).0, StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn schedule_literals_quote_hyphens() {
+        assert_eq!(schedule_literal("game-sync"), "_00_schedule:⟨game-sync⟩");
+        assert_eq!(schedule_literal("a⟩b"), "_00_schedule:⟨ab⟩");
+    }
+
+    #[test]
+    fn rerun_of_filter_compares_the_string_form() {
+        let sql = runs_surql(&RunsQuery { rerun_of: Some("_00_workflow_run:x".into()), ..Default::default() });
+        assert!(sql.contains("type::string(rerun_of) = '_00_workflow_run:x'"), "{sql}");
+    }
 
     #[test]
     fn esc_neutralises_quotes_and_backslashes() {

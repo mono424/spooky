@@ -322,6 +322,33 @@ pub struct SspBootstrapProgressRequest {
     pub progress: BootstrapProgress,
 }
 
+/// Body of the 409 the scheduler answers a heartbeat with when it wants the
+/// SSP gone. The SSP's response to a 409 is to exit and let its supervisor
+/// relaunch it, so this is the one message that can ride along on the way out.
+///
+/// `clean` asks the SSP to drop its on-disk circuit snapshot first, so the
+/// relaunch is a cold rebuild rather than a snapshot restore plus catch-up.
+/// Older SSPs read the body as free text and simply restart; older schedulers
+/// send free text, which parses to `clean: false`. Both directions degrade to
+/// a plain restart, never to a refused one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResyncDirective {
+    pub reason: String,
+    #[serde(default)]
+    pub clean: bool,
+}
+
+impl ResyncDirective {
+    /// Parse a heartbeat 409 body, tolerating the pre-directive plain-text
+    /// form so an SSP never treats an old scheduler's reply as garbage.
+    pub fn parse(body: &str) -> Self {
+        serde_json::from_str(body).unwrap_or_else(|_| ResyncDirective {
+            reason: body.trim().to_string(),
+            clean: false,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SspHeartbeat {
     pub ssp_id: String,

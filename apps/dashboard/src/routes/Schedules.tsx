@@ -20,6 +20,7 @@ import {
   relativeStamp,
 } from '../lib/format';
 import { runTone } from '../lib/status';
+import { pauseSchedule, triggerSchedule } from '../lib/runActions';
 import type { Schedule, ScheduleDetailData, ScheduleRun } from '../api/types';
 
 /**
@@ -37,6 +38,48 @@ function cadence(s: Pick<Schedule, 'cron' | 'every_ms'>) {
   if (s.cron) return s.cron;
   if (s.every_ms) return `every ${formatDuration(s.every_ms)}`;
   return '—';
+}
+
+/**
+ * Pause/resume and "run now" for one schedule.
+ *
+ * `config_disabled` is not an operator state: it came from the config file
+ * and only `spky schedules sync` can change it, so both controls are off with
+ * that reason rather than offering a toggle that would silently do nothing.
+ */
+function ScheduleControls(props: {
+  schedule: Pick<Schedule, 'name' | 'paused' | 'config_disabled'>;
+  onChange: () => void;
+  size?: 'sm';
+}) {
+  const s = () => props.schedule;
+  const disabledReason = () =>
+    s().config_disabled
+      ? 'Disabled in config; change it there and run spky schedules sync'
+      : undefined;
+  const triggerReason = () =>
+    disabledReason() ?? (s().paused ? 'Paused: pause wins over a queued trigger' : undefined);
+  const cls = () => (props.size === 'sm' ? 'btn btn-sm' : 'btn');
+  return (
+    <div class="row" onClick={(e) => e.stopPropagation()}>
+      <button
+        class={cls()}
+        disabled={!!disabledReason()}
+        title={disabledReason()}
+        onClick={() => void pauseSchedule(s().name, !s().paused, props.onChange)}
+      >
+        {s().paused ? 'Resume' : 'Pause'}
+      </button>
+      <button
+        class={`${cls()} btn-primary`}
+        disabled={!!triggerReason()}
+        title={triggerReason()}
+        onClick={() => void triggerSchedule(s().name, props.onChange)}
+      >
+        Run now
+      </button>
+    </div>
+  );
 }
 
 export function Schedules() {
@@ -75,6 +118,7 @@ export function Schedules() {
                         <th>State</th>
                         <th>Last run</th>
                         <th>Next fire</th>
+                        <th />
                       </tr>
                     </thead>
                     <tbody>
@@ -115,6 +159,11 @@ export function Schedules() {
                               </Show>
                             </td>
                             <td class="dim" data-label="Next fire">{relativeStamp(s.next_fire_at)}</td>
+                            <td data-label="Actions" data-empty={true}>
+                              <div class="row-actions">
+                                <ScheduleControls schedule={s} size="sm" onChange={refetch} />
+                              </div>
+                            </td>
                           </tr>
                         )}
                       </For>
@@ -184,9 +233,12 @@ export function ScheduleDetail() {
         actions={
           <Show when={s()}>
             {(v) => (
-              <Pill tone={scheduleState(v()).tone} dot>
-                {scheduleState(v()).label}
-              </Pill>
+              <>
+                <ScheduleControls schedule={v()} size="sm" onChange={refetch} />
+                <Pill tone={scheduleState(v()).tone} dot>
+                  {scheduleState(v()).label}
+                </Pill>
+              </>
             )}
           </Show>
         }

@@ -4,6 +4,7 @@ import { openStream } from '../api/client';
 import { Empty, PageHead, Panel, Pill, StatusDot } from '../components/Chrome';
 import { elapsed, relativeStamp } from '../lib/format';
 import { runTone } from '../lib/status';
+import { cancelRun, rerunRun } from '../lib/runActions';
 import type { WorkflowRun } from '../api/types';
 
 /**
@@ -124,6 +125,7 @@ export function Workflows() {
                   <th>Started</th>
                   <th>Duration</th>
                   <th>Schedule</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -142,6 +144,9 @@ export function Workflows() {
                             pulse={run.status === 'running'}
                           />
                           {run.workflow_name}
+                          <Show when={run.trigger === 'manual'}>
+                            <span class="mini">manual</span>
+                          </Show>
                         </div>
                         <div class="id" style={{ 'margin-top': '2px' }}>
                           {run.id}
@@ -164,6 +169,32 @@ export function Workflows() {
                         data-empty={!run.schedule_name}
                       >
                         {run.schedule_name ?? '—'}
+                      </td>
+                      <td data-label="Actions" data-empty={true}>
+                        {/* The stream updates the row in place, so no refetch
+                            is needed after either action. stopPropagation on
+                            the cell keeps the row's own click from firing. */}
+                        <div class="row-actions" onClick={(e) => e.stopPropagation()}>
+                          <Show
+                            when={run.status === 'running'}
+                            fallback={
+                              <button
+                                class="btn btn-sm"
+                                onClick={() => void rerunRun(run.id, navigate)}
+                              >
+                                Rerun
+                              </button>
+                            }
+                          >
+                            <button
+                              class="btn btn-sm"
+                              disabled={run.kill_requested}
+                              onClick={() => void cancelRun(run.id, run.workflow_name)}
+                            >
+                              Cancel
+                            </button>
+                          </Show>
+                        </div>
                       </td>
                     </tr>
                   )}

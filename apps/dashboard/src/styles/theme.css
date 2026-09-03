@@ -37,6 +37,9 @@
   --ink-ghost: #403a34;
 
   /* --- accent (the only free colour) -------------------------------- */
+  /* Only tokens declared here may be referenced from TSX (`var(--amber)`,
+     never an invented alias): a missing custom property fails silently and
+     the shape simply does not draw. */
   --amber: #f0a83c;
   --amber-deep: #b87d24;
   --amber-wash: rgba(240, 168, 60, 0.1);
@@ -1035,6 +1038,618 @@ select:focus {
 }
 
 /* ================================================================
+   ACTIONS: split buttons, menus, confirm dialog, toasts
+   ================================================================ */
+
+/* A split button: the primary verb on the left, a chevron on the right that
+   opens the menu of modes. The two halves share one outline so it reads as a
+   single control rather than two buttons that happen to touch. */
+.split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.split .btn {
+  border-radius: 0;
+}
+
+.split .split-primary {
+  border-top-left-radius: var(--radius);
+  border-bottom-left-radius: var(--radius);
+  border-right-width: 0;
+}
+
+.split .split-toggle {
+  border-top-right-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 9px;
+  padding-right: 9px;
+}
+
+.split-solo .split-toggle {
+  border-radius: var(--radius);
+}
+
+/* On desktop the toggle is just the chevron; the label lives on the primary. */
+.split:not(.split-solo) .split-label {
+  display: none;
+}
+
+.chev {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 0.12s;
+}
+
+.split.open .chev {
+  transform: translateY(1px) rotate(225deg);
+}
+
+.split.open .split-toggle {
+  border-color: var(--amber-deep);
+  color: var(--ink);
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 40;
+  min-width: 250px;
+  max-width: 320px;
+  background: var(--bg-raised);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.menu-left {
+  right: auto;
+  left: 0;
+}
+
+.menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--ink);
+}
+
+.menu-item:hover:not(.disabled) {
+  background: var(--bg-hover);
+}
+
+.menu-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.menu-item.destructive .menu-title {
+  color: var(--bad);
+}
+
+.menu-sub {
+  font-size: 11px;
+  font-family: var(--sans);
+  color: var(--ink-faint);
+  line-height: 1.35;
+}
+
+/* An unavailable option stays listed. The reason replaces the consequence,
+   which is the one line an operator needs to know how to make it available. */
+.menu-item.disabled {
+  cursor: default;
+}
+
+.menu-item.disabled .menu-title {
+  color: var(--ink-ghost);
+}
+
+.menu-item.disabled .menu-sub {
+  color: var(--ink-ghost);
+  font-style: italic;
+}
+
+/* --- confirm dialog --- */
+
+dialog.confirm {
+  padding: 0;
+  border: none;
+  background: transparent;
+  max-width: 100vw;
+  max-height: 100vh;
+  color: var(--ink);
+}
+
+dialog.confirm::backdrop {
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.confirm-card {
+  width: min(440px, calc(100vw - 32px));
+  margin: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px 16px;
+  box-shadow:
+    inset 0 1px 0 var(--amber-line),
+    0 30px 70px rgba(0, 0, 0, 0.6);
+}
+
+.confirm-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  margin: 6px 0 12px;
+}
+
+.confirm-warning {
+  background: var(--warn-wash);
+  color: var(--warn);
+  border: 1px solid rgba(226, 165, 63, 0.22);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 11.5px;
+  font-family: var(--sans);
+  margin-bottom: 12px;
+}
+
+.confirm-list {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.confirm-list li::marker {
+  color: var(--bad);
+}
+
+.confirm-type {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.confirm-type input {
+  margin-top: 6px;
+  width: 100%;
+}
+
+.confirm-type input:focus {
+  border-color: var(--bad);
+  box-shadow: 0 0 0 3px var(--bad-wash);
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* --- toasts --- */
+
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--rule-strong);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast .dot {
+  margin-top: 4px;
+}
+
+.toast.ok {
+  border-left-color: var(--ok);
+}
+.toast.bad {
+  border-left-color: var(--bad);
+}
+.toast.warn {
+  border-left-color: var(--warn);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.toast-body {
+  font-size: 11.5px;
+  font-family: var(--sans);
+  color: var(--ink-dim);
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: var(--ink-ghost);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.toast-close:hover {
+  color: var(--ink);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --- activity strip --- */
+
+.activity {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.activity-item {
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--amber);
+  border-radius: var(--radius-lg);
+  padding: 9px 12px 10px;
+}
+
+.activity-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.activity-kind {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.activity-target {
+  color: var(--ink-dim);
+}
+
+.activity-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.activity-msg {
+  margin-top: 6px;
+  font-size: 11px;
+  font-family: var(--sans);
+  color: var(--ink-faint);
+}
+
+/* --- row actions: revealed on hover, always shown on touch layouts --- */
+
+.row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+tr:hover .row-actions,
+.row-actions:focus-within {
+  opacity: 1;
+}
+
+/* --- stepper --- */
+
+.stepper {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.step {
+  display: flex;
+  gap: 12px;
+  padding: 7px 0;
+  position: relative;
+}
+
+/* The connecting rule between markers. */
+.step + .step::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: -8px;
+  height: 14px;
+  width: 1px;
+  background: var(--rule-strong);
+}
+
+.step-marker {
+  flex: 0 0 auto;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  border: 1px solid var(--rule-strong);
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  color: var(--ink-ghost);
+  background: var(--bg-sunken);
+}
+
+.step.done .step-marker {
+  border-color: var(--ok);
+  color: var(--ok);
+  background: var(--ok-wash);
+}
+
+.step.active .step-marker {
+  border-color: var(--amber);
+  color: var(--amber);
+  background: var(--amber-wash);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.step.failed .step-marker {
+  border-color: var(--bad);
+  color: var(--bad);
+  background: var(--bad-wash);
+}
+
+.step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.step-label {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.step.active .step-label,
+.step.done .step-label {
+  color: var(--ink);
+}
+
+.step.pending .step-label {
+  color: var(--ink-faint);
+}
+
+.step-note {
+  font-size: 11px;
+  font-family: var(--sans);
+  color: var(--ink-faint);
+}
+
+/* --- full-page reconnect --- */
+
+.reconnect {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.reconnect-card {
+  text-align: center;
+  max-width: 380px;
+}
+
+.reconnect-card .bar {
+  margin: 16px auto 0;
+  width: 180px;
+}
+
+.reconnect-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+
+.reconnect-msg {
+  margin-top: 10px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}
+
+/* --- inline callouts inside a panel --- */
+
+.callout {
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  font-size: 11.5px;
+  font-family: var(--sans);
+  line-height: 1.5;
+  border: 1px solid var(--rule);
+  background: var(--bg-sunken);
+  color: var(--ink-dim);
+}
+
+.callout.bad {
+  background: var(--bad-wash);
+  color: var(--bad);
+  border-color: rgba(220, 109, 92, 0.24);
+}
+
+.callout code,
+.callout .mono {
+  font-family: var(--mono);
+  color: var(--ink);
+}
+
+/* --- toggle switch (backup schedule enabled) --- */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switch-track {
+  width: 28px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--rule-strong);
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+  transition: transform 0.12s, background 0.12s;
+}
+
+.switch input:checked + .switch-track {
+  background: var(--amber-wash);
+  border-color: var(--amber-deep);
+}
+
+.switch input:checked + .switch-track::after {
+  transform: translateX(14px);
+  background: var(--amber);
+}
+
+.switch input:focus-visible + .switch-track {
+  box-shadow: 0 0 0 3px var(--amber-wash);
+}
+
+/* Sparkline readout: three quiet measurements under the plot. */
+.spark-read {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.spark-read .tag .val {
+  margin-left: 5px;
+}
+
+/* A one-line form row: input + button. */
+.form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.form-row input {
+  flex: 1;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.field-hint {
+  font-size: 11px;
+  font-family: var(--sans);
+  color: var(--ink-faint);
+  margin-top: 5px;
+}
+
+/* Small inline tag next to a name, e.g. "manual". */
+.mini {
+  display: inline-block;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--amber-deep);
+  border: 1px solid var(--amber-line);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+/* ================================================================
    MOBILE TOP BAR + DRAWER
 
    Desktop keeps the permanent rail. Below the breakpoint the rail
@@ -1118,6 +1733,20 @@ select:focus {
 }
 
 @media (max-width: 860px) {
+  /* The split button collapses to one "Actions" toggle; every mode is still
+     in the menu, so nothing is lost, only the one-click shortcut. */
+  .split .split-primary {
+    display: none;
+  }
+  .split .split-toggle {
+    border-radius: var(--radius);
+  }
+  .split:not(.split-solo) .split-label {
+    display: inline;
+  }
+  .row-actions {
+    opacity: 1;
+  }
   .mobile-bar {
     display: flex;
   }
@@ -1259,6 +1888,24 @@ select:focus {
 }
 
 @media (max-width: 560px) {
+  .confirm-card {
+    width: calc(100vw - 16px);
+    padding: 16px;
+  }
+  .menu {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: 8px;
+    max-width: none;
+  }
+  .toasts {
+    right: 8px;
+    left: 8px;
+    bottom: 8px;
+    width: auto;
+  }
   .page-head {
     padding: 12px 12px 10px;
   }

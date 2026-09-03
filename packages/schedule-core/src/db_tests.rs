@@ -235,6 +235,62 @@ impl Harness {
         self.one_string("SELECT VALUE status FROM ONLY _00_workflow_run WHERE true LIMIT 1").await
     }
 
+    /// Status of ONE run by id. `workflow_status` reads whichever row comes
+    /// first, which is ambiguous as soon as a rerun puts a second run in the
+    /// table.
+    async fn run_status(&self, run: &ids::Ref) -> Option<String> {
+        self.raw
+            .query("SELECT VALUE status FROM ONLY type::record($tb, $key)")
+            .bind(("tb", run.table.clone()))
+            .bind(("key", run.key.clone()))
+            .await
+            .expect("query")
+            .take(0)
+            .expect("take")
+    }
+
+    async fn run_field(&self, run: &ids::Ref, field: &str) -> Option<String> {
+        self.raw
+            .query(format!("SELECT VALUE type::string({field}) FROM ONLY type::record($tb, $key)"))
+            .bind(("tb", run.table.clone()))
+            .bind(("key", run.key.clone()))
+            .await
+            .expect("query")
+            .take(0)
+            .expect("take")
+    }
+
+    /// Status of one step of one run, by name.
+    async fn step_status_of(&self, run: &ids::Ref, step: &str) -> Option<String> {
+        self.raw
+            .query(
+                "SELECT VALUE status FROM ONLY _00_step_run \
+                 WHERE workflow_run = type::record($tb, $key) AND step = $step LIMIT 1",
+            )
+            .bind(("tb", run.table.clone()))
+            .bind(("key", run.key.clone()))
+            .bind(("step", step.to_string()))
+            .await
+            .expect("query")
+            .take(0)
+            .expect("take")
+    }
+
+    async fn step_job_of(&self, run: &ids::Ref, step: &str) -> Option<String> {
+        self.raw
+            .query(
+                "SELECT VALUE job_id FROM ONLY _00_step_run \
+                 WHERE workflow_run = type::record($tb, $key) AND step = $step LIMIT 1",
+            )
+            .bind(("tb", run.table.clone()))
+            .bind(("key", run.key.clone()))
+            .bind(("step", step.to_string()))
+            .await
+            .expect("query")
+            .take(0)
+            .expect("take")
+    }
+
     /// A second engine over the same database — a replicated scheduler, or a
     /// heal pass racing an ingest event.
     fn rival(&self) -> ScheduleEngine {
@@ -2391,3 +2447,376 @@ async fn a_discarded_job_row_is_not_mistaken_for_a_missing_one() {
     );
 }
 
+
+// --- operator actions: rerun, retry, cancel ---------------------------------
+
+use crate::workflow::WorkflowOpError;
+
+/// Drive the diamond to a halted failure: `extract-orders` fails, `extract-users`
+/// succeeds, the rest is skipped, the run is `failed`.
+async fn failed_diamond() -> (Harness, ids::Ref) {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    h.fail_job(&h.step_job("extract-orders").await.unwrap(), "boom").await;
+    h.finish_job(&h.step_job("extract-users").await.unwrap(), "success", json!({"fileId": "u"}))
+        .await;
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("failed"));
+    (h, run)
+}
+
+async fn schedule_run_status(h: &Harness) -> Option<String> {
+    h.one_string("SELECT VALUE status FROM ONLY _00_schedule_run WHERE true LIMIT 1").await
+}
+
+#[tokio::test]
+async fn a_rerun_is_a_fresh_ad_hoc_run_of_the_same_workflow() {
+    let (h, source) = failed_diamond().await;
+    let source_error = h.run_field(&source, "error.step").await;
+
+    let out = h.engine.rerun_workflow(&source, Utc::now()).await.unwrap();
+
+    assert_ne!(out.run, source);
+    assert_eq!(out.rerun_of, source);
+    assert_eq!(h.run_status(&out.run).await.as_deref(), Some("running"));
+    assert_eq!(h.run_field(&out.run, "rerun_of").await, Some(source.as_string()));
+    assert_eq!(h.run_field(&out.run, "trigger").await.as_deref(), Some("manual"));
+    assert_eq!(
+        h.run_field(&out.run, "schedule_name").await.as_deref(),
+        Some("NONE"),
+        "a rerun has no owning schedule"
+    );
+    assert_eq!(
+        h.run_field(&out.run, "dag").await,
+        h.run_field(&source, "dag").await,
+        "the frozen dag is copied verbatim"
+    );
+    // Roots dispatched under the NEW key, so the old failed job row is untouched.
+    for step in ["extract-orders", "extract-users"] {
+        assert_eq!(h.step_status_of(&out.run, step).await.as_deref(), Some("dispatched"));
+        let job = h.step_job_of(&out.run, step).await.unwrap();
+        assert!(job.contains(&out.run.key), "job {job} belongs to the rerun");
+    }
+    assert_eq!(h.step_status_of(&out.run, "transform").await.as_deref(), Some("blocked"));
+    // The source is exactly as it was.
+    assert_eq!(h.run_status(&source).await.as_deref(), Some("failed"));
+    assert_eq!(h.run_field(&source, "error.step").await, source_error);
+}
+
+#[tokio::test]
+async fn a_rerun_never_touches_the_schedule_run_and_rolls_up_as_ad_hoc() {
+    let mut def = diamond_workflow();
+    def["history_mode"] = json!("failures-only");
+    let h = workflow_harness(def).await;
+    let source = workflow_run_id(&h).await;
+    h.fail_job(&h.step_job("extract-orders").await.unwrap(), "boom").await;
+    h.finish_job(&h.step_job("extract-users").await.unwrap(), "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(schedule_run_status(&h).await.as_deref(), Some("failed"));
+
+    let out = h.engine.rerun_workflow(&source, Utc::now()).await.unwrap();
+    for step in ["extract-orders", "extract-users"] {
+        h.finish_job(&h.step_job_of(&out.run, step).await.unwrap(), "success", json!({})).await;
+    }
+    h.engine.tick_pass().await.unwrap();
+    h.finish_job(&h.step_job_of(&out.run, "transform").await.unwrap(), "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    for step in ["notify", "archive"] {
+        h.finish_job(&h.step_job_of(&out.run, step).await.unwrap(), "success", json!({})).await;
+    }
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(
+        schedule_run_status(&h).await.as_deref(),
+        Some("failed"),
+        "the original fire's outcome is not rewritten by a rerun"
+    );
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM _00_schedule_run GROUP ALL").await,
+        1,
+        "no second schedule run was minted"
+    );
+    assert!(
+        h.run_status(&out.run).await.is_none(),
+        "under failures-only a successful rerun is discarded like any other success"
+    );
+    assert!(
+        rollup_rows(&h).await.iter().any(|r| r.starts_with("schedule/(ad-hoc) s=1")),
+        "and counted under the ad-hoc bucket: {:?}",
+        rollup_rows(&h).await
+    );
+}
+
+#[tokio::test]
+async fn a_rerun_of_a_run_whose_frozen_dag_is_broken_is_refused() {
+    let (h, source) = failed_diamond().await;
+    h.set(&format!(
+        "UPDATE {source} SET dag = {{ steps: [ \
+           {{ name: 'a', path: '/a', depends_on: ['b'] }}, \
+           {{ name: 'b', path: '/b', depends_on: ['a'] }} ] }}"
+    ))
+    .await;
+
+    let err = h.engine.rerun_workflow(&source, Utc::now()).await.unwrap_err();
+    assert!(matches!(err, WorkflowOpError::BadDag(_)), "got {err:?}");
+    assert_eq!(h.count("SELECT VALUE count() FROM _00_workflow_run GROUP ALL").await, 1);
+}
+
+#[tokio::test]
+async fn two_reruns_in_the_same_millisecond_collide_instead_of_double_spawning() {
+    let (h, source) = failed_diamond().await;
+    let at = Utc::now();
+    h.engine.rerun_workflow(&source, at).await.unwrap();
+    let err = h.engine.rerun_workflow(&source, at).await.unwrap_err();
+    assert!(matches!(err, WorkflowOpError::AlreadyExists), "got {err:?}");
+    assert_eq!(h.count("SELECT VALUE count() FROM _00_workflow_run GROUP ALL").await, 2);
+}
+
+#[tokio::test]
+async fn a_retry_resumes_from_the_failure_and_keeps_what_succeeded() {
+    let (h, run) = failed_diamond().await;
+    let users_job = h.step_job_of(&run, "extract-users").await.unwrap();
+    let old_orders_job = h.step_job_of(&run, "extract-orders").await.unwrap();
+
+    let out = h.engine.retry_workflow(&run).await.unwrap();
+
+    assert_eq!(out.retry_count, 1);
+    let mut reset = out.reset.clone();
+    reset.sort();
+    assert_eq!(reset, vec!["archive", "extract-orders", "notify", "transform"]);
+    assert_eq!(out.kept, vec!["extract-users"]);
+
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("running"));
+    assert_eq!(h.run_field(&run, "error").await.as_deref(), Some("NONE"));
+    assert_eq!(h.run_field(&run, "retry_count").await.as_deref(), Some("1"));
+    assert_eq!(schedule_run_status(&h).await.as_deref(), Some("running"), "the owning fire reopens");
+
+    // The success is untouched, output and all.
+    assert_eq!(h.step_status_of(&run, "extract-users").await.as_deref(), Some("success"));
+    assert_eq!(h.step_job_of(&run, "extract-users").await.as_deref(), Some(users_job.as_str()));
+    assert_eq!(
+        h.one_string("SELECT VALUE output.fileId FROM ONLY _00_step_run WHERE step = 'extract-users' LIMIT 1").await.as_deref(),
+        Some("u")
+    );
+    // The failure re-dispatched under a fresh attempt id; the old row is history.
+    assert_eq!(h.step_status_of(&run, "extract-orders").await.as_deref(), Some("dispatched"));
+    let new_orders_job = h.step_job_of(&run, "extract-orders").await.unwrap();
+    assert_ne!(new_orders_job, old_orders_job);
+    assert!(new_orders_job.ends_with("_r1"), "got {new_orders_job}");
+    assert!(h.job_ids().await.contains(&old_orders_job), "the failed row is kept as history");
+    // The skipped join is back to waiting, not re-skipped.
+    assert_eq!(h.step_status_of(&run, "transform").await.as_deref(), Some("blocked"));
+}
+
+#[tokio::test]
+async fn a_retried_run_finishes_and_mirrors_onto_its_schedule_run() {
+    let (h, run) = failed_diamond().await;
+    h.engine.retry_workflow(&run).await.unwrap();
+
+    h.finish_job(&h.step_job_of(&run, "extract-orders").await.unwrap(), "success", json!({"fileId": "o"})).await;
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.step_status_of(&run, "transform").await.as_deref(), Some("dispatched"));
+    let transform_job = h.step_job_of(&run, "transform").await.unwrap();
+    let users: Option<String> = h
+        .raw
+        .query("SELECT VALUE payload.steps.`extract-users`.fileId FROM ONLY type::record($id)")
+        .bind(("id", transform_job.clone()))
+        .await
+        .expect("query")
+        .take(0)
+        .expect("take");
+    assert_eq!(users.as_deref(), Some("u"), "the kept step's output still feeds the join");
+
+    h.finish_job(&transform_job, "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    for step in ["notify", "archive"] {
+        h.finish_job(&h.step_job_of(&run, step).await.unwrap(), "success", json!({})).await;
+    }
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("success"));
+    assert_eq!(schedule_run_status(&h).await.as_deref(), Some("success"));
+}
+
+#[tokio::test]
+async fn a_killed_run_cannot_be_retried_until_its_jobs_have_settled() {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    h.set(&format!("UPDATE {run} SET kill_requested = true")).await;
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("killed"));
+
+    // RecordingKill never terminalizes the job rows, so both roots are still pending.
+    let err = h.engine.retry_workflow(&run).await.unwrap_err();
+    assert!(matches!(err, WorkflowOpError::Settling { .. }), "got {err:?}");
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("killed"), "nothing was written");
+
+    // Once the SSP has processed the kill, the retry goes through.
+    for step in ["extract-orders", "extract-users"] {
+        h.fail_job(&h.step_job_of(&run, step).await.unwrap(), "killed by operator").await;
+    }
+    let out = h.engine.retry_workflow(&run).await.unwrap();
+    assert!(out.reset.contains(&"extract-orders".to_string()));
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("running"));
+    assert_eq!(h.run_field(&run, "kill_requested").await.as_deref(), Some("false"));
+
+    // A further sweep must not re-kill it.
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("running"));
+    assert_eq!(h.step_status_of(&run, "extract-orders").await.as_deref(), Some("dispatched"));
+}
+
+#[tokio::test]
+async fn only_a_failed_or_killed_run_can_be_retried() {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    let err = h.engine.retry_workflow(&run).await.unwrap_err();
+    assert!(matches!(err, WorkflowOpError::NotTerminal { .. }), "got {err:?}");
+
+    for step in ["extract-orders", "extract-users"] {
+        h.finish_job(&h.step_job(step).await.unwrap(), "success", json!({})).await;
+    }
+    h.engine.tick_pass().await.unwrap();
+    h.finish_job(&h.step_job("transform").await.unwrap(), "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    for step in ["notify", "archive"] {
+        h.finish_job(&h.step_job(step).await.unwrap(), "success", json!({})).await;
+    }
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("success"));
+    let err = h.engine.retry_workflow(&run).await.unwrap_err();
+    assert!(matches!(err, WorkflowOpError::NotTerminal { .. }), "got {err:?}");
+
+    let missing = ids::workflow_run("no_such_run");
+    assert!(matches!(
+        h.engine.retry_workflow(&missing).await.unwrap_err(),
+        WorkflowOpError::NotFound(_)
+    ));
+}
+
+#[tokio::test]
+async fn a_retry_racing_a_sweep_still_dispatches_each_step_once() {
+    let (h, run) = failed_diamond().await;
+    let rival = h.rival();
+
+    let (a, b) = tokio::join!(h.engine.retry_workflow(&run), rival.tick_pass());
+    a.unwrap();
+    b.unwrap();
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM job WHERE path = '/exportOrders' GROUP ALL").await,
+        2,
+        "the original attempt plus exactly one retry attempt"
+    );
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("running"));
+}
+
+#[tokio::test]
+async fn a_second_retry_mints_the_next_attempt_id() {
+    let (h, run) = failed_diamond().await;
+    h.engine.retry_workflow(&run).await.unwrap();
+    h.fail_job(&h.step_job_of(&run, "extract-orders").await.unwrap(), "boom again").await;
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("failed"));
+
+    let out = h.engine.retry_workflow(&run).await.unwrap();
+    assert_eq!(out.retry_count, 2);
+    let job = h.step_job_of(&run, "extract-orders").await.unwrap();
+    assert!(job.ends_with("_r2"), "got {job}");
+    assert_eq!(h.count("SELECT VALUE count() FROM job WHERE path = '/exportOrders' GROUP ALL").await, 3);
+}
+
+#[tokio::test]
+async fn a_continue_independent_retry_resets_only_the_doomed_branch() {
+    let h = workflow_harness(json!({
+        "kind": "workflow",
+        "every_ms": 3_600_000,
+        "target_table": "job",
+        "workflow": {
+            "target_table": "job",
+            "steps": [
+                {"name": "extract-orders", "path": "/a"},
+                {"name": "transform", "path": "/b", "depends_on": ["extract-orders"]},
+                {"name": "independent", "path": "/c"},
+                {"name": "after-independent", "path": "/d", "depends_on": ["independent"]},
+            ],
+            "on_failure": "continue-independent",
+        },
+    }))
+    .await;
+    let run = workflow_run_id(&h).await;
+    h.fail_job(&h.step_job("extract-orders").await.unwrap(), "boom").await;
+    h.finish_job(&h.step_job("independent").await.unwrap(), "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    h.finish_job(&h.step_job("after-independent").await.unwrap(), "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("failed"));
+
+    let out = h.engine.retry_workflow(&run).await.unwrap();
+    let mut reset = out.reset.clone();
+    reset.sort();
+    assert_eq!(reset, vec!["extract-orders", "transform"]);
+    let mut kept = out.kept.clone();
+    kept.sort();
+    assert_eq!(kept, vec!["after-independent", "independent"]);
+    assert_eq!(h.step_status_of(&run, "after-independent").await.as_deref(), Some("success"));
+    assert_eq!(h.step_status_of(&run, "extract-orders").await.as_deref(), Some("dispatched"));
+}
+
+#[tokio::test]
+async fn a_retry_that_succeeds_under_failures_only_leaves_no_rows() {
+    let mut def = diamond_workflow();
+    def["history_mode"] = json!("failures-only");
+    let h = workflow_harness(def).await;
+    let run = workflow_run_id(&h).await;
+    h.fail_job(&h.step_job("extract-orders").await.unwrap(), "boom").await;
+    h.finish_job(&h.step_job("extract-users").await.unwrap(), "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("failed"), "a failure is kept");
+
+    h.engine.retry_workflow(&run).await.unwrap();
+    h.finish_job(&h.step_job_of(&run, "extract-orders").await.unwrap(), "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    h.finish_job(&h.step_job_of(&run, "transform").await.unwrap(), "success", json!({})).await;
+    h.engine.tick_pass().await.unwrap();
+    for step in ["notify", "archive"] {
+        h.finish_job(&h.step_job_of(&run, step).await.unwrap(), "success", json!({})).await;
+    }
+    h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(h.count("SELECT VALUE count() FROM _00_workflow_run GROUP ALL").await, 0);
+    assert_eq!(h.count("SELECT VALUE count() FROM _00_step_run GROUP ALL").await, 0);
+    assert_eq!(h.count("SELECT VALUE count() FROM _00_schedule_run GROUP ALL").await, 0);
+}
+
+#[tokio::test]
+async fn cancel_kills_the_in_flight_jobs_without_waiting_for_a_sweep() {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    let roots = [
+        h.step_job("extract-orders").await.unwrap(),
+        h.step_job("extract-users").await.unwrap(),
+    ];
+
+    let out = h.engine.cancel_workflow(&run).await.unwrap();
+
+    assert_eq!(out.status, "killed");
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("killed"));
+    let killed = h.kill.killed.lock().unwrap().clone();
+    for job in roots {
+        assert!(killed.contains(&job), "{job} should have been killed immediately");
+    }
+    assert_eq!(h.step_status_of(&run, "transform").await.as_deref(), Some("skipped"));
+}
+
+#[tokio::test]
+async fn only_a_running_run_can_be_cancelled() {
+    let (h, run) = failed_diamond().await;
+    let err = h.engine.cancel_workflow(&run).await.unwrap_err();
+    assert!(matches!(err, WorkflowOpError::NotRunning { .. }), "got {err:?}");
+    assert!(matches!(
+        h.engine.cancel_workflow(&ids::workflow_run("no_such_run")).await.unwrap_err(),
+        WorkflowOpError::NotFound(_)
+    ));
+}

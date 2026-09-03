@@ -33,6 +33,8 @@ export function Sparkline(props: {
   /** Accent colour override, e.g. a backend's status colour. */
   stroke?: string;
   height?: number;
+  /** Hide the min / last / max readout under the plot. */
+  bare?: boolean;
 }) {
   const gradientId = createUniqueId();
 
@@ -43,6 +45,7 @@ export function Sparkline(props: {
     return {
       count: pts.length,
       max: values.length ? Math.max(...values) : 0,
+      min: values.length ? Math.min(...values) : null,
       last: values.length ? values[values.length - 1]! : null,
       failures: pts.length - oks.length,
     };
@@ -102,7 +105,7 @@ export function Sparkline(props: {
       .map(({ i }) => x(i));
   });
 
-  const colour = () => props.stroke ?? 'var(--accent)';
+  const colour = () => props.stroke ?? 'var(--amber)';
 
   return (
     <Show
@@ -159,6 +162,22 @@ export function Sparkline(props: {
             )}
           </For>
         </svg>
+
+        {/* The three numbers a line alone cannot give: the plot is scaled to
+            its own peak, so "high" or "low" means nothing without them. */}
+        <Show when={!props.bare && stats().last !== null}>
+          <div class="spark-read">
+            <span class="tag">
+              min<span class="val">{formatMs(stats().min)}</span>
+            </span>
+            <span class="tag">
+              last<span class="val">{formatMs(stats().last)}</span>
+            </span>
+            <span class="tag">
+              max<span class="val">{formatMs(stats().max)}</span>
+            </span>
+          </div>
+        </Show>
       </div>
     </Show>
   );

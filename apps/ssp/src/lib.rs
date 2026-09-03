@@ -9,6 +9,7 @@ use axum::{
 use serde_json::{Value, json};
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -710,6 +711,11 @@ pub async fn run_server() -> anyhow::Result<()> {
     // job runner consumes them. `timer_rx` feeds the timer dispatcher spawned
     // further down (once all its dependencies exist).
     let (platform, mut timer_rx) = adapters::vm_platform(db.clone(), metrics.clone());
+    // Set by the heartbeat task when the scheduler asks for a CLEAN restart.
+    // The graceful-shutdown checkpoint consults it, because persisting a
+    // snapshot on the way out would recreate exactly the file the clean
+    // restart just deleted.
+    let clean_requested = Arc::new(AtomicBool::new(false));
 
     // HTTP-engine tokens expire; keep the long-lived shared handle fresh.
     platform
@@ -1346,6 +1352,8 @@ pub async fn run_server() -> anyhow::Result<()> {
         // path no longer self-registers; if the scheduler 404s us, we
         // exit and the supervisor reruns the full register handshake.
         let status_for_heartbeat = status.clone();
+        let circuit_store_for_heartbeat = Arc::clone(&platform.circuit_store);
+        let clean_requested_for_heartbeat = Arc::clone(&clean_requested);
 
         tokio::spawn(async move {
             let client = reqwest::Client::new();
@@ -1403,7 +1411,16 @@ pub async fn run_server() -> anyhow::Result<()> {
                         // can't be trusted; exit so the supervisor brings
                         // us back with a clean state.
                         let body = resp.text().await.unwrap_or_default();
-                        error!(reason = %body, "Scheduler requested re-bootstrap, exiting");
+                        let directive = ssp_protocol::ResyncDirective::parse(&body);
+                        if directive.clean {
+                            // Drop the snapshot BEFORE exiting, and tell the
+                            // shutdown path not to write a fresh one: the
+                            // point of a clean restart is a cold rebuild, and
+                            // a checkpoint on the way out would undo it.
+                            clean_requested_for_heartbeat.store(true, Ordering::SeqCst);
+                            wipe_local_state(circuit_store_for_heartbeat.as_ref()).await;
+                        }
+                        error!(reason = %directive.reason, clean = directive.clean, "Scheduler requested re-bootstrap, exiting");
                         std::process::exit(4);
                     }
                     Ok(resp) if !resp.status().is_success() => {
@@ -1459,7 +1476,11 @@ pub async fn run_server() -> anyhow::Result<()> {
     }
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(meter_provider, runtime.clone()))
+        .with_graceful_shutdown(shutdown_signal(
+            meter_provider,
+            runtime.clone(),
+            Arc::clone(&clean_requested),
+        ))
         .await
         .context("Server error")?;
 
@@ -1468,9 +1489,30 @@ pub async fn run_server() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Delete the on-disk circuit state so the next boot is a cold rebuild.
+///
+/// The snapshot goes through the `CircuitStore` port; the arena is a
+/// sparse-file cache of row bytes that bootstrap repopulates, so it is removed
+/// wholesale. Both are caches of SurrealDB, never the source of truth, which
+/// is what makes deleting them a safe thing to do from a heartbeat task.
+async fn wipe_local_state(store: &dyn ssp_node::CircuitStore) {
+    match store.clear().await {
+        Ok(()) => info!("Circuit snapshot cleared for clean restart"),
+        Err(e) => warn!(error = %e, "Could not clear circuit snapshot; restart will be warm"),
+    }
+    if let Some(dir) = std::env::var_os("SPKY_SSP_ARENA_DIR") {
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => info!(dir = %std::path::Path::new(&dir).display(), "Arena cleared for clean restart"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!(error = %e, "Could not clear arena dir"),
+        }
+    }
+}
+
 async fn shutdown_signal(
     meter_provider: opentelemetry_sdk::metrics::SdkMeterProvider,
     runtime: ssp_node::Runtime,
+    clean_requested: Arc<AtomicBool>,
 ) {
     let ctrl_c = async {
         signal::ctrl_c()
@@ -1497,8 +1539,13 @@ async fn shutdown_signal(
     info!("Signal received, starting graceful shutdown");
 
     // Persist a final snapshot so an ephemeral host restarts warm. No-op on the
-    // VM (NoopCircuitStore) and skipped unless the circuit is Ready.
-    runtime.checkpoint().await;
+    // VM (NoopCircuitStore) and skipped unless the circuit is Ready. Skipped
+    // outright after a clean-restart directive, which just deleted it.
+    if clean_requested.load(Ordering::SeqCst) {
+        info!("Skipping shutdown checkpoint: clean restart requested");
+    } else {
+        runtime.checkpoint().await;
+    }
 
     if let Err(e) = meter_provider.shutdown() {
         error!(error = %e, "Failed to shutdown meter provider");

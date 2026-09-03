@@ -11,9 +11,15 @@ Full documentation: [Admin dashboard](https://sp00ky.dev/docs/reference/admin-da
   end-to-end sync latency with its sparkline
 - **SSPs** — per-processor state, with a bootstrap progress bar
 - **Backends** — health status and a ~30-minute response-time history
-- **Workflows** — runs updating live over SSE, with per-step detail
-- **Schedules** — definitions with next and last fire
+- **Workflows** — runs updating live over SSE, with per-step detail, and
+  cancel / retry-from-failed / rerun
+- **Schedules** — definitions with next and last fire, pause/resume and run-now
+- **Backups** — catalog, schedule and retention (from Sp00ky Cloud when linked),
+  create, and a staged restore
 - **Logs** — live tail of scheduler or SSP output
+
+Every SSP and the scheduler carry an action menu (restart, clean restart,
+reload, reclone, and the cloud-only image upgrade / volume wipe).
 
 ## Development
 
@@ -45,6 +51,9 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
 | `src/components/Chrome.tsx` | Page head, panels, metric rail, pills, key/value |
 | `src/components/Timeline.tsx` | The run Gantt — the workflow page's centrepiece |
 | `src/components/Sparkline.tsx` | Latency/response-time chart |
+| `src/components/Actions.tsx` | Split-button menus, the confirm dialog, toasts, the activity strip, stepper |
+| `src/components/ClusterActions.tsx` | The SSP and scheduler restart menus and their wording |
+| `src/lib/runActions.ts` | Workflow, job and schedule actions |
 | `src/components/` | Shell, bootstrap progress |
 | `src/routes/` | One file per view |
 | `src/styles/theme.css` | Design tokens and every rule |
@@ -78,6 +87,21 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
   "open →".
 - **One poll for the whole app.** `App.tsx` polls `/overview` and passes it
   down. Views should not add their own poll for data that is already there.
+- **Only tokens declared in `:root` may be referenced from TSX.** A missing
+  custom property fails silently: the shape simply does not draw. The
+  sparkline shipped invisible for a release because of `var(--accent)`.
+- **Actions go through `runAction`** (`components/Actions.tsx`): confirm if
+  asked, call, then a toast with the server's own sentence. Destructive modes
+  require a typed word, and the word is the consequence (`clean`, `restore`),
+  never "yes". An option that is not available here is listed muted with the
+  reason (`disabledReason`), never hidden.
+- **Every action is asynchronous from the operator's seat.** An SSP exits on
+  its next heartbeat, a reclone takes minutes. The scheduler reports these as
+  operations on `/overview`, and `ActivityStrip` is where they are watched;
+  do not invent a spinner that ends when the request returns.
+- **A restart is survivable.** `waitForScheduler` in `api/client.ts` waits for
+  `/admin/api/config` to go down and come back, then the router remounts on the
+  same URL. Only a 401 sends the app to login.
 - **`EventSource` is unusable here** — it cannot send an `Authorization`
   header, and we deliberately do not use cookies. `openStream()` in
   `api/client.ts` reads the `fetch` body and parses the event stream by hand.

@@ -286,7 +286,18 @@ Send a heartbeat from an SSP to maintain health status.
 **Response:**
 - `200 OK` - Heartbeat accepted
 - `404 Not Found` - SSP not registered (SSP should re-register)
-- `409 Conflict` - Buffer overflow detected (SSP should re-bootstrap)
+- `409 Conflict` - The SSP must exit and re-bootstrap. The body is a JSON `ResyncDirective`:
+
+```json
+{ "reason": "Clean restart requested. SSP must drop its snapshot and re-bootstrap.", "clean": true }
+```
+
+`clean: true` asks the SSP to delete its circuit snapshot and arena before it
+exits, so the relaunch is a cold rebuild. A buffer overflow, an integrity-check
+resync and an operator restart from the [admin dashboard](/docs/reference/admin-dashboard#restarting-an-ssp)
+all arrive this way. Older SSPs read the body as free text and restart anyway,
+and an older scheduler sends free text, which parses as `clean: false`; both
+directions degrade to a plain restart, never to a refused one.
 
 **Example:**
 
@@ -387,6 +398,19 @@ Report job execution results from an SSP back to the scheduler.
 
 **Response:**
 - `200 OK` - Result recorded
+
+### Job operator actions
+
+Outbox jobs are routed by the ingest path rather than `/job/dispatch`, so the
+scheduler does not know which SSP holds a given job. These three routes work
+around that; they are what `fn::job::kill`, `fn::job::retry`, the recovery
+sweep and the admin dashboard call.
+
+| Endpoint | Body | Behaviour |
+| --- | --- | --- |
+| `POST /job/kill` | `{"id": "job:abc"}` | Broadcast to every ready SSP. A kill is idempotent and harmless on SSPs that do not host the job: only the one with the request in flight cancels it, the rest set a kill flag. `200 {id, dispatched, ssps}`; `503 no_ssp` with none ready |
+| `POST /job/retry` | `{"id": "job:abc"}` | Picks exactly one ready SSP and forwards, because a retry re-enqueues into that SSP's runner and broadcasting would run the job N times. The SSP's own verdict is relayed with its status: `409 not_terminal` for a job that is still pending or processing, `404` for an unknown one. `200 {id, status: "pending", assigned_to}` |
+| `POST /job/recover` | (SSP route) | Called on one SSP by the scheduler's 30 s recovery sweep for `pending` rows nothing picked up and `processing` rows that went stale; the SSP stamps itself as assignee and enqueues them |
 
 ---
 

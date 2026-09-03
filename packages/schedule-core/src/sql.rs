@@ -226,6 +226,50 @@ pub const SELECT_KILL_REQUESTED: &str =
     "SELECT VALUE id FROM _00_workflow_run WHERE kill_requested = true AND status = 'running'";
 
 // ---------------------------------------------------------------------------
+// Operator actions: rerun and retry
+// ---------------------------------------------------------------------------
+
+/// A rerun: no owning schedule, but a link back to the run it was copied from.
+/// The link is spliced through `type::record` like `schedule` is, because a
+/// bound string will not coerce into a `record<...>` field.
+pub const CREATE_WORKFLOW_RUN_RERUN: &str = "\
+CREATE type::record($tb, $key) CONTENT object::extend($content, \
+{ rerun_of: type::record($src_tb, $src_key) })";
+
+/// Put a terminal step back on the start line. Guarded on failed/skipped so a
+/// success (and the output it captured) is never touched: a retry re-runs only
+/// what did not work.
+pub const RESET_STEP_FOR_RETRY: &str = "\
+UPDATE type::record($tb, $key) SET status = 'blocked', job_id = NONE, error = NONE, \
+output = NONE, finished_at = NONE \
+WHERE status INSIDE ['failed', 'skipped'] RETURN AFTER";
+
+/// Same, for a step a kill left `dispatched` whose job the caller has just seen
+/// terminally failed or missing. Pinning `job_id` to what was observed means a
+/// job that finished between the read and this write leaves the step alone.
+pub const RESET_DISPATCHED_STEP_FOR_RETRY: &str = "\
+UPDATE type::record($tb, $key) SET status = 'blocked', job_id = NONE, error = NONE, \
+output = NONE, finished_at = NONE \
+WHERE status = 'dispatched' AND job_id = $job_id RETURN AFTER";
+
+/// Reopen a terminal run for a retry. One statement on purpose: clearing
+/// `kill_requested` in the same write as `status = 'running'` means the sweep
+/// can never observe a running run with the flag still set and kill it again.
+/// `?? 0` because rows older than the field carry no `retry_count`.
+pub const REOPEN_WORKFLOW_RUN: &str = "\
+UPDATE type::record($tb, $key) SET status = 'running', error = NONE, \
+kill_requested = false, finished_at = NONE, \
+retry_count = (retry_count ?? 0) + 1, last_retry_at = time::now() \
+WHERE status INSIDE ['failed', 'killed'] RETURN AFTER";
+
+/// Mirror the reopen onto the owning schedule run, so the retry's outcome lands
+/// there too (FINALIZE_SCHEDULE_RUN is guarded on `running`) and
+/// `concurrency: skip` sees the key as in flight again, which it is.
+pub const REOPEN_SCHEDULE_RUN: &str = "\
+UPDATE type::record($tb, $key) SET status = 'running', error = NONE, finished_at = NONE \
+WHERE kind = 'workflow' AND status INSIDE ['failed', 'killed']";
+
+// ---------------------------------------------------------------------------
 // Observing job completion
 // ---------------------------------------------------------------------------
 
@@ -668,9 +712,49 @@ mod tests {
             ("FAIL_UNDISPATCHABLE_STEP", FAIL_UNDISPATCHABLE_STEP),
             ("SKIP_STEP", SKIP_STEP),
             ("FINALIZE_WORKFLOW_RUN", FINALIZE_WORKFLOW_RUN),
+            ("RESET_STEP_FOR_RETRY", RESET_STEP_FOR_RETRY),
+            ("RESET_DISPATCHED_STEP_FOR_RETRY", RESET_DISPATCHED_STEP_FOR_RETRY),
+            ("REOPEN_WORKFLOW_RUN", REOPEN_WORKFLOW_RUN),
+            ("REOPEN_SCHEDULE_RUN", REOPEN_SCHEDULE_RUN),
         ] {
             assert!(sql.contains(" WHERE "), "{name} must carry a WHERE guard");
         }
+    }
+
+    /// A retry re-runs what failed. A successful step keeps its status and its
+    /// captured output, which dependants read back on the next attempt, so no
+    /// reset statement may ever name `success`.
+    #[test]
+    fn retry_never_resets_a_successful_step() {
+        for (name, sql) in [
+            ("RESET_STEP_FOR_RETRY", RESET_STEP_FOR_RETRY),
+            ("RESET_DISPATCHED_STEP_FOR_RETRY", RESET_DISPATCHED_STEP_FOR_RETRY),
+        ] {
+            let guard = sql.split(" WHERE ").nth(1).expect("guard");
+            assert!(!guard.contains("'success'"), "{name} must not match a successful step");
+            assert!(sql.contains("status = 'blocked'"), "{name} must send the step back to blocked");
+        }
+        assert!(RESET_STEP_FOR_RETRY.contains("INSIDE ['failed', 'skipped']"));
+        assert!(RESET_DISPATCHED_STEP_FOR_RETRY.contains("status = 'dispatched' AND job_id = $job_id"));
+        // Only a terminal run reopens, and reopening clears the kill flag in the
+        // same write so the sweep can never see `running` + `kill_requested`.
+        assert!(REOPEN_WORKFLOW_RUN.contains("INSIDE ['failed', 'killed']"));
+        assert!(REOPEN_WORKFLOW_RUN.contains("kill_requested = false"));
+        assert!(REOPEN_WORKFLOW_RUN.contains("status = 'running'"));
+    }
+
+    /// The fields the operator actions write must exist on the run table, or every
+    /// rerun and retry fails with "found no field" against a deployed schema.
+    #[test]
+    fn the_workflow_run_defines_the_operator_action_fields() {
+        for field in ["trigger", "rerun_of", "retry_count", "last_retry_at"] {
+            assert!(
+                SCHEDULE_TABLES.contains(&format!("{field} ON TABLE _00_workflow_run")),
+                "_00_workflow_run is missing `{field}`"
+            );
+        }
+        assert!(SCHEDULE_TABLES.contains("retry_count ON TABLE _00_workflow_run TYPE int DEFAULT 0"));
+        assert!(SCHEDULE_TABLES.contains("rerun_of ON TABLE _00_workflow_run TYPE option<record<_00_workflow_run>>"));
     }
 
     /// The engine must never write outbox `status` — the JobRunner is the single
@@ -696,6 +780,8 @@ mod tests {
             SELECT_KILL_REQUESTED, FIND_RUN_BY_JOB, FIND_STEP_BY_JOB,
             SELECT_RUNNING_JOB_RUNS, SELECT_RUNNING_WORKFLOW_RUNS,
             PRUNE_SCHEDULE_RUNS, PRUNE_WORKFLOW_RUNS,
+            CREATE_WORKFLOW_RUN_RERUN, RESET_STEP_FOR_RETRY, RESET_DISPATCHED_STEP_FOR_RETRY,
+            REOPEN_WORKFLOW_RUN, REOPEN_SCHEDULE_RUN,
         ] {
             for (i, _) in sql.match_indices("type::record($") {
                 let call = &sql[i..];

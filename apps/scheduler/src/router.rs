@@ -16,6 +16,16 @@ pub enum SspState {
     Ready,
 }
 
+/// What a forced re-bootstrap should do on the SSP's side before it exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResyncKind {
+    /// Exit and relaunch; the snapshot (if any) is restored and caught up.
+    Resync,
+    /// Drop the on-disk snapshot first, so the relaunch is a cold rebuild.
+    Clean,
+}
+
 /// Pool of connected SSPs with load balancing
 pub struct SspPool {
     ssps: HashMap<String, SspInfo>,
@@ -24,9 +34,10 @@ pub struct SspPool {
     /// Per-SSP snapshot_seq recorded at registration time
     ssp_snapshot_seqs: HashMap<String, u64>,
     /// SSPs that the operator (or an integrity check) has flagged as needing
-    /// to re-bootstrap. The next heartbeat from these SSPs returns 409 so
-    /// they tear down and re-register against the current frozen snapshot.
-    forced_resync: HashSet<String>,
+    /// to re-bootstrap, and how. The next heartbeat from these SSPs returns
+    /// 409 so they tear down and re-register against the current frozen
+    /// snapshot; a `Clean` entry also tells them to drop their snapshot first.
+    forced_resync: HashMap<String, ResyncKind>,
     /// Consecutive catch-up verification failures per SSP, reset on any pass.
     /// A plain re-bootstrap can't fix a *deterministic* scheduler-vs-circuit
     /// hash gap (the SSP refetches the same diverging state every cycle), so
@@ -65,7 +76,7 @@ impl SspPool {
             ssp_states: HashMap::new(),
             message_buffers: HashMap::new(),
             ssp_snapshot_seqs: HashMap::new(),
-            forced_resync: HashSet::new(),
+            forced_resync: HashMap::new(),
             catchup_failures: HashMap::new(),
             bootstrap_failures: HashMap::new(),
             buffer_overflowed: HashSet::new(),
@@ -114,14 +125,32 @@ impl SspPool {
     /// the scheduler's frozen snapshot — the SSP is told (via 409) to wipe
     /// and re-register rather than continue serving stale state.
     pub fn mark_for_resync(&mut self, ssp_id: &str) {
-        self.forced_resync.insert(ssp_id.to_string());
+        self.mark_for_resync_with(ssp_id, ResyncKind::Resync);
+    }
+
+    /// Flag an SSP for forced re-bootstrap of a particular kind. `Clean` is
+    /// sticky: an integrity check that later flags the same SSP with a plain
+    /// `Resync` must not quietly downgrade what the operator asked for.
+    pub fn mark_for_resync_with(&mut self, ssp_id: &str, kind: ResyncKind) {
+        let entry = self
+            .forced_resync
+            .entry(ssp_id.to_string())
+            .or_insert(kind);
+        if kind == ResyncKind::Clean {
+            *entry = ResyncKind::Clean;
+        }
     }
 
     /// Flag every connected SSP for forced re-bootstrap.
     pub fn mark_all_for_resync(&mut self) -> usize {
+        self.mark_all_for_resync_with(ResyncKind::Resync)
+    }
+
+    /// Flag every connected SSP for forced re-bootstrap of a particular kind.
+    pub fn mark_all_for_resync_with(&mut self, kind: ResyncKind) -> usize {
         let ids: Vec<String> = self.ssps.keys().cloned().collect();
         for id in &ids {
-            self.forced_resync.insert(id.clone());
+            self.mark_for_resync_with(id, kind);
         }
         ids.len()
     }
@@ -129,7 +158,17 @@ impl SspPool {
     /// Take-and-clear: returns true if this SSP was flagged for forced
     /// resync, removing the flag in the same step.
     pub fn take_resync_flag(&mut self, ssp_id: &str) -> bool {
+        self.take_resync(ssp_id).is_some()
+    }
+
+    /// Take-and-clear, returning the kind of resync that was requested.
+    pub fn take_resync(&mut self, ssp_id: &str) -> Option<ResyncKind> {
         self.forced_resync.remove(ssp_id)
+    }
+
+    /// Whether an SSP is currently flagged, without clearing it.
+    pub fn pending_resync(&self, ssp_id: &str) -> Option<ResyncKind> {
+        self.forced_resync.get(ssp_id).copied()
     }
 
     /// Add or update an SSP

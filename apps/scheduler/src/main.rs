@@ -140,7 +140,7 @@ async fn run() -> Result<()> {
     let (restore_tx, restore_rx) = scheduler::restore::create_restore_channel();
     let backup_restore_lock = Arc::new(tokio::sync::Mutex::new(()));
     let maintenance_host: Arc<dyn maintenance::MaintenanceHost> = scheduler.maintenance_host();
-    let backup_router = scheduler::backup::create_backup_router(maintenance::BackupState {
+    let backup_state = Arc::new(maintenance::BackupState {
         host: Arc::clone(&maintenance_host),
         config: Arc::clone(&backup_config),
         registry: Arc::clone(&backup_registry),
@@ -149,6 +149,7 @@ async fn run() -> Result<()> {
         restore_tx: restore_tx.clone(),
         backup_restore_lock: Arc::clone(&backup_restore_lock),
     });
+    let backup_router = scheduler::backup::create_backup_router((*backup_state).clone());
 
     // Global request deadline: a handler that never resolves must produce a
     // 408, never an indefinitely-hung connection (the wedge signature was
@@ -184,20 +185,39 @@ async fn run() -> Result<()> {
     let admin_config = scheduler::admin::AdminConfig::from_env();
     let admin_server = if admin_config.enabled {
         let admin_addr = admin_config.bind_addr();
+        let cloud = scheduler::admin::cloud::CloudLink::from_env();
+        match &cloud {
+            Some(link) => info!(api = %link.api_url, project = %link.project, "Linked to Sp00ky Cloud"),
+            None => info!("Not linked to Sp00ky Cloud (SPKY_CLOUD_API_URL / SPKY_CLOUD_PROJECT unset); cloud-only dashboard actions are off"),
+        }
         let (_admin_state, admin_router) = scheduler::admin::build(
             admin_config,
-            scheduler.metrics_state(
-                std::sync::Arc::clone(&query_tracker),
-                std::sync::Arc::clone(&job_tracker),
-                backend_health_cache_for_admin,
-                shared_backend_configs_for_admin,
-            ),
-            std::sync::Arc::clone(&transport),
-            std::sync::Arc::clone(&log_ring),
-            scheduler.config().db.clone(),
-            std::sync::Arc::clone(&scheduler.db_slot),
-            scheduler.config().bootstrap_timeout_secs,
-            scheduler.config().health_check_interval_secs,
+            scheduler::admin::AdminDeps {
+                metrics: scheduler.metrics_state(
+                    std::sync::Arc::clone(&query_tracker),
+                    std::sync::Arc::clone(&job_tracker),
+                    backend_health_cache_for_admin,
+                    shared_backend_configs_for_admin,
+                ),
+                transport: std::sync::Arc::clone(&transport),
+                logs: std::sync::Arc::clone(&log_ring),
+                db_config: scheduler.config().db.clone(),
+                db_slot: std::sync::Arc::clone(&scheduler.db_slot),
+                backup: Arc::clone(&backup_state),
+                resync: scheduler::ssp_management::ResyncArgs {
+                    ssp_pool: std::sync::Arc::clone(&scheduler.ssp_pool),
+                    replica: std::sync::Arc::clone(&scheduler.replica),
+                    config: Arc::new(scheduler.config().clone()),
+                    status: std::sync::Arc::clone(&scheduler.status),
+                    seq_counter: std::sync::Arc::clone(&scheduler.seq_counter),
+                    reclone_lock: scheduler.reclone_lock.clone(),
+                },
+                cloud,
+                auth_secret: std::env::var("SPKY_AUTH_SECRET").ok().filter(|s| !s.is_empty()),
+                // The control plane runs containers under `unless-stopped`;
+                // anything else (a checkout, a bare host) is on its own.
+                supervised: std::env::var("SPKY_ENV").map(|v| v == "cloud").unwrap_or(false),
+            },
         );
         // No global TimeoutLayer here, unlike the ingest app: `/admin/api/logs`
         // and `/admin/api/workflows/stream` are SSE streams that are SUPPOSED

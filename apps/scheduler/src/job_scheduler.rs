@@ -148,8 +148,20 @@ pub fn create_job_router(state: JobState) -> Router {
 /// is idempotent and harmless on SSPs that don't host the job: only the SSP with
 /// the in-flight request cancels it; the rest just set a kill flag.
 async fn cluster_job_kill(State(state): State<JobState>, Json(req): Json<JobActionRequest>) -> Response {
+    let (status, body) = kill_job(&state.ssp_pool, &state.transport, &req.id).await;
+    (status, Json(body)).into_response()
+}
+
+/// The cluster kill, as a function: the ingest-port route above and the
+/// dashboard's `/admin/api/jobs/:id/kill` both call this, so a job killed from
+/// either place behaves identically.
+pub async fn kill_job(
+    ssp_pool: &Arc<RwLock<SspPool>>,
+    transport: &HttpTransport,
+    id: &str,
+) -> (StatusCode, serde_json::Value) {
     let ready: Vec<SspInfo> = {
-        let pool = state.ssp_pool.read().await;
+        let pool = ssp_pool.read().await;
         pool.all()
             .into_iter()
             .filter(|s| pool.is_ready(&s.id))
@@ -160,18 +172,17 @@ async fn cluster_job_kill(State(state): State<JobState>, Json(req): Json<JobActi
     if ready.is_empty() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "code": "no_ssp", "message": "no ready SSP available" })),
-        )
-            .into_response();
+            json!({ "code": "no_ssp", "message": "no ready SSP available" }),
+        );
     }
 
-    let results = state.transport.broadcast_to_ssps(&ready, "/job/kill", &req).await;
+    let req = JobActionRequest { id: id.to_string() };
+    let results = transport.broadcast_to_ssps(&ready, "/job/kill", &req).await;
     let dispatched = results.iter().filter(|(_, r)| r.is_ok()).count();
     (
         StatusCode::OK,
-        Json(json!({ "id": req.id, "dispatched": dispatched, "ssps": ready.len() })),
+        json!({ "id": id, "dispatched": dispatched, "ssps": ready.len() }),
     )
-        .into_response()
 }
 
 /// Cluster `/job/retry` — pick exactly one ready SSP and forward.
@@ -181,8 +192,19 @@ async fn cluster_job_kill(State(state): State<JobState>, Json(req): Json<JobActi
 /// SSP fresh (the prior assignment is stale; a re-enqueued job logically gets a new
 /// one, mirroring how `ingest.rs` assigns).
 async fn cluster_job_retry(State(state): State<JobState>, Json(req): Json<JobActionRequest>) -> Response {
+    let (status, body) = retry_job(&state.ssp_pool, &state.transport, &req.id).await;
+    (status, Json(body)).into_response()
+}
+
+/// The cluster retry, as a function shared with the dashboard. See
+/// [`kill_job`] for why.
+pub async fn retry_job(
+    ssp_pool: &Arc<RwLock<SspPool>>,
+    transport: &HttpTransport,
+    id: &str,
+) -> (StatusCode, serde_json::Value) {
     let ssp = {
-        let mut pool = state.ssp_pool.write().await;
+        let mut pool = ssp_pool.write().await;
         match pool.select_for_query() {
             Some(id) => pool.get(&id).map(|s| (id.clone(), s.url.clone())),
             None => None,
@@ -194,23 +216,32 @@ async fn cluster_job_retry(State(state): State<JobState>, Json(req): Json<JobAct
         None => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "code": "no_ssp", "message": "no ready SSP available" })),
-            )
-                .into_response();
+                json!({ "code": "no_ssp", "message": "no ready SSP available" }),
+            );
         }
     };
 
-    match state.transport.post_to_ssp(&ssp_url, "/job/retry", &req).await {
-        Ok(_) => (
+    let req = JobActionRequest { id: id.to_string() };
+    match transport.post_to_ssp_status(&ssp_url, "/job/retry", &req).await {
+        Ok((status, _)) if status.is_success() => (
             StatusCode::OK,
-            Json(json!({ "id": req.id, "status": "pending", "assigned_to": ssp_id })),
-        )
-            .into_response(),
+            json!({ "id": id, "status": "pending", "assigned_to": ssp_id }),
+        ),
+        // The SSP's verdict is the useful part (404 unknown job, 409 not
+        // terminal): relay its status and body rather than flattening both
+        // into a 502.
+        Ok((status, body)) => {
+            let parsed: Value = serde_json::from_str(&body)
+                .unwrap_or_else(|_| json!({ "code": "ssp_error", "message": body }));
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+                parsed,
+            )
+        }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
-            Json(json!({ "code": "ssp_error", "message": e.to_string() })),
-        )
-            .into_response(),
+            json!({ "code": "ssp_error", "message": e.to_string() }),
+        ),
     }
 }
 

@@ -1,10 +1,12 @@
 ---
 layout: ../../../layouts/DocsLayout.astro
 title: Admin dashboard
-description: "The operator dashboard the scheduler serves at /admin: sign-in, cluster overview, backend health, live logs and workflow runs."
+description: "The operator dashboard the scheduler serves at /admin: sign-in, cluster overview, restart and backup actions, backend health, live logs and workflow runs."
 ---
 
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import Note from '../../../components/ui/Note.astro';
+import Warning from '../../../components/ui/Warning.astro';
 
 Every scheduler serves an operator dashboard. It shows the health of the
 scheduler and its SSPs, the end-to-end sync latency, the status of your
@@ -76,9 +78,21 @@ password.
 
 ### Session behaviour
 
-Sessions are held in the scheduler's memory and **do not survive a restart** —
-you will be asked to sign in again. Persisting them would mean writing an auth
-artifact into the very database you may be debugging, which is a worse trade.
+How long a session lives depends on whether the scheduler has a cluster secret:
+
+- With `SPKY_AUTH_SECRET` set (always the case on Sp00ky Cloud), tokens are
+  self-describing and HMAC-signed with a key derived from that secret. They
+  verify without any server-side state, so they **survive a scheduler
+  restart**, including one you trigger from the dashboard. Signing out adds
+  the token to an in-memory revocation set; a restart forgets that set, so a
+  revoked token comes back for the remainder of its own expiry. That trade is
+  deliberate and is the whole cost of not logging you out when you press
+  Restart.
+- Without a secret there is nothing to sign with that outlives the process,
+  so sessions are random tokens held in memory and a restart means signing in
+  again.
+
+`GET /admin/api/config` reports which mode is active as `sessions_persistent`.
 
 Failed logins are rate limited to 10 attempts per address per 5 minutes, and
 every failure returns the same response regardless of cause, so the endpoint
@@ -138,6 +152,153 @@ than hidden.
 Backends have no log stream: the scheduler reaches them with HTTP health checks
 and has no access to their output.
 
+## Actions
+
+Everything the dashboard can *do*, as opposed to show, goes through the
+scheduler. Every action logs the signed-in subject, and the long-running ones
+answer `202` with an **operation** the dashboard watches (see below).
+
+### Restarting an SSP
+
+The scheduler never touches a container. Restarting an SSP means flagging it
+in the pool; the SSP's next heartbeat is answered with `409` and a JSON
+`ResyncDirective`, the SSP exits, and its supervisor relaunches it through the
+same register, bootstrap and verify path every SSP takes on boot. A restart
+from the dashboard is indistinguishable from one by Docker.
+
+| Mode | What happens |
+| --- | --- |
+| `restart` | Flag, `409`, exit, relaunch. The SSP restores its circuit snapshot and catches up the delta. |
+| `clean` | The directive carries `clean: true`, so before exiting the SSP deletes its `snapshot.json` and its arena directory. The relaunch is a cold rebuild from the database. Use it when the snapshot itself is suspect. |
+| `reload` | No exit. The scheduler calls the SSP's `POST /admin/reload`, which rebuilds the circuit in-process from the database. Picks up tables and permissions defined after the last bootstrap. |
+
+Nothing happens until the next heartbeat (5 s by default). An operation is
+marked **done** when the SSP has re-registered and reached `ready`, and
+**failed** if that has not happened within one heartbeat interval plus the
+scheduler's bootstrap timeout plus 30 s. An SSP older than this release reads
+the directive as free text and restarts anyway, so a `clean` on it degrades to
+a plain restart; the operation records the SSP's version so you can tell.
+
+**Restart all** defaults to **rolling**: one SSP is flagged, the scheduler
+waits for it to come back ready, then flags the next, in id order. Queries are
+pinned to an SSP, so taking one down is already an outage for its clients;
+taking all of them down at once is an outage for everyone. All-at-once is
+still offered for the case where you want exactly that. A roll stops at the
+first SSP that does not come back, because continuing would take down the next
+one while this one is still missing. Only one roll runs at a time.
+
+### Restarting the scheduler
+
+| Mode | What happens |
+| --- | --- |
+| `restart` | The scheduler answers `202`, waits for the response to flush, and calls `exit(0)`. Sp00ky Cloud runs it under Docker's `unless-stopped`, which relaunches on any exit code, and the startup integrity check runs again on boot. |
+| `reclone` | Resets the local replica and re-fetches everything from upstream SurrealDB, then flags every SSP to re-verify. The same thing `POST /admin/resync` on the ingest port does. Runs as an operation, because it can take minutes. |
+| `rehash` | Keeps the replica's rows and recomputes the persisted snapshot hashes from them, then flags every SSP. Repairs hash-metadata drift without a refetch. |
+
+A scheduler run from a checkout has no supervisor and simply stops.
+`GET /admin/api/config` reports `supervised` (true when `SPKY_ENV=cloud`) so
+the dashboard can say so before you press the button rather than after.
+Reclone and rehash are refused with `503` while the scheduler is cloning or
+restoring, and with `409` while another reclone is running.
+
+### Cloud-only actions
+
+Some things are not the scheduler's to do: pulling a newer image, wiping its
+own volume (RocksDB holds the files open), bouncing SurrealDB, and the backup
+catalog with its schedule and retention. Those belong to Sp00ky Cloud, which
+owns the containers and the backup rows. When the scheduler is **linked** (see
+[Configuration](#configuration)) the dashboard offers them and the scheduler
+forwards the request; when it is not, every such action answers `409` with
+`Not linked to Sp00ky Cloud`, and the dashboard shows the option disabled with
+that sentence beside it.
+
+`POST /admin/api/cloud/restart` takes `{roles, upgrade, clean, surreal}` with
+exactly the meaning of `spky restart`: `upgrade` force-pulls the latest
+scheduler and SSP images, `clean` wipes the scheduler's volume (and always
+includes the scheduler in the role set), `surreal` also bounces SurrealDB.
+Empty `roles` means scheduler plus SSPs. A request that recreates this
+scheduler will, by definition, not be reported done by it; the dashboard's
+reconnect loop observes the outcome instead.
+
+### Operations
+
+Every asynchronous action records an operation: kind, target, who asked,
+start and finish times, status (`running`, `done`, `failed`), the server's
+own closing message, and free-form progress (`{done, total, current}` for a
+rolling restart, the registry state for a backup).
+
+- `GET /admin/api/operations` lists the most recent ones, newest first.
+- `GET /admin/api/operations/stream` is an SSE stream (event `operations`)
+  that sends the whole list on every change.
+- `GET /admin/api/overview` embeds the **running** ones, so the poll the
+  dashboard already makes shows activity without a second request.
+
+Operations live in memory, bounded at 50. Finished ones are evicted oldest
+first; a running one is never evicted, however old, because a stuck operation
+is exactly what you still need to see. They are a UI convenience, not an audit
+log: the audit trail is the scheduler's own log output.
+
+### Workflows, schedules and jobs
+
+| Action | What happens |
+| --- | --- |
+| Cancel a run | Sets `kill_requested` **and** runs the kill immediately: every dispatched step's job gets `/job/kill` broadcast to the ready SSPs. Sub-second, with the flag as the durable fallback the next sweep would act on. `409` unless the run is `running`. |
+| Rerun | A brand-new ad-hoc run with the same frozen DAG, input and target table, `trigger: manual`, and `rerun_of` pointing at the source. It has no owning schedule run, never counts towards `concurrency: skip`, and rolls up under `(ad-hoc)`. Any source status is allowed. |
+| Retry from failed | Only for a `failed` or `killed` run. Resets `failed` and `skipped` steps to `blocked`, keeps successful steps and their outputs, reopens the run (and its owning schedule run, so the outcome is mirrored there) and dispatches the reset steps again under new job ids of the form `<table>:wf_<run key>_<step>_r<n>`. Old job rows are left as history; a job row is never deleted or re-created under the same id. `409` with `Settling` while a killed step's job is still `pending` or `processing` on an SSP, because resetting it before the kill lands would run the step twice. |
+| Pause / resume a schedule | Writes `paused` on the `_00_schedule` row, the same field `spky schedules pause` writes. |
+| Run a schedule now | Writes `trigger_requested_at`. `409` while the schedule is paused (pause wins over a queued trigger, so the fire would silently never happen) or disabled in its config. |
+| Kill / retry a step's job | The cluster `/job/kill` (broadcast to every ready SSP) and `/job/retry` (one SSP is picked). The SSP's own verdict is relayed: a `409` for a job that is not terminal, a `404` for one it does not know. |
+
+<Note>
+Retrying the latest fire of a schedule leaves `_00_schedule.last_run_status`
+at `failed` even when the retry succeeds: the engine only lets a failure
+overwrite an equal `last_run_at`. The run and schedule-run rows are correct;
+only that summary field lags.
+</Note>
+
+A scheduler upgraded before `spky deploy` has migrated the schedule tables
+answers `409` asking you to run it: rerun and retry write fields
+(`trigger`, `rerun_of`, `retry_count`, `last_retry_at` on `_00_workflow_run`)
+that older schemas do not have.
+
+## Backups
+
+The Backups tab merges two sources rather than choosing between them:
+
+- **This scheduler** executes backups and restores. Its registries know the
+  live state of anything in flight, including restore stages nothing else can
+  see. They are in memory and forget on restart, which the tab says under
+  *Restore history* when it is empty.
+- **Sp00ky Cloud**, when linked, owns the catalog, the schedule, retention and
+  deletion.
+
+Linked, the catalog is the control plane's list with each row joined to the
+scheduler's registry entry by id (the cloud worker uses its own row id as the
+scheduler's backup id, so the join is exact). Unlinked with S3 configured, the
+catalog is a listing of `{slug}/*.surql.gz` in the bucket, where the slug is
+`SPKY_CLOUD_PROJECT` or, failing that, `SPKY_PROJECT_SLUG` (default
+`default`). That is enough to create and restore; there is no schedule,
+retention or delete, and the tab says so instead of hiding the panels.
+
+A restore reports the stages the scheduler actually goes through:
+
+```
+queued → running → main_db → replica → done
+                                   ↘ failed
+```
+
+`main_db` means the main SurrealDB has been wiped and re-imported; `replica`
+means the scheduler's own replica followed. A restore that ends `failed` with
+the main database restored but the replica not is the deliberately stuck
+`Restoring` state described under [Cloud → Backups](/docs/cloud/backups); the
+tab calls it out with the recovery step.
+
+<Warning>
+A restore wipes the database, evicts every SSP (they re-bootstrap against the
+restored state) and requires your migrations to be run again. The dialog asks
+you to type `restore` before it proceeds.
+</Warning>
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -149,6 +310,16 @@ and has no access to their output.
 | `SPKY_ADMIN_PASSWORD` | unset | Break-glass password. Unset disables password-only login |
 | `SPKY_ADMIN_ACCESS` | auto | Pins the record-access method used for sign-in |
 | `SPKY_ADMIN_SESSION_TTL_SECS` | `28800` | Session lifetime (8 hours) |
+| `SPKY_CLOUD_API_URL` | unset | Sp00ky Cloud API base URL. Injected into the scheduler container by the control plane |
+| `SPKY_CLOUD_PROJECT` | unset | The project slug, injected alongside it |
+| `SPKY_PROJECT_SLUG` | `default` | Storage prefix for backups on an unlinked scheduler |
+
+The scheduler counts as **linked** when `SPKY_CLOUD_API_URL`,
+`SPKY_CLOUD_PROJECT` and `SPKY_AUTH_SECRET` are all set. The first two are not
+secrets; the credential is the `SPKY_AUTH_SECRET` the scheduler already holds
+as its cluster identity, which the control plane accepts on a small,
+allow-listed route family for that one project. No new credential is minted
+or stored. `GET /admin/api/config` reports the result as `cloud_linked`.
 
 ## Running from a checkout
 
@@ -171,7 +342,7 @@ Every endpoint is under `/admin/api` on the admin port. All require
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /admin/api/config` | Scheduler id, version, whether break-glass is available. Unauthenticated |
+| `GET /admin/api/config` | Scheduler id, version, `breakglass_available`, `cloud_linked`, `supervised`, `sessions_persistent`. Unauthenticated |
 | `POST /admin/api/session` | Sign in. `{username, password}` or `{password}` for break-glass |
 | `POST /admin/api/logout` | Revoke the current token |
 | `GET /admin/api/me` | Current session's subject, label and mode |
@@ -179,11 +350,32 @@ Every endpoint is under `/admin/api` on the admin port. All require
 | `GET /admin/api/backends` | Backend list |
 | `GET /admin/api/backends/:name` | One backend with probe history and masked env |
 | `GET /admin/api/logs` | SSE. `?source=scheduler` or `ssp:<id>`, `&tail=`, `&backfill=` |
-| `GET /admin/api/workflows/runs` | Run list. `?name=`, `?schedule=`, `?status=`, `?limit=` |
+| `GET /admin/api/workflows/runs` | Run list. `?name=`, `?schedule=`, `?status=`, `?rerun_of=`, `?limit=` |
 | `GET /admin/api/workflows/runs/:id` | One run with its steps and DAG |
 | `GET /admin/api/workflows/stream` | SSE. Run list, pushed on change |
 | `GET /admin/api/schedules` | Schedule definitions with next/last fire |
 | `GET /admin/api/schedules/:name` | One schedule, its recent fires, and its `_00_run_rollup` tally |
+| `GET /admin/api/operations` | Recent operations, newest first |
+| `GET /admin/api/operations/stream` | SSE. Event `operations`, the whole list on every change |
+| `POST /admin/api/ssps/:id/restart` | `{mode: "restart" \| "clean" \| "reload"}`. `202` with the operation |
+| `POST /admin/api/ssps/restart-all` | `{mode: "restart" \| "clean", rolling: true}`. `409` while a roll is running |
+| `POST /admin/api/scheduler/restart` | `{mode: "restart" \| "reclone" \| "rehash"}` |
+| `POST /admin/api/cloud/restart` | `{roles, upgrade, clean, surreal}`, forwarded to Sp00ky Cloud. `409` when unlinked |
+| `GET /admin/api/cloud/deployment` | The deployment as Sp00ky Cloud sees it. `409` when unlinked |
+| `GET /admin/api/backups` | Catalog, local registry, restores, schedule config, storage status |
+| `POST /admin/api/backups` | `{name}`. `202` with the operation and `backup_id`. `503` without S3 storage |
+| `PUT /admin/api/backups/config` | `{enabled, schedule, retention}`. `409` when unlinked |
+| `DELETE /admin/api/backups/:id` | Soft-delete in the catalog. `409` when unlinked |
+| `POST /admin/api/backups/:id/restore` | `202` with the operation and `restore_id`. `503` unless the scheduler is `Ready` |
+| `GET /admin/api/backups/:id/restore` | `{cloud, local, stage}` for the latest restore of that backup |
+| `POST /admin/api/workflows/runs/:id/cancel` | `202` `{run, status: "killed" \| "kill_requested"}` |
+| `POST /admin/api/workflows/runs/:id/rerun` | `201` `{run, rerun_of}` |
+| `POST /admin/api/workflows/runs/:id/retry` | `200` `{run, retry_count, reset, kept}` |
+| `POST /admin/api/schedules/:name/pause` | `{name, paused: true}` |
+| `POST /admin/api/schedules/:name/resume` | `{name, paused: false}` |
+| `POST /admin/api/schedules/:name/trigger` | `{name, triggered_at}`. `409` when paused or config-disabled |
+| `POST /admin/api/jobs/:id/kill` | The cluster kill, relaying the SSPs' answer |
+| `POST /admin/api/jobs/:id/retry` | The cluster retry, relaying the SSP's answer |
 
 The workflow endpoints are served by the scheduler rather than read from the
 database directly because `_00_workflow_run`, `_00_step_run` and

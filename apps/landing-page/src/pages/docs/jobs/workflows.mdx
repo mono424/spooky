@@ -238,6 +238,23 @@ Piped output switches to plain ASCII automatically, so it pastes cleanly into a 
   On a narrow terminal the renderer falls back to an indented dependency list instead of truncating the graph, so it stays readable at any width.
 </Note>
 
+## Rerun and retry
+
+The [admin dashboard](/docs/reference/admin-dashboard#workflows-schedules-and-jobs) offers two ways to run a workflow again, and they are not the same thing:
+
+- **Rerun** starts a brand-new run from a finished one: same frozen DAG, same `input`, same target table, a fresh run key. It is recorded with `trigger: manual` and `rerun_of` pointing at the source. It has no owning schedule run, so it never counts towards `concurrency: skip` and its outcome rolls up under `(ad-hoc)` rather than the schedule's name. Any source status will do.
+- **Retry from failed** resumes a `failed` or `killed` run in place. Steps that `failed` or were `skipped` go back to `blocked`; steps that succeeded keep their status and their output, so downstream steps read the same `steps.<name>` they would have the first time. The run and its owning schedule run are reopened (`running`), `retry_count` is incremented, and the reset steps are dispatched again.
+
+A retried step gets a **new job row**, `<table>:wf_<run key>_<step>_r<n>` where `n` is the run's `retry_count`; the original `…_<step>` row and any earlier attempts stay as history until the job table's retention prunes them. A job row is never deleted or re-created under its old id: an SSP that was told to kill that id remembers it in memory, and would fail the re-created job on arrival.
+
+A retry is refused while any step of a killed run still has its job `pending` or `processing` on an SSP, because resetting the step before the kill lands would run it twice. Wait a moment and retry again. It is also refused when there is nothing to reset, and when the frozen DAG itself is invalid (that run would only fail the same way).
+
+<Note>
+Retrying the newest fire of a schedule leaves `_00_schedule.last_run_status` at `failed` even when the retry succeeds, because the engine only lets a failure overwrite an equal `last_run_at`. The run and schedule-run rows themselves are correct.
+</Note>
+
+These four fields on `_00_workflow_run` exist for this: `trigger` (`cron` or `manual`, unset on rows older than the field), `rerun_of`, `retry_count` (default `0`) and `last_retry_at`. They ship with `spky deploy`; a scheduler upgraded ahead of the deploy answers rerun and retry with a `409` that says so.
+
 ## How it advances
 
 A workflow run has no long-lived coordinator process. Every advancement reads the step rows, decides what changed, and writes the transitions back under guards, which is what makes it safe to run restarts and duplicate events through:

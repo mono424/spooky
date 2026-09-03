@@ -104,6 +104,32 @@ impl HttpTransport {
         Ok(response)
     }
 
+    /// POST to an SSP and hand back whatever it said, status included.
+    ///
+    /// `post_to_ssp` folds a non-2xx into an error string, which is right for
+    /// fire-and-forget calls but wrong when the SSP's own verdict (a 409
+    /// "not terminal" on a job retry, say) is the thing the caller wants to
+    /// relay to an operator.
+    pub async fn post_to_ssp_status<T: Serialize>(
+        &self,
+        ssp_url: &str,
+        path: &str,
+        payload: &T,
+    ) -> Result<(reqwest::StatusCode, String)> {
+        let url = format!("{}{}", ssp_url.trim_end_matches('/'), path);
+        let mut request = self.client.post(&url).json(payload);
+        if let Some(ref secret) = self.ssp_auth_secret {
+            request = request.bearer_auth(secret);
+        }
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to POST to SSP at {}", url))?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Ok((status, body))
+    }
+
     /// Broadcast a JSON payload to all ready SSPs
     pub async fn broadcast_to_ssps<T: Serialize + std::fmt::Debug>(
         &self,

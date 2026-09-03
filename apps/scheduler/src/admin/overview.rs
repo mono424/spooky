@@ -47,6 +47,10 @@ pub async fn overview(State(state): State<AdminState>) -> Json<serde_json::Value
         // The dashboard renders a deadline bar for a bootstrapping SSP against
         // this; it is the same budget the scheduler reaps hung bootstraps on.
         "bootstrap_timeout_secs": state.bootstrap_timeout_secs,
+        // Running operations ride on the poll the dashboard already makes,
+        // so an activity strip costs no extra request.
+        "operations": state.ops.running(),
+        "cloud_linked": state.cloud.is_some(),
         "server_time_ms": now_ms(),
     }))
 }

@@ -19,10 +19,14 @@
 //! A bearer token in `localStorage` works identically in both, and takes CSRF
 //! out of the picture entirely.
 
+pub mod actions;
 pub mod auth;
 pub mod backends;
+pub mod backups;
+pub mod cloud;
 pub mod config;
 pub mod logs;
+pub mod ops;
 pub mod overview;
 pub mod session;
 pub mod workflows;
@@ -33,7 +37,7 @@ use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::json;
 use tokio::sync::RwLock;
@@ -47,6 +51,8 @@ use maintenance::db::{DbConfig, ReconnectingDb};
 use maintenance::log_ring::LogRing;
 
 use self::auth::RateLimiter;
+use self::cloud::CloudLink;
+use self::ops::Operations;
 use self::session::{Session, SessionStore};
 use self::workflows::WorkflowWatcher;
 
@@ -80,6 +86,19 @@ pub struct AdminState {
     db_cache: Arc<std::sync::RwLock<Option<Arc<ReconnectingDb>>>>,
     pub bootstrap_timeout_secs: u64,
     pub health_check_interval_secs: u64,
+    pub heartbeat_interval_ms: u64,
+    /// Long-running actions, watched by the dashboard.
+    pub ops: Arc<Operations>,
+    /// The Sp00ky Cloud link, when this scheduler was given one.
+    pub cloud: Option<CloudLink>,
+    /// The backup plane's registries and queues, shared with the ingest port.
+    pub backup: Arc<maintenance::BackupState>,
+    /// What a reclone or rehash needs, shared with `POST /admin/resync`.
+    pub resync: crate::ssp_management::ResyncArgs,
+    /// Whether something relaunches this process when it exits.
+    pub supervised: bool,
+    /// The slug backups are stored under.
+    pub project_slug: String,
 }
 
 impl AdminState {
@@ -157,6 +176,12 @@ async fn config_handler(State(state): State<AdminState>) -> Json<serde_json::Val
         "scheduler_id": state.metrics.scheduler_id,
         "version": env!("CARGO_PKG_VERSION"),
         "breakglass_available": state.config.password.is_some(),
+        // What the dashboard can offer: cloud-only actions need the link,
+        // and a restart button on an unsupervised process deserves a warning
+        // before, not after.
+        "cloud_linked": state.cloud.is_some(),
+        "supervised": state.supervised,
+        "sessions_persistent": state.sessions.persistent(),
     }))
 }
 
@@ -233,6 +258,30 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route("/workflows/stream", get(workflows::stream_runs))
         .route("/schedules", get(workflows::list_schedules))
         .route("/schedules/:name", get(workflows::schedule_detail))
+        // Actions. Every one logs the session subject; the long-running
+        // ones answer 202 with an operation the dashboard can watch.
+        .route("/operations", get(actions::list_operations))
+        .route("/operations/stream", get(actions::stream_operations))
+        .route("/ssps/restart-all", post(actions::ssps_restart_all))
+        .route("/ssps/:id/restart", post(actions::ssp_restart))
+        .route("/scheduler/restart", post(actions::scheduler_restart))
+        .route("/cloud/restart", post(actions::cloud_restart))
+        .route("/cloud/deployment", get(actions::cloud_deployment))
+        .route("/backups", get(backups::list).post(backups::create))
+        .route("/backups/config", put(backups::configure))
+        .route("/backups/:id", delete(backups::delete))
+        .route(
+            "/backups/:id/restore",
+            post(backups::restore).get(backups::restore_status),
+        )
+        .route("/workflows/runs/:id/cancel", post(workflows::cancel_run))
+        .route("/workflows/runs/:id/rerun", post(workflows::rerun_run))
+        .route("/workflows/runs/:id/retry", post(workflows::retry_run))
+        .route("/schedules/:name/pause", post(workflows::schedule_pause))
+        .route("/schedules/:name/resume", post(workflows::schedule_resume))
+        .route("/schedules/:name/trigger", post(workflows::schedule_trigger))
+        .route("/jobs/:id/kill", post(workflows::job_kill))
+        .route("/jobs/:id/retry", post(workflows::job_retry))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -274,31 +323,47 @@ fn get_service_router(svc: ServeDir<ServeFile>) -> Router {
     Router::new().fallback_service(svc)
 }
 
+/// Everything `build` needs beyond the admin config itself. A struct rather
+/// than a dozen positional arguments, because the call site in `main.rs` and
+/// the one in the integration tests must stay readable as they grow.
+pub struct AdminDeps {
+    pub metrics: crate::metrics::MetricsState,
+    pub transport: Arc<crate::transport::HttpTransport>,
+    pub logs: Arc<LogRing>,
+    pub db_config: DbConfig,
+    pub db_slot: SharedDbSlot,
+    pub backup: Arc<maintenance::BackupState>,
+    pub resync: crate::ssp_management::ResyncArgs,
+    pub cloud: Option<CloudLink>,
+    /// The cluster secret, which selects restart-surviving sessions.
+    pub auth_secret: Option<String>,
+    pub supervised: bool,
+}
+
 /// Assemble the admin state and its router.
-#[allow(clippy::too_many_arguments)]
-pub fn build(
-    config: AdminConfig,
-    metrics: crate::metrics::MetricsState,
-    transport: Arc<crate::transport::HttpTransport>,
-    logs: Arc<LogRing>,
-    db_config: DbConfig,
-    db_slot: SharedDbSlot,
-    bootstrap_timeout_secs: u64,
-    health_check_interval_secs: u64,
-) -> (AdminState, Router) {
+pub fn build(config: AdminConfig, deps: AdminDeps) -> (AdminState, Router) {
+    let project_slug = backups::project_slug(deps.cloud.as_ref());
+    let scheduler_config = Arc::clone(&deps.resync.config);
     let state = AdminState {
-        sessions: SessionStore::new(config.session_ttl),
+        sessions: SessionStore::new(config.session_ttl, deps.auth_secret.as_deref()),
         config: Arc::new(config),
-        metrics,
-        transport,
+        metrics: deps.metrics,
+        transport: deps.transport,
         rate_limiter: RateLimiter::new(),
-        logs,
+        logs: deps.logs,
         workflows: WorkflowWatcher::new(),
-        db_config: Arc::new(db_config),
-        db_slot,
+        db_config: Arc::new(deps.db_config),
+        db_slot: deps.db_slot,
         db_cache: Arc::new(std::sync::RwLock::new(None)),
-        bootstrap_timeout_secs,
-        health_check_interval_secs,
+        bootstrap_timeout_secs: scheduler_config.bootstrap_timeout_secs,
+        health_check_interval_secs: scheduler_config.health_check_interval_secs,
+        heartbeat_interval_ms: scheduler_config.heartbeat_interval_ms,
+        ops: Operations::new(),
+        cloud: deps.cloud,
+        backup: deps.backup,
+        resync: deps.resync,
+        supervised: deps.supervised,
+        project_slug,
     };
     let router = create_admin_router(state.clone());
     (state, router)

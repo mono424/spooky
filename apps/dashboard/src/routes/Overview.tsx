@@ -12,7 +12,13 @@ import {
 } from '../components/Chrome';
 import { Sparkline } from '../components/Sparkline';
 import { BootstrapProgress } from '../components/BootstrapProgress';
-import { formatCount, formatMs, formatUptime, splitValue } from '../lib/format';
+import { ActivityStrip, OpBadge } from '../components/Actions';
+import {
+  SchedulerActions,
+  SspActions,
+  SspLogsLink,
+} from '../components/ClusterActions';
+import { formatClock, formatCount, formatMs, formatUptime, splitValue } from '../lib/format';
 import { backendTone, schedulerTone, sspTone } from '../lib/status';
 import type { Overview as OverviewData } from '../api/types';
 
@@ -25,12 +31,23 @@ import type { Overview as OverviewData } from '../api/types';
  * real sync path rather than a synthetic ping, which is why it earns the
  * largest readout on the page.
  */
-export function Overview(props: { data: OverviewData | undefined; error?: string }) {
+export function Overview(props: {
+  data: OverviewData | undefined;
+  error?: string;
+  /** Re-poll the overview now, e.g. right after an action. */
+  refresh: () => void;
+}) {
   const sched = () => props.data?.scheduler;
   const heartbeat = () => sched()?.heartbeat;
 
   const points = () =>
     (heartbeat()?.samples ?? []).map((s) => ({ ts: s.ts, ms: s.ms, ok: s.ok }));
+
+  const failed = () => points().filter((p) => !p.ok);
+  const lastFailure = () => {
+    const f = failed();
+    return f.length ? f[f.length - 1]!.ts : null;
+  };
 
   const lag = () => sched()?.lag ?? 0;
   const latency = () => splitValue(formatMs(heartbeat()?.last_e2e_ms));
@@ -58,6 +75,8 @@ export function Overview(props: { data: OverviewData | undefined; error?: string
             {props.error}
           </div>
         </Show>
+
+        <ActivityStrip operations={props.data?.operations} />
 
         <Show when={props.data} fallback={<Empty>Loading…</Empty>}>
           {(data) => (
@@ -120,9 +139,16 @@ export function Overview(props: { data: OverviewData | undefined; error?: string
                   title="Sync round trip"
                   sub="DB write → scheduler → SSP circuit, per probe cycle"
                   actions={
-                    <Show when={points().some((p) => !p.ok)}>
-                      <span class="pill bad">
-                        {points().filter((p) => !p.ok).length} failed
+                    <Show when={failed().length > 0}>
+                      <span
+                        class="pill bad"
+                        title={
+                          lastFailure()
+                            ? `Last failed cycle at ${formatClock(lastFailure()!)}`
+                            : undefined
+                        }
+                      >
+                        {failed().length} failed of {points().length}
                       </span>
                     </Show>
                   }
@@ -130,7 +156,11 @@ export function Overview(props: { data: OverviewData | undefined; error?: string
                   <Sparkline points={points()} height={78} />
                 </Panel>
 
-                <Panel title="Scheduler" sub={sched()?.id}>
+                <Panel
+                  title="Scheduler"
+                  sub={sched()?.id}
+                  actions={<SchedulerActions size="sm" onDone={props.refresh} />}
+                >
                   <KeyValue
                     rows={[
                       [
@@ -176,7 +206,8 @@ export function Overview(props: { data: OverviewData | undefined; error?: string
                           <th>Status</th>
                           <th>Views</th>
                           <th>Uptime</th>
-                          <th style={{ width: '36%' }}>Progress</th>
+                          <th style={{ width: '30%' }}>Progress</th>
+                          <th />
                         </tr>
                       </thead>
                       <tbody>
@@ -208,7 +239,13 @@ export function Overview(props: { data: OverviewData | undefined; error?: string
                                 <Show
                                   when={ssp.status !== 'ready'}
                                   fallback={
-                                    <span class="ghost">caught up</span>
+                                    <div class="row">
+                                      <span class="ghost">caught up</span>
+                                      <OpBadge
+                                        operations={data().operations}
+                                        target={ssp.id}
+                                      />
+                                    </div>
                                   }
                                 >
                                   <BootstrapProgress
@@ -216,6 +253,10 @@ export function Overview(props: { data: OverviewData | undefined; error?: string
                                     timeoutSecs={data().bootstrap_timeout_secs}
                                   />
                                 </Show>
+                              </td>
+                              <td data-label="Actions" style={{ 'text-align': 'right' }}>
+                                <SspActions ssp={ssp} size="sm" onDone={props.refresh} />
+                                <SspLogsLink ssp={ssp} />
                               </td>
                             </tr>
                           )}

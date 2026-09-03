@@ -47,6 +47,7 @@ export function Shell(props: {
     },
     { href: '/workflows', label: 'Workflows' },
     { href: '/schedules', label: 'Schedules' },
+    { href: '/backups', label: 'Backups' },
     { href: '/logs', label: 'Logs' },
   ];
 

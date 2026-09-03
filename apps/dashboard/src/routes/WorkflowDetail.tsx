@@ -1,5 +1,5 @@
-import { Show, createResource, onCleanup } from 'solid-js';
-import { A, useParams } from '@solidjs/router';
+import { For, Show, createResource, onCleanup } from 'solid-js';
+import { A, useNavigate, useParams } from '@solidjs/router';
 import { api } from '../api/client';
 import {
   Cell,
@@ -17,10 +17,12 @@ import {
   elapsed,
   formatDuration,
   formatStamp,
+  orNull,
   relativeStamp,
 } from '../lib/format';
 import { runTone, stepTone } from '../lib/status';
-import type { StepRun, WorkflowRunDetail } from '../api/types';
+import { cancelRun, killJob, rerunRun, retryJob, retryRun } from '../lib/runActions';
+import type { StepRun, WorkflowRun, WorkflowRunDetail } from '../api/types';
 
 /**
  * One workflow run.
@@ -32,6 +34,7 @@ import type { StepRun, WorkflowRunDetail } from '../api/types';
  */
 export function WorkflowDetail() {
   const params = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const runId = () => decodeParam(params.id);
 
   const [result, { refetch }] = createResource(runId, (id) =>
@@ -59,6 +62,26 @@ export function WorkflowDetail() {
 
   const run = () => data()?.run;
   const isRunning = () => run()?.status === 'running';
+  const isTerminal = () => !!run() && !isRunning();
+  const canRetry = () => run()?.status === 'failed' || run()?.status === 'killed';
+  const rerunOf = () => orNull(run()?.rerun_of ?? null);
+
+  // Runs created by rerunning this one. Refetched with the run itself, so a
+  // rerun started from this page shows up in the list on the next poll.
+  const [reruns, { refetch: refetchReruns }] = createResource(runId, (id) =>
+    api.getResult<{ runs: WorkflowRun[] }>(
+      `/workflows/runs?rerun_of=${encodeURIComponent(id)}&limit=20`,
+    ),
+  );
+  const rerunList = () => {
+    const r = reruns();
+    return r?.ok ? r.value.runs : [];
+  };
+
+  const refreshAll = () => {
+    void refetch();
+    void refetchReruns();
+  };
 
   /**
    * Steps in dependency order (Kahn). Any cycle — which the engine should never
@@ -101,9 +124,11 @@ export function WorkflowDetail() {
    * every step of a workflow — including the ones still waiting on their
    * dependencies — carries a timestamp. Plotting a `blocked` step from that
    * stamp draws a bar for work that has not happened, which is the one thing a
-   * timeline must never do.
+   * timeline must never do. A `skipped` step is the same case: the engine
+   * skipped it without ever dispatching, so its stamps are row-creation times.
    */
-  const hasStarted = (status: string) => status !== 'blocked' && status !== 'ready';
+  const hasStarted = (status: string) =>
+    status !== 'blocked' && status !== 'ready' && status !== 'skipped';
 
   const lanes = (): Lane[] =>
     orderedSteps().map((s) => ({
@@ -114,7 +139,7 @@ export function WorkflowDetail() {
       status: s.status,
       tone: stepTone(s.status),
       dependsOn: s.depends_on,
-      detail: () => <StepDetail step={s} />,
+      detail: () => <StepDetail step={s} onChange={refreshAll} />,
     }));
 
   const counts = () => {
@@ -131,9 +156,56 @@ export function WorkflowDetail() {
       <PageHead
         crumb="Workflows / Run"
         title={run()?.workflow_name ?? runId()}
-        subtitle={<CopyId value={runId()} />}
+        subtitle={
+          <div class="stack" style={{ gap: '3px' }}>
+            <CopyId value={runId()} />
+            <Show when={rerunOf()}>
+              {(src) => (
+                <span>
+                  rerun of{' '}
+                  <A
+                    href={`/workflows/${encodeURIComponent(src())}`}
+                    style={{ 'text-decoration': 'underline' }}
+                  >
+                    {src()}
+                  </A>
+                </span>
+              )}
+            </Show>
+            <Show when={(run()?.retry_count ?? 0) > 0}>
+              <span>
+                retried {run()!.retry_count} time{run()!.retry_count === 1 ? '' : 's'}
+              </span>
+            </Show>
+          </div>
+        }
         actions={
           <>
+            <Show when={isRunning()}>
+              <button
+                class="btn btn-sm"
+                disabled={run()?.kill_requested}
+                onClick={() => void cancelRun(runId(), run()!.workflow_name, refreshAll)}
+              >
+                Cancel
+              </button>
+            </Show>
+            <Show when={canRetry()}>
+              <button
+                class="btn btn-sm btn-primary"
+                onClick={() => void retryRun(runId(), run()!.workflow_name, refreshAll)}
+              >
+                Retry from failed
+              </button>
+            </Show>
+            <Show when={isTerminal()}>
+              <button
+                class="btn btn-sm"
+                onClick={() => void rerunRun(runId(), (to) => navigate(to))}
+              >
+                Rerun
+              </button>
+            </Show>
             <Show when={run()?.schedule_name}>
               {(name) => (
                 <A
@@ -259,6 +331,55 @@ export function WorkflowDetail() {
                   </Panel>
                 </div>
 
+                <Show when={rerunList().length > 0}>
+                  <Panel
+                    title="Reruns"
+                    sub="Runs created from this one, newest first"
+                    flush
+                  >
+                    <div class="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Run</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                            <th>Duration</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <For each={rerunList()}>
+                            {(r) => (
+                              <tr
+                                class="clickable"
+                                onClick={() =>
+                                  navigate(`/workflows/${encodeURIComponent(r.id)}`)
+                                }
+                              >
+                                <td>
+                                  <div class="row">
+                                    <span class="dot" classList={{ [runTone(r.status)]: true }} />
+                                    <span class="id">{r.id}</span>
+                                  </div>
+                                </td>
+                                <td data-label="Status">
+                                  <Pill tone={runTone(r.status)}>{r.status}</Pill>
+                                </td>
+                                <td class="dim" data-label="Started">
+                                  {relativeStamp(r.created_at)}
+                                </td>
+                                <td class="dim" data-label="Duration">
+                                  {elapsed(r.created_at, r.finished_at)}
+                                </td>
+                              </tr>
+                            )}
+                          </For>
+                        </tbody>
+                      </table>
+                    </div>
+                  </Panel>
+                </Show>
+
                 <Panel title="DAG" sub="As stored on the run">
                   <pre class="json">{JSON.stringify(d().run.dag, null, 2)}</pre>
                 </Panel>
@@ -272,8 +393,9 @@ export function WorkflowDetail() {
 }
 
 /** The expanded body of one timeline lane. */
-function StepDetail(props: { step: StepRun }) {
+function StepDetail(props: { step: StepRun; onChange: () => void }) {
   const s = () => props.step;
+  const jobId = () => orNull(s().job_id);
   return (
     <div class="stack" style={{ gap: '10px', 'padding-top': '10px' }}>
       <KeyValue
@@ -283,7 +405,32 @@ function StepDetail(props: { step: StepRun }) {
             'Depends on',
             s().depends_on.length ? s().depends_on.join(', ') : '—',
           ],
-          ['Job', s().job_id ?? '—'],
+          [
+            'Job',
+            <div class="row" style={{ 'flex-wrap': 'wrap' }}>
+              <span>{jobId() ?? '—'}</span>
+              {/* Job-level controls act on the SSP running it, not on the
+                  workflow: killing fails this step; retrying re-runs the SAME
+                  job row, which is the right tool when the step's own job
+                  failed and the workflow has not moved on yet. */}
+              <Show when={jobId() && s().status === 'dispatched'}>
+                <button
+                  class="btn btn-sm"
+                  onClick={() => void killJob(jobId()!, props.onChange)}
+                >
+                  Kill job
+                </button>
+              </Show>
+              <Show when={jobId() && s().status === 'failed'}>
+                <button
+                  class="btn btn-sm"
+                  onClick={() => void retryJob(jobId()!, props.onChange)}
+                >
+                  Retry job
+                </button>
+              </Show>
+            </div>,
+          ],
           ['Started', formatStamp(s().created_at)],
           ['Finished', formatStamp(s().finished_at)],
         ]}

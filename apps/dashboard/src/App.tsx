@@ -7,9 +7,11 @@ import {
   logout,
   onUnauthorized,
   resolveMode,
+  restarting,
 } from './api/client';
 import type { LoginResponse, Overview as OverviewData } from './api/types';
 import { Shell } from './components/Shell';
+import { ConfirmHost, ToastHost } from './components/Actions';
 import { Login } from './routes/Login';
 import { Overview } from './routes/Overview';
 import { Ssps } from './routes/Ssps';
@@ -17,6 +19,7 @@ import { Backends, BackendDetailView } from './routes/Backends';
 import { Workflows } from './routes/Workflows';
 import { WorkflowDetail } from './routes/WorkflowDetail';
 import { ScheduleDetail, Schedules } from './routes/Schedules';
+import { Backups } from './routes/Backups';
 import { Logs } from './routes/Logs';
 
 /** How often the overview is refreshed. Fast enough to feel live, slow enough
@@ -29,30 +32,34 @@ export function App() {
   const [overview, setOverview] = createSignal<OverviewData | undefined>();
   const [overviewError, setOverviewError] = createSignal<string | undefined>();
 
+  const checkSession = async (token: string): Promise<boolean> => {
+    try {
+      const me = await api.get<{
+        subject: string;
+        label: string;
+        mode: LoginResponse['mode'];
+      }>('/me');
+      setSession({
+        token,
+        subject: me.subject,
+        label: me.label,
+        mode: me.mode,
+        expires_in_secs: 0,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   onMount(async () => {
     await resolveMode();
 
-    // A token in storage may be from a previous scheduler process — sessions do
-    // not survive a restart — so it has to be checked rather than trusted.
+    // A token in storage may be from a previous scheduler process. With a
+    // cluster secret set the scheduler signs tokens and they survive a
+    // restart; without one they do not. Either way the server decides.
     const token = getToken();
-    if (token) {
-      try {
-        const me = await api.get<{
-          subject: string;
-          label: string;
-          mode: LoginResponse['mode'];
-        }>('/me');
-        setSession({
-          token,
-          subject: me.subject,
-          label: me.label,
-          mode: me.mode,
-          expires_in_secs: 0,
-        });
-      } catch {
-        /* stale token; the login form is the right place to land */
-      }
-    }
+    if (token) await checkSession(token);
     setReady(true);
   });
 
@@ -60,9 +67,9 @@ export function App() {
   onCleanup(onUnauthorized(() => setSession(null)));
 
   // One poll for the whole app: the shell's nav counts, the overview, the SSP
-  // list and the log source picker all read from it.
+  // list, the activity strip and the log source picker all read from it.
   const poll = async () => {
-    if (!session()) return;
+    if (!session() || restarting()) return;
     try {
       setOverview(await api.get<OverviewData>('/overview'));
       setOverviewError(undefined);
@@ -83,6 +90,17 @@ export function App() {
     if (session()) void poll();
   });
 
+  // Coming back from a restart: the token may or may not still be good, and
+  // the overview is certainly stale. Ask, then poll.
+  createEffect((was: string | null) => {
+    const now = restarting();
+    if (was && !now) {
+      const token = getToken();
+      if (token) void checkSession(token).then(poll);
+    }
+    return now;
+  }, null as string | null);
+
   const signIn = (s: LoginResponse) => {
     setSession(s);
   };
@@ -94,41 +112,77 @@ export function App() {
   };
 
   return (
-    <Show when={ready()} fallback={<div class="login-wrap" />}>
-      <Show when={session()} fallback={<Login onSignedIn={signIn} />}>
-        {(s) => (
-          <Router
-            // Embedded, the app is served under /admin; standalone (a dev
-            // server or a static host) it sits at the root.
-            base={currentMode().embedded ? '/admin' : ''}
-            root={(props) => (
-              <Shell
-                session={s()}
-                overview={overview()}
-                onSignOut={signOut}
+    <>
+      <Show when={ready()} fallback={<div class="login-wrap" />}>
+        <Show when={!restarting()} fallback={<Reconnecting message={restarting()!} />}>
+          <Show when={session()} fallback={<Login onSignedIn={signIn} />}>
+            {(s) => (
+              <Router
+                // Embedded, the app is served under /admin; standalone (a dev
+                // server or a static host) it sits at the root.
+                base={currentMode().embedded ? '/admin' : ''}
+                root={(props) => (
+                  <Shell
+                    session={s()}
+                    overview={overview()}
+                    onSignOut={signOut}
+                  >
+                    {props.children}
+                  </Shell>
+                )}
               >
-                {props.children}
-              </Shell>
+                <Route
+                  path="/"
+                  component={() => (
+                    <Overview
+                      data={overview()}
+                      error={overviewError()}
+                      refresh={poll}
+                    />
+                  )}
+                />
+                <Route
+                  path="/ssps"
+                  component={() => <Ssps data={overview()} refresh={poll} />}
+                />
+                <Route path="/backends" component={Backends} />
+                <Route path="/backends/:name" component={BackendDetailView} />
+                <Route path="/workflows" component={Workflows} />
+                <Route path="/workflows/:id" component={WorkflowDetail} />
+                <Route path="/schedules" component={Schedules} />
+                <Route path="/schedules/:name" component={ScheduleDetail} />
+                <Route
+                  path="/backups"
+                  component={() => <Backups overview={overview()} refresh={poll} />}
+                />
+                <Route path="/logs" component={() => <Logs overview={overview()} />} />
+                <Route path="*" component={() => <Overview data={overview()} refresh={poll} />} />
+              </Router>
             )}
-          >
-            <Route
-              path="/"
-              component={() => (
-                <Overview data={overview()} error={overviewError()} />
-              )}
-            />
-            <Route path="/ssps" component={() => <Ssps data={overview()} />} />
-            <Route path="/backends" component={Backends} />
-            <Route path="/backends/:name" component={BackendDetailView} />
-            <Route path="/workflows" component={Workflows} />
-            <Route path="/workflows/:id" component={WorkflowDetail} />
-            <Route path="/schedules" component={Schedules} />
-            <Route path="/schedules/:name" component={ScheduleDetail} />
-            <Route path="/logs" component={() => <Logs overview={overview()} />} />
-            <Route path="*" component={() => <Overview data={overview()} />} />
-          </Router>
-        )}
+          </Show>
+        </Show>
       </Show>
-    </Show>
+      <ConfirmHost />
+      <ToastHost />
+    </>
+  );
+}
+
+/**
+ * Shown while a restart the operator asked for is in flight. The route is
+ * left untouched underneath: when the scheduler answers again the router
+ * remounts on the same URL.
+ */
+function Reconnecting(props: { message: string }) {
+  return (
+    <div class="reconnect">
+      <div class="reconnect-card">
+        <div class="reconnect-title">Reconnecting</div>
+        <div class="reconnect-msg">{props.message}</div>
+        <div class="bar">
+          <div class="bar-fill indeterminate" />
+        </div>
+      </div>
+    </div>
   );
 }

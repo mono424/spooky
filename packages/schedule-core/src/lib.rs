@@ -32,6 +32,7 @@ pub use db::{ScheduleDb, ScheduleDbError};
 pub use engine::{EngineConfig, ScheduleEngine, TickReport};
 pub use kill::{JobKill, NoopJobKill};
 pub use spec::{Concurrency, OnFailure, ScheduleKind, ScheduleSpec, StepDef, WorkflowDef};
+pub use workflow::{CancelOutcome, RerunOutcome, RetryOutcome, WorkflowOpError};
 
 /// `Send + Sync` on native targets, no bounds on wasm32. Blanket-implemented.
 #[cfg(not(target_arch = "wasm32"))]

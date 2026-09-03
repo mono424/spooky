@@ -92,16 +92,69 @@ impl JobKill for ClusterJobKill {
     }
 }
 
+/// `ScheduleDb` over the scheduler's shared reconnecting root handle.
+///
+/// The admin plane runs operator actions (rerun, retry, cancel) through this
+/// rather than opening a session per request like the sweep does: the handle
+/// already exists, and a dead session is reported back so the reconnect task
+/// replaces it instead of every subsequent action failing the same way.
+pub struct SharedDb(pub Arc<maintenance::db::ReconnectingDb>);
+
+#[async_trait::async_trait]
+impl ScheduleDb for SharedDb {
+    async fn query(
+        &self,
+        surql: &str,
+        binds: &[(&str, Value)],
+    ) -> Result<Vec<Value>, ScheduleDbError> {
+        // Never clone the inner `Surreal`: that mints a new server-side session.
+        let handle = self.0.handle();
+        let mut q = handle.query(surql);
+        for (name, value) in binds {
+            q = q.bind(((*name).to_string(), value.clone()));
+        }
+        let mut response = match q.await {
+            Ok(r) => r,
+            Err(e) => {
+                let msg = e.to_string();
+                self.0.note_error(&msg);
+                return Err(ScheduleDbError::Transport(msg));
+            }
+        };
+        let n = response.num_statements();
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let val: surrealdb::types::Value = response.take(i).map_err(|e| {
+                let msg = e.to_string();
+                self.0.note_error(&msg);
+                ScheduleDbError::Query(msg)
+            })?;
+            out.push(val.into_json_value());
+        }
+        Ok(out)
+    }
+}
+
+/// Assemble an engine over any database port, with the cluster kill capability.
+/// Cheap to build per request; it holds no state beyond the prune clock.
+pub fn build_engine_over(
+    db: Arc<dyn ScheduleDb>,
+    ssp_pool: Arc<RwLock<SspPool>>,
+    transport: Arc<HttpTransport>,
+) -> ScheduleEngine {
+    ScheduleEngine::new(
+        db,
+        Arc::new(ClusterJobKill { ssp_pool, transport }),
+        EngineConfig::default(),
+    )
+}
+
 fn build_engine(
     db: Surreal<Client>,
     ssp_pool: Arc<RwLock<SspPool>>,
     transport: Arc<HttpTransport>,
 ) -> ScheduleEngine {
-    ScheduleEngine::new(
-        Arc::new(RemoteDb(db)),
-        Arc::new(ClusterJobKill { ssp_pool, transport }),
-        EngineConfig::default(),
-    )
+    build_engine_over(Arc::new(RemoteDb(db)), ssp_pool, transport)
 }
 
 /// Start the cluster schedule sweep. One task, one ticker, for the whole cluster.

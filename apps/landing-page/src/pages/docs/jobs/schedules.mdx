@@ -216,6 +216,8 @@ Once you have more than a handful, `schedules:` can live in separate files, per 
 
 `pause` is the big red button: it stops future fires, **survives redeploys**, and wins over a queued trigger. `trigger` fires one extra run without shifting the cadence, a manual run at 14:07 does not move tonight's 03:00.
 
+All three are also buttons on the [admin dashboard](/docs/reference/admin-dashboard#workflows-schedules-and-jobs)'s Schedules pages, writing the same fields. There, *Run now* is refused while the schedule is paused (the fire would silently never happen) or disabled in its config.
+
 <CodeBlock code={cliRunsCode} lang="bash" />
 
 `spky schedules list` and `runs` cover workflow schedules too; to see a workflow run's DAG, use [`spky workflows show` / `watch`](/docs/jobs/workflows#watching-a-run).

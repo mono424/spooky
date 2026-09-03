@@ -106,7 +106,42 @@ async fn handle_resync(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let req = body.map(|Json(b)| b).unwrap_or_default();
     let mode = req.mode.as_deref().unwrap_or("reclone");
+    let args = ResyncArgs {
+        ssp_pool: Arc::clone(&state.ssp_pool),
+        replica: Arc::clone(&state.replica),
+        config: Arc::clone(&state.config),
+        status: Arc::clone(&state.status),
+        seq_counter: Arc::clone(&state.seq_counter),
+        reclone_lock: Arc::clone(&state.reclone_lock),
+    };
+    run_resync(&args, mode, req.tables).await.map(Json)
+}
 
+fn directive_body(d: &ssp_protocol::ResyncDirective) -> String {
+    serde_json::to_string(d).unwrap_or_else(|_| d.reason.clone())
+}
+
+/// Everything a resync needs, so the admin plane can run one without holding
+/// the whole `SspManagementState` (whose WAL and drain lock it has no business
+/// touching).
+#[derive(Clone)]
+pub struct ResyncArgs {
+    pub ssp_pool: Arc<RwLock<SspPool>>,
+    pub replica: Arc<RwLock<Replica>>,
+    pub config: Arc<SchedulerConfig>,
+    pub status: Arc<RwLock<SchedulerStatus>>,
+    pub seq_counter: Arc<AtomicU64>,
+    pub reclone_lock: Arc<Mutex<()>>,
+}
+
+/// Run a `reclone` or `rehash` and flag every SSP to re-verify afterwards.
+/// Shared by `POST /admin/resync` on the ingest port and the dashboard's
+/// scheduler actions, so the two can never disagree about what a mode means.
+pub async fn run_resync(
+    state: &ResyncArgs,
+    mode: &str,
+    tables: Option<Vec<String>>,
+) -> Result<serde_json::Value, (StatusCode, String)> {
     match *state.status.read().await {
         SchedulerStatus::Cloning => {
             return Err((
@@ -126,7 +161,7 @@ async fn handle_resync(
     match mode {
         "rehash" => {
             let tables: Option<BTreeSet<String>> =
-                req.tables.map(|t| t.into_iter().collect());
+                tables.map(|t| t.into_iter().collect());
             let rehashed = {
                 let mut rep = state.replica.write().await;
                 let seq = rep.snapshot_seq();
@@ -147,12 +182,12 @@ async fn handle_resync(
             // bootstrapped against — make them re-verify.
             let marked = state.ssp_pool.write().await.mark_all_for_resync();
             info!(mode, rehashed, marked, "Admin resync complete");
-            Ok(Json(serde_json::json!({
+            Ok(serde_json::json!({
                 "mode": "rehash",
                 "recloned": false,
                 "rehashed_tables": rehashed,
                 "marked_for_resync": marked,
-            })))
+            }))
         }
         "reclone" => {
             match reclone_replica_from_upstream(
@@ -166,12 +201,12 @@ async fn handle_resync(
                 Ok(true) => {
                     let marked = state.ssp_pool.write().await.mark_all_for_resync();
                     info!(mode, marked, "Admin resync complete");
-                    Ok(Json(serde_json::json!({
+                    Ok(serde_json::json!({
                         "mode": "reclone",
                         "recloned": true,
                         "rehashed_tables": 0,
                         "marked_for_resync": marked,
-                    })))
+                    }))
                 }
                 Ok(false) => Err((
                     StatusCode::CONFLICT,
@@ -608,24 +643,37 @@ async fn handle_heartbeat(
             heartbeat.memory_usage,
             heartbeat.version.clone(),
         );
-        resync_requested = pool.take_resync_flag(&heartbeat.ssp_id);
+        resync_requested = pool.take_resync(&heartbeat.ssp_id);
         has_overflow = pool.has_buffer_overflow(&heartbeat.ssp_id);
     }
 
-    if resync_requested {
-        warn!(ssp_id = %heartbeat.ssp_id, "Forced resync requested by integrity check");
-        return Err((
-            StatusCode::CONFLICT,
-            "Integrity-check resync requested. SSP must re-bootstrap.".to_string(),
-        ));
+    // The 409 body is a `ResyncDirective` rather than prose: it is the one
+    // message that reaches an SSP on its way out, and "drop your snapshot
+    // first" has to ride on it. Old SSPs log it as text and restart anyway.
+    if let Some(kind) = resync_requested {
+        warn!(ssp_id = %heartbeat.ssp_id, ?kind, "Forced resync requested");
+        let directive = ssp_protocol::ResyncDirective {
+            reason: match kind {
+                crate::router::ResyncKind::Resync => {
+                    "Resync requested. SSP must re-bootstrap.".to_string()
+                }
+                crate::router::ResyncKind::Clean => {
+                    "Clean restart requested. SSP must drop its snapshot and re-bootstrap."
+                        .to_string()
+                }
+            },
+            clean: kind == crate::router::ResyncKind::Clean,
+        };
+        return Err((StatusCode::CONFLICT, directive_body(&directive)));
     }
 
     if has_overflow {
         error!("Buffer overflow detected for SSP: {}", heartbeat.ssp_id);
-        return Err((
-            StatusCode::CONFLICT,
-            "Buffer overflow detected. SSP needs to re-bootstrap.".to_string(),
-        ));
+        let directive = ssp_protocol::ResyncDirective {
+            reason: "Buffer overflow detected. SSP needs to re-bootstrap.".to_string(),
+            clean: false,
+        };
+        return Err((StatusCode::CONFLICT, directive_body(&directive)));
     }
 
     Ok(StatusCode::OK)

@@ -23,6 +23,7 @@
  * localStorage behaves identically in both modes and takes CSRF off the table.
  */
 
+import { createSignal } from 'solid-js';
 import type { LoginResponse, ServerConfig } from './types';
 
 const ENDPOINT_KEY = 'spky.endpoint';
@@ -209,7 +210,94 @@ export const api = {
       method: 'POST',
       body: body === undefined ? undefined : JSON.stringify(body),
     }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: 'PUT',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
+  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
+
+/* ------------------------------------------------------------------ */
+/* Reconnecting across a scheduler restart                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Non-null while the app is waiting for the scheduler to come back. The value
+ * is the message shown on the full-page reconnect screen.
+ */
+const [restarting, setRestarting] = createSignal<string | null>(null);
+export { restarting };
+
+/** How long to wait for the old process to actually go away. */
+const OUTAGE_WAIT_MS = 90_000;
+/** Give up waiting for it to come back after this. */
+const RETURN_WAIT_MS = 10 * 60_000;
+const RECONNECT_POLL_MS = 1000;
+
+async function configUp(): Promise<boolean> {
+  try {
+    const res = await fetch(`${mode.baseUrl}/admin/api/config`, {
+      cache: 'no-store',
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Wait out a scheduler restart, then hand the app back.
+ *
+ * Two phases, because the first poll after a restart request almost always
+ * still reaches the OLD process: a native restart exits a few hundred
+ * milliseconds after answering, and a cloud restart is queued for a worker
+ * that acts within seconds. So: wait until `/admin/api/config` fails at least
+ * once (the process is gone), then wait until it answers again. If nothing
+ * ever goes down inside the outage window the restart was a no-op or was
+ * refused upstream; either way the right thing is to resume rather than to
+ * sit on a "reconnecting" screen forever.
+ *
+ * Whether the stored token is still good is not decided here. The next real
+ * request finds out, and a 401 sends the app to the login screen exactly as
+ * it always did.
+ */
+export async function waitForScheduler(message: string): Promise<void> {
+  if (restarting()) return;
+  setRestarting(message);
+  try {
+    const outageDeadline = Date.now() + OUTAGE_WAIT_MS;
+    let wentDown = false;
+    while (Date.now() < outageDeadline) {
+      await sleep(RECONNECT_POLL_MS);
+      if (!(await configUp())) {
+        wentDown = true;
+        break;
+      }
+    }
+    if (!wentDown) return;
+
+    setRestarting(`${message} Waiting for it to come back.`);
+    const returnDeadline = Date.now() + RETURN_WAIT_MS;
+    while (Date.now() < returnDeadline) {
+      await sleep(RECONNECT_POLL_MS);
+      if (await configUp()) {
+        // Refresh the cached config: a restart is when `cloud_linked` and
+        // `version` are most likely to have changed.
+        try {
+          mode = { ...mode, config: await fetchConfig(mode.baseUrl) };
+        } catch {
+          /* keep the old config */
+        }
+        return;
+      }
+    }
+  } finally {
+    setRestarting(null);
+  }
+}
 
 export async function login(
   password: string,

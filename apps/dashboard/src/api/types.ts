@@ -7,6 +7,19 @@ export interface ServerConfig {
   version: string;
   /** Whether `SPKY_ADMIN_PASSWORD` is set, i.e. password-only login is offered. */
   breakglass_available: boolean;
+  /**
+   * Whether this scheduler can reach the Sp00ky Cloud control plane. Off for a
+   * self-hosted scheduler, and for a cloud tenant that has not been restarted
+   * since the link was introduced. Cloud-only actions are offered disabled,
+   * with that reason, rather than hidden.
+   */
+  cloud_linked?: boolean;
+  /**
+   * Whether something will relaunch the process after it exits. A scheduler
+   * run from a checkout is not supervised, and a restart from the dashboard
+   * would simply stop it.
+   */
+  supervised?: boolean;
 }
 
 export interface LoginResponse {
@@ -126,6 +139,202 @@ export interface Overview {
   };
   bootstrap_timeout_secs: number;
   server_time_ms: number;
+  /** Operations still running. Finished ones live on `/operations`. */
+  operations?: Operation[];
+}
+
+/* ------------------------------------------------------------------ */
+/* Operations: the scheduler's log of operator actions in flight.       */
+/* ------------------------------------------------------------------ */
+
+export type OpKind =
+  | 'ssp_restart'
+  | 'ssp_clean'
+  | 'ssp_reload'
+  | 'rolling_restart'
+  | 'scheduler_restart'
+  | 'reclone'
+  | 'rehash'
+  | 'cloud_restart'
+  | 'backup_create'
+  | 'backup_restore';
+
+export type OpStatus = 'running' | 'done' | 'failed';
+
+export interface Operation {
+  id: string;
+  kind: OpKind;
+  /** SSP id, run id, backup id: whatever the action was aimed at. */
+  target: string | null;
+  requested_by: string;
+  /** Epoch ms. */
+  started_at: number;
+  finished_at: number | null;
+  status: OpStatus;
+  message: string | null;
+  /**
+   * Free-form progress. Known shapes: rolling_restart `{done, total, current}`,
+   * ssp_restart `{ssp_version}`, backup_create `{backup_id, status, size_bytes}`,
+   * backup_restore `{restore_id, stage}`.
+   */
+  detail: Record<string, unknown>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Actions                                                              */
+/* ------------------------------------------------------------------ */
+
+export type SspRestartMode = 'restart' | 'clean' | 'reload';
+export type SchedulerRestartMode = 'restart' | 'reclone' | 'rehash';
+
+export interface CloudRestartRequest {
+  roles?: string[];
+  upgrade: boolean;
+  clean: boolean;
+  surreal: boolean;
+}
+
+export interface OperationResponse {
+  operation: Operation;
+}
+
+export interface CancelResponse {
+  run: string;
+  status: 'killed' | 'kill_requested';
+}
+
+export interface RerunResponse {
+  run: string;
+  rerun_of: string;
+}
+
+export interface RetryResponse {
+  run: string;
+  retry_count: number;
+  reset: string[];
+  kept: string[];
+}
+
+export interface JobKillResponse {
+  id: string;
+  dispatched: number;
+  ssps: number;
+}
+
+export interface JobRetryResponse {
+  id: string;
+  status: string;
+  assigned_to: string;
+}
+
+/* ------------------------------------------------------------------ */
+/* Backups                                                              */
+/* ------------------------------------------------------------------ */
+
+export type BackupJobStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+/** The scheduler's own record of a backup it executed. In memory only. */
+export interface BackupJobState {
+  backup_id: string;
+  project_slug: string;
+  status: BackupJobStatus;
+  enqueued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  /** Compressed size of the export. */
+  size_bytes: number | null;
+  snapshot_seq: number | null;
+  storage_path: string | null;
+  error: string | null;
+}
+
+/**
+ * The scheduler's own record of a restore. The three booleans are the real
+ * stages; `replica_restored` is the wire name for host state, kept for the
+ * control plane which reads it.
+ */
+export interface RestoreJobState {
+  restore_id: string;
+  backup_id: string;
+  project_slug: string;
+  storage_path: string;
+  status: BackupJobStatus;
+  enqueued_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  snapshot_seq: number | null;
+  pending_cleared: number | null;
+  main_db_restored: boolean;
+  replica_restored: boolean;
+  ssps_evicted: number | null;
+  error: string | null;
+}
+
+export type CatalogStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'completed'
+  | 'failed'
+  | 'deleted';
+
+/** One backup as the catalog knows it, joined with the local job if any. */
+export interface CatalogEntry {
+  id: string;
+  name: string | null;
+  status: CatalogStatus;
+  size_bytes: number;
+  storage_path: string | null;
+  snapshot_seq: number | null;
+  created_at: string;
+  completed_at: string | null;
+  error: string | null;
+  /** `cloud` from the control plane's table, `s3` from a bucket listing. */
+  source: 'cloud' | 's3';
+  local: BackupJobState | null;
+}
+
+export interface BackupConfig {
+  enabled: boolean;
+  schedule: string | null;
+  retention: number | null;
+  next_run_at: string | null;
+  last_scheduled_at: string | null;
+}
+
+export interface BackupsData {
+  linked: boolean;
+  s3: { configured: boolean; endpoint: string | null; bucket: string | null };
+  project_slug: string;
+  scheduler_status: string;
+  local: {
+    current_running: BackupJobState | null;
+    queue_len: number;
+    recent: BackupJobState[];
+  };
+  catalog: CatalogEntry[];
+  restores: RestoreJobState[];
+  /** Null when not linked: schedules are run by Sp00ky Cloud. */
+  config: BackupConfig | null;
+}
+
+export type RestoreStage =
+  | 'queued'
+  | 'running'
+  | 'main_db'
+  | 'replica'
+  | 'done'
+  | 'failed';
+
+export interface RestoreStatus {
+  cloud: {
+    id: string;
+    status: string;
+    created_at: string;
+    completed_at: string | null;
+    error: string | null;
+  } | null;
+  local: RestoreJobState | null;
+  stage: RestoreStage;
 }
 
 export type RunStatus =
@@ -146,6 +355,12 @@ export interface WorkflowRun {
   created_at: string;
   updated_at: string | null;
   finished_at: string | null;
+  /** `cron` for a scheduled fire, `manual` for an operator rerun. Null on old rows. */
+  trigger?: string | null;
+  /** Operator retries applied to this run. Each mints new `_r<n>` step job ids. */
+  retry_count?: number;
+  /** The run this one was rerun from, when it was. */
+  rerun_of?: string | null;
 }
 
 export interface WorkflowRunDetail extends WorkflowRun {

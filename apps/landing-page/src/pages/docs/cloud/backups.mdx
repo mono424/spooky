@@ -118,6 +118,14 @@ Restoring replaces your current data with the backup. Anything you wrote after t
 If the main database gets wiped but the snapshot replica fails to import, the scheduler stays in the `restoring` state on purpose. That blocks reads until someone re-runs the restore. Serving traffic from a half-restored cluster would give back wrong data.
 </Note>
 
+## From the dashboard
+
+The scheduler's [admin dashboard](/docs/reference/admin-dashboard#backups) has a Backups tab that does everything above except `reset`: create, list, restore, delete and configure the schedule. It shows the same catalog as `spky backup list`, joined to what the scheduler itself knows about each backup, and a restore there reports the real stages as the scheduler moves through them (`queued`, `running`, main database restored, replica restored, done). Migrations still have to be run again afterwards.
+
+<Note>
+**How the dashboard talks to Sp00ky Cloud.** The control plane injects `SPKY_CLOUD_API_URL` and `SPKY_CLOUD_PROJECT` into the scheduler container (only the scheduler, never the SSPs). The scheduler then calls an allow-listed route family, `/v1/internal/projects/{slug}/…` (restart, deployment status, and the backup routes minus `reset`), authenticated with the project's existing `SPKY_AUTH_SECRET`. No new credential is created. A control plane that supports this lists `scheduler_link` under `features` in its `/health` response; a scheduler without the link still works and marks those actions as unavailable.
+</Note>
+
 ## Deleting Backups
 
 <CodeBlock

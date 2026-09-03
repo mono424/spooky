@@ -31,6 +31,66 @@ use crate::engine::{
 use crate::spec::{OnFailure, ScheduleSpec, StepDef, HISTORY_FAILURES_ONLY};
 use crate::{ids, sql};
 
+/// Why an operator action on a workflow run was refused.
+///
+/// Each variant maps to a distinct HTTP outcome at the admin API, which is why
+/// they are enumerated rather than folded into one `anyhow` string.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkflowOpError {
+    #[error("no workflow run {0}")]
+    NotFound(String),
+    #[error("run is {status}; only failed or killed runs can be retried")]
+    NotTerminal { status: String },
+    #[error("run is {status}, not running")]
+    NotRunning { status: String },
+    /// A kill leaves in-flight steps `dispatched` until the SSP processes it.
+    /// Retrying before that would run the step twice.
+    #[error("step {step}'s job is still {job_status}; wait for the kill to settle")]
+    Settling { step: String, job_status: String },
+    #[error("nothing to retry")]
+    NothingToRetry,
+    #[error("frozen dag is invalid: {0}")]
+    BadDag(String),
+    #[error("a rerun of this run was already created this millisecond")]
+    AlreadyExists,
+    #[error("run changed underneath the operation")]
+    Conflict,
+    #[error(transparent)]
+    Db(#[from] anyhow::Error),
+}
+
+impl From<crate::db::ScheduleDbError> for WorkflowOpError {
+    fn from(e: crate::db::ScheduleDbError) -> Self {
+        WorkflowOpError::Db(e.into())
+    }
+}
+
+/// The run a rerun produced, and where it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RerunOutcome {
+    pub run: ids::Ref,
+    pub rerun_of: ids::Ref,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryOutcome {
+    pub run: ids::Ref,
+    /// Operator retries applied to this run so far, including this one.
+    pub retry_count: i64,
+    /// Steps sent back to `blocked` and about to be re-dispatched.
+    pub reset: Vec<String>,
+    /// Steps left as they were, with their outputs.
+    pub kept: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CancelOutcome {
+    pub run: ids::Ref,
+    /// `killed` when the run terminalized in this call, `kill_requested` when
+    /// only the durable flag landed and the next sweep will finish it.
+    pub status: String,
+}
+
 /// A step row as the engine reads it back.
 struct StepRow {
     id: ids::Ref,
@@ -105,16 +165,7 @@ impl ScheduleEngine {
         binds.push(("content", Value::Object(content)));
         self.create_if_absent(sql::CREATE_WORKFLOW_RUN, &binds).await?;
 
-        for step in dag.steps() {
-            let mut content = Map::new();
-            content.insert("step".into(), json!(step.name));
-            content.insert("depends_on".into(), json!(step.depends_on));
-            content.insert("status".into(), json!("blocked"));
-            let mut binds = bind_ref("", &ids::step_run(run_key, &step.name)).to_vec();
-            binds.extend(bind_ref("wf", &wf_run));
-            binds.push(("content", Value::Object(content)));
-            self.create_if_absent(sql::CREATE_STEP_RUN, &binds).await?;
-        }
+        self.create_step_rows(&dag, run_key, &wf_run).await?;
 
         let mut binds = bind_ref("", &ids::schedule_run(run_key)).to_vec();
         binds.extend(bind_ref("wf", &wf_run));
@@ -123,6 +174,213 @@ impl ScheduleEngine {
         // Roots become ready through the same readiness pass as everything else.
         self.advance_workflow(&wf_run).await?;
         Ok(true)
+    }
+
+    /// One `blocked` step row per DAG node. Shared by a schedule fire and an
+    /// operator rerun, so both start from the identical shape.
+    async fn create_step_rows(
+        &self,
+        dag: &WorkflowDag,
+        run_key: &str,
+        wf_run: &ids::Ref,
+    ) -> anyhow::Result<()> {
+        for step in dag.steps() {
+            let mut content = Map::new();
+            content.insert("step".into(), json!(step.name));
+            content.insert("depends_on".into(), json!(step.depends_on));
+            content.insert("status".into(), json!("blocked"));
+            let mut binds = bind_ref("", &ids::step_run(run_key, &step.name)).to_vec();
+            binds.extend(bind_ref("wf", wf_run));
+            binds.push(("content", Value::Object(content)));
+            self.create_if_absent(sql::CREATE_STEP_RUN, &binds).await?;
+        }
+        Ok(())
+    }
+
+    // -- operator actions ---------------------------------------------------
+
+    /// Start a fresh run of the same workflow: same frozen dag, same input, same
+    /// target table, a new key, and no owning schedule.
+    ///
+    /// A rerun is deliberately ad-hoc. It never touches `_00_schedule_run`, never
+    /// counts toward `concurrency: skip`, and rolls up under `(ad-hoc)`; tying it
+    /// to the schedule would make it overlap with `spky schedules trigger`, which
+    /// already exists for "fire this schedule now".
+    pub async fn rerun_workflow(
+        &self,
+        source: &ids::Ref,
+        now: DateTime<Utc>,
+    ) -> Result<RerunOutcome, WorkflowOpError> {
+        let run = self
+            .load_workflow_run(source)
+            .await?
+            .ok_or_else(|| WorkflowOpError::NotFound(source.as_string()))?;
+        // Refuse up front rather than spawn a run that fails `bad_dag` on its
+        // first advancement.
+        let dag = self.frozen_dag(&run).map_err(|e| WorkflowOpError::BadDag(e.to_string()))?;
+        let workflow_name = run
+            .get("workflow_name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| WorkflowOpError::BadDag("run has no workflow_name".into()))?
+            .to_string();
+
+        let run_key = ids::rerun_key(&workflow_name, now.timestamp_millis(), &source.key);
+        let wf_run = ids::workflow_run(&run_key);
+
+        let mut content = Map::new();
+        content.insert("workflow_name".into(), json!(workflow_name));
+        content.insert("status".into(), json!("running"));
+        content.insert("trigger".into(), json!(Trigger::Manual.as_str()));
+        // Absent optionals are omitted, never nulled: `option<T>` rejects NULL.
+        for field in ["dag", "target_table", "input", "history_mode"] {
+            if let Some(v) = run.get(field).filter(|v| !v.is_null()) {
+                content.insert(field.into(), v.clone());
+            }
+        }
+        let mut binds = bind_ref("", &wf_run).to_vec();
+        binds.push(("src_tb", json!(source.table)));
+        binds.push(("src_key", json!(source.key)));
+        binds.push(("content", Value::Object(content)));
+        if !self.create_if_absent(sql::CREATE_WORKFLOW_RUN_RERUN, &binds).await? {
+            return Err(WorkflowOpError::AlreadyExists);
+        }
+
+        self.create_step_rows(&dag, &run_key, &wf_run).await?;
+        // Roots dispatch now rather than on the next sweep.
+        self.advance_workflow(&wf_run).await?;
+        Ok(RerunOutcome { run: wf_run, rerun_of: source.clone() })
+    }
+
+    /// Resume a failed or killed run from its failure point: successful steps keep
+    /// their outputs, everything that failed or was skipped goes back to `blocked`
+    /// and is dispatched again under a new attempt id.
+    ///
+    /// All the step work happens while the run is still terminal, which the sweep
+    /// ignores entirely, and a single guarded write then reopens it. So a rival
+    /// pass can only ever see the old terminal run or the fully reset one.
+    pub async fn retry_workflow(&self, wf_run: &ids::Ref) -> Result<RetryOutcome, WorkflowOpError> {
+        let run = self
+            .load_workflow_run(wf_run)
+            .await?
+            .ok_or_else(|| WorkflowOpError::NotFound(wf_run.as_string()))?;
+        let status = run.get("status").and_then(Value::as_str).unwrap_or("").to_string();
+        if !matches!(status.as_str(), "failed" | "killed") {
+            return Err(WorkflowOpError::NotTerminal { status });
+        }
+        // A run that failed on its dag would only fail the same way again.
+        self.frozen_dag(&run).map_err(|e| WorkflowOpError::BadDag(e.to_string()))?;
+
+        let steps = self.load_step_rows(wf_run).await?;
+
+        // Pass A: nothing is written until every in-flight step has settled. A kill
+        // leaves dispatched steps dispatched; their jobs go terminal only once the
+        // SSP processes the kill, and resetting before that would double-run them.
+        let mut dispatched_jobs: BTreeMap<String, Option<String>> = BTreeMap::new();
+        for step in steps.iter().filter(|s| s.status == StepStatus::Dispatched) {
+            let Some(job_id) = step.job_id.as_deref() else {
+                dispatched_jobs.insert(step.step.clone(), None);
+                continue;
+            };
+            let job_status = self
+                .load_job(job_id)
+                .await?
+                .and_then(|j| j.get("status").and_then(Value::as_str).map(str::to_string));
+            match job_status.as_deref() {
+                Some("pending") | Some("processing") => {
+                    return Err(WorkflowOpError::Settling {
+                        step: step.step.clone(),
+                        job_status: job_status.unwrap_or_default(),
+                    });
+                }
+                _ => {
+                    dispatched_jobs.insert(step.step.clone(), job_status);
+                }
+            }
+        }
+
+        // Pass B: reset what did not work. A dispatched step whose job succeeded is
+        // left alone; the reopened run's first advancement lands it with its output.
+        let mut reset = Vec::new();
+        let mut kept = Vec::new();
+        for step in &steps {
+            match step.status {
+                StepStatus::Failed | StepStatus::Skipped => {
+                    let done = self.db.query(sql::RESET_STEP_FOR_RETRY, &bind_ref("", &step.id)).await?;
+                    if first_row(done).is_some() {
+                        reset.push(step.step.clone());
+                    }
+                }
+                StepStatus::Dispatched => {
+                    let job_status = dispatched_jobs.get(&step.step).cloned().flatten();
+                    if job_status.as_deref() == Some("success") {
+                        kept.push(step.step.clone());
+                        continue;
+                    }
+                    let mut binds = bind_ref("", &step.id).to_vec();
+                    binds.push(("job_id", json!(step.job_id.clone().unwrap_or_default())));
+                    let done = self.db.query(sql::RESET_DISPATCHED_STEP_FOR_RETRY, &binds).await?;
+                    if first_row(done).is_some() {
+                        reset.push(step.step.clone());
+                    }
+                }
+                StepStatus::Success => kept.push(step.step.clone()),
+                // `blocked`/`ready` on a terminal run only happens on a `bad_dag`
+                // failure, which was refused above; they re-dispatch as-is.
+                StepStatus::Blocked | StepStatus::Ready => {}
+            }
+        }
+        let landable = steps.iter().any(|s| {
+            s.status == StepStatus::Dispatched
+                && dispatched_jobs.get(&s.step).cloned().flatten().as_deref() == Some("success")
+        });
+        if reset.is_empty() && !landable {
+            return Err(WorkflowOpError::NothingToRetry);
+        }
+
+        let reopened = self.db.query(sql::REOPEN_WORKFLOW_RUN, &bind_ref("", wf_run)).await?;
+        let Some(reopened) = first_row(reopened) else {
+            // Pruned, or reopened by someone else, between our read and this write.
+            return Err(WorkflowOpError::Conflict);
+        };
+        let retry_count = reopened.get("retry_count").and_then(Value::as_i64).unwrap_or(1);
+
+        // The owning schedule run comes back too, so the retry's final outcome is
+        // mirrored there (finalize is guarded on `running`) and the key counts as
+        // in flight for `concurrency: skip`, which it now is. Best effort: a missing
+        // schedule run is an ad-hoc run or pruned history, not a failed retry.
+        if run.get("schedule_name").and_then(Value::as_str).is_some() {
+            let sched_run = ids::schedule_run(&wf_run.key);
+            if let Err(e) = self.db.query(sql::REOPEN_SCHEDULE_RUN, &bind_ref("", &sched_run)).await {
+                tracing::warn!(run = %sched_run, error = %e, "could not reopen the owning schedule run");
+            }
+        }
+
+        self.advance_workflow(wf_run).await?;
+        Ok(RetryOutcome { run: wf_run.clone(), retry_count, reset, kept })
+    }
+
+    /// Stop a running run now: skip what has not started, kill what has, and
+    /// terminalize. The flag is written first as the durable fallback, so a crash
+    /// mid-kill is finished by the next sweep.
+    pub async fn cancel_workflow(&self, wf_run: &ids::Ref) -> Result<CancelOutcome, WorkflowOpError> {
+        let run = self
+            .load_workflow_run(wf_run)
+            .await?
+            .ok_or_else(|| WorkflowOpError::NotFound(wf_run.as_string()))?;
+        let status = run.get("status").and_then(Value::as_str).unwrap_or("").to_string();
+        if status != "running" {
+            return Err(WorkflowOpError::NotRunning { status });
+        }
+        self.request_workflow_kill(wf_run).await?;
+        let after = self
+            .load_workflow_run(wf_run)
+            .await?
+            .and_then(|r| r.get("status").and_then(Value::as_str).map(str::to_string));
+        let status = match after.as_deref() {
+            Some("killed") => "killed",
+            _ => "kill_requested",
+        };
+        Ok(CancelOutcome { run: wf_run.clone(), status: status.to_string() })
     }
 
     /// Drive one workflow run as far as it can currently go.
@@ -304,7 +562,10 @@ impl ScheduleEngine {
             return Ok(());
         };
 
-        let job = ids::step_job(&table, run_key, &step.name);
+        // The attempt number comes off the run row this pass already loaded, so a
+        // retried step gets a fresh job id rather than colliding with its old row.
+        let attempt = run.get("retry_count").and_then(Value::as_i64).unwrap_or(0);
+        let job = ids::step_job_attempt(&table, run_key, &step.name, attempt);
 
         // Only the direct dependencies' outputs are injected, so a long chain
         // can't grow an ever-larger payload.
@@ -371,7 +632,7 @@ impl ScheduleEngine {
 
     /// Flag a run for the engine to kill on its next pass. Used by
     /// `concurrency: replace` and by `spky workflows kill`.
-    pub(crate) async fn request_workflow_kill(&self, wf_run: &ids::Ref) -> anyhow::Result<()> {
+    pub async fn request_workflow_kill(&self, wf_run: &ids::Ref) -> anyhow::Result<()> {
         self.db.query(sql::REQUEST_WORKFLOW_KILL, &bind_ref("", wf_run)).await?;
         // Act immediately when we're already the engine; the flag is the durable
         // fallback if this pass dies mid-way.
