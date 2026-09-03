@@ -17,7 +17,9 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
+
+use crate::db_retry::query_retrying;
 
 use ssp::circuit::{Circuit, SubqueryOp, ViewDelta};
 use ssp_protocol::RefMode;
@@ -221,34 +223,42 @@ pub fn wrap_in_transaction(statements: &[String]) -> Option<String> {
     ))
 }
 
+/// Rounds a batch's leftovers are carried into the next window before they
+/// are given up on (see [`run_edge_update_service`]).
+pub const MAX_EDGE_CARRY: u32 = 5;
+
 /// Build + execute the aggregated edge transaction for a batch of deltas
-/// through the [`Db`] port. Replaces the shell's `update_all_edges`.
-pub async fn run_edge_writes(
+/// through the [`Db`] port, and NEVER silently drop them.
+///
+/// Returns the deltas that could not be written. The transaction is retried
+/// through [`query_retrying`] (SurrealDB's optimistic conflicts are the
+/// ordinary case on these rows: the TTL sweep, the view metrics and client
+/// heartbeats all write `_00_query` / `_00_list_ref_*`); once the budget is
+/// out the batch is split in halves and each half retried on its own, so one
+/// poisoned statement cannot take the other 4095 down with it. A single delta
+/// that still fails is returned to the caller, logged with its view.
+///
+/// Before this, a failed transaction was one `error!` and the deltas were
+/// gone: the clients subscribed to those views never received the row (a
+/// message, a call's `accepted`) until something re-materialized the view,
+/// which in practice was a reload.
+pub async fn write_deltas_resilient(
     db: &dyn Db,
-    deltas: &[&ViewDelta],
+    deltas: Vec<ViewDelta>,
     circuit: &Circuit,
     mode: RefMode,
     telemetry: &dyn Telemetry,
-) {
+) -> Vec<ViewDelta> {
     if deltas.is_empty() {
-        return;
+        return Vec::new();
     }
-    let batch = build_edge_batch(deltas, mode, &CircuitVersions(circuit));
+    let refs: Vec<&ViewDelta> = deltas.iter().collect();
+    let batch = build_edge_batch(&refs, mode, &CircuitVersions(circuit));
     if batch.is_empty() {
-        return;
+        return Vec::new();
     }
-
-    telemetry.counter("edge_operations", batch.created + batch.updated + batch.deleted);
-    debug!(
-        created = batch.created,
-        updated = batch.updated,
-        deleted = batch.deleted,
-        views = deltas.len(),
-        "Processing edge operations"
-    );
-
     let Some(full_query) = wrap_in_transaction(&batch.statements) else {
-        return;
+        return Vec::new();
     };
     let op_count = batch.statements.len();
     let binds: Vec<(&str, Value)> = batch
@@ -257,9 +267,54 @@ pub async fn run_edge_writes(
         .map(|(name, key)| (name.as_str(), json!(key)))
         .collect();
 
-    match db.query(&full_query, &binds).await {
-        Ok(_) => debug!(target: "ssp::edges", operations = op_count, "Edge update transaction completed"),
-        Err(e) => error!(target: "ssp::edges", error = %e, operations = op_count, "Edge update transaction failed - data may be out of sync"),
+    debug!(
+        created = batch.created,
+        updated = batch.updated,
+        deleted = batch.deleted,
+        views = deltas.len(),
+        "Processing edge operations"
+    );
+
+    match query_retrying(db, &full_query, &binds).await {
+        Ok(_) => {
+            telemetry.counter("edge_operations", batch.created + batch.updated + batch.deleted);
+            debug!(target: "ssp::edges", operations = op_count, "Edge update transaction completed");
+            Vec::new()
+        }
+        Err(e) if deltas.len() > 1 => {
+            // Split on ANY error, not just a conflict: a statement that is
+            // wrong (not merely contended) must be isolated, not retried as
+            // part of everything else forever.
+            telemetry.counter("edge_batch_split", 1);
+            warn!(target: "ssp::edges", error = %e, views = deltas.len(), operations = op_count, "Edge update transaction failed after retries; splitting the batch");
+            let mut left = deltas;
+            let right = left.split_off(left.len() / 2);
+            let mut leftovers = Box::pin(write_deltas_resilient(db, left, circuit, mode, telemetry)).await;
+            leftovers.extend(Box::pin(write_deltas_resilient(db, right, circuit, mode, telemetry)).await);
+            leftovers
+        }
+        Err(e) => {
+            error!(target: "ssp::edges", error = %e, view_id = %deltas[0].query_id, operations = op_count, "Edge delta not written after retries");
+            deltas
+        }
+    }
+}
+
+/// Fire-and-forget form of [`write_deltas_resilient`] over borrowed deltas;
+/// leftovers are counted and logged. Kept for the direct-write callers and
+/// the existing tests.
+pub async fn run_edge_writes(
+    db: &dyn Db,
+    deltas: &[&ViewDelta],
+    circuit: &Circuit,
+    mode: RefMode,
+    telemetry: &dyn Telemetry,
+) {
+    let owned: Vec<ViewDelta> = deltas.iter().map(|d| (*d).clone()).collect();
+    let left = write_deltas_resilient(db, owned, circuit, mode, telemetry).await;
+    if !left.is_empty() {
+        telemetry.counter("edge_deltas_dropped", left.len() as u64);
+        error!(target: "ssp::edges", views = left.len(), "edge deltas dropped after retries");
     }
 }
 
@@ -286,6 +341,18 @@ impl Batcher {
         }
     }
 
+    /// Re-queue deltas a flush could not write, AHEAD of anything buffered
+    /// since: a carried RELATE must land before a newer DELETE for the same
+    /// view, or the edge would resurrect.
+    pub fn push_front(&mut self, deltas: Vec<ViewDelta>) {
+        if deltas.is_empty() {
+            return;
+        }
+        let mut merged = deltas;
+        merged.append(&mut self.buf);
+        self.buf = merged;
+    }
+
     /// Drain for a window-tick / shutdown flush. `None` when empty.
     pub fn take(&mut self) -> Option<Vec<ViewDelta>> {
         if self.buf.is_empty() {
@@ -303,13 +370,15 @@ impl Batcher {
 /// The flush boundary. The real impl ([`SurrealEdgeSink`]) writes to SurrealDB;
 /// tests use a recording mock. `Send` bounds are cfg-gated: native tokio needs
 /// `Send` futures, workers-rs DO futures are `!Send`.
+/// `flush` returns the deltas it could NOT write; the service carries them
+/// into the next window (see [`MAX_EDGE_CARRY`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub trait EdgeSink: Send + Sync {
-    fn flush(&self, deltas: Vec<ViewDelta>) -> impl std::future::Future<Output = ()> + Send;
+    fn flush(&self, deltas: Vec<ViewDelta>) -> impl std::future::Future<Output = Vec<ViewDelta>> + Send;
 }
 #[cfg(target_arch = "wasm32")]
 pub trait EdgeSink {
-    fn flush(&self, deltas: Vec<ViewDelta>) -> impl std::future::Future<Output = ()>;
+    fn flush(&self, deltas: Vec<ViewDelta>) -> impl std::future::Future<Output = Vec<ViewDelta>>;
 }
 
 /// Drain `rx`, coalescing pushed delta batches and flushing them through
@@ -325,11 +394,37 @@ pub async fn run_edge_update_service<S>(
 ) where
     S: EdgeSink + 'static,
 {
+    // Leftovers of a flush ride at the front of the next batch. Bounded: after
+    // MAX_EDGE_CARRY consecutive rounds a delta still failing is dropped and
+    // counted, so a permanently broken statement cannot pin the queue.
+    let mut carry_rounds: u32 = 0;
+    let mut carry = |batcher: &mut Batcher, left: Vec<ViewDelta>| {
+        if left.is_empty() {
+            carry_rounds = 0;
+            return;
+        }
+        carry_rounds += 1;
+        if carry_rounds > MAX_EDGE_CARRY {
+            error!(target: "ssp::edges", views = left.len(), rounds = carry_rounds, "edge deltas dropped after carry rounds");
+            // Dropped for good: the next flush starts a fresh count.
+            carry_rounds = 0;
+            return;
+        }
+        debug!(target: "ssp::edges", views = left.len(), rounds = carry_rounds, "carrying unwritten edge deltas into the next window");
+        batcher.push_front(left);
+    };
+
     if window.is_zero() {
+        let mut batcher = Batcher::new(0);
         while let Some(deltas) = rx.recv().await {
-            if !deltas.is_empty() {
-                sink.flush(deltas).await;
+            batcher.push(deltas);
+            if let Some(ready) = batcher.take() {
+                let left = sink.flush(ready).await;
+                carry(&mut batcher, left);
             }
+        }
+        if let Some(remainder) = batcher.take() {
+            sink.flush(remainder).await;
         }
         return;
     }
@@ -347,7 +442,8 @@ pub async fn run_edge_update_service<S>(
                 maybe = rx.recv() => match maybe {
                     Some(deltas) => {
                         if let Some(ready) = batcher.push(deltas) {
-                            sink.flush(ready).await;
+                            let left = sink.flush(ready).await;
+                            carry(&mut batcher, left);
                         }
                     }
                     None => {
@@ -359,7 +455,8 @@ pub async fn run_edge_update_service<S>(
                 },
                 _ = &mut sleep_fut => {
                     if let Some(batch) = batcher.take() {
-                        sink.flush(batch).await;
+                        let left = sink.flush(batch).await;
+                        carry(&mut batcher, left);
                     }
                     continue 'windows;
                 }
@@ -380,10 +477,9 @@ pub struct SurrealEdgeSink {
 }
 
 impl EdgeSink for SurrealEdgeSink {
-    async fn flush(&self, deltas: Vec<ViewDelta>) {
-        let refs: Vec<&ViewDelta> = deltas.iter().collect();
+    async fn flush(&self, deltas: Vec<ViewDelta>) -> Vec<ViewDelta> {
         let circuit = self.processor.read().await;
-        run_edge_writes(self.db.as_ref(), &refs, &circuit, self.mode, self.telemetry.as_ref()).await;
+        write_deltas_resilient(self.db.as_ref(), deltas, &circuit, self.mode, self.telemetry.as_ref()).await
     }
 }
 

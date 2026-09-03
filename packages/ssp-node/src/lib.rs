@@ -21,6 +21,7 @@
 pub mod api;
 pub mod bootstrap;
 pub mod config;
+pub mod db_retry;
 pub mod crdt;
 pub mod edges;
 pub mod http_sql_db;

@@ -135,6 +135,10 @@ pub fn load_config() -> Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(60),
+        view_metrics_flush_ms: std::env::var("SPKY_SSP_VIEW_METRICS_FLUSH_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2000),
         register_max_wait_secs: std::env::var("SPKY_SSP_REGISTER_MAX_WAIT_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -814,6 +818,7 @@ pub async fn run_server() -> anyhow::Result<()> {
         standalone: config.scheduler_url.is_none(),
         schedule_engine,
         ttl_cleanup_interval_secs: config.ttl_cleanup_interval_secs,
+        view_metrics_flush_ms: config.view_metrics_flush_ms,
         bootstrap_page_size: config.bootstrap_page_size,
         checkpoint_interval_secs: config.checkpoint_interval_secs,
         max_snapshot_age_secs: config.max_snapshot_age_secs,
@@ -1297,6 +1302,17 @@ pub async fn run_server() -> anyhow::Result<()> {
         )
         .await;
     info!(interval_secs = config.ttl_cleanup_interval_secs, "TTL cleanup timer armed");
+
+    // Per-view metrics: noted in memory on ingest, flushed to `_00_query` here
+    // (TimerKind::ViewMetricsFlush), re-armed by the dispatcher.
+    platform
+        .scheduler
+        .schedule(
+            ssp_node::TimerKind::ViewMetricsFlush,
+            ssp_node::now_epoch_ms() + config.view_metrics_flush_ms,
+        )
+        .await;
+    info!(interval_ms = config.view_metrics_flush_ms, "View metrics flush timer armed");
 
     // Circuit checkpoint: only when a host opts in (ephemeral/edge). The VM
     // leaves checkpoint_interval_secs unset — its NoopCircuitStore holds the

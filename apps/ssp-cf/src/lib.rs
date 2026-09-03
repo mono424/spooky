@@ -358,6 +358,7 @@ impl SspNodeDo {
         // Arm the periodic sweeps (each re-arms itself thereafter via on_timer).
         let sched = &node.platform.scheduler;
         sched.schedule(TimerKind::TtlCleanup, now_epoch_ms() + 60_000).await;
+        sched.schedule(TimerKind::ViewMetricsFlush, now_epoch_ms() + 2000).await;
         sched.schedule(TimerKind::JobRecoverySweep, now_epoch_ms()).await;
 
         *self.node.borrow_mut() = Some(node);
@@ -416,6 +417,7 @@ fn build_node(platform: Platform, cfg: &NodeConfigCf) -> SspNode {
         // is VM/singlenode + cluster only until that changes.
         schedule_engine: None,
         ttl_cleanup_interval_secs: 60,
+        view_metrics_flush_ms: 2000,
         bootstrap_page_size: 200,
         checkpoint_interval_secs: Some(300),
         max_snapshot_age_secs: 3600,

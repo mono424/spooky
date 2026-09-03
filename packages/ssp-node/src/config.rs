@@ -46,6 +46,11 @@ pub struct NodeConfig {
     /// Coalescing window (ms) for query edge-update writes to `_00_list_ref`.
     /// `0` disables batching (each update flushes immediately).
     pub query_update_throttle_ms: u64,
+    /// How often (ms) the per-view metrics (`rowCount`, `updateCount`, the
+    /// materialization percentiles on `_00_query`) are flushed. The ingest path
+    /// only notes them in memory. Env: `SPKY_SSP_VIEW_METRICS_FLUSH_MS`,
+    /// default 2000.
+    pub view_metrics_flush_ms: u64,
     /// Share ONE operator graph between registrations that compute the same
     /// thing, instead of building an identical DAG per registered query id.
     /// Env: `SPKY_SSP_MERGE_VIEWS`, default `false`.

@@ -21,6 +21,9 @@ pub enum TimerKind {
     ScheduleSweep,
     /// View TTL cleanup (re-arms every `ttl_cleanup_interval_secs`).
     TtlCleanup,
+    /// Flush of the in-memory per-view metrics to `_00_query` (re-arms every
+    /// `view_metrics_flush_ms`).
+    ViewMetricsFlush,
     /// Edge-update batch flush (re-arms every `query_update_throttle_ms`
     /// while a batch is pending).
     EdgeFlush,

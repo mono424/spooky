@@ -23,6 +23,7 @@ use crate::jobs::{
     set_assignee_helper, JobConfig, JobControl, JobDispatcher, JobEntry,
 };
 use crate::platform::Platform;
+use crate::db_retry::query_retrying;
 use crate::ports::{BackendHealth, Db, Telemetry};
 use crate::status::SspStatus;
 
@@ -83,6 +84,9 @@ pub struct SspNode {
     pub schedule_engine: Option<Arc<schedule_core::ScheduleEngine>>,
     /// View TTL cleanup cadence (seconds) — the `TtlCleanup` timer re-arm.
     pub ttl_cleanup_interval_secs: u64,
+    /// Flush cadence for the per-view metrics on `_00_query` (see
+    /// `flush_view_metrics`).
+    pub view_metrics_flush_ms: u64,
     /// Rows per bootstrap page (keyset pagination) for cold-start rebuild.
     pub bootstrap_page_size: usize,
     /// Periodic circuit-checkpoint cadence; `None` disables (VM).
@@ -1104,14 +1108,18 @@ impl SspNode {
         if let Some(delta) = update {
             if let Err(send_err) = self.edge_update_tx.send(vec![delta]) {
                 let circuit = self.processor.read().await;
-                crate::edges::run_edge_writes(
+                let left = crate::edges::write_deltas_resilient(
                     self.platform.db.as_ref(),
-                    &[&send_err.0[0]],
+                    send_err.0,
                     &circuit,
                     self.ref_mode,
                     self.platform.telemetry.as_ref(),
                 )
                 .await;
+                if !left.is_empty() {
+                    error!(views = left.len(), "registration edges not written after retries (direct path)");
+                    self.platform.telemetry.counter("edge_deltas_dropped", left.len() as u64);
+                }
             }
         }
 
@@ -1235,11 +1243,17 @@ impl SspNode {
                 }
                 if let Err(send_err) = edge_tx.send(deltas) {
                     let deltas = send_err.0;
-                    let refs: Vec<&ssp::circuit::ViewDelta> = deltas.iter().collect();
                     let circuit = processor_c.read().await;
-                    crate::edges::run_edge_writes(db_c.as_ref(), &refs, &circuit, ref_mode, telemetry_c.as_ref()).await;
+                    let left = crate::edges::write_deltas_resilient(db_c.as_ref(), deltas, &circuit, ref_mode, telemetry_c.as_ref()).await;
+                    if !left.is_empty() {
+                        error!(views = left.len(), "edge deltas not written after retries (direct path)");
+                        telemetry_c.counter("edge_deltas_dropped", left.len() as u64);
+                    }
                 }
-                persist_view_metrics(db_c.as_ref(), &view_metrics_c, record_counts, view_ids, materialization_time_ms).await;
+                // In memory only; a timer flushes the dirty views to `_00_query`
+                // (see flush_view_metrics). Writing per ingest contended with the
+                // edge transaction on the same rows and lost edge writes.
+                note_view_metrics(&view_metrics_c, record_counts, view_ids, materialization_time_ms).await;
             }));
         }
 
@@ -1452,6 +1466,11 @@ impl SspNode {
 
 
     /// One TTL sweep over this node's ports (see [`ttl_cleanup_sweep`]).
+    /// Timer entry: flush the dirty per-view metrics (see `flush_view_metrics`).
+    pub async fn flush_view_metrics(&self) -> usize {
+        flush_view_metrics(self.platform.db.as_ref(), &self.view_metrics).await
+    }
+
     pub async fn ttl_cleanup_sweep(&self) -> usize {
         ttl_cleanup_sweep(
             self.platform.db.as_ref(),
@@ -1460,55 +1479,6 @@ impl SspNode {
             self.ref_mode,
         )
         .await
-    }
-}
-
-/// SurrealDB runs optimistic (MVCC) transactions: a statement whose write set
-/// overlaps a transaction that committed while it was in flight fails with
-/// "Transaction conflict: Transaction write conflict. This transaction can be
-/// retried". Nothing is wrong and nothing is lost, the statement simply has to
-/// run again against the newer snapshot.
-///
-/// The TTL sweep hits this constantly under load because it writes exactly the
-/// rows the ingest path writes: `persist_view_metrics` UPDATEs `_00_query` for
-/// every view touched by every materialization, and clients heartbeat the same
-/// rows. Without a retry, one sweep logged one ERROR per contended row and left
-/// every one of those views behind (their circuit state, ~45MB of operator
-/// state each, held until a later sweep happened to win the race).
-fn is_write_conflict(e: &crate::ports::DbError) -> bool {
-    use crate::ports::DbError;
-    let msg = match e {
-        DbError::Query(m) | DbError::Transport(m) => m.to_ascii_lowercase(),
-        DbError::Auth(_) => return false,
-    };
-    msg.contains("write conflict")
-        || msg.contains("transaction conflict")
-        || msg.contains("can be retried")
-}
-
-/// Attempts for a statement that lost an optimistic-concurrency race. No sleep
-/// between tries: a conflict means the *other* transaction already committed,
-/// so the retry runs against a settled snapshot (and a sleep here is not
-/// portable to the wasm shell, which has no timer inside a request).
-const CONFLICT_RETRIES: usize = 5;
-
-/// `Db::query` with bounded retries on a write conflict. Any other error, and
-/// an exhausted budget, are returned to the caller unchanged.
-async fn query_retrying(
-    db: &dyn Db,
-    surql: &str,
-    binds: &[(&str, Value)],
-) -> Result<Vec<Value>, crate::ports::DbError> {
-    let mut attempt = 0usize;
-    loop {
-        match db.query(surql, binds).await {
-            Ok(v) => return Ok(v),
-            Err(e) if is_write_conflict(&e) && attempt < CONFLICT_RETRIES => {
-                attempt += 1;
-                debug!(attempt, error = %e, "write conflict, retrying statement");
-            }
-            Err(e) => return Err(e),
-        }
     }
 }
 
@@ -1710,8 +1680,11 @@ async fn wait_for_row_committed(
 
 /// Update the in-memory rolling latency window per affected view and persist
 /// row count + percentiles onto each `_00_query` row.
-async fn persist_view_metrics(
-    db: &dyn Db,
+/// Note one ingest against every view it touched. Memory only: the flush to
+/// `_00_query` runs on its own timer (`flush_view_metrics`), so the ingest
+/// path never writes the rows the edge transaction is writing at the same
+/// moment.
+pub async fn note_view_metrics(
     view_metrics: &crate::view_metrics::ViewMetrics,
     row_counts: Vec<usize>,
     view_ids: Vec<String>,
@@ -1720,21 +1693,33 @@ async fn persist_view_metrics(
     if view_ids.is_empty() {
         return;
     }
+    let mut map = view_metrics.write().await;
+    for (view_id, row_count) in view_ids.into_iter().zip(row_counts) {
+        map.entry(view_id).or_default().note_ingest(row_count, materialization_time_ms);
+    }
+}
+
+/// Write every dirty view's metrics to its `_00_query` row, one retried
+/// UPDATE each, and clear the dirty marks. Returns how many rows were written.
+/// Same statement and columns as the old per-ingest write, so the row shape is
+/// unchanged; only the cadence moved (registration still writes `rowCount`
+/// synchronously, so first paint does not wait on this).
+pub async fn flush_view_metrics(
+    db: &dyn Db,
+    view_metrics: &crate::view_metrics::ViewMetrics,
+) -> usize {
     let snapshots: Vec<_> = {
         let mut map = view_metrics.write().await;
-        view_ids
-            .iter()
-            .zip(row_counts.iter())
-            .map(|(view_id, row_count)| {
-                let entry = map.entry(view_id.clone()).or_default();
-                entry.record_sample(materialization_time_ms);
-                entry.update_count = entry.update_count.saturating_add(1);
-                (view_id.clone(), *row_count, entry.update_count, entry.percentiles())
+        map.iter_mut()
+            .filter(|(_, st)| st.dirty)
+            .map(|(view_id, st)| {
+                st.dirty = false;
+                (view_id.clone(), st.row_count, st.update_count, st.last_ingest_ms, st.percentiles())
             })
             .collect()
     };
-
-    for (view_id, row_count, update_count, percentiles) in snapshots {
+    let mut written = 0usize;
+    for (view_id, row_count, update_count, last_ingest_ms, percentiles) in snapshots {
         let incantation_id = crate::edges::format_incantation_id(&view_id);
         let (p55, p90, p99) = match percentiles {
             Some(t) => (json!(t.0), json!(t.1), json!(t.2)),
@@ -1744,24 +1729,30 @@ async fn persist_view_metrics(
             rowCount = <int>$rowCount, updateCount = <int>$updateCount, \
             lastIngestLatency = <float>$lastIngestLatency, \
             materializationP55 = $p55, materializationP90 = $p90, materializationP99 = $p99";
-        if let Err(e) = db
-            .query(
-                stmt,
-                &[
-                    ("id", json!(incantation_id)),
-                    ("rowCount", json!(row_count as i64)),
-                    ("updateCount", json!(update_count as i64)),
-                    ("lastIngestLatency", json!(materialization_time_ms)),
-                    ("p55", p55),
-                    ("p90", p90),
-                    ("p99", p99),
-                ],
-            )
-            .await
+        match query_retrying(
+            db,
+            stmt,
+            &[
+                ("id", json!(incantation_id)),
+                ("rowCount", json!(row_count as i64)),
+                ("updateCount", json!(update_count as i64)),
+                ("lastIngestLatency", json!(last_ingest_ms)),
+                ("p55", p55),
+                ("p90", p90),
+                ("p99", p99),
+            ],
+        )
+        .await
         {
-            warn!(target: "ssp::view_metrics", error = %e, view_id = %incantation_id, "Failed to persist per-view metrics");
+            Ok(_) => written += 1,
+            Err(e) => {
+                // Left dirty for the next flush: the sample is still in memory.
+                view_metrics.write().await.entry(view_id).or_default().dirty = true;
+                warn!(target: "ssp::view_metrics", error = %e, view_id = %incantation_id, "Failed to persist per-view metrics");
+            }
         }
     }
+    written
 }
 
 fn valid_record_id(id: &str) -> bool {

@@ -108,6 +108,17 @@ impl Runtime {
                     )
                     .await;
             }
+            TimerKind::ViewMetricsFlush => {
+                if *node.status.read().await == SspStatus::Ready {
+                    node.flush_view_metrics().await;
+                }
+                sched
+                    .schedule(
+                        TimerKind::ViewMetricsFlush,
+                        now_epoch_ms() + node.view_metrics_flush_ms,
+                    )
+                    .await;
+            }
             TimerKind::CircuitCheckpoint => {
                 // Filled in step 4 (checkpoint triggers). Re-arm only if enabled.
                 if let Some(secs) = node.checkpoint_interval_secs {

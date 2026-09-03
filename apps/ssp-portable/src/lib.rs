@@ -237,6 +237,7 @@ fn build_node(
         // dropped), so a fired schedule would spawn rows nothing executes.
         schedule_engine: None,
         ttl_cleanup_interval_secs: 60,
+        view_metrics_flush_ms: 2000,
         bootstrap_page_size: 200,
         checkpoint_interval_secs,
         max_snapshot_age_secs: 3600,
