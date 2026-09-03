@@ -201,8 +201,17 @@ DEFINE FIELD OVERWRITE rerun_of ON TABLE _00_workflow_run TYPE option<record<_00
 -- step job ids, so a retried step never collides with its previous job row (an
 -- SSP keeps kill flags keyed by job id, so re-creating the same id would fail on
 -- arrival).
-DEFINE FIELD OVERWRITE retry_count ON TABLE _00_workflow_run TYPE int DEFAULT 0;
+--
+-- `option<int>`, not `int`: SurrealDB applies DEFAULT only on CREATE and
+-- re-validates the whole row on every UPDATE, so a non-option field makes every
+-- write to a run created before the field existed fail (cancel, the kill flag,
+-- the engine's own finalize). Readers treat NONE as 0.
+DEFINE FIELD OVERWRITE retry_count ON TABLE _00_workflow_run TYPE option<int> DEFAULT 0;
 DEFINE FIELD OVERWRITE last_retry_at ON TABLE _00_workflow_run TYPE option<datetime>;
+-- Backfill rows from before `retry_count` existed. This file is applied by every
+-- `spky migrate` / `spky deploy`, so this runs once per table state and is a
+-- no-op afterwards.
+UPDATE _00_workflow_run SET retry_count = 0 WHERE retry_count = NONE;
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_workflow_run TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_workflow_run TYPE datetime VALUE time::now();
 DEFINE FIELD OVERWRITE finished_at ON TABLE _00_workflow_run TYPE option<datetime>;

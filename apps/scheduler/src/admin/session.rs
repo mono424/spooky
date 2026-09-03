@@ -38,6 +38,9 @@ pub enum SessionMode {
     Roster,
     /// Signed in with `SPKY_ADMIN_PASSWORD`.
     Breakglass,
+    /// A long-lived token minted for an MCP client. Cannot mint further
+    /// tokens; otherwise an ordinary bearer.
+    Mcp,
 }
 
 impl SessionMode {
@@ -45,6 +48,7 @@ impl SessionMode {
         match self {
             SessionMode::Roster => "roster",
             SessionMode::Breakglass => "breakglass",
+            SessionMode::Mcp => "mcp",
         }
     }
 
@@ -52,6 +56,34 @@ impl SessionMode {
         match s {
             "roster" => Some(SessionMode::Roster),
             "breakglass" => Some(SessionMode::Breakglass),
+            "mcp" => Some(SessionMode::Mcp),
+            _ => None,
+        }
+    }
+}
+
+/// What a session may do. Enforced in one place, the bearer middleware: a
+/// `Read` session can only make `GET` requests, so a read-only MCP token
+/// handed to an agent cannot restart anything however it phrases the call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    Read,
+    Full,
+}
+
+impl Scope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Scope::Read => "read",
+            Scope::Full => "full",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "read" => Some(Scope::Read),
+            "full" => Some(Scope::Full),
             _ => None,
         }
     }
@@ -59,11 +91,12 @@ impl SessionMode {
 
 #[derive(Debug, Clone)]
 pub struct Session {
-    /// The `_00_admin` user record id, or `"breakglass"`.
+    /// The `_00_admin` user record id, or `"breakglass"`, or `"mcp:<label>"`.
     pub subject: String,
     /// Display name for the UI.
     pub label: String,
     pub mode: SessionMode,
+    pub scope: Scope,
     pub expires_at: Instant,
 }
 
@@ -103,8 +136,21 @@ impl SessionStore {
         matches!(self.backend, Backend::Signed { .. })
     }
 
-    /// Mint a session and return its bearer token.
+    /// Mint a full-scope session with the store's default TTL.
     pub fn create(&self, subject: String, label: String, mode: SessionMode) -> String {
+        self.create_with(subject, label, mode, Scope::Full, self.ttl)
+    }
+
+    /// Mint a session with an explicit scope and lifetime, and return its
+    /// bearer token. MCP tokens come through here with a TTL of days.
+    pub fn create_with(
+        &self,
+        subject: String,
+        label: String,
+        mode: SessionMode,
+        scope: Scope,
+        ttl: Duration,
+    ) -> String {
         match &self.backend {
             Backend::Map(map) => {
                 // Two v4 UUIDs: ~242 bits of entropy from the same CSPRNG
@@ -118,7 +164,8 @@ impl SessionStore {
                     subject,
                     label,
                     mode,
-                    expires_at: Instant::now() + self.ttl,
+                    scope,
+                    expires_at: Instant::now() + ttl,
                 };
                 let mut map = map.lock().expect("session store poisoned");
                 // Sweep here rather than on a timer: sessions are few, and
@@ -129,18 +176,21 @@ impl SessionStore {
                 token
             }
             Backend::Signed { key, .. } => {
-                let exp = epoch_secs() + self.ttl.as_secs();
+                let exp = epoch_secs() + ttl.as_secs();
                 // A nonce so two logins by the same subject in the same second
                 // do not share a token (and so revoking one does not revoke
-                // the other).
+                // the other). Newlines never appear in a subject or label
+                // because both are single-line identifiers; the claim order
+                // is part of the token format and must not change.
                 let nonce = uuid::Uuid::new_v4().simple().to_string();
                 let claims = format!(
-                    "{}\n{}\n{}\n{}\n{}",
-                    subject,
-                    label,
+                    "{}\n{}\n{}\n{}\n{}\n{}",
+                    subject.replace('\n', " "),
+                    label.replace('\n', " "),
                     mode.as_str(),
                     exp,
-                    nonce
+                    nonce,
+                    scope.as_str()
                 );
                 let payload = base64_url_encode(claims.as_bytes());
                 let sig = base64_url_encode(&hmac_sha256(key, payload.as_bytes()));
@@ -176,6 +226,13 @@ impl SessionStore {
                 let label = parts.next()?.to_string();
                 let mode = SessionMode::parse(parts.next()?)?;
                 let exp: u64 = parts.next()?.parse().ok()?;
+                let _nonce = parts.next()?;
+                // Tokens minted before scopes existed carry five claims; they
+                // were all full sessions.
+                let scope = match parts.next() {
+                    Some(s) => Scope::parse(s)?,
+                    None => Scope::Full,
+                };
                 let now = epoch_secs();
                 if exp <= now {
                     return None;
@@ -191,6 +248,7 @@ impl SessionStore {
                     subject,
                     label,
                     mode,
+                    scope,
                     expires_at: Instant::now() + Duration::from_secs(exp - now),
                 })
             }
@@ -430,6 +488,43 @@ mod tests {
         flipped[0] = if flipped[0] == b'A' { b'B' } else { b'A' };
         let flipped = format!("{}.{}", payload, String::from_utf8(flipped).unwrap());
         assert!(store.get(&flipped).is_none());
+    }
+
+    #[test]
+    fn scope_and_lifetime_travel_with_the_token() {
+        for store in [
+            map_store(Duration::from_secs(60)),
+            signed_store(Duration::from_secs(60)),
+        ] {
+            let token = store.create_with(
+                "mcp:agent".into(),
+                "agent".into(),
+                SessionMode::Mcp,
+                Scope::Read,
+                Duration::from_secs(86_400 * 30),
+            );
+            let s = store.get(&token).expect("live");
+            assert_eq!(s.mode, SessionMode::Mcp);
+            assert_eq!(s.scope, Scope::Read);
+            assert!(s.expires_at > Instant::now() + Duration::from_secs(86_000));
+            let plain = store.create("user:a".into(), "a".into(), SessionMode::Roster);
+            assert_eq!(store.get(&plain).unwrap().scope, Scope::Full);
+        }
+    }
+
+    #[test]
+    fn a_five_claim_token_from_before_scopes_is_still_full() {
+        let store = signed_store(Duration::from_secs(60));
+        let Backend::Signed { key, .. } = &store.backend else {
+            panic!("signed")
+        };
+        let claims = format!("user:a\nalice\nroster\n{}\nnonce", epoch_secs() + 60);
+        let payload = base64_url_encode(claims.as_bytes());
+        let sig = base64_url_encode(&hmac_sha256(key, payload.as_bytes()));
+        let s = store
+            .get(&format!("{payload}.{sig}"))
+            .expect("old token verifies");
+        assert_eq!(s.scope, Scope::Full);
     }
 
     #[test]

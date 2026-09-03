@@ -18,6 +18,10 @@ config = "0.14"
 anyhow = "1"
 axum = "0.7"
 tower-http = { version = "0.6", features = ["timeout", "fs", "cors"] }
+# `util` for `ServiceExt::oneshot`: the MCP server dispatches tool calls
+# through the admin router in-process rather than re-implementing handlers.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
 uuid = { version = "1", features = ["v4"] }
 ssp-protocol = { path = "../../packages/ssp-protocol" }
 maintenance = { path = "../../packages/maintenance" }
@@ -31,5 +35,3 @@ sha2 = "0.10"
 chrono = "0.4"
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"

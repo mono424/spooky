@@ -139,6 +139,13 @@ export function onUnauthorized(fn: () => void): () => void {
   return () => unauthorizedHandlers.delete(fn);
 }
 
+/** The exact sentence `require_session` answers with; nothing else is ours. */
+const NOT_SIGNED_IN = 'Not signed in';
+
+function isSessionLoss(message: string): boolean {
+  return message === NOT_SIGNED_IN;
+}
+
 function notifyUnauthorized() {
   setToken(null);
   unauthorizedHandlers.forEach((fn) => fn());
@@ -156,10 +163,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const res = await fetch(url(path), { ...init, headers });
 
-  if (res.status === 401) {
-    notifyUnauthorized();
-    throw new ApiError(401, 'Session expired');
-  }
   if (!res.ok) {
     // The API answers errors as {error} JSON; fall back to the raw body for
     // anything that does not (a proxy's own error page, say).
@@ -169,6 +172,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       if (body && typeof body.error === 'string') message = body.error;
     } catch {
       /* keep the default */
+    }
+    // Only the plane's own gate means the session is gone. A 401 with any
+    // other sentence is a refusal relayed from somewhere else (a control
+    // plane rejecting the scheduler's credentials, an SSP), and signing the
+    // operator out over it would hide the very message they need to read.
+    if (res.status === 401 && isSessionLoss(message)) {
+      notifyUnauthorized();
+      throw new ApiError(401, 'Session expired');
     }
     throw new ApiError(res.status, message);
   }
@@ -215,7 +226,11 @@ export const api = {
       method: 'PUT',
       body: body === undefined ? undefined : JSON.stringify(body),
     }),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  delete: <T>(path: string, body?: unknown) =>
+    request<T>(path, {
+      method: 'DELETE',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
 };
 
 /* ------------------------------------------------------------------ */
@@ -369,12 +384,19 @@ export function openStream(
         signal: controller.signal,
       });
 
-      if (res.status === 401) {
-        notifyUnauthorized();
-        return;
-      }
       if (!res.ok || !res.body) {
-        throw new ApiError(res.status, `Stream failed (${res.status})`);
+        let message = `Stream failed (${res.status})`;
+        try {
+          const body = await res.json();
+          if (body && typeof body.error === 'string') message = body.error;
+        } catch {
+          /* keep the default */
+        }
+        if (res.status === 401 && isSessionLoss(message)) {
+          notifyUnauthorized();
+          return;
+        }
+        throw new ApiError(res.status, message);
       }
       handlers.onOpen?.();
 

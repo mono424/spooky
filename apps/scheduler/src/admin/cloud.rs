@@ -114,6 +114,20 @@ impl CloudLink {
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("Sp00ky Cloud answered {}", status.as_u16()));
             warn!(%method, %url, %status, %message, "Control plane refused");
+            // An upstream 401/403 is about THIS SCHEDULER's credentials, not
+            // the operator's session. Relaying it as-is made the dashboard
+            // read it as an expired login and sign the operator out, which
+            // hid the real problem. So it becomes a gateway error with the
+            // sentence that explains it.
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                return Err((
+                    StatusCode::BAD_GATEWAY,
+                    axum::Json(json!({
+                        "error": format!("Sp00ky Cloud rejected this scheduler's credentials ({message})"),
+                        "code": "cloud_auth",
+                    })),
+                ));
+            }
             Err(api_error(status, message))
         }
     }

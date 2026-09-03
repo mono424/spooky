@@ -49,6 +49,7 @@ export function Shell(props: {
     { href: '/schedules', label: 'Schedules' },
     { href: '/backups', label: 'Backups' },
     { href: '/logs', label: 'Logs' },
+    { href: '/access', label: 'Access' },
   ];
 
   // Navigating closes the drawer — otherwise tapping a link leaves it sitting

@@ -253,7 +253,7 @@ A retry is refused while any step of a killed run still has its job `pending` or
 Retrying the newest fire of a schedule leaves `_00_schedule.last_run_status` at `failed` even when the retry succeeds, because the engine only lets a failure overwrite an equal `last_run_at`. The run and schedule-run rows themselves are correct.
 </Note>
 
-These four fields on `_00_workflow_run` exist for this: `trigger` (`cron` or `manual`, unset on rows older than the field), `rerun_of`, `retry_count` (default `0`) and `last_retry_at`. They ship with `spky deploy`; a scheduler upgraded ahead of the deploy answers rerun and retry with a `409` that says so.
+These four fields on `_00_workflow_run` exist for this: `trigger` (`cron` or `manual`, unset on rows older than the field), `rerun_of`, `retry_count` (`option<int>`, default `0`, backfilled to `0` on older rows by `spky migrate`) and `last_retry_at`. They ship with `spky deploy`; a scheduler upgraded ahead of the deploy answers rerun and retry with a `409` that says so.
 
 ## How it advances
 

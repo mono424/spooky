@@ -3222,4 +3222,270 @@ mod admin_plane {
             .unwrap_or("")
             .starts_with("text/event-stream"));
     }
+
+    // -----------------------------------------------------------------------
+    // Tokens, scope and MCP
+    // -----------------------------------------------------------------------
+
+    fn rpc(id: u64, method: &str, params: Value) -> Value {
+        json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
+    }
+
+    async fn mcp_call(app: &Router, token: &str, message: Value) -> (StatusCode, Value) {
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/mcp", token, message))
+            .await
+            .unwrap();
+        let status = res.status();
+        (status, body_json(res).await)
+    }
+
+    async fn mint(app: &Router, token: &str, scope: &str) -> String {
+        let res = app
+            .clone()
+            .oneshot(post_auth(
+                "/admin/api/tokens",
+                token,
+                json!({ "label": "agent", "scope": scope, "ttl_days": 30 }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let body = body_json(res).await;
+        assert_eq!(body["scope"], scope);
+        assert_eq!(body["endpoint"], "/admin/api/mcp");
+        body["token"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn mcp_requires_a_token_and_rejects_get() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/mcp", "nope", rpc(1, "ping", json!({}))))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let token = breakglass_token(&app, "pw").await;
+        let res = app.oneshot(get_auth("/admin/api/mcp", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn mcp_speaks_the_handshake() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let (status, init) = mcp_call(
+            &app,
+            &token,
+            rpc(1, "initialize", json!({ "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(init["id"], 1);
+        assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
+        assert_eq!(init["result"]["serverInfo"]["name"], "spky-admin");
+        assert!(init["result"]["capabilities"]["tools"].is_object());
+
+        // The initialized notification has no id and is acknowledged empty.
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/mcp", &token, json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        let (_, pong) = mcp_call(&app, &token, rpc(2, "ping", json!({}))).await;
+        assert_eq!(pong["result"], json!({}));
+
+        let (_, unknown) = mcp_call(&app, &token, rpc(3, "nope/nothing", json!({}))).await;
+        assert_eq!(unknown["error"]["code"], -32601);
+
+        let (_, batch) = mcp_call(&app, &token, json!([rpc(4, "ping", json!({}))])).await;
+        assert_eq!(batch["error"]["code"], -32600);
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/api/mcp")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from("{not json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(body_json(res).await["error"]["code"], -32700);
+    }
+
+    #[tokio::test]
+    async fn tools_list_follows_scope_and_calls_dispatch_through_the_router() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let (_, full) = mcp_call(&app, &token, rpc(1, "tools/list", json!({}))).await;
+        let names: Vec<&str> = full["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"overview") && names.contains(&"scheduler_restart"), "{names:?}");
+        let restart = full["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "scheduler_restart")
+            .unwrap();
+        assert_eq!(restart["annotations"]["destructiveHint"], true);
+        assert_eq!(restart["inputSchema"]["properties"]["mode"]["enum"][1], "reclone");
+
+        // A tool call is the same endpoint the dashboard uses.
+        let (_, ov) = mcp_call(&app, &token, rpc(2, "tools/call", json!({ "name": "overview", "arguments": {} }))).await;
+        assert_eq!(ov["result"]["isError"], false, "{ov}");
+        let text = ov["result"]["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["totals"]["ssps"], 1);
+
+        // A failing call is a tool error carrying the endpoint's sentence.
+        let (_, missing) = mcp_call(&app, &token, rpc(3, "tools/call", json!({ "name": "ssp_restart", "arguments": { "id": "ghost" } }))).await;
+        assert_eq!(missing["result"]["isError"], true, "{missing}");
+        assert!(missing["result"]["content"][0]["text"].as_str().unwrap().contains("HTTP 404"));
+
+        // A real restart flags the SSP, exactly as the button does.
+        let (_, ok) = mcp_call(&app, &token, rpc(4, "tools/call", json!({ "name": "ssp_restart", "arguments": { "id": "ssp-1", "mode": "clean" } }))).await;
+        assert_eq!(ok["result"]["isError"], false, "{ok}");
+        assert_eq!(h.ssp_pool.read().await.pending_resync("ssp-1"), Some(scheduler::router::ResyncKind::Clean));
+
+        // Bounded logs come back as an array, not a stream.
+        let (_, logs) = mcp_call(&app, &token, rpc(5, "tools/call", json!({ "name": "logs_recent", "arguments": { "backfill": 5 } }))).await;
+        assert_eq!(logs["result"]["isError"], false, "{logs}");
+        let text = logs["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(serde_json::from_str::<Value>(text).unwrap().is_array(), "{text}");
+
+        let (_, unknown) = mcp_call(&app, &token, rpc(6, "tools/call", json!({ "name": "nope", "arguments": {} }))).await;
+        assert_eq!(unknown["error"]["code"], -32602);
+    }
+
+    #[tokio::test]
+    async fn a_read_token_sees_and_does_only_reads() {
+        let h = TestHarness::new().await;
+        h.add_ready_ssp("ssp-1", "http://10.0.0.1:8667").await;
+        let app = admin_app_with(&h, Some("pw"), None, Some("cluster-secret"));
+        let person = breakglass_token(&app, "pw").await;
+        let read = mint(&app, &person, "read").await;
+        assert!(read.contains('.'), "signed");
+
+        let res = app.clone().oneshot(get_auth("/admin/api/me", &read)).await.unwrap();
+        let me = body_json(res).await;
+        assert_eq!(me["mode"], "mcp");
+        assert_eq!(me["scope"], "read");
+        assert_eq!(me["label"], "agent");
+
+        let (_, list) = mcp_call(&app, &read, rpc(1, "tools/list", json!({}))).await;
+        let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"overview") && !names.contains(&"scheduler_restart"), "{names:?}");
+
+        // Calling a write tool anyway is a tool error, and the raw endpoint is a 403.
+        let (_, refused) = mcp_call(&app, &read, rpc(2, "tools/call", json!({ "name": "ssp_restart", "arguments": { "id": "ssp-1" } }))).await;
+        assert_eq!(refused["result"]["isError"], true);
+        assert!(refused["result"]["content"][0]["text"].as_str().unwrap().contains("read-only"));
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/ssps/ssp-1/restart", &read, json!({ "mode": "restart" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert!(h.ssp_pool.read().await.pending_resync("ssp-1").is_none());
+
+        // Reads through the plain API still work for it.
+        let res = app.clone().oneshot(get_auth("/admin/api/overview", &read)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // And it cannot mint.
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/tokens", &read, json!({ "label": "x", "scope": "full" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // A full MCP token cannot mint either.
+        let full = mint(&app, &person, "full").await;
+        let res = app
+            .clone()
+            .oneshot(post_auth("/admin/api/tokens", &full, json!({ "label": "x", "scope": "full" })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn tokens_can_be_revoked_and_validated() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let person = breakglass_token(&app, "pw").await;
+
+        for bad in [json!({ "label": "", "scope": "read" }), json!({ "label": "x", "scope": "root" }), json!({ "label": "x", "ttl_days": 9999 })] {
+            let res = app.clone().oneshot(post_auth("/admin/api/tokens", &person, bad.clone())).await.unwrap();
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{bad}");
+        }
+
+        let token = mint(&app, &person, "full").await;
+        let res = app.clone().oneshot(get_auth("/admin/api/me", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/admin/api/tokens")
+                    .header("Authorization", format!("Bearer {person}"))
+                    .header("Content-Type", "application/json")
+                    .body(axum::body::Body::from(json!({ "token": token }).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        let res = app.oneshot(get_auth("/admin/api/me", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn an_upstream_auth_failure_is_a_gateway_error_not_a_logout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // Every internal route refuses the credential, as a control plane
+        // that does not know this scheduler's secret would.
+        let fake = Router::new().fallback(|| async {
+            (StatusCode::UNAUTHORIZED, axum::Json(json!({ "error": "invalid project credentials", "code": "unauthorized" })))
+        });
+        tokio::spawn(async move { axum::serve(listener, fake).await.unwrap() });
+
+        let h = TestHarness::new().await;
+        let app = admin_app_with(&h, Some("pw"), Some(&format!("http://{addr}")), None);
+        let token = breakglass_token(&app, "pw").await;
+        // The catalog is soft: the list still answers, with the sentence.
+        let res = app.clone().oneshot(get_auth("/admin/api/backups", &token)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = body_json(res).await;
+        assert!(body["catalog_error"].as_str().unwrap().contains("rejected this scheduler's credentials"), "{body}");
+        // A hard cloud call is 502 with the same sentence, never 401.
+        let res = app
+            .oneshot(post_auth("/admin/api/cloud/restart", &token, json!({ "roles": ["ssp"] })))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+        let body = body_json(res).await;
+        assert_eq!(body["code"], "cloud_auth");
+    }
 }

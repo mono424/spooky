@@ -1120,6 +1120,17 @@ select:focus {
   left: 0;
 }
 
+/* Portaled to <body> and pinned to viewport coordinates set inline, so no
+   ancestor's overflow can clip it. Above the sticky mobile bar, below the
+   confirm dialog. */
+.menu.menu-fixed {
+  position: fixed;
+  top: auto;
+  right: auto;
+  left: auto;
+  z-index: 60;
+}
+
 .menu-item {
   display: flex;
   flex-direction: column;
@@ -1729,6 +1740,140 @@ tr:hover .row-actions,
   }
   to {
     opacity: 1;
+  }
+}
+
+
+/* ================================================================
+   ACCESS (MCP tokens)
+   ================================================================ */
+
+.token-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--amber-line);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.token-box .token-value {
+  flex: 1;
+  min-width: 0;
+}
+
+.snippet {
+  position: relative;
+  margin-top: 8px;
+}
+
+.snippet-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.snippet pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 8px 10px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.choice.on {
+  border-color: var(--amber-deep);
+  background: var(--amber-wash);
+}
+
+.choice input {
+  margin: 3px 0 0;
+  accent-color: var(--amber);
+}
+
+/* Inside a <label>, which the form rules set as an uppercase tag; these are
+   prose, so the transform and tracking come back off. */
+.choice-title {
+  font-size: 12px;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--mono);
+}
+
+.choice-sub {
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin-top: 2px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--sans);
+  line-height: 1.45;
+}
+
+.tool-group {
+  padding: 10px 0 4px;
+}
+
+.tool-group + .tool-group {
+  border-top: 1px solid var(--rule);
+}
+
+.tool-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) auto 1fr;
+  gap: 6px 14px;
+  align-items: baseline;
+  padding: 5px 0;
+}
+
+.tool-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.tool-desc {
+  font-size: 11.5px;
+  color: var(--ink-dim);
+}
+
+@media (max-width: 860px) {
+  .tool-row {
+    grid-template-columns: 1fr auto;
+  }
+  .tool-desc {
+    grid-column: 1 / -1;
   }
 }
 

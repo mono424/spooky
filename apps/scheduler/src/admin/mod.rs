@@ -26,9 +26,11 @@ pub mod backups;
 pub mod cloud;
 pub mod config;
 pub mod logs;
+pub mod mcp;
 pub mod ops;
 pub mod overview;
 pub mod session;
+pub mod tokens;
 pub mod workflows;
 
 use std::sync::Arc;
@@ -53,7 +55,7 @@ use maintenance::log_ring::LogRing;
 use self::auth::RateLimiter;
 use self::cloud::CloudLink;
 use self::ops::Operations;
-use self::session::{Session, SessionStore};
+use self::session::{Scope, Session, SessionStore};
 use self::workflows::WorkflowWatcher;
 
 /// A handle to the scheduler's shared root database connection, published once
@@ -99,9 +101,18 @@ pub struct AdminState {
     pub supervised: bool,
     /// The slug backups are stored under.
     pub project_slug: String,
+    /// The finished admin router, for the MCP server's in-process dispatch.
+    /// Late-bound like `db_slot`: the router is built FROM this state, so it
+    /// cannot be a plain field.
+    router_slot: Arc<std::sync::OnceLock<Router>>,
 }
 
 impl AdminState {
+    /// A clone of the admin router, once `build` has produced it.
+    pub fn router(&self) -> Option<Router> {
+        self.router_slot.get().cloned()
+    }
+
     /// The shared root handle, or `None` while the scheduler is still starting.
     pub fn db(&self) -> Option<Arc<ReconnectingDb>> {
         if let Some(db) = self
@@ -154,6 +165,17 @@ async fn require_session(
 
     match token.and_then(|t| state.sessions.get(t)) {
         Some(session) => {
+            // Scope is enforced here and nowhere else, so a read-only token
+            // cannot write however the request is phrased. The MCP endpoint
+            // is a POST that carries reads too; it checks scope per tool.
+            let is_mcp = req.uri().path().trim_end_matches('/').ends_with("/mcp");
+            if session.scope == Scope::Read && req.method() != axum::http::Method::GET && !is_mcp {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({ "error": "This token is read-only" })),
+                )
+                    .into_response();
+            }
             req.extensions_mut().insert(CurrentSession(session));
             next.run(req).await
         }
@@ -182,6 +204,7 @@ async fn config_handler(State(state): State<AdminState>) -> Json<serde_json::Val
         "cloud_linked": state.cloud.is_some(),
         "supervised": state.supervised,
         "sessions_persistent": state.sessions.persistent(),
+        "project_slug": state.project_slug,
     }))
 }
 
@@ -193,6 +216,7 @@ async fn me_handler(
         "subject": session.subject,
         "label": session.label,
         "mode": session.mode,
+        "scope": session.scope,
     }))
 }
 
@@ -282,6 +306,13 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route("/schedules/:name/trigger", post(workflows::schedule_trigger))
         .route("/jobs/:id/kill", post(workflows::job_kill))
         .route("/jobs/:id/retry", post(workflows::job_retry))
+        // Agents. Tokens are minted by a person; the MCP endpoint takes any
+        // bearer and dispatches tools back through this same router.
+        .route("/tokens", post(tokens::mint).delete(tokens::revoke))
+        .route(
+            "/mcp",
+            post(mcp::handle).get(mcp::not_allowed).delete(mcp::not_allowed),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_session,
@@ -364,7 +395,10 @@ pub fn build(config: AdminConfig, deps: AdminDeps) -> (AdminState, Router) {
         resync: deps.resync,
         supervised: deps.supervised,
         project_slug,
+        router_slot: mcp::router_slot(),
     };
     let router = create_admin_router(state.clone());
+    // The MCP server dispatches through the very router it is mounted on.
+    let _ = state.router_slot.set(router.clone());
     (state, router)
 }

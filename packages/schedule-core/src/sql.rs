@@ -753,7 +753,13 @@ mod tests {
                 "_00_workflow_run is missing `{field}`"
             );
         }
-        assert!(SCHEDULE_TABLES.contains("retry_count ON TABLE _00_workflow_run TYPE int DEFAULT 0"));
+        // `option<int>`, never bare `int`: a non-option field breaks every UPDATE
+        // on runs created before the field existed (DEFAULT only fills CREATEs).
+        assert!(SCHEDULE_TABLES.contains("retry_count ON TABLE _00_workflow_run TYPE option<int> DEFAULT 0"));
+        assert!(
+            SCHEDULE_TABLES.contains("UPDATE _00_workflow_run SET retry_count = 0 WHERE retry_count = NONE"),
+            "the backfill for pre-field rows must ship with the schema"
+        );
         assert!(SCHEDULE_TABLES.contains("rerun_of ON TABLE _00_workflow_run TYPE option<record<_00_workflow_run>>"));
     }
 

@@ -70,6 +70,36 @@ export const curlCheck = `curl -s https://api.sp00ky.cloud/v1/mcp \\
   -H "Accept: application/json, text/event-stream" \\
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`;
 
+export const adminClaudeAdd = `claude mcp add --transport http spky-admin-<slug> \\
+  https://<slug>-admin.<domain>/admin/api/mcp \\
+  --header "Authorization: Bearer <token>" \\
+  --scope user`;
+
+export const adminCursorJson = `{
+  "mcpServers": {
+    "spky-admin-<slug>": {
+      "url": "https://<slug>-admin.<domain>/admin/api/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}`;
+
+export const adminVscodeJson = `{
+  "servers": {
+    "spky-admin-<slug>": {
+      "type": "http",
+      "url": "https://<slug>-admin.<domain>/admin/api/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}`;
+
+export const adminCurlCheck = `curl -s https://<slug>-admin.<domain>/admin/api/mcp \\
+  -H "Authorization: Bearer <token>" \\
+  -H "Content-Type: application/json" \\
+  -H "Accept: application/json, text/event-stream" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'`;
+
 The **Sp00ky Cloud MCP server** lets any [Model Context Protocol](https://modelcontextprotocol.io)
 client (Claude Code, Cursor, VS Code, and others) drive your Sp00ky Cloud account in natural
 language. Your AI assistant can list projects, deploy, tail logs, manage environment variables,
@@ -225,3 +255,75 @@ Things you can ask once the server is connected:
 You can sanity-check connectivity from a terminal:
 
 <CodeBlock code={curlCheck} lang="bash" />
+
+## Scheduler admin MCP
+
+The cloud server above manages your **account**: projects, deployments, billing. Each deployed
+project also has a second, smaller MCP server that manages **one running cluster**: the
+[admin dashboard](/docs/reference/admin-dashboard)'s scheduler serves its own operator actions
+as tools, at `<admin url>/admin/api/mcp`. On Sp00ky Cloud that is
+`https://<slug>-admin.<domain>/admin/api/mcp`; on a self-hosted scheduler it is the admin port
+(`9668` by default).
+
+It speaks Streamable HTTP, is stateless, and answers plain JSON, so any MCP client that can send
+a bearer header works. The tools are the same endpoints the dashboard's buttons call: a tool call
+is dispatched through the scheduler's own admin router, so an agent can never do anything the
+dashboard cannot, and the scheduler's audit log records the token's label on every action.
+
+### Tokens
+
+Tokens are minted on the dashboard's **Access** page, never by the CLI, because minting needs a
+signed-in person: an MCP token cannot mint further tokens. Give it a label, pick a scope, pick a
+lifetime (up to 365 days), and copy it. It is shown once. To revoke one, paste it back on the
+same page.
+
+| Scope | Grants |
+| --- | --- |
+| `read` (default) | Inspection only. `tools/list` shows only read tools, and any non-`GET` request to the admin API with that token is a `403` |
+| `full` | Every tool, including restarts, retries, backups and restores |
+
+With `SPKY_AUTH_SECRET` set (always on Sp00ky Cloud) tokens are HMAC-signed and survive scheduler
+restarts. Without it they are held in memory and die with the process; the Access page says so
+before you mint one.
+
+### Add to your editor
+
+The Access page prints these three ready to copy, with your slug, host and token filled in.
+
+<CodeBlock code={adminClaudeAdd} lang="bash" />
+
+<CodeBlock code={adminCursorJson} lang="json" fileName="~/.cursor/mcp.json" />
+
+<CodeBlock code={adminVscodeJson} lang="json" fileName=".vscode/mcp.json" />
+
+Sanity-check from a terminal:
+
+<CodeBlock code={adminCurlCheck} lang="bash" />
+
+### What your assistant can do
+
+Tools marked **destructive** carry the `destructiveHint` annotation, so a well-behaved client asks
+before calling them. Restart, cancel, retry, backup and restore tools are asynchronous: they answer
+with an operation, and `operations_list` is how the agent watches it finish.
+
+- **Cluster**: `admin_config`, `overview`, `backends_list`, `backend_get`, `logs_recent` (bounded, non-streaming), `operations_list`
+- **Workflows**: `workflow_runs_list`, `workflow_run_get`, `workflow_run_cancel`, `workflow_run_rerun`, `workflow_run_retry`, `schedules_list`, `schedule_get`, `schedule_pause`, `schedule_resume`, `schedule_trigger`, `job_kill`, `job_retry`
+- **Restart**: `ssp_restart` (`restart`, `clean` or `reload`), `ssps_restart_all` (rolling by default), **`scheduler_restart`** (`restart`, `reclone` or `rehash`), `cloud_deployment`, **`cloud_restart`** (`upgrade`, `clean`, `surreal`)
+- **Backups**: `backups_list`, `backup_create`, **`backup_restore`**, `backup_restore_status`, **`backup_delete`**, `backups_configure`
+
+On a scheduler that is not linked to Sp00ky Cloud, `cloud_deployment`, `cloud_restart`,
+`backup_delete` and `backups_configure` are refused with `Not linked to Sp00ky Cloud`; the
+server's `initialize` instructions say so up front.
+
+### Example prompts
+
+- "How many SSPs are ready, and what is the end-to-end latency right now?"
+- "Show me the failed workflow runs from today and retry the nightly report."
+- "Restart ssp-1 cleanly and tell me when it is back."
+- "Take a backup named pre-migration and wait until it is written."
+
+<Note title="Three MCP servers">
+  The <a href="/docs/reference/ai-agents">devtools</a> server introspects a running app over
+  stdio; the cloud server above manages your account; this one operates a single deployment's
+  scheduler. They take different tokens and are added separately.
+</Note>

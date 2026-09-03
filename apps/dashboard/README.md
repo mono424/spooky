@@ -102,6 +102,20 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
 - **A restart is survivable.** `waitForScheduler` in `api/client.ts` waits for
   `/admin/api/config` to go down and come back, then the router remounts on the
   same URL. Only a 401 sends the app to login.
+- **Only the plane's own 401 is a sign-out.** `request()` ejects the session
+  when the body is exactly `{"error": "Not signed in"}`, the sentence
+  `require_session` answers with. Any other 401 (a control plane refusing the
+  scheduler's credentials, an SSP) is relayed as an ordinary error toast; a
+  backup that failed upstream once logged the operator out over it.
+- **Menus are portaled and keyed.** `ActionMenu` renders into `document.body`
+  at fixed coordinates, because a menu inside `.table-scroll` was clipped by
+  the panel. Its open state is a module-level signal keyed by `menuId`, not
+  component state: a menu in a polled table row is re-created on every
+  `/overview` poll, and local state would close it every three seconds. Rows
+  must pass a stable `menuId`.
+- **The Access page shows a token once.** `/tokens` returns the signed token
+  and nothing stores it; the page renders the `claude mcp add`, Cursor and VS
+  Code snippets from that one response and never asks the server again.
 - **`EventSource` is unusable here** — it cannot send an `Authorization`
   header, and we deliberately do not use cookies. `openStream()` in
   `api/client.ts` reads the `fetch` body and parses the event stream by hand.

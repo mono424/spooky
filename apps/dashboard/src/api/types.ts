@@ -1,6 +1,9 @@
 /** Wire types for the scheduler's `/admin/api` surface. */
 
-export type SessionMode = 'roster' | 'breakglass';
+export type SessionMode = 'roster' | 'breakglass' | 'mcp';
+
+/** What a session may do. Roster and break-glass sessions are always `full`. */
+export type SessionScope = 'read' | 'full';
 
 export interface ServerConfig {
   scheduler_id: string;
@@ -14,6 +17,10 @@ export interface ServerConfig {
    * with that reason, rather than hidden.
    */
   cloud_linked?: boolean;
+  /** The project slug this scheduler serves; names the MCP server entry. */
+  project_slug?: string;
+  /** Whether tokens outlive the process (true when `SPKY_AUTH_SECRET` is set). */
+  sessions_persistent?: boolean;
   /**
    * Whether something will relaunch the process after it exits. A scheduler
    * run from a checkout is not supervised, and a restart from the dashboard
@@ -28,6 +35,36 @@ export interface LoginResponse {
   subject: string;
   label: string;
   expires_in_secs: number;
+  scope?: SessionScope;
+}
+
+export interface MeResponse {
+  subject: string;
+  label: string;
+  mode: SessionMode;
+  scope?: SessionScope;
+}
+
+/** `POST /admin/api/tokens`: a long-lived MCP token, shown exactly once. */
+export interface TokenResponse {
+  token: string;
+  label: string;
+  scope: SessionScope;
+  expires_at: string;
+  /** Path of the MCP endpoint on this scheduler, e.g. `/admin/api/mcp`. */
+  endpoint: string;
+}
+
+/** One entry of the MCP server's `tools/list`. */
+export interface McpTool {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+  };
 }
 
 /** One end-to-end heartbeat probe cycle. `ms` is null for a failed cycle. */

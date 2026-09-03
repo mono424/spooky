@@ -124,6 +124,7 @@ export function SspActions(props: { ssp: SspEntity; onDone: () => void; size?: '
   const entries = () => sspEntries(props.ssp, props.onDone);
   return (
     <ActionMenu
+      menuId={`ssp:${props.ssp.id}`}
       size={props.size}
       primary={entries()[0]}
       entries={[

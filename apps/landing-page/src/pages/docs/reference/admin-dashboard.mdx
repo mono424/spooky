@@ -93,6 +93,8 @@ How long a session lives depends on whether the scheduler has a cluster secret:
   again.
 
 `GET /admin/api/config` reports which mode is active as `sessions_persistent`.
+`GET /admin/api/me` reports the session's `mode` (`roster`, `breakglass`, or
+`mcp` for a token minted on the [Access](#access) page) and its `scope`.
 
 Failed logins are rate limited to 10 attempts per address per 5 minutes, and
 every failure returns the same response regardless of cause, so the endpoint
@@ -212,6 +214,11 @@ forwards the request; when it is not, every such action answers `409` with
 `Not linked to Sp00ky Cloud`, and the dashboard shows the option disabled with
 that sentence beside it.
 
+If Sp00ky Cloud refuses the scheduler's credentials, the dashboard shows a
+`502` with `code: cloud_auth` and the sentence from the control plane. It is
+never relayed as a `401`: that status means "not signed in" to the dashboard,
+and a cloud refusal has nothing to do with your session.
+
 `POST /admin/api/cloud/restart` takes `{roles, upgrade, clean, surreal}` with
 exactly the meaning of `spky restart`: `upgrade` force-pulls the latest
 scheduler and SSP images, `clean` wipes the scheduler's volume (and always
@@ -258,8 +265,29 @@ only that summary field lags.
 
 A scheduler upgraded before `spky deploy` has migrated the schedule tables
 answers `409` asking you to run it: rerun and retry write fields
-(`trigger`, `rerun_of`, `retry_count`, `last_retry_at` on `_00_workflow_run`)
+(`trigger`, `rerun_of`, `retry_count` as `option<int>`, `last_retry_at` on `_00_workflow_run`)
 that older schemas do not have.
+
+## Access
+
+The **Access** page mints long-lived tokens for MCP clients, so an AI agent can
+do everything this dashboard does through the
+[scheduler admin MCP](/docs/reference/mcp#scheduler-admin-mcp) at
+`/admin/api/mcp`. A token has a label, a scope and a lifetime of up to 365
+days, and is shown once; the page prints the `claude mcp add` command and the
+Cursor and VS Code snippets with everything filled in. Paste a token back to
+revoke it.
+
+| Scope | Meaning |
+| --- | --- |
+| `read` | May only make `GET` requests. Any other method answers `403 This token is read-only`, and `tools/list` hides write tools |
+| `full` | Everything the signed-in operator can do |
+
+Scope is enforced in the bearer middleware for every request, so it binds an
+agent exactly as it binds a browser. Roster and break-glass sessions are
+always `full`. An MCP token cannot mint further tokens; only a person's own
+session can. Tokens follow the [session rules](#session-behaviour): signed and
+restart-proof when `SPKY_AUTH_SECRET` is set, in memory otherwise.
 
 ## Backups
 
@@ -342,10 +370,10 @@ Every endpoint is under `/admin/api` on the admin port. All require
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /admin/api/config` | Scheduler id, version, `breakglass_available`, `cloud_linked`, `supervised`, `sessions_persistent`. Unauthenticated |
+| `GET /admin/api/config` | Scheduler id, version, `breakglass_available`, `cloud_linked`, `supervised`, `sessions_persistent`, `project_slug`. Unauthenticated |
 | `POST /admin/api/session` | Sign in. `{username, password}` or `{password}` for break-glass |
 | `POST /admin/api/logout` | Revoke the current token |
-| `GET /admin/api/me` | Current session's subject, label and mode |
+| `GET /admin/api/me` | Current session's subject, label, mode and scope |
 | `GET /admin/api/overview` | Scheduler, SSP and backend entities plus totals |
 | `GET /admin/api/backends` | Backend list |
 | `GET /admin/api/backends/:name` | One backend with probe history and masked env |
@@ -376,6 +404,17 @@ Every endpoint is under `/admin/api` on the admin port. All require
 | `POST /admin/api/schedules/:name/trigger` | `{name, triggered_at}`. `409` when paused or config-disabled |
 | `POST /admin/api/jobs/:id/kill` | The cluster kill, relaying the SSPs' answer |
 | `POST /admin/api/jobs/:id/retry` | The cluster retry, relaying the SSP's answer |
+| `POST /admin/api/tokens` | `{label, scope: "read" \| "full", ttl_days}`. `201` with the token, shown once. `403` for an MCP or read-only session |
+| `DELETE /admin/api/tokens` | `{token}`. Revokes it. `204` |
+| `POST /admin/api/mcp` | The scheduler admin MCP server: JSON-RPC over Streamable HTTP, stateless. `GET` and `DELETE` answer `405` |
+
+<Note title="Upgrading to canary.212">
+  <code>retry_count</code> on <code>_00_workflow_run</code> became
+  <code>option&lt;int&gt;</code>: as a plain <code>int</code> every update to a run created
+  before the field existed failed validation, which blocked cancel and the engine's own
+  finalize on those rows. <code>spky migrate</code> applies the new definition and a one-time
+  backfill; run it once after upgrading.
+</Note>
 
 The workflow endpoints are served by the scheduler rather than read from the
 database directly because `_00_workflow_run`, `_00_step_run` and

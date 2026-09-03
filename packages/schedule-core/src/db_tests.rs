@@ -2820,3 +2820,45 @@ async fn only_a_running_run_can_be_cancelled() {
         WorkflowOpError::NotFound(_)
     ));
 }
+
+/// A run written before `retry_count` existed carries NONE in it. SurrealDB
+/// re-validates the whole row on every UPDATE, so with a bare `int` field that
+/// row could never be cancelled, killed, or finalized again ("Expected `int`
+/// but found `NONE`"). The field is `option<int>` precisely so those rows stay
+/// writable; readers treat NONE as 0.
+#[tokio::test]
+async fn a_run_from_before_retry_count_existed_can_still_be_cancelled_and_finalized() {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    // Make the row look like it predates the field.
+    h.set(&format!(
+        "UPDATE {} UNSET retry_count;",
+        ids::Ref::new(run.table.clone(), run.key.clone())
+    ))
+    .await;
+    assert_eq!(h.run_field(&run, "retry_count").await.as_deref(), Some("NONE"));
+
+    let out = h.engine.cancel_workflow(&run).await.unwrap();
+    assert_eq!(out.status, "killed");
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("killed"));
+
+    // The sweep still writes the row without tripping validation.
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("killed"));
+}
+
+#[tokio::test]
+async fn retrying_a_run_from_before_retry_count_existed_counts_from_zero() {
+    let (h, run) = failed_diamond().await;
+    h.set(&format!(
+        "UPDATE {} UNSET retry_count;",
+        ids::Ref::new(run.table.clone(), run.key.clone())
+    ))
+    .await;
+    assert_eq!(h.run_field(&run, "retry_count").await.as_deref(), Some("NONE"));
+
+    let out = h.engine.retry_workflow(&run).await.unwrap();
+    assert_eq!(out.retry_count, 1, "NONE reads as 0, so the first retry is attempt 1");
+    assert_eq!(h.run_field(&run, "retry_count").await.as_deref(), Some("1"));
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("running"));
+}

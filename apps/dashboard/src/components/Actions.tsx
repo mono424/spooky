@@ -3,10 +3,12 @@ import {
   Show,
   createEffect,
   createSignal,
+  createUniqueId,
   onCleanup,
   onMount,
   type JSX,
 } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import { api, ApiError } from '../api/client';
 import { formatDuration } from '../lib/format';
 import type { OpKind, Operation } from '../api/types';
@@ -286,6 +288,15 @@ export interface ActionEntry {
  * a single button that opens the menu. Below 860px the primary half is hidden
  * and the toggle reads "Actions"; the menu is the same.
  */
+/**
+ * Which menu is open, app-wide, by id. Kept outside the component because a
+ * menu inside a polled table row is re-created on every poll (the row's data
+ * object is new each time), and state that lives in the component dies with
+ * it. Keyed state survives the remount; the new instance sees its own id and
+ * reopens where it was.
+ */
+const [openMenuId, setOpenMenuId] = createSignal<string | null>(null);
+
 export function ActionMenu(props: {
   entries: ActionEntry[];
   primary?: ActionEntry;
@@ -294,22 +305,90 @@ export function ActionMenu(props: {
   size?: 'sm';
   /** Open the menu to the left of the toggle. Default right-aligned. */
   align?: 'left' | 'right';
+  /** Stable identity across re-renders; defaults to one per instance. */
+  menuId?: string;
 }) {
-  const [open, setOpen] = createSignal(false);
+  const fallbackId = createUniqueId();
+  const myId = () => props.menuId ?? fallbackId;
+  const open = () => openMenuId() === myId();
+  const setOpen = (v: boolean) => setOpenMenuId(v ? myId() : openMenuId() === myId() ? null : openMenuId());
+  // Viewport coordinates for the menu, computed when it opens. Null means
+  // "let the stylesheet place it", which is the bottom-sheet rule on phones.
+  const [place, setPlace] = createSignal<Record<string, string> | null>(null);
   let root: HTMLDivElement | undefined;
+  let toggle: HTMLButtonElement | undefined;
+  let menuEl: HTMLDivElement | undefined;
+
+  /**
+   * The menu lives in a portal on `document.body` and is positioned from the
+   * toggle's rectangle. It used to be an absolutely positioned child of the
+   * split button, which was fine everywhere except inside a scrolling table
+   * (`.table-scroll` has overflow: auto), where the panel clipped it and the
+   * operator saw two entries and a cut edge. A fixed-position menu is clipped
+   * by nothing.
+   */
+  const measure = () => {
+    if (!toggle) return;
+    if (window.matchMedia('(max-width: 560px)').matches) {
+      setPlace(null);
+      return;
+    }
+    const r = toggle.getBoundingClientRect();
+    const gap = 4;
+    const coords: Record<string, string> = {};
+    if (props.align === 'left') coords.left = `${Math.round(r.left)}px`;
+    else coords.right = `${Math.round(window.innerWidth - r.right)}px`;
+    // Flip above the toggle when the menu would run past the bottom edge.
+    // The height is known only once rendered, so this runs after mount too.
+    const height = menuEl?.offsetHeight ?? 0;
+    const below = r.bottom + gap;
+    if (height > 0 && below + height > window.innerHeight - 8 && r.top - gap - height > 8) {
+      coords.top = `${Math.round(r.top - gap - height)}px`;
+    } else {
+      coords.top = `${Math.round(below)}px`;
+    }
+    setPlace(coords);
+  };
+
+  const openMenu = () => {
+    measure();
+    setOpen(true);
+    // Second pass with the real height, for the flip decision.
+    requestAnimationFrame(measure);
+  };
 
   onMount(() => {
+    // Remounted while open (a polled row re-created around us): measure
+    // against the new toggle so the menu lands where it was.
+    if (open()) requestAnimationFrame(measure);
+
     const onDoc = (e: MouseEvent) => {
-      if (open() && root && !root.contains(e.target as Node)) setOpen(false);
+      if (!open()) return;
+      const t = e.target as Node;
+      if (root?.contains(t) || menuEl?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
     };
+    // A menu pinned to viewport coordinates must follow the layout it was
+    // measured against: on scroll or resize it is re-measured, and closed
+    // only once its toggle has left the viewport entirely.
+    const onMove = () => {
+      if (!open() || !toggle) return;
+      const r = toggle.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight) setOpen(false);
+      else measure();
+    };
     document.addEventListener('mousedown', onDoc);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
     onCleanup(() => {
       document.removeEventListener('mousedown', onDoc);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
     });
   });
 
@@ -344,38 +423,48 @@ export function ActionMenu(props: {
         )}
       </Show>
       <button
+        ref={toggle}
         class="btn split-toggle"
         classList={{ 'btn-sm': props.size === 'sm' }}
         aria-haspopup="menu"
         aria-expanded={open()}
-        onClick={() => setOpen(!open())}
+        onClick={() => (open() ? setOpen(false) : openMenu())}
       >
         <span class="split-label">{props.label ?? 'Actions'}</span>
         <span class="chev" aria-hidden="true" />
       </button>
 
       <Show when={open()}>
-        <div class="menu" classList={{ 'menu-left': props.align === 'left' }} role="menu">
-          <For each={props.entries}>
-            {(entry) => (
-              <button
-                role="menuitem"
-                class="menu-item"
-                classList={{
-                  disabled: !!entry.disabledReason,
-                  destructive: !!entry.destructive,
-                }}
-                aria-disabled={!!entry.disabledReason}
-                onClick={() => pick(entry)}
-              >
-                <span class="menu-title">{entry.title}</span>
-                <span class="menu-sub">
-                  {entry.disabledReason ?? entry.consequence}
-                </span>
-              </button>
-            )}
-          </For>
-        </div>
+        <Portal>
+          <div
+            ref={menuEl}
+            class="menu menu-fixed"
+            classList={{ 'menu-left': props.align === 'left' }}
+            style={place() ?? undefined}
+            role="menu"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <For each={props.entries}>
+              {(entry) => (
+                <button
+                  role="menuitem"
+                  class="menu-item"
+                  classList={{
+                    disabled: !!entry.disabledReason,
+                    destructive: !!entry.destructive,
+                  }}
+                  aria-disabled={!!entry.disabledReason}
+                  onClick={() => pick(entry)}
+                >
+                  <span class="menu-title">{entry.title}</span>
+                  <span class="menu-sub">
+                    {entry.disabledReason ?? entry.consequence}
+                  </span>
+                </button>
+              )}
+            </For>
+          </div>
+        </Portal>
       </Show>
     </div>
   );
