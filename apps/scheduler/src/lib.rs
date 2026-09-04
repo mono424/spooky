@@ -803,6 +803,17 @@ pub async fn snapshot_updater_tick(
     // Step 3: status gate with self-recovery (see doc comment). Safe under
     // the lock: no registration can be mid-critical-section, so a latched
     // SnapshotFrozen/SnapshotUpdating with no active bootstrap is orphaned.
+    //
+    // Advertise `SnapshotUpdating` only when there is actually something to
+    // apply. This used to be unconditional, so every tick flipped the status
+    // on an idle cluster — and `/health` reads exactly that status as
+    // `stalled` (see `metrics::health_check`), which reported the whole stack
+    // "degraded" once per `snapshot_update_interval_secs`, forever, for a tick
+    // that had no work to do. The drain below still runs either way: it is a
+    // no-op on an empty buffer, and leaving it unconditional means an event
+    // that lands between this peek and the drain is applied on this tick
+    // rather than waiting out a whole interval.
+    let has_backlog = !event_buffer.read().await.is_empty();
     {
         let mut st = status.write().await;
         match *st {
@@ -818,7 +829,12 @@ pub async fn snapshot_updater_tick(
                 return;
             }
         }
-        *st = SchedulerStatus::SnapshotUpdating;
+        *st = if has_backlog {
+            SchedulerStatus::SnapshotUpdating
+        } else {
+            // Also the landing point for the self-recovery branch above.
+            SchedulerStatus::Ready
+        };
     }
 
     // Step 4: drain, in a child task so a panic can't kill the updater loop

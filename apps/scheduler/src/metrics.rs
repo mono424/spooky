@@ -305,10 +305,20 @@ async fn health_check(
         SchedulerStatus::SnapshotUpdating => "updating",
         SchedulerStatus::Restoring => "restoring",
     };
-    let stalled = matches!(
-        scheduler_status,
-        SchedulerStatus::SnapshotFrozen | SchedulerStatus::SnapshotUpdating
-    ) && !has_active_bootstrap;
+    let stalled = !has_active_bootstrap
+        && match scheduler_status {
+            SchedulerStatus::SnapshotFrozen => true,
+            // `SnapshotUpdating` is set by the periodic updater, under
+            // `drain_lock` and only when there is a backlog, so a drain in
+            // flight is normal operation and must not read as a fault. What is
+            // a fault is the status outliving the work — a tick that died
+            // mid-drain leaves it latched long after the lock was released.
+            // `try_lock` separates the two with no extra bookkeeping, because
+            // the updater takes `drain_lock` BEFORE it sets the status: lock
+            // held means a real drain, lock free means a latch.
+            SchedulerStatus::SnapshotUpdating => state.ingest.drain_lock.try_lock().is_ok(),
+            _ => false,
+        };
     let pending = pending_events_snapshot(&state.ingest).await;
     let lag_exceeded = health_max_lag().is_some_and(|max| pending.lag > max);
 

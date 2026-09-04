@@ -1499,6 +1499,51 @@ mod bootstrap_protocol_tests {
         assert_eq!(*h.status.read().await, SchedulerStatus::Ready);
     }
 
+    // An idle tick must not advertise a drain it is not doing.
+    //
+    // `/health` derives `stalled` straight from this status, so flipping it
+    // unconditionally every `snapshot_update_interval_secs` reported the whole
+    // cluster "degraded" once per interval, forever, for a tick with no work.
+    #[tokio::test]
+    async fn updater_tick_stays_ready_with_an_empty_buffer() {
+        let h = TestHarness::with_status(SchedulerStatus::Ready).await;
+        assert!(h.event_buffer.read().await.is_empty(), "precondition: nothing buffered");
+
+        let status = Arc::clone(&h.status);
+        let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen_writer = Arc::clone(&seen);
+        // Sample the status while the tick runs: the assertion after it returns
+        // would pass even if the tick had flipped to Updating and back.
+        let watcher = tokio::spawn(async move {
+            for _ in 0..200 {
+                if *status.read().await == SchedulerStatus::SnapshotUpdating {
+                    seen_writer.store(true, std::sync::atomic::Ordering::SeqCst);
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        });
+
+        scheduler::snapshot_updater_tick(
+            &h.status,
+            &h.event_buffer,
+            &h.replica,
+            &h.ssp_pool,
+            &h.wal,
+            &h.drain_lock,
+            std::time::Duration::from_secs(300),
+            None,
+        )
+        .await;
+        watcher.abort();
+
+        assert!(
+            !seen.load(std::sync::atomic::Ordering::SeqCst),
+            "an empty-buffer tick must never enter SnapshotUpdating"
+        );
+        assert_eq!(*h.status.read().await, SchedulerStatus::Ready);
+    }
+
     #[tokio::test]
     async fn updater_tick_noop_with_fresh_active_bootstrap() {
         let h = TestHarness::with_status(SchedulerStatus::SnapshotFrozen).await;
