@@ -212,6 +212,7 @@ struct NodeConfigCf {
     ssp_id: String,
     job_config: String, // SPKY_JOB_CONFIG JSON (outbox backend routing)
     ref_mode: ssp_protocol::RefMode,
+    anonymous_live_queries: bool,
 }
 
 fn read_config(env: &Env) -> Result<NodeConfigCf> {
@@ -235,6 +236,17 @@ fn read_config(env: &Env) -> Result<NodeConfigCf> {
             "single" => ssp_protocol::RefMode::Single,
             _ => ssp_protocol::RefMode::Dedicated,
         },
+        // Must match the client's `enableAnonymousLiveQueries`, for the same
+        // reason as `ref_mode` above: it decides which `_00_list_ref*` table an
+        // anonymous registration writes to, while the client picks the table it
+        // reads from its own flag. This was hardcoded false, so a free-plan
+        // tenant that opted in had its signed-out sessions reading
+        // `_00_list_ref_anon` while this node wrote the global `_00_list_ref` —
+        // no rows, no realtime, nothing logged.
+        anonymous_live_queries: matches!(
+            var("SPKY_ANON_LIVE_QUERIES").trim().to_ascii_lowercase().as_str(),
+            "1" | "true"
+        ),
     })
 }
 
@@ -326,6 +338,7 @@ impl SspNodeDo {
             ssp_id: "cf-ssp".to_string(),
             job_config: String::new(),
             ref_mode: ssp_protocol::RefMode::Dedicated,
+            anonymous_live_queries: false,
         });
 
         let http: Arc<dyn HttpClient> = Arc::new(CfHttp);
@@ -410,7 +423,7 @@ fn build_node(platform: Platform, cfg: &NodeConfigCf) -> SspNode {
         )),
         view_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         edge_update_tx,
-        anonymous_live_queries: false,
+        anonymous_live_queries: cfg.anonymous_live_queries,
         standalone: true,
         // No schedule engine on Workers: this shell drops `_job_rx`, so there is
         // no runner to execute anything a fired schedule would spawn. Scheduling

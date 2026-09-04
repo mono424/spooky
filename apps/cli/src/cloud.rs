@@ -2914,6 +2914,15 @@ pub fn deploy(
         // Free plan: the app's refMode must reach the SSP Worker so its ref mode
         // matches the client's — a mismatch wedges cross-session sync.
         "ref_mode": config.resolved_ref_mode().as_str(),
+        // Same contract as `ref_mode`, and the same failure when it is missing.
+        // The SSP decides which `_00_list_ref*` table an anonymous
+        // registration writes to; the client decides which one it reads. This
+        // key reached only `spky dev`, so a cloud tenant that set
+        // `anonymousLiveQueries: true` had its client reading
+        // `_00_list_ref_anon` while the SSP kept writing the global
+        // `_00_list_ref` — signed-out sessions got no rows and no realtime, with
+        // nothing logged on either side.
+        "anonymous_live_queries": config.resolved_anonymous_live_queries(),
         // Partial deploy: control plane merges these apps over the previous
         // deployment instead of treating them as the complete desired set.
         "partial": is_partial,
