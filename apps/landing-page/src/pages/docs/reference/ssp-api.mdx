@@ -215,6 +215,36 @@ curl -X POST http://localhost:8667/reset \
 
 **Warning:** This is a destructive operation and cannot be undone.
 
+`/reset` empties the circuit but does not rebuild it. Use `POST /admin/reload`
+below when you want the SSP to come back with data.
+
+### POST /admin/reload
+
+Rebuild the circuit from the database, in process. The SSP re-scans the schema,
+reloads rows and re-registers the views recorded in `_00_query`, then returns to
+`ready`. It does **not** exit, and it does not re-run the scheduler handshake.
+
+This is how a schema change becomes visible without a restart: view registration
+captures table permissions at bootstrap, so a table or permission defined
+afterwards is invisible until a reload. Ingest is gated for the duration, exactly
+as during a cold start.
+
+**Authentication:** Required
+
+**Response:**
+- `200 OK` - `{"status": "ready"}`
+- `500` - `{"code": "reload_failed"}` with the error; the SSP is left `failed`
+
+**Example:**
+
+```bash
+curl -X POST http://localhost:8667/admin/reload \
+  -H "Authorization: Bearer your-secret-token"
+```
+
+The [admin dashboard](/docs/reference/admin-dashboard#restarting-an-ssp) offers
+this as "Reload schema" next to the two restart modes.
+
 ---
 
 ## Monitoring & Debugging
@@ -399,6 +429,40 @@ curl -X POST http://localhost:8667/log \
 
 ---
 
+## Other endpoints
+
+The routes above are the ones you call by hand. The rest of the surface exists
+for the scheduler, the dashboard and the CRDT client. All of them require the
+bearer; only `/health`, `/info`, `/info/text` and `/version` are public.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /logs` | Server-sent events of this SSP's own log lines. `?tail=false` returns the backfill and closes, `?backfill=N` sets how much history. This is what the dashboard's log view reads, proxied by the scheduler |
+| `POST /job/kill` | Cancel one outbox job: aborts it in flight if this SSP owns it, otherwise flags it so it fails at dequeue |
+| `POST /job/retry` | Reset a terminal job to `pending` and re-admit it. Refused with `409 not_terminal` while it is still running |
+| `POST /job/recover` | Claim a `pending` job the recovery sweep found orphaned |
+| `POST /crdt/apply` | Apply a Loro update to a `@crdt` field |
+| `GET /debug/heartbeat` | The last heartbeat sequence this SSP observed, used by the end-to-end latency probe |
+| `GET /debug/catchup-rows/:table` | Row counts for one table, for drift diagnosis |
+| `GET /debug/memory` | Circuit memory breakdown |
+| `GET /info/text` | The same content as `/info`, formatted for a terminal |
+
+Job kill and retry are normally reached through the cluster, not directly: the
+scheduler broadcasts a kill to every ready SSP and sends a retry to exactly one.
+See the [scheduler API](/docs/reference/scheduler-api) for that side and
+[Jobs](/docs/jobs) for what the states mean.
+
+### Standalone maintenance
+
+A single-node SSP with no scheduler also serves the backup plane, since there is
+no scheduler to own it: `PUT /backends`, `POST /backup/create`,
+`GET /backup/status` and `GET /backup/status/:id`, `POST /backup/restore`, and
+`GET /backup/restore/status/:id`. Shapes and semantics match the scheduler's, so
+they are documented once in the [scheduler API](/docs/reference/scheduler-api).
+In a cluster the scheduler owns these and the SSP's copies go unused.
+
+---
+
 ## Scheduler Integration
 
 When running with a scheduler, the SSP automatically:
@@ -455,15 +519,49 @@ The SSP sends periodic heartbeats to the scheduler:
   "timestamp": 1707654321,
   "views": 5,
   "cpu_usage": 45.2,
-  "memory_usage": 512.5
+  "memory_usage": 512.5,
+  "version": "0.0.1-canary.212"
 }
 ```
 
 **Response Handling:**
-- `200 OK` - Heartbeat accepted, continue normal operation
-- `404 Not Found` - Scheduler doesn't recognize SSP, trigger re-registration
-- `409 Conflict` - Buffer overflow detected, trigger re-bootstrap
-- Other errors - Log warning, continue sending heartbeats
+- `200 OK` - heartbeat accepted, continue normal operation
+- `404 Not Found` - the scheduler no longer knows this SSP. The process exits
+  with code `3`
+- `409 Conflict` - the scheduler wants this SSP to re-bootstrap. The process
+  exits with code `4`, after wiping local state when the directive asks for it
+- Other errors - log a warning and keep heartbeating
+
+Neither `404` nor `409` is handled in place. The SSP exits and its supervisor
+relaunches it, so it comes back through the full register, bootstrap and
+hash-verify path rather than trying to repair a circuit it can no longer trust
+from a task that cannot replay events into it.
+
+**The 409 body is a directive:**
+
+```json
+{
+  "reason": "Clean restart requested. SSP must drop its snapshot and re-bootstrap.",
+  "clean": true
+}
+```
+
+`clean: true` means delete the circuit snapshot and the arena first, so the
+relaunch is a cold rebuild instead of a snapshot restore plus catch-up; the
+final shutdown checkpoint is skipped too, or it would write back the file that
+was just removed. A 409 covers three cases: a buffer overflow, an integrity
+check that found drift, and an operator pressing restart or clean restart on
+the [admin dashboard](/docs/reference/admin-dashboard#restarting-an-ssp).
+
+Both directions degrade safely. An older scheduler sends plain text, which
+parses as `clean: false`; an older SSP reads the JSON as an opaque reason
+string and restarts warm. See the
+[scheduler API](/docs/reference/scheduler-api) for the sending side.
+
+**Other exit codes:** `2` when a post-bootstrap integrity check keeps failing,
+`5` and `6` when registration never succeeds within its budget. All of them
+mean the same thing operationally: the supervisor should start the process
+again.
 
 ---
 
@@ -498,10 +596,22 @@ TTL_CLEANUP_INTERVAL_SECS=60
 # Job-table runner config, JSON-encoded. Read once at startup.
 SPKY_JOB_CONFIG='{"job_tables": {…}}'
 
+# Snapshot cache. With a writable directory the circuit is restored on boot
+# and written on graceful shutdown, so restarts replay only the delta.
+# Unset means memory-only: every start is a full rebuild. See State Persistence.
+SPKY_SSP_SNAPSHOT_DIR=/data/ssp-0
+SPKY_SSP_ARENA_DIR=/data/ssp-0/arena
+SPKY_SSP_CHECKPOINT_INTERVAL_SECS=300  # interval, armed by SNAPSHOT_DIR
+
 # Optional knobs
 SPKY_CRDT_CACHE_SIZE=10000       # in-memory CRDT cache capacity
 SPKY_CRDT_FIELDS='{"thread": ["content"]}'  # override @crdt detection
 SPKY_SSP_BOOTSTRAP_PAGE_SIZE=500 # rows pulled per /proxy/query page
+SPKY_SSP_ARENA_SEGMENT_MB=64     # arena segment size (default: 64)
+SPKY_SSP_MEMORY_LIMIT_MB=1024    # memory ceiling reported for load balancing
+SPKY_SSP_REGISTER_MAX_WAIT_SECS=180 # give up registering and exit (default: 180)
+SPKY_SSP_VIEW_METRICS_FLUSH_MS=2000 # view metrics flush interval (default: 2000)
+SPKY_SSP_ANON_LIVE_QUERIES=false # allow LIVE queries with no auth context
 ```
 
 ### Scheduler Integration
@@ -602,12 +712,26 @@ When `SPKY_SCHEDULER_URL` is set:
 
 ### State Persistence
 
-- The SSP holds materialized view state in memory only. It does not
-  write a local snapshot to disk.
-- On startup the SSP **self-bootstraps** by paging through the
-  scheduler's `POST /proxy/query` endpoint to replay the relevant
-  source rows into its in-memory circuit. The scheduler is the
-  durable source of truth.
+SurrealDB and the scheduler's replica are always the durable source of truth.
+Anything the SSP keeps on disk is a cache that exists to make a restart cheaper.
+
+- On startup the SSP **self-bootstraps** by paging through the scheduler's
+  `POST /proxy/query` endpoint to replay the relevant source rows into its
+  circuit.
+- With `SPKY_SSP_SNAPSHOT_DIR` set to a writable directory, the SSP keeps a
+  circuit snapshot at `<dir>/snapshot.json`: it loads it on boot and writes it
+  on graceful shutdown, so a restart replays only the delta instead of the
+  whole dataset. Row bytes live alongside it in a sparse-file arena at
+  `SPKY_SSP_ARENA_DIR`.
+- Setting the snapshot directory also arms a periodic checkpoint, every 300
+  seconds by default. `SPKY_SSP_CHECKPOINT_INTERVAL_SECS` changes the interval
+  and is ignored when there is no snapshot directory to write to.
+- With the directory unset or not writable, the SSP logs it once and runs
+  memory-only: every start is a full rebuild.
+- Sp00ky Cloud sets the snapshot and arena directories, so a cloud SSP restarts
+  warm. A [clean restart](/docs/reference/admin-dashboard#restarting-an-ssp)
+  from the dashboard is precisely the deletion of these files, which is what
+  forces the cold rebuild it promises.
 
 ### Memory Management
 

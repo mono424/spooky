@@ -18,12 +18,12 @@ somewhere else, and `spky <command> --help` for the flags of any single command.
 | --- | --- |
 | `spky init` | Scaffold a new project: schema, app, config, first migration. |
 | `spky dev` | Start the local stack: SurrealDB, SSP, scheduler, your apps. [Docs](/docs/dev) |
-| `spky generate` (`gen`) | Generate client types from `sp00ky.yml`, or a single file via `--input`/`--output`. [Docs](/docs/schema/generated-types) |
-| `spky migrate` | Database migrations: `create`, `apply`, `prod`, `status`, `fix`. [Docs](/docs/schema/migrations) |
+| `spky generate` (`gen`) | Generate client types from `sp00ky.yml`, or a single file via `--input`/`--output`. `--format json\|typescript\|dart\|surql`, `--all`, `--append`, `--no-header`, `--mode`, `--endpoint`, `--secret`, `--modules-dir`. [Docs](/docs/schema/generated-types) |
+| `spky migrate` | Database migrations: `create`, `apply`, `prod`, `status`, `fix`. `prod` migrates the cloud deployment without deploying. [Docs](/docs/schema/migrations) |
 | `spky lint` | Validate `sp00ky.yml`. |
 | `spky doctor [--json]` | Project health: config, codegen freshness, migrations, Docker. [Docs](/docs/dev/doctor) |
 | `spky verify [--fix]` | Check the SSP/scheduler snapshot against upstream SurrealDB and print the scheduler's own drift verdict; `--fix` re-clones the replica when its counts are off, else forces every SSP to re-bootstrap. |
-| `spky query [sql]` | Run SurrealQL once, or open a REPL. `--cloud` targets the deployment. |
+| `spky query [sql]` | Run SurrealQL once, or open a REPL. `--cloud` targets the deployment, `--json` prints raw JSON instead of a table. |
 | `spky version` | Print version information. |
 
 ## Adding things to a project
@@ -33,7 +33,7 @@ somewhere else, and `spky <command> --help` for the flags of any single command.
 | `spky api add` | Register a backend and generate its outbox table. [Docs](/docs/backend/add) |
 | `spky bucket` | `add` a file bucket, or configure its storage `backend`. [Docs](/docs/client/buckets) |
 | `spky flag` | Feature flags: `list`, `create`, `get`, `delete`, `enable`, `disable`, `set`, `unset`, `eval`. `set` adds a targeting rule, `eval` dry-runs one user. [Docs](/docs/client/feature-flags) |
-| `spky admin` | Operator roster (`_00_admin`): `list`, `add <user>`, `remove <user>`. Grants access to the feature-flag editor and the [admin dashboard](/docs/reference/admin-dashboard). Root-only — nobody promotes themselves. |
+| `spky admin` | Operator roster (`_00_admin`): `list` (`ls`), `add <user>`, `remove <user>`. Grants access to the feature-flag editor and the [admin dashboard](/docs/reference/admin-dashboard). Root-only, so nobody promotes themselves. |
 | `spky recipe <name>` | Render a cookbook snippet (`live-list`, `optimistic-mutation`, `crdt-text-field`). `spky recipe list` for the index. |
 | `spky agents init` | Generate `AGENTS.md`, parameterized by your schema. [Docs](/docs/reference/ai-agents) |
 | `spky mcp` | MCP server for editors and agents: `serve`, `token`, `tokens`, `revoke`, `install`. [Docs](/docs/reference/mcp) |
@@ -42,13 +42,13 @@ somewhere else, and `spky <command> --help` for the flags of any single command.
 
 | Command | What it does |
 | --- | --- |
-| `spky jobs` | Background jobs: `list`, `get`, `kill`, `retry`, `clear`. No subcommand opens the interactive dashboard. [Docs](/docs/jobs) |
+| `spky jobs` | Background jobs: `list`, `get`, `kill`, `retry`, `clear`. `clear -A/--all` also drops queued jobs; running ones are never deleted. No subcommand opens the interactive dashboard. [Docs](/docs/jobs) |
 | `spky schedules` | Server-side schedules: `list`, `get`, `pause`, `resume`, `trigger`, `runs`, `sync`. [Docs](/docs/jobs/schedules) |
 | `spky workflows` | Workflow DAGs: `list`, `show`, `watch`, `runs`, `kill`. `show` renders the graph, `watch` follows a run live. [Docs](/docs/jobs/workflows) |
-| `spky logs` | Tail or browse logs. `--since`, `--until`, `--grep`, `--filter`, `--tui`. [Docs](/docs/cloud/logs) |
-| `spky stats` | Live CPU, memory, disk and network graphs. |
+| `spky logs` | Tail or browse logs. `--filter`, `--split`, `--since`, `--until`, `--grep`, `-i/--interactive` (TUI), `-F/--follow`. [Docs](/docs/cloud/logs) |
+| `spky stats` | Live CPU, memory, disk and network graphs. `--window 1h`, `--filter backend,surrealdb`. |
 | `spky status` | Deployment version, status and running VMs. |
-| `spky restart [--surreal] [--clean]` | Restart scheduler and SSP containers. Backends and frontends are untouched. |
+| `spky restart [TARGET...]` | Restart deployment containers. With no target: the scheduler and SSPs. [Flags](#restarting-containers) |
 | `spky scale ssp <n>` | Scale SSP instances. |
 
 ## Cloud
@@ -56,18 +56,56 @@ somewhere else, and `spky <command> --help` for the flags of any single command.
 | Command | What it does |
 | --- | --- |
 | `spky login`, `spky logout` | Authenticate with Sp00ky Cloud. |
-| `spky project` | Manage cloud projects: `create`, `list`, `credentials`, `destroy`. [Docs](/docs/cloud/getting-started) |
+| `spky project` | Manage cloud projects: `create`, `list`, `credentials`, `destroy`. `credentials --raw` prints just the password, for piping. [Docs](/docs/cloud/getting-started) |
 | `spky deploy` | Build, upload, provision, migrate, deploy. [Docs](/docs/cloud/deploying) |
 | `spky push` | Push schema to a free (Cloudflare) project's SSP node. Paid plans apply schema during `deploy`. |
 | `spky release <app>` | Announce a new version to running clients without deploying. `--mandatory`, `--cache-bust`. |
-| `spky env` | Encrypted variables and the vault: `set`, `list`, `rm`, `pull`, `import`, `unlock`, `passphrase`, `share-ci`, `reset`. [Docs](/docs/cloud/env-variables) |
-| `spky domain` | Custom domains: `add`, `list`, `remove`. |
+| `spky env` | Encrypted variables and the vault: `set`, `list`, `rm`, `pull`, `import`, `unlock`, `passphrase`, `share-ci`, `reset`. `set --file <path>` reads a multi-line value (a PEM key) from disk, scoped with `--dev` or `--prod`. `reset` takes `request`, `approve <email>`, `complete`, `list`. [Docs](/docs/cloud/env-variables) |
+| `spky domain` | Custom domains: `add`, `list`, `remove`. `add --app <name>` picks which app serves it, `add --status` attaches it to the public uptime page. |
 | `spky backup` | Database backups: `list`, `create`, `restore`, `delete`, `configure`, `reset`. [Docs](/docs/cloud/backups) |
-| `spky link` | GitHub push-to-deploy: `setup`, `status`, `settings`, `unlink`, `trigger`, `runs`. [Docs](/docs/cloud/ci-cd) |
+| `spky link` | GitHub push-to-deploy: `connect`, `status`, `settings`, `disconnect`, `trigger`, `runs`. [Docs](/docs/cloud/ci-cd) |
 | `spky token` | API tokens for CI: `create`, `list`, `revoke`. |
-| `spky team` | Members and invitations: `list`, `invite`, `invitations`, `revoke`, `remove`, `rename`. [Docs](/docs/cloud/team) |
-| `spky billing` | Billing: `usage`, `change-plan`. No subcommand opens the portal. |
+| `spky team` | Members and invitations: `list`, `invite`, `invites`, `revoke`, `remove`, `rename`. [Docs](/docs/cloud/team) |
+| `spky billing` | Billing: `usage`, `plan`. No subcommand opens the portal. |
 | `spky notice [message]` | Post a notice to the public uptime page. `list` and `remove` manage existing ones. |
+
+## Restarting containers
+
+`spky restart` recreates containers in place. With no target it restarts the scheduler and its
+SSPs, leaving backends, frontends and SurrealDB running.
+
+| Input | What it does |
+| --- | --- |
+| `TARGET...` | Roles (`db` or `surrealdb`, `scheduler`, `ssp`, `frontend`) or the name of a single app from `sp00ky.yml`. Several may be given at once. |
+| `--all-backends` | Restart every backend app. |
+| `--upgrade` | Pull the latest scheduler and SSP base images before restarting. |
+| `--clean` | Also wipe the scheduler's persistent volume, its replica and write-ahead log. SurrealDB data is untouched. |
+| `--surreal` (`--db`) | Also restart SurrealDB. A process restart rather than a wipe, so data on the volume survives, but the whole deployment is briefly unavailable. Equivalent to adding `db` to the targets. |
+| `-y`, `--yes` | Skip the confirmation prompt that a SurrealDB target triggers. Required in CI and any other non-interactive shell, where the prompt cannot be answered at all. |
+
+<CodeBlock code={restartCode} lang="bash" />
+
+What `--upgrade`, `--clean` and `--surreal` do at the container level is spelled out in
+[Admin dashboard](/docs/reference/admin-dashboard), which offers the same three actions from a
+browser.
+
+## Migrating a deployment
+
+`spky migrate prod` applies pending migrations plus the internal Sp00ky schema to your cloud
+deployment, without deploying anything else. It resolves the SurrealDB URL and root password from
+your login and the `slug` in `sp00ky.yml`, and reads the mode, namespace and database from
+`sp00ky.yml` too, so there are no connection flags to pass.
+
+| Flag | What it does |
+| --- | --- |
+| `--yes` | Skip the production confirmation prompt. |
+| `--force-schema` | Re-apply the internal schema and remote functions even when unchanged, bypassing the schema-hash skip. Also accepted by `spky migrate apply`. Use it for drift recovery. |
+| `--migrations-dir <dir>` | Override the migrations directory from `sp00ky.yml`. |
+| `--endpoint <url>`, `--secret <s>` | Override the SSP or scheduler endpoint and auth secret used for the internal schema. |
+| `--config <path>` | Point at a `sp00ky.yml` somewhere else. |
+
+Raise `SPKY_DB_HTTP_TIMEOUT_SECS` when a large migration exceeds the 120 second per-request
+deadline. [Migrations](/docs/schema/migrations)
 
 ## Flags worth memorising
 
@@ -89,3 +127,12 @@ spky deploy --upgrade       # also pull new SSP/scheduler images
 spky doctor --json          # machine-readable health check
 spky query --cloud '…'      # run SurrealQL against production
 spky logs --since 1h --grep 'error'`;
+
+export const restartCode = `spky restart                 # scheduler + SSPs
+spky restart db              # SurrealDB only (prompts first)
+spky restart ssp scheduler   # several roles at once
+spky restart gameanalysis    # one backend, by app name
+spky restart --all-backends  # every backend app
+spky restart --upgrade       # pull new scheduler/SSP images first
+spky restart --clean         # also wipe the scheduler's replica + WAL
+spky restart db -y           # CI: skip the SurrealDB prompt`;

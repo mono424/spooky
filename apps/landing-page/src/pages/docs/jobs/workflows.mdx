@@ -238,16 +238,20 @@ Piped output switches to plain ASCII automatically, so it pastes cleanly into a 
   On a narrow terminal the renderer falls back to an indented dependency list instead of truncating the graph, so it stays readable at any width.
 </Note>
 
-## Rerun and retry
+## Cancel, rerun and retry
 
-The [admin dashboard](/docs/reference/admin-dashboard#workflows-schedules-and-jobs) offers two ways to run a workflow again, and they are not the same thing:
+The [admin dashboard](/docs/reference/admin-dashboard#workflows-schedules-and-jobs) can stop a run, and can start one again in two different senses.
+
+**Cancel** stops a `running` run. It sets `kill_requested` on the run row, and because the scheduler is itself the engine it does not wait for the next 5-second sweep: it kills the run's in-flight jobs immediately, broadcasting to every ready SSP, so a cancel lands in well under a second. The flag is still written first and stays as the durable fallback, so a scheduler that dies mid-cancel finishes the job on its next sweep. The run ends `killed`. `spky workflows kill <run>` writes the same flag and waits for that sweep.
+
+The two ways to run a workflow again are not the same thing:
 
 - **Rerun** starts a brand-new run from a finished one: same frozen DAG, same `input`, same target table, a fresh run key. It is recorded with `trigger: manual` and `rerun_of` pointing at the source. It has no owning schedule run, so it never counts towards `concurrency: skip` and its outcome rolls up under `(ad-hoc)` rather than the schedule's name. Any source status will do.
 - **Retry from failed** resumes a `failed` or `killed` run in place. Steps that `failed` or were `skipped` go back to `blocked`; steps that succeeded keep their status and their output, so downstream steps read the same `steps.<name>` they would have the first time. The run and its owning schedule run are reopened (`running`), `retry_count` is incremented, and the reset steps are dispatched again.
 
 A retried step gets a **new job row**, `<table>:wf_<run key>_<step>_r<n>` where `n` is the run's `retry_count`; the original `…_<step>` row and any earlier attempts stay as history until the job table's retention prunes them. A job row is never deleted or re-created under its old id: an SSP that was told to kill that id remembers it in memory, and would fail the re-created job on arrival.
 
-A retry is refused while any step of a killed run still has its job `pending` or `processing` on an SSP, because resetting the step before the kill lands would run it twice. Wait a moment and retry again. It is also refused when there is nothing to reset, and when the frozen DAG itself is invalid (that run would only fail the same way).
+A retry is refused while any step of a killed run still has its job `pending` or `processing` on an SSP, because resetting the step before the kill lands would run it twice. The refusal is a `409` reading `step <name>'s job is still processing; wait for the kill to settle`; wait a moment and retry again. It is also refused when there is nothing to reset, and when the frozen DAG itself is invalid (that run would only fail the same way).
 
 <Note>
 Retrying the newest fire of a schedule leaves `_00_schedule.last_run_status` at `failed` even when the retry succeeds, because the engine only lets a failure overwrite an equal `last_run_at`. The run and schedule-run rows themselves are correct.

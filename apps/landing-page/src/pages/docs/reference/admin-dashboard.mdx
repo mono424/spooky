@@ -251,7 +251,7 @@ log: the audit trail is the scheduler's own log output.
 | --- | --- |
 | Cancel a run | Sets `kill_requested` **and** runs the kill immediately: every dispatched step's job gets `/job/kill` broadcast to the ready SSPs. Sub-second, with the flag as the durable fallback the next sweep would act on. `409` unless the run is `running`. |
 | Rerun | A brand-new ad-hoc run with the same frozen DAG, input and target table, `trigger: manual`, and `rerun_of` pointing at the source. It has no owning schedule run, never counts towards `concurrency: skip`, and rolls up under `(ad-hoc)`. Any source status is allowed. |
-| Retry from failed | Only for a `failed` or `killed` run. Resets `failed` and `skipped` steps to `blocked`, keeps successful steps and their outputs, reopens the run (and its owning schedule run, so the outcome is mirrored there) and dispatches the reset steps again under new job ids of the form `<table>:wf_<run key>_<step>_r<n>`. Old job rows are left as history; a job row is never deleted or re-created under the same id. `409` with `Settling` while a killed step's job is still `pending` or `processing` on an SSP, because resetting it before the kill lands would run the step twice. |
+| Retry from failed | Only for a `failed` or `killed` run. Resets `failed` and `skipped` steps to `blocked`, keeps successful steps and their outputs, reopens the run (and its owning schedule run, so the outcome is mirrored there) and dispatches the reset steps again under new job ids of the form `<table>:wf_<run key>_<step>_r<n>`. Old job rows are left as history; a job row is never deleted or re-created under the same id. Refused with `409 step <name>'s job is still processing; wait for the kill to settle` while a killed step's job has not gone terminal on its SSP, because resetting it before the kill lands would run the step twice. |
 | Pause / resume a schedule | Writes `paused` on the `_00_schedule` row, the same field `spky schedules pause` writes. |
 | Run a schedule now | Writes `trigger_requested_at`. `409` while the schedule is paused (pause wins over a queued trigger, so the fire would silently never happen) or disabled in its config. |
 | Kill / retry a step's job | The cluster `/job/kill` (broadcast to every ready SSP) and `/job/retry` (one SSP is picked). The SSP's own verdict is relayed: a `409` for a job that is not terminal, a `404` for one it does not know. |
@@ -280,14 +280,21 @@ revoke it.
 
 | Scope | Meaning |
 | --- | --- |
-| `read` | May only make `GET` requests. Any other method answers `403 This token is read-only`, and `tools/list` hides write tools |
+| `read` | May only make `GET` requests to the API. Any other method answers `403 This token is read-only` |
 | `full` | Everything the signed-in operator can do |
 
-Scope is enforced in the bearer middleware for every request, so it binds an
-agent exactly as it binds a browser. Roster and break-glass sessions are
-always `full`. An MCP token cannot mint further tokens; only a person's own
-session can. Tokens follow the [session rules](#session-behaviour): signed and
-restart-proof when `SPKY_AUTH_SECRET` is set, in memory otherwise.
+The bearer middleware enforces that on every request, so a read token binds an
+agent exactly as it binds a browser. `POST /admin/api/mcp` is the single
+exception, and it has to be: MCP carries reads over POST as well, so the
+endpoint is exempted from the method check and enforces scope per tool
+instead. A read token's `tools/list` lists only read tools, and calling a
+write tool anyway comes back as a tool error rather than a result. The reach
+is the same either way, only the place it is checked differs.
+
+Roster and break-glass sessions are always `full`. An MCP token cannot mint
+further tokens; only a person's own session can. Tokens follow the
+[session rules](#session-behaviour): signed and restart-proof when
+`SPKY_AUTH_SECRET` is set, in memory otherwise.
 
 ## Backups
 
@@ -342,6 +349,16 @@ you to type `restore` before it proceeds.
 | `SPKY_CLOUD_PROJECT` | unset | The project slug, injected alongside it |
 | `SPKY_PROJECT_SLUG` | `default` | Storage prefix for backups on an unlinked scheduler |
 
+Backup storage is configured separately, and those five variables carry no
+`SPKY_` prefix: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`
+and `S3_REGION`. The backup plane switches on as soon as any of the first four
+is present, and each one falls back to a local-MinIO default when it is not, so
+set them deliberately rather than partially. Sp00ky Cloud injects them for you;
+self-hosters set them by hand, and
+[Self-hosting](/docs/self-hosting#scheduler) lists them with their defaults.
+Without them the Backups tab still loads and says storage is unconfigured, and
+`POST /admin/api/backups` answers `503`.
+
 The scheduler counts as **linked** when `SPKY_CLOUD_API_URL`,
 `SPKY_CLOUD_PROJECT` and `SPKY_AUTH_SECRET` are all set. The first two are not
 secrets; the credential is the `SPKY_AUTH_SECRET` the scheduler already holds
@@ -367,6 +384,10 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
 
 Every endpoint is under `/admin/api` on the admin port. All require
 `Authorization: Bearer <token>` except `GET /admin/api/config`.
+
+Two routes sit outside that prefix: the built dashboard itself, served from
+`/admin`, and `GET /`, which answers a `301` to `/admin/` so typing the host
+and port with no path lands on the dashboard.
 
 | Endpoint | Purpose |
 | --- | --- |

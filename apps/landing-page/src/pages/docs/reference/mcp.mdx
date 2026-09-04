@@ -279,8 +279,14 @@ same page.
 
 | Scope | Grants |
 | --- | --- |
-| `read` (default) | Inspection only. `tools/list` shows only read tools, and any non-`GET` request to the admin API with that token is a `403` |
+| `read` (default) | Inspection only. `tools/list` shows only read tools, and calling a write tool anyway comes back as a tool error. Used directly against the admin API, the same token gets a `403` on any method other than `GET` |
 | `full` | Every tool, including restarts, retries, backups and restores |
+
+The two halves of that row are one rule checked in two places. The bearer
+middleware refuses a read token any non-`GET` request, and exempts
+`POST /admin/api/mcp` alone, because MCP sends reads over POST as well. The
+MCP endpoint then does its own per-tool check. A read token cannot write
+either way.
 
 With `SPKY_AUTH_SECRET` set (always on Sp00ky Cloud) tokens are HMAC-signed and survive scheduler
 restarts. Without it they are held in memory and die with the process; the Access page says so

@@ -14,6 +14,14 @@ migrationEngine: surrealkit   # "legacy" (default) or "surrealkit"
 surrealkit:
   binary: /path/to/surrealkit  # optional, defaults to "surrealkit" in PATH`;
 
+export const codeMigrateProd = `spky migrate prod
+
+# Skip the confirmation prompt (CI)
+spky migrate prod --yes
+
+# Re-apply the internal schema even when unchanged
+spky migrate prod --force-schema`;
+
 export const code18 = `spky migrate create "add_user_avatar"`;
 
 export const code17 = `Created migration: 20240215093000_add_user_avatar.surql
@@ -104,6 +112,14 @@ Commands:
     --url/--namespace/--database/--username/--password
                          Connection options (or use SURREAL_* env vars)
     --migrations-dir     Override migrations directory
+    --force-schema       Re-apply internal schema even when unchanged
+
+  prod                 Apply pending migrations to the cloud deployment
+    --yes                Skip the production confirmation prompt
+    --force-schema       Re-apply internal schema even when unchanged
+    --migrations-dir     Override migrations directory
+    --endpoint/--secret  Override the SSP/scheduler endpoint and secret
+    --config             Path to sp00ky.yml
 
   status               Show applied/pending/drift status
     --url/--namespace/--database/--username/--password
@@ -243,6 +259,12 @@ All connection flags can also be set via environment variables:
 
 CLI flags take precedence over environment variables.
 
+One more variable is not a connection flag but bounds every SurrealDB HTTP call the CLI makes:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SPKY_DB_HTTP_TIMEOUT_SECS` | `120` | Per-request deadline. A large backfill, or applying the internal schema to a big database, can exceed it; the resulting error names this variable. Values of `0` or garbage fall back to the default. |
+
 ## Checking Status
 
 <CodeBlock code={code8} lang="bash" />
@@ -329,6 +351,18 @@ No user interaction is needed: migrations run automatically. If your `migrations
 </Note>
 
 The same migration flow also runs after `spky backup reset`, after the database is wiped, migrations are re-applied to rebuild the schema.
+
+### Migrating Without Deploying
+
+`spky migrate prod` runs step 3 and step 4 on their own. Use it when the schema has moved but the application code has not, or to finish a deploy whose migration step failed:
+
+<CodeBlock code={codeMigrateProd} lang="bash" />
+
+It resolves the SurrealDB URL and root password from your login (`spky login`) and the `slug` in `sp00ky.yml`, and takes the mode, namespace and database from `sp00ky.yml`, so there are no connection flags to pass. `--yes` skips the production confirmation, and `--force-schema` re-applies the internal schema and remote functions even when the schema hash says nothing changed.
+
+<Note>
+  Applying the internal schema to a large database can run past the CLI's 120 second per-request deadline. Raise it with <code>SPKY_DB_HTTP_TIMEOUT_SECS</code>, for example <code>SPKY_DB_HTTP_TIMEOUT_SECS=900 spky migrate prod</code>.
+</Note>
 
 ## Safety Features
 

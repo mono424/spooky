@@ -36,13 +36,30 @@ your-app/
 - **`spky verify [--fix]`** — confirm SSP/scheduler snapshot matches upstream SurrealDB, and print the scheduler's own drift verdict (`/health/snapshot` `drift`). `--fix` re-clones the scheduler replica when its counts are off, otherwise forces every SSP to re-bootstrap. The scheduler runs the same count check itself at startup and after each snapshot drain and auto-reclones by default (`SPKY_DRIFT_AUTO_RECLONE`).
 - **`spky lint`** — validate `sp00ky.yml` and referenced files exist.
 - **`spky dev [--apply-migrations] [--clean] [--verbose]`** — boots a local SurrealDB + SSP + scheduler stack via Docker. `--clean` wipes SSP/scheduler state but preserves user data in SurrealDB. Startup renders as step lines via `src/ui.rs` (indicatif/console; plain lines when not a TTY); after "ready" only ERROR/crash-looking lines (infra and app streams) show unless `--verbose` / `SPKY_VERBOSE=1`. A bare `logLevel` is scoped to sp00ky crates by `backend::scoped_rust_log`.
-- **`spky create`** — scaffold a new sp00ky project.
+- **`spky init`** — scaffold a new sp00ky project in the current directory. (`spky create` is a removed alias that only prints a migration hint.)
 - **`spky bucket add`** / **`spky api add`** — append a bucket or backend definition to `sp00ky.yml`.
-- **`spky mcp`** — start the bundled `@spooky-sync/devtools-mcp` server (so AI assistants can introspect the running app).
+- **`spky mcp`** — start the bundled `@spooky-sync/devtools-mcp` server (so AI assistants can introspect the running app). Its `token` / `tokens` / `revoke` / `install` subcommands manage credentials for the separate Sp00ky Cloud MCP server. A deployed scheduler also serves its own MCP server for operator actions; see `docs/reference/mcp.mdx`.
+- **`spky admin list|add <user>|remove <user>`** — manage the `_00_admin` roster. Roster members can sign in to the scheduler's operator dashboard and administer feature flags. `add` takes an optional `--note`.
 
-## Cloud subcommands (deployment)
+## Deployment subcommands
 
-`spky cloud login | create | deploy | status | logs | scale | restart | destroy | backup | env | keys | link | team | vault | credentials`. See `spky cloud --help`. Most app code agents touch never need these.
+These are top level, not under a `cloud` prefix. `spky cloud ...` was removed and now only
+prints a migration hint.
+
+`spky login | logout | deploy | release | status | stats | logs | restart | push | scale | backup | env | domain | link | team | billing | token | project | notice`.
+See `spky <command> --help`. Most app code agents touch never need these.
+
+Two that come up when a deployment misbehaves:
+
+- **`spky restart [TARGET...] [--upgrade] [--clean] [--surreal] [--all-backends] [-y]`** —
+  recreate containers. Targets are roles (`db`, `scheduler`, `ssp`, `frontend`) or an app
+  name; with none it restarts the scheduler and SSPs. `--upgrade` pulls the latest scheduler
+  and SSP images, `--clean` wipes the scheduler's volume (replica and WAL, not SurrealDB
+  data). `-y` is required in CI because the SurrealDB prompt cannot be answered
+  non-interactively.
+- **`spky migrate prod`** — apply pending migrations plus the internal Sp00ky schema to the
+  deployment, without a full deploy. Set `SPKY_DB_HTTP_TIMEOUT_SECS` if the internal schema
+  step times out.
 
 ## Schema annotations the parser recognizes
 

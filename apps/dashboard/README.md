@@ -17,6 +17,8 @@ Full documentation: [Admin dashboard](https://sp00ky.dev/docs/reference/admin-da
 - **Backups** — catalog, schedule and retention (from Sp00ky Cloud when linked),
   create, and a staged restore
 - **Logs** — live tail of scheduler or SSP output
+- **Access** — mint a scoped token for an AI agent, with the `claude mcp add`,
+  Cursor and VS Code snippets, and the tool list the scheduler's MCP server reports
 
 Every SSP and the scheduler carry an action menu (restart, clean restart,
 reload, reclone, and the cloud-only image upgrade / volume wipe).

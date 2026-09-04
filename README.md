@@ -73,7 +73,7 @@ const ThreadList = () => {
 | [`@spooky-sync/query-builder`](https://www.npmjs.com/package/@spooky-sync/query-builder) | Type-safe query builder                            |
 | [`@spooky-sync/cli`](https://www.npmjs.com/package/@spooky-sync/cli)                     | CLI for schema generation                          |
 | [`mono424/spooky-ssp`](https://hub.docker.com/r/mono424/spooky-ssp)                     | SSP sidecar (Docker)                               |
-| [`mono424/spooky-scheduler`](https://hub.docker.com/r/mono424/spooky-scheduler)          | Scheduler service (Docker)                         |
+| [`mono424/spooky-scheduler`](https://hub.docker.com/r/mono424/spooky-scheduler)          | Scheduler service, and the operator dashboard and MCP server it serves on port 9668 (Docker) |
 
 ## Example App
 

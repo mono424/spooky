@@ -126,6 +126,17 @@ The scheduler's [admin dashboard](/docs/reference/admin-dashboard#backups) has a
 **How the dashboard talks to Sp00ky Cloud.** The control plane injects `SPKY_CLOUD_API_URL` and `SPKY_CLOUD_PROJECT` into the scheduler container (only the scheduler, never the SSPs). The scheduler then calls an allow-listed route family, `/v1/internal/projects/{slug}/…` (restart, deployment status, and the backup routes minus `reset`), authenticated with the project's existing `SPKY_AUTH_SECRET`. No new credential is created. A control plane that supports this lists `scheduler_link` under `features` in its `/health` response; a scheduler without the link still works and marks those actions as unavailable.
 </Note>
 
+If a backup started from the dashboard fails with **Sp00ky Cloud rejected this
+scheduler's credentials**, that is the control plane refusing the scheduler's
+`SPKY_AUTH_SECRET`, not your login expiring. The dashboard reports it as a
+`502` carrying the code `cloud_auth` and keeps you signed in, precisely so the
+real cause is visible; an earlier version relayed the upstream `401` and
+signed the operator out instead, which hid it. Check that the project still
+has a stored auth secret and that the scheduler container was recreated since
+the secret last changed, then retry. The catalog degrades the same way rather
+than disappearing: the Backups tab still loads and shows the message where the
+list would be.
+
 ## Deleting Backups
 
 <CodeBlock

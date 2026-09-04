@@ -56,6 +56,13 @@ Sp00ky Cloud handles infrastructure provisioning, scaling, and management so you
   lang="bash"
 />
 
+Once it is up, `spky status` lists your endpoints. One of them is
+`https://<slug>-admin.<domain>/admin`, the
+[operator dashboard](/docs/reference/admin-dashboard): cluster health, live logs,
+workflow runs and the restart and backup actions, in a browser. Grant yourself
+access with `spky admin add <user>` before you go looking, since the roster starts
+empty.
+
 ## Authentication
 
 Log in via GitHub OAuth. The CLI opens your browser to complete the flow:

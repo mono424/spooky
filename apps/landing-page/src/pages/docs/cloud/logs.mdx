@@ -24,7 +24,21 @@ spky logs --filter spooky
 
 # Split view
 spky logs --filter ssp,surrealdb --split h   # horizontal (stacked)
-spky logs --filter ssp,surrealdb --split v   # vertical (side-by-side)`;
+spky logs --filter ssp,surrealdb --split v   # vertical (side-by-side)
+
+# Replay history, then keep tailing
+spky logs --since 2h
+spky logs --since 2026-05-20T09:00:00Z
+
+# Bounded window: one-shot, closes when exhausted
+spky logs --since 3d --until 2d
+
+# Server-side regex on the message
+spky logs --grep 'panicked|timed out'
+
+# Interactive TUI browser, opening in follow mode
+spky logs -i
+spky logs -i -F`;
 
 export const code2 = `![Sp00ky Status](https://api.sp00ky.cloud/v1/badge/your-project-slug)`;
 
@@ -70,6 +84,23 @@ Tail logs from your cloud deployment in real time:
   code={code3}
   lang="bash"
 />
+
+| Flag | What it does |
+| :--- | :--- |
+| `--filter <services>` | One or more of `surrealdb`, `scheduler`, `ssp`, `backend`, `frontend`, comma-separated. `spooky` is shorthand for `ssp` plus `scheduler`. |
+| `--split h\|v` | Show each service in its own pane, stacked or side by side. |
+| `--since <when>` | Replay history from a duration (`2h`, `3d`, `1h30m`) or an RFC-3339 timestamp, then keep tailing. |
+| `--until <when>` | Bound the window. Turns the command into a one-shot that closes when the window is exhausted. |
+| `--grep <regex>` | Server-side match on the log message, for both history and live tail. |
+| `-i`, `--interactive` | Open a TUI browser with scroll, search, and service and time filters, instead of streaming to stdout. |
+| `-F`, `--follow` | TUI only. Start in follow mode. Without it the TUI opens paused at the newest entry; press `f` to go live. |
+
+### From the dashboard
+
+The scheduler's [admin dashboard](/docs/reference/admin-dashboard) has a live log view over the
+same scheduler and SSP sources, with the SSP picked per instance. It is the quicker route when
+you are already looking at a cluster's health, and it works against a self-hosted scheduler,
+where `spky logs` has no cloud deployment to talk to.
 
 ## Setting Log Level
 

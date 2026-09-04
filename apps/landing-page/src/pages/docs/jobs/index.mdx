@@ -238,6 +238,13 @@ Each cycle creates a new job row in this same table, so everything on this page 
   `kill` and `retry` go through the `fn::job::kill` / `fn::job::retry` SurrealQL functions rather than a plain `UPDATE`, because job pickup is gated inside the SSP. Those functions are installed by the schema deploy, so both need a deployed backend. `clear` only touches terminal rows, so it is a plain `DELETE`.
 </Note>
 
+## Inspecting jobs from the dashboard
+
+Every deployment serves an [operator dashboard](/docs/reference/admin-dashboard)
+that offers the same two actions per job, kill and retry, without a terminal or a
+database connection. It is also where a job is easiest to find: workflow runs
+update live, and each step links to the job that ran it.
+
 ## How execution works
 
 The job runner is built into the SSP. There is nothing to install or implement:
@@ -355,6 +362,12 @@ A single schedule can override the run-history windows, which is what a noisy fa
     title="Workflows"
     icon="workflow"
     description="A DAG of steps, where every step is a job."
+  />
+  <LinkCard
+    href="/docs/reference/admin-dashboard"
+    title="Admin dashboard"
+    icon="gauge"
+    description="Watch runs live, and kill or retry a job from the browser."
   />
   <LinkCard
     href="/docs/backend"

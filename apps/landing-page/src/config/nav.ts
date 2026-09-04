@@ -85,19 +85,24 @@ export const docsNav = [
     ],
   },
   {
+    title: 'Operations',
+    links: [
+      { text: 'Admin dashboard', href: `${basePath}/docs/reference/admin-dashboard` },
+      { text: 'MCP server', href: `${basePath}/docs/reference/mcp` },
+    ],
+  },
+  {
     title: 'Reference',
     links: [
       { text: 'CLI', href: `${basePath}/docs/reference/cli` },
       { text: 'sp00ky.yml', href: `${basePath}/docs/reference/config` },
       { text: 'Client config', href: `${basePath}/docs/reference/client-config` },
       { text: 'AI coding agents', href: `${basePath}/docs/reference/ai-agents` },
-      { text: 'MCP server', href: `${basePath}/docs/reference/mcp` },
       { text: 'Architecture', href: `${basePath}/docs/reference/architecture` },
       { text: 'Performance', href: `${basePath}/docs/reference/performance` },
       { text: 'Vault architecture', href: `${basePath}/docs/reference/vault` },
       { text: 'SSP API', href: `${basePath}/docs/reference/ssp-api` },
       { text: 'Scheduler API', href: `${basePath}/docs/reference/scheduler-api` },
-      { text: 'Admin dashboard', href: `${basePath}/docs/reference/admin-dashboard` },
     ],
   },
 ];

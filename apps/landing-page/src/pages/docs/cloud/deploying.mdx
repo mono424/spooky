@@ -89,6 +89,23 @@ backend rebuilt.
 
 Shows the current deployment version, status, and all running VMs with their roles and versions.
 
+## The operator dashboard
+
+Every deployment also serves a dashboard in the browser, at
+`https://<slug>-admin.<domain>/admin`. `spky status` prints the URL alongside the
+others.
+
+It is the same information `spky status` and `spky logs` give you, live and
+without a terminal: scheduler and SSP health, end-to-end sync latency, backend
+health, workflow runs as they happen, and a live log tail. It also carries the
+actions, so you can restart an SSP, retry a failed workflow run, take a backup or
+upgrade images from the browser.
+
+Nobody can sign in until you grant someone access with `spky admin add <user>`.
+See the [admin dashboard](/docs/reference/admin-dashboard) for sign-in, the
+actions and their consequences, and the
+[MCP server](/docs/reference/mcp#scheduler-admin-mcp) it serves for AI agents.
+
 ## Scaling
 
 Scale your SSP instances horizontally:

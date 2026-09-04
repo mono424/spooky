@@ -5,6 +5,10 @@ description: Run the scheduler and SSP yourself, single node or distributed, wit
 ---
 
 import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Note from '../../components/ui/Note.astro';
+import Warning from '../../components/ui/Warning.astro';
+import CardGrid from '../../components/ui/CardGrid.astro';
+import LinkCard from '../../components/ui/LinkCard.astro';
 
 export const code2 = `services:
   surrealdb:
@@ -53,7 +57,9 @@ export const code1 = `services:
     # Bind host/port and storage paths come from the scheduler's
     # sp00ky.yml (ingest_host, ingest_port, replica_db_path, wal_path).
     ports:
-      - "9667:9667"
+      # 9668 is the admin plane: the operator dashboard and its MCP server.
+      # This is the only scheduler port you publish. 9667 stays internal.
+      - "127.0.0.1:9668:9668"
     volumes:
       - scheduler-data:/app/data
     depends_on:
@@ -132,6 +138,56 @@ For production with high availability and horizontal scaling, use a Scheduler wi
   lang="yaml"
 />
 
+<Warning title="Never publish port 9667">
+The scheduler listens on two ports and they are not equivalent. Port **9667**
+is the ingest plane, and every route on it is unauthenticated by design because
+it is meant to be reachable only from inside your private network. That
+includes `POST /proxy/query`, which runs **arbitrary SurrealQL against the
+replica** for any caller that can open a socket to it. Publishing 9667 hands
+your database to the internet.
+
+Port **9668** is the admin plane. It is authenticated, and it is the one you
+publish, behind TLS. The example above binds it to `127.0.0.1` so you can put a
+reverse proxy in front of it rather than exposing it directly.
+</Warning>
+
+## Operator dashboard
+
+The scheduler image bundles a dashboard and serves it on the admin port at
+`/admin`. It shows the health of the scheduler and every SSP, the end-to-end
+sync latency, backend health, live logs, and workflow runs, and it can restart
+SSPs, cancel and retry workflow runs, pause schedules and take backups.
+
+Point a browser at `http://your-scheduler:9668/admin` and sign in one of two
+ways:
+
+- **An admin account.** `spky admin add <user>` puts an existing app user on
+  the `_00_admin` roster; they then sign in with their normal app credentials.
+  The roster starts empty, so until you add someone nobody can sign in this way.
+- **The break-glass password.** Set `SPKY_ADMIN_PASSWORD` on the scheduler and
+  sign in with that alone. It bypasses the roster, which is what makes it
+  useful when the database itself is the thing that is down, so the dashboard
+  shows a persistent banner while a session is using it.
+
+The same port also serves an **MCP server** at `/admin/api/mcp`, so an AI
+assistant can read the cluster and run the same actions. Tokens are minted from
+the dashboard's Access page.
+
+Everything works self-hosted except the actions that only Sp00ky Cloud can
+perform, because they act on containers rather than on processes: pulling newer
+images, wiping the scheduler volume, bouncing SurrealDB, and the backup
+catalog, schedule, retention and delete. Those answer `409` with `Not linked to
+Sp00ky Cloud`, and the dashboard shows them greyed out with that reason rather
+than hiding them. Backups themselves still work: configure the `S3_*` variables
+below and the dashboard lists the bucket directly.
+
+<Note>
+Sessions are signed with `SPKY_AUTH_SECRET` when you set one, which means they
+survive a scheduler restart. Without it they live in memory and every restart
+signs you out. See [Admin dashboard](/docs/reference/admin-dashboard) for the
+full surface and [MCP server](/docs/reference/mcp) for the agent side.
+</Note>
+
 ---
 
 ## Environment Variables
@@ -161,17 +217,39 @@ All `SPKY_*` vars below are read directly from the process environment.
 | `SPKY_CRDT_CACHE_SIZE` | In-memory CRDT cache capacity | `10000` |
 | `SPKY_CRDT_FIELDS` | JSON override for `@crdt` field detection, e.g. `{"thread":["content"]}` | *(auto)* |
 | `SPKY_SSP_BOOTSTRAP_PAGE_SIZE` | Rows pulled per `/proxy/query` page | `500` |
+| `SPKY_SSP_REGISTER_MAX_WAIT_SECS` | How long to keep retrying scheduler registration before exiting for a restart | `180` |
+| `SPKY_SSP_ANON_LIVE_QUERIES` | Allow live queries from unauthenticated clients (`1`/`true` to enable) | `false` |
+| `SPKY_SSP_VIEW_METRICS_FLUSH_MS` | How often view metrics are flushed to the database | `2000` |
+| `SPKY_SSP_MEMORY_LIMIT_MB` | Memory ceiling this SSP reports itself against. The heartbeat sends usage as a fraction of it, which is what the scheduler's `LeastLoad` strategy ranks on, so an unset or wrong value skews balancing. | `1024` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry collector endpoint for SSP metrics | *(unset)* |
 | `OTEL_SERVICE_NAME` | OTEL service identifier | `ssp` |
 
+#### Circuit persistence
+
+Without a snapshot directory every restart is a cold rebuild: the SSP re-pages
+the whole database while the scheduler holds sync frozen. Point these at a
+volume and a restart restores the snapshot and catches up only what it missed.
+Both are caches of SurrealDB, never the source of truth, so deleting them is
+always safe. See [State persistence](/docs/reference/ssp-api#state-persistence).
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `SPKY_SSP_SNAPSHOT_DIR` | Directory for the circuit snapshot (`snapshot.json`). Enables snapshots when set and writable; the SSP probes it and falls back to memory-only rather than failing startup. | *(unset)* |
+| `SPKY_SSP_CHECKPOINT_INTERVAL_SECS` | How often the snapshot is rewritten while running. Only read when `SPKY_SSP_SNAPSHOT_DIR` is set, which arms the timer. | `300` |
+| `SPKY_SSP_ARENA_DIR` | Directory for the row arena, a sparse-file cache of row bytes. Probed for writability like the snapshot dir; falls back to the heap. | *(unset)* |
+| `SPKY_SSP_ARENA_SEGMENT_MB` | Arena segment size in MB | `64` |
+
 ### Scheduler
 
-The scheduler reads most of its config from `sp00ky.yml`. The
-`SPKY_*` env vars below override the corresponding YAML field. Every
-other field (`ingest_host`, `ingest_port`, `load_balance`,
-`heartbeat_*`, `bootstrap_*`, `replica_db_path`, `wal_path`,
-`ssp_poll_interval_ms`, `max_buffer_per_ssp`, `job_tables`) is YAML
-only.
+The scheduler reads most of its config from `sp00ky.yml`, and the `SPKY_*` vars
+in the first table below override the corresponding YAML field. The fields
+`ingest_host`, `ingest_port`, `load_balance`, `replica_db_path`, `wal_path`,
+`ssp_poll_interval_ms`, `max_buffer_per_ssp` and `job_tables` are YAML only.
+
+The tables after it are env only and have no YAML equivalent: the admin plane,
+backup storage, the dead-man heartbeat, and the tuning knobs.
+
+#### Core
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
@@ -188,5 +266,100 @@ only.
 | `SPKY_DRIFT_CONFIRM_TICKS` | Consecutive checks a non-zero count mismatch must persist before acting (an empty table upstream has rows for is acted on immediately) | `2` |
 | `SPKY_DRIFT_RECLONE_COOLDOWN_SECS` | Minimum seconds between automatic re-clones | `3600` |
 | `SPKY_BOOTSTRAP_PAGE_SIZE` | Rows read per bootstrap page from the replica | `500` |
-| `SPKY_AUTH_SECRET` | Optional shared secret; when set, callers to `/proxy/*` must send `Authorization: Bearer <secret>`. | *(empty)* |
+| `SPKY_AUTH_SECRET` | Optional shared secret; when set, callers to `/proxy/*` must send `Authorization: Bearer <secret>`. Also signs admin dashboard sessions, so setting it is what makes them survive a restart. | *(empty)* |
 | `SPKY_BACKENDS` | JSON-encoded backend health-check list (`SPKY_SCHEDULER_BACKENDS` accepted as legacy fallback) | *(unset)* |
+
+#### Admin plane
+
+The dashboard and its MCP server, on their own port. See
+[Admin dashboard](/docs/reference/admin-dashboard).
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `SPKY_ADMIN_ENABLED` | Serve the admin plane at all. Set to `0`, `false` or `off` to disable it; any other value (or unset) enables it. | `true` |
+| `SPKY_ADMIN_PORT` | Port for the admin plane | `9668` |
+| `SPKY_ADMIN_HOST` | Bind address for the admin plane | `0.0.0.0` |
+| `SPKY_ADMIN_DIR` | Directory holding the built dashboard. The official image ships one here; a scheduler built from a checkout serves a placeholder page instead. | `/usr/share/spooky/dashboard` |
+| `SPKY_ADMIN_PASSWORD` | Break-glass password, which signs in without the `_00_admin` roster. An empty value is treated as unset, so a deployment that templates the var but leaves it blank does not end up with a guessable password. | *(unset)* |
+| `SPKY_ADMIN_ACCESS` | Pins the SurrealDB record-access method used for admin sign-in. When unset the accesses are discovered from `INFO FOR DB`. | *(auto)* |
+| `SPKY_ADMIN_SESSION_TTL_SECS` | How long a signed-in session lasts | `28800` (8h) |
+
+#### Backup storage
+
+These carry **no `SPKY_` prefix**. The backup plane is enabled as soon as any of
+`S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` or `S3_BUCKET` is present, so a
+partial configuration turns backups on with defaults filling the rest. Any
+S3-compatible store works. Also read by a standalone SSP, which serves the same
+backup routes.
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `S3_ENDPOINT` | S3-compatible endpoint | `http://10.100.1.5:9000` |
+| `S3_ACCESS_KEY` | Access key | `minioadmin` |
+| `S3_SECRET_KEY` | Secret key | `minioadmin` |
+| `S3_BUCKET` | Bucket backups are written to | `backups` |
+| `S3_REGION` | Region | `us-east-1` |
+| `SPKY_PROJECT_SLUG` | Prefix backups are stored under, as `<slug>/<backup-id>.surql.gz`. Also what the dashboard lists when it is not linked to Sp00ky Cloud. | `default` |
+
+#### Heartbeat and alerting
+
+An end-to-end probe: the scheduler writes `_00_heartbeat:probe` upstream and
+times the full round trip through `/ingest`, the WAL, the broadcast and every
+SSP's circuit. It is what the dashboard's latency reading and the `/health`
+staleness flag are built on.
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `SPKY_HEARTBEAT_INTERVAL_SECS` | Seconds between probe cycles. `0` disables the probe. | `30` |
+| `SPKY_HEARTBEAT_TIMEOUT_SECS` | Deadline for one cycle. Clamped below the interval so a cycle always finishes before the next tick. | `25` |
+| `SPKY_HEARTBEAT_FAIL_THRESHOLD` | Consecutive failed cycles before the alert fires | `3` |
+| `SPKY_HEARTBEAT_PING_URL` | Dead-man URL pinged after each successful cycle, for an external uptime monitor | *(unset)* |
+| `SPKY_ALERT_WEBHOOK_URL` | Webhook posted to when the probe crosses the failure threshold and again when it recovers | *(unset)* |
+| `SPKY_HEALTH_MAX_HEARTBEAT_AGE_SECS` | How stale the last successful probe may be before `/health` degrades. Floored at `3 x interval + timeout`, so a smaller value has no effect. | *(computed)* |
+
+#### Tuning
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `SPKY_WORKER_THREADS` | Tokio worker threads | `4` |
+| `SPKY_HTTP_TIMEOUT_SECS` | Request deadline on the ingest plane, so a wedged handler produces a `408` rather than a hung connection. The admin plane is exempt because its log and event streams are meant to stay open. | `120` |
+| `SPKY_HEALTH_MAX_LAG` | Ingest lag above which `/health` reports `degraded`. Unset means lag never degrades health. | *(unset)* |
+| `SPKY_CLONE_TIMEOUT_SECS` | Ceiling on the initial replica clone. Overrunning it fails startup and exits, rather than leaving the scheduler wedged in `cloning` and answering 503 to every SSP for the life of the container. | `900` |
+| `SPKY_BOOTSTRAP_TIMEOUT_SECS` | How long an SSP may take to bootstrap before the scheduler reaps it. Also half of what the dashboard waits on before calling a restart failed. | `300` |
+| `SPKY_BOOTSTRAP_RECLONE_AFTER` | Consecutive bootstrap integrity failures before the replica is re-cloned from upstream | `3` |
+| `SPKY_BOOTSTRAP_ADMIT_AFTER` | Consecutive bootstrap integrity failures before the SSP is admitted to broadcast anyway, restoring sync. Floored at the re-clone threshold, so admit never precedes a re-clone attempt. | `5` |
+| `SPKY_CATCHUP_RECLONE_AFTER` | Same escalation for the catch-up gate | `3` |
+| `SPKY_CATCHUP_ADMIT_AFTER` | Same escalation for the catch-up gate | `5` |
+
+<Note title="Injected by Sp00ky Cloud, not by you">
+A managed deployment also receives `SPKY_CLOUD_API_URL` and
+`SPKY_CLOUD_PROJECT` on the scheduler container. They are what let the
+dashboard ask the control plane to upgrade images, wipe the volume or manage
+the backup catalog, authenticated with the project's own `SPKY_AUTH_SECRET`.
+Self-hosted schedulers leave them unset and report `cloud_linked: false`.
+</Note>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard
+    href="/docs/reference/admin-dashboard"
+    title="Admin dashboard"
+    description="Sign-in, restart and backup actions, and the full admin API."
+  />
+  <LinkCard
+    href="/docs/reference/ssp-api"
+    title="SSP API"
+    description="The sidecar's HTTP contract, bootstrap and heartbeat behaviour."
+  />
+  <LinkCard
+    href="/docs/reference/scheduler-api"
+    title="Scheduler API"
+    description="Ingest, proxy, health and the SSP coordination endpoints."
+  />
+  <LinkCard
+    href="/docs/reference/mcp"
+    title="MCP server"
+    description="Let an AI assistant read and operate the deployment."
+  />
+</CardGrid>
