@@ -1143,3 +1143,110 @@ async fn a_job_that_finished_under_the_sweep_is_not_dragged_back_to_pending() {
 async fn h_reset_pending(db: &Surreal<MemEngine>, id: &str) {
     db.query(format!("UPDATE {id} SET status = 'pending'")).await.expect("reset");
 }
+
+/// End to end, against a real SurrealDB and a real socket: a backend that accepts the
+/// connection and then never answers.
+///
+/// This is the failure the lease exists for, and every layer of it is genuine here —
+/// the runner claims the row, the request really hangs, the sweep's own reclaim
+/// statement hands the row back, a second attempt really runs it, and the first
+/// attempt's eventual write is really fenced out. The only simulated part is the
+/// passage of time: there is no controllable clock in this codebase, so the lease is
+/// expired by writing `lease_until`, the same way the schedule tests age a run.
+#[tokio::test]
+async fn a_hung_request_is_reclaimed_re_run_and_cannot_report_its_own_outcome() {
+    // A listener that accepts and then holds the connection open, saying nothing.
+    // wiremock cannot express this: it always answers eventually.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let hung_addr = listener.local_addr().expect("addr");
+    let accepted = Arc::new(tokio::sync::Notify::new());
+    let accepted_tx = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((sock, _)) = listener.accept().await {
+            accepted_tx.notify_waiters();
+            held.push(sock); // never written to, never dropped
+        }
+    });
+
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "hung", "pending").await;
+
+    // Attempt one: a short request timeout so the test does not sit for minutes, but
+    // long enough that the request is genuinely still in flight while we reclaim.
+    let runner = make_runner(Arc::clone(&port));
+    let ctx = Arc::clone(runner.ctx());
+    let mut entry = job_entry("job:hung", format!("http://{hung_addr}"), 1);
+    entry.timeout = Duration::from_secs(4);
+    let first = tokio::spawn(async move { ctx.execute_job(entry).await });
+
+    // Wait until the request is actually out on the wire.
+    tokio::time::timeout(Duration::from_secs(5), accepted.notified())
+        .await
+        .expect("the backend received the request");
+
+    // The row is claimed, leased, and fenced.
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:hung").await.as_deref(),
+        Some("processing"),
+    );
+    let first_epoch = select_i64(&raw, "SELECT VALUE lease_epoch FROM ONLY job:hung")
+        .await
+        .expect("a lease epoch");
+    assert_eq!(
+        select_bool(&raw, "SELECT VALUE lease_until > time::now() FROM ONLY job:hung").await,
+        Some(true),
+        "the lease is live while the request is in flight, so nothing reclaims it yet"
+    );
+    assert!(
+        !reclaim_expired_lease(port.as_ref(), "job:hung").await.expect("reclaim"),
+        "a live lease is left alone even though the backend is hung"
+    );
+
+    // The lease runs out. This is the sweep's own write.
+    raw.query("UPDATE job:hung SET lease_until = time::now() - 1s").await.expect("expire");
+    assert!(
+        reclaim_expired_lease(port.as_ref(), "job:hung").await.expect("reclaim"),
+        "past its lease the row comes back, with the request still hanging"
+    );
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:hung").await.as_deref(),
+        Some("pending"),
+    );
+
+    // Attempt two, against a backend that answers.
+    let good = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(match_path("/run"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"attempt": 2})))
+        .mount(&good)
+        .await;
+    let runner2 = make_runner(Arc::clone(&port));
+    runner2
+        .execute_job(job_entry("job:hung", good.uri(), 1))
+        .await
+        .expect("the second attempt runs");
+
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:hung").await.as_deref(),
+        Some("success"),
+        "the re-run completed the work the hung attempt never could"
+    );
+    let second_epoch = select_i64(&raw, "SELECT VALUE lease_epoch FROM ONLY job:hung").await;
+    assert_eq!(second_epoch, Some(first_epoch + 2), "reclaim bumped it, then the re-claim did");
+
+    // Now attempt one finally gives up (its request times out) and tries to record a
+    // failure. It must not touch the row the re-run already finished.
+    first.await.expect("the first attempt's task").expect("it returns Ok, having been fenced");
+
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:hung").await.as_deref(),
+        Some("success"),
+        "the zombie must not overwrite the outcome of the attempt that replaced it"
+    );
+    assert_eq!(
+        select_i64(&raw, "SELECT VALUE array::len(errors) FROM ONLY job:hung").await,
+        Some(0),
+        "nor append its error to the successful run's history"
+    );
+}
