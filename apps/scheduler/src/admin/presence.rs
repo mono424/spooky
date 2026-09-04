@@ -256,10 +256,31 @@ impl PresenceTracker {
         );
 
         let handle = db.handle();
-        let fetched: Vec<Value> = match handle.query(&surql).await.and_then(|mut r| r.take(0)) {
+        // Bounded, because this await IS the loop. The sampler is a single task
+        // on an interval, so a query that never returns does not "miss a
+        // sample" — it parks the sampler for the life of the process. That is
+        // what a wedged SurrealDB produces, and the symptom is silent: `error`
+        // stays null (nothing failed, nothing returned) while `taken_at_ms`
+        // freezes, so the dashboard keeps rendering minutes-old numbers as if
+        // they were current. Observed 2026-09-04, stuck 18 minutes behind.
+        //
+        // One interval is the natural bound: a sample worth more than the gap
+        // to the next one has already lost its reason to exist.
+        let outcome: Result<Vec<Value>, String> =
+            match tokio::time::timeout(self.interval, handle.query(&surql)).await {
+                Err(_) => Err(format!(
+                    "presence sample timed out after {}s",
+                    self.interval.as_secs()
+                )),
+                Ok(res) => res
+                    .and_then(|mut r| r.take(0))
+                    .map_err(|e| format!("{e:#}")),
+            };
+
+        let fetched: Vec<Value> = match outcome {
             Ok(v) => v,
             Err(e) => {
-                db.note_error(&format!("{e:#}"));
+                db.note_error(&e);
                 warn!(error = %e, "Presence sample failed");
                 // Keep the previous totals rather than publishing zeros: a
                 // transient database error is not everybody logging out. The
@@ -267,7 +288,7 @@ impl PresenceTracker {
                 // stale.
                 if let Ok(mut guard) = self.snapshot.write() {
                     if let Some(snap) = guard.as_mut() {
-                        snap.error = Some(format!("{e}"));
+                        snap.error = Some(e);
                     } else {
                         *guard = Some(Snapshot {
                             taken_at_ms: now_ms(),
@@ -275,7 +296,7 @@ impl PresenceTracker {
                             top_users: Vec::new(),
                             by_ssp: Vec::new(),
                             truncated: false,
-                            error: Some(format!("{e}")),
+                            error: Some(e),
                         });
                     }
                 }
