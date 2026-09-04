@@ -1773,13 +1773,14 @@ async fn re_registration_leaves_a_healthy_view_alone() {
     assert_eq!(before, edges().await, "a healthy view must not have its edges republished");
 }
 
-// A view registered before its session had an identity routes its edges to the
-// global `_00_list_ref` stamped `auth_id = ''`, which that table's own
-// permission rule (`auth_id = $auth.id`) makes unreadable to the very user who
-// registered it. Write-once would keep it that way for life, so an
-// authenticated re-registration adopts the identity instead.
+// A view registered before its session had an identity is broken twice over:
+// its edges go to the global `_00_list_ref` stamped `auth_id = ''`, which that
+// table's own rule (`auth_id = $auth.id`) makes unreadable to the very user who
+// registered it, AND its plan resolved every `$auth.id` predicate against ''
+// so it holds the wrong rows. Write-once would keep it that way for life, so an
+// identity-asserting re-registration must REBUILD it, not relabel it.
 #[tokio::test]
-async fn an_authenticated_re_registration_adopts_an_empty_identity() {
+async fn an_authenticated_re_registration_rebuilds_a_view_with_no_identity() {
     let h = thread_harness().await;
 
     let anonymous = json!({
@@ -1800,7 +1801,7 @@ async fn an_authenticated_re_registration_adopts_an_empty_identity() {
     assert_eq!(
         h.node.processor.read().await.get_view("v1").map(|v| v.auth_id.clone()),
         Some("user:alice".to_string()),
-        "the view must adopt the identity so its edges become reachable"
+        "the view must carry the caller's identity so its edges become reachable"
     );
     let stored: Option<String> = h
         .raw_db
@@ -1810,6 +1811,12 @@ async fn an_authenticated_re_registration_adopts_an_empty_identity() {
         .take(0)
         .unwrap_or(None);
     assert_eq!(stored.as_deref(), Some("user:alice"), "and persist it to _00_query");
+
+    // Rebuilt, not duplicated: the discard has to leave the circuit clean or
+    // the cold path stacks a second graph and every ingest steps it twice.
+    let c = h.node.processor.read().await;
+    assert_eq!(c.view_count(), 1);
+    assert_eq!(c.graph_count(), 1);
 }
 
 // The guard the adoption above must not weaken: one concrete identity may never

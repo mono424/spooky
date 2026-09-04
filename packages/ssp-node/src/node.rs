@@ -840,71 +840,56 @@ impl SspNode {
     }
 
     /// `POST /view/register` — create/refresh a view and seed its edges.
-    /// Give a view that was registered without an identity the one this
-    /// registration asserts, and clear the rows it stranded in the global
-    /// table on the way.
+    /// Drop a view that was registered with no identity, so the caller's own
+    /// registration can rebuild it.
     ///
-    /// Deliberately does NOT republish here. Adoption changes which table
-    /// `edges::build_edge_batch` routes to, so once the circuit and
-    /// `_00_query` agree on the new identity, `repair_stranded_view` (called
-    /// later in this same request) finds zero edges in the now-correct
-    /// `_00_list_ref_user_<uid>` and republishes there. One publish path, not
-    /// two.
+    /// Returns `true` when the view was discarded and the cold path should
+    /// run. `false` leaves the warm path to handle the registration as usual:
+    /// the view already has an identity, or another registration shares its
+    /// operator graph and tearing it down would take that one with it.
     ///
-    /// The per-user table itself already exists: `ensure_user_tables` ran on
-    /// the incoming `auth_id` at the top of the handler.
-    async fn adopt_view_identity(
-        &self,
-        view_id: &str,
-        incantation_id: &str,
-        old_auth: &str,
-        new_auth: &str,
-    ) {
-        {
+    /// Relabelling is NOT an option here. `prepare_registration_dbsp` bakes
+    /// `params.auth.id` into the plan's permission injection, so a view built
+    /// with `''` resolved every `$auth.id` predicate against the empty string.
+    /// It does not just have its edges in the wrong table, it holds the wrong
+    /// rows: `permission = true` tables come out correct while everything
+    /// gated on the caller comes out empty. Handing that to a real user
+    /// exchanges a blank page for a page that looks populated and is quietly
+    /// missing their data, which is strictly harder to notice.
+    ///
+    /// The stranded edges go too. They carry `auth_id = ''`, so nobody can
+    /// read them (`_00_list_ref` is gated `auth_id = $auth.id`) and nothing
+    /// would ever clean them up once the row is rebuilt under a real identity.
+    async fn discard_view_without_identity(&self, view_id: &str) -> bool {
+        let stale_table = {
             let mut circuit = self.processor.write().await;
-            if !circuit.adopt_auth_id(view_id, new_auth.to_string()) {
-                return;
+            match circuit.get_view(view_id) {
+                Some(v) if v.auth_id.is_empty() => {}
+                _ => return false,
             }
-        }
+            // Merging is off by default, but when it is on another
+            // registration may be reading this graph. Leave it alone rather
+            // than tear it out from under them; that view is readable by
+            // whoever owns it and this caller can wait for its own cold build
+            // on the next distinct id.
+            if !circuit.subscribers_of(view_id).is_empty() {
+                return false;
+            }
+            let table = crate::tables::list_ref_table(self.ref_mode, "");
+            circuit.remove_query(view_id);
+            table
+        };
+        self.platform.telemetry.gauge_add("view_count", -1);
 
         info!(
             target: "ssp::edges",
             view_id = %view_id,
-            adopted = %new_auth,
-            "View had no identity recorded - adopting the registrant's so its edges become readable"
+            "View was registered without an identity - rebuilding it for the caller who has one"
         );
 
-        if let Err(e) = self
-            .platform
-            .db
-            .query(
-                "UPDATE type::record($id) SET auth_id = <string>$authId",
-                &[
-                    ("id", json!(incantation_id)),
-                    ("authId", json!(new_auth)),
-                ],
-            )
-            .await
-        {
-            error!(
-                view_id = %view_id,
-                error = %e,
-                "Failed to persist an adopted auth_id; the view keeps routing to the old table"
-            );
-            return;
-        }
-
-        // Drop what the view wrote while it had no identity. Those rows carry
-        // `auth_id = ''`, so nobody could read them, but leaving them behind
-        // would double-count membership if the view ever routes back here.
-        let stale = crate::tables::list_ref_table(self.ref_mode, old_auth);
-        let fresh = crate::tables::list_ref_table(self.ref_mode, new_auth);
-        if stale == fresh {
-            return;
-        }
         let cleanup = format!(
             "LET $from = type::record('_00_query', $qid); \
-             DELETE {stale} WHERE in = $from;"
+             DELETE {stale_table} WHERE in = $from;"
         );
         if let Err(e) = self
             .platform
@@ -915,11 +900,12 @@ impl SspNode {
             warn!(
                 target: "ssp::edges",
                 view_id = %view_id,
-                table = %stale,
+                table = %stale_table,
                 error = %e,
                 "Failed to clear edges stranded under the empty identity"
             );
         }
+        true
     }
 
     /// Republish a warm-path view whose `_00_list_ref` rows have gone missing.
@@ -1156,9 +1142,22 @@ impl SspNode {
             circuit.get_view(&data.plan.id).is_some()
         };
 
+        // A view registered before its session had an identity is not merely
+        // mislabelled. `prepare_registration_dbsp` injects permissions using
+        // `params.auth.id`, so its plan resolved every `$auth.id` predicate
+        // against '' and it computes the WRONG ROWS: public tables come out
+        // right, everything gated on the caller comes out empty. Relabelling
+        // such a view would make it readable and silently under-populated,
+        // which is harder to notice than the blank page it renders today.
+        // Discard it instead and let the cold path below rebuild it with this
+        // registration's own, correctly injected plan.
+        let identity_upgrade = view_existed
+            && !auth_id.is_empty()
+            && self.discard_view_without_identity(&data.plan.id).await;
+
         let meta_str = |k: &str| data.metadata.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-        if view_existed {
+        if view_existed && !identity_upgrade {
             // A second (or tenth) session subscribing to a view that already
             // exists. This is the SHARED path and it is deliberately
             // metadata-only: calling `add_query_with_auth` again would
@@ -1190,10 +1189,14 @@ impl SspNode {
             // with '' mid-reconnect, every one was refused 409, and their views
             // never came back, which rendered as "not found" on a page that had
             // been working. Treat '' as "no assertion" and let it join; the
-            // stored `auth_id` is write-once and the plan keeps the original
-            // identity's permission injection either way, and the per-user
+            // stored `auth_id` is write-once and the per-user
             // `_00_list_ref_user_<uid>` table still gates what can actually be
             // read back.
+            //
+            // The converse — an identity-asserting caller meeting a view that
+            // holds none — never reaches here: `identity_upgrade` above has
+            // already discarded that view so the cold path can rebuild it
+            // under the caller's own permission injection.
             if let Some(existing) = existing_auth {
                 if !auth_id.is_empty() && !existing.is_empty() && existing != auth_id {
                     warn!(
@@ -1208,21 +1211,6 @@ impl SspNode {
                         "auth_mismatch",
                         "This query id belongs to a different identity",
                     ));
-                }
-
-                // The reverse of the guard above: this caller DOES assert an
-                // identity and the view holds none. Adopt it, because a view
-                // stuck on `''` is not merely unlabelled, it is unreachable.
-                // Its edges route to the global `_00_list_ref` (empty does not
-                // sanitize to a per-user table) and land there with
-                // `auth_id = ''`, while a signed-in client reads
-                // `_00_list_ref_user_<uid>` and could not read the global rows
-                // anyway (`PERMISSIONS FOR select WHERE auth_id = $auth.id`).
-                // Without this the view stays invisible for the rest of its
-                // life and the UI simply never updates.
-                if !auth_id.is_empty() && existing.is_empty() {
-                    self.adopt_view_identity(&data.plan.id, &incantation_id, &existing, &auth_id)
-                        .await;
                 }
             }
 

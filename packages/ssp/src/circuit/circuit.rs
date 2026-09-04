@@ -1566,50 +1566,6 @@ impl Circuit {
         Some(delta)
     }
 
-    /// Adopt an authenticated identity for a view that was registered without
-    /// one, returning `true` when the view actually changed.
-    ///
-    /// `View::auth_id` is otherwise write-once, and deliberately so: letting a
-    /// later registrant overwrite a concrete identity would stamp edges with
-    /// one user while routing them to another's `_00_list_ref_user_<id>`
-    /// table. Empty is the one safe source state, because it asserts no
-    /// identity at all. A view stuck on empty has its edges in the global
-    /// `_00_list_ref` with `auth_id = ''`, which that table's own permission
-    /// rule (`auth_id = $auth.id`) makes unreadable to every real user, so
-    /// there is no reader to disturb and nothing to leak. Without this, such a
-    /// view stays invisible for the rest of its life.
-    ///
-    /// Refuses an empty `auth_id`, and refuses to overwrite a concrete one.
-    pub fn adopt_auth_id(&mut self, query_id: &str, auth_id: String) -> bool {
-        if auth_id.is_empty() {
-            return false;
-        }
-        let canon = crate::canonical_query_id(query_id);
-        let key = if self.views.contains_key(query_id) {
-            query_id.to_string()
-        } else {
-            canon.clone()
-        };
-        let Some(view) = self.views.get_mut(&key) else {
-            return false;
-        };
-        if !view.auth_id.is_empty() {
-            return false;
-        }
-        view.auth_id = auth_id.clone();
-        // Keep any merge subscribers in step: they route on their own stored
-        // identity, and one of them holding `''` would keep writing into the
-        // global table for the same graph.
-        for subs in self.subscribers.values_mut() {
-            for sub in subs.iter_mut() {
-                if sub.query_id == canon && sub.auth_id.is_empty() {
-                    sub.auth_id = auth_id.clone();
-                }
-            }
-        }
-        true
-    }
-
     /// Build a full-membership [`ViewDelta`] for `query_id` out of `source`'s
     /// already-computed view, without touching the graph.
     ///
