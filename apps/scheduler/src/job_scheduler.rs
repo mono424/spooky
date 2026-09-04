@@ -349,8 +349,13 @@ const JOB_RECOVERY_INTERVAL_SECS: u64 = 30;
 /// Only re-dispatch `pending` rows older than this, so the sweep never races the
 /// live CREATE-pickup path on freshly created jobs.
 const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
-/// A `processing` row untouched for longer than this is treated as orphaned and
-/// reset to pending. Kept well above any realistic job timeout.
+/// How far past its due time a `pending` row must be before its claim is treated as
+/// stale and re-dispatched regardless of assignee liveness (the `long_overdue` hatch
+/// below). Kept well above any realistic job timeout.
+///
+/// It no longer governs `processing` rows: those are reclaimed when their LEASE
+/// expires (`schedule_core::sql::LEASE_EXPIRED`), which is per-job rather than a flat
+/// window and does not consult ownership at all.
 const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
 
 /// Outbox job-table names from `SPKY_JOB_CONFIG`. Accepts BOTH shapes the
@@ -387,8 +392,22 @@ async fn connect_remote(db: &DbConfig) -> Result<Surreal<Client>> {
     maintenance::db::connect_http(db).await
 }
 
-/// A job is recoverable only if its `assignee` has left the pool (or was never
-/// stamped). A job owned by a current pool member is being handled there.
+/// The row's `assignee` has left the pool (or was never stamped).
+///
+/// This is a reason to reclaim a row EARLY. It is deliberately not a precondition for
+/// reclaiming one at all, and treating it as one is what let `processing` rows sit
+/// forever: "that process is up" and "this work is progressing" are different
+/// questions, and three things routinely make the first one lie —
+///
+/// - an SSP that restarts under a stable `SPKY_SSP_ID` (which `spky dev` and the
+///   benchmark stack both set) re-registers under the same id, so every row its
+///   previous process abandoned still has a live owner;
+/// - `SspPool::all()` includes `Bootstrapping`, `Replaying` and `Failed` entries, so
+///   "live" means present in the map, not healthy;
+/// - an SSP can be alive and heartbeating while having lost its in-memory queue.
+///
+/// The authority on whether work is still progressing is the row's lease. See
+/// `schedule_core::sql::LEASE_EXPIRED`.
 fn is_orphaned(row: &Value, live: &HashSet<String>) -> bool {
     match row.get("assignee").and_then(|v| v.as_str()) {
         Some(a) => !live.contains(a),
@@ -498,12 +517,18 @@ async fn recover_table_once(
         }
     }
 
-    // 2. Processing rows orphaned far longer than any job runs. Reset to pending
-    //    first (the SSP `/job/recover` only acts on pending rows), then dispatch.
+    // 2. `processing` rows whose LEASE has expired. Reset to pending first (the SSP
+    //    `/job/recover` only acts on pending rows), then dispatch.
+    //
+    //    The query selects on the lease and NOT on ownership. There used to be an
+    //    `is_orphaned` gate here with no escape hatch — the `long_overdue` one above
+    //    covers `pending` rows only — which meant a `processing` row whose assignee was
+    //    still in the pool was never reset at any age, by any path in this repo. A
+    //    dead assignee now only makes the reclaim happen SOONER.
     let stale_q = format!(
-        "SELECT type::string(id) AS id, assignee FROM {table} \
-         WHERE status = 'processing' AND updated_at < time::now() - {stale}s",
-        stale = JOB_RECOVERY_STALE_PROCESSING_SECS,
+        "SELECT type::string(id) AS id, assignee, lease_until, updated_at FROM {table} \
+         WHERE status = 'processing' AND ({expired} OR assignee != NONE)",
+        expired = schedule_core::sql::LEASE_EXPIRED,
     );
     let mut resp = db.query(&stale_q).await?;
     let processing: Vec<Value> = resp.take(0)?;
@@ -511,9 +536,6 @@ async fn recover_table_once(
         let Some(id) = row.get("id").and_then(|v| v.as_str()) else {
             continue;
         };
-        if !is_orphaned(row, &live) {
-            continue;
-        }
         let record_id = match RecordId::parse_simple(id) {
             Ok(r) => r,
             Err(e) => {
@@ -521,13 +543,34 @@ async fn recover_table_once(
                 continue;
             }
         };
-        // Guarded so we never clobber a row that has since changed.
-        db.query(
-            "UPDATE $id SET status = 'pending', updated_at = time::now() \
-             WHERE status = 'processing' RETURN NONE",
-        )
-        .bind(("id", record_id))
-        .await?;
+        // Two ways in, and the statement decides which applies rather than the caller:
+        // the lease has run out, or the owner is gone. `RETURN AFTER` so an empty
+        // result means neither held and the row is left alone — which also closes the
+        // race where it terminalized between the SELECT above and this write.
+        let orphaned = is_orphaned(row, &live);
+        let reset = db
+            .query(format!(
+                "UPDATE $id SET status = 'pending', assignee = NONE, lease_until = NONE, \
+                 lease_epoch = (lease_epoch ?? 0) + 1, updated_at = time::now() \
+                 WHERE status = 'processing' AND ({expired} OR $orphaned) RETURN AFTER",
+                expired = schedule_core::sql::LEASE_EXPIRED,
+            ))
+            .bind(("id", record_id))
+            .bind(("orphaned", orphaned))
+            .await;
+        let reclaimed: Vec<Value> = match reset {
+            Ok(mut r) => r.take(0).unwrap_or_default(),
+            Err(e) => {
+                warn!(job_id = %id, error = %e, "Cluster job recovery: could not reclaim; skipping");
+                continue;
+            }
+        };
+        if reclaimed.is_empty() {
+            continue;
+        }
+        if !orphaned {
+            warn!(job_id = %id, "Cluster job recovery: processing job past its lease despite a live assignee — reclaiming");
+        }
         dispatch_recover(ssp_pool, transport, id).await;
     }
 

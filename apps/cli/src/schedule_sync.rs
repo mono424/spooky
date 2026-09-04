@@ -295,12 +295,14 @@ fn retention_patch_sql(r: &ResolvedRetention, tables: &[String]) -> Result<Strin
     // survives, and so the row's own DEFAULTs still apply on first write.
     Ok(format!(
         "UPSERT _00_retention:default MERGE {{ success_secs: {}, failed_secs: {}, \
-         run_success_secs: {}, run_failed_secs: {}, max_rows: {}, job_tables: {} }};",
+         run_success_secs: {}, run_failed_secs: {}, max_rows: {}, run_deadline_secs: {}, \
+         job_tables: {} }};",
         r.success_secs,
         r.failed_secs,
         r.run_success_secs,
         r.run_failed_secs,
         r.max_rows,
+        r.run_deadline_secs,
         serde_json::to_string(tables)?
     ))
 }
@@ -458,6 +460,7 @@ mod retention_sync_tests {
                 "success_secs",
                 "failed_secs",
                 "run_success_secs",
+                "run_deadline_secs",
                 "run_failed_secs",
                 "max_rows",
                 "job_tables",

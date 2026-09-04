@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// One `schedules:` entry.
@@ -54,6 +54,17 @@ pub struct ScheduleConfig {
     /// `deploy.timeoutOverridable`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
+
+    /// Wall-clock ceiling on ONE run (`30m`). Unset uses the project default from
+    /// `retention.runDeadline`.
+    ///
+    /// Not the same knob as `timeout`: that bounds a single HTTP request to a
+    /// backend, this bounds the run as a whole — every step, every job retry, and
+    /// every gap in between. A run past it is failed `deadline_exceeded` and its
+    /// jobs are killed, which is what stops one stuck run from holding its fan-out
+    /// key under `concurrency: skip` indefinitely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<String>,
 
     /// `false` deploys the schedule but leaves it inert. Distinct from an
     /// operator `spky schedules pause`, which config never overwrites.
@@ -212,6 +223,17 @@ pub struct WorkflowConfig {
     pub concurrency: Concurrency,
     #[serde(default, rename = "forEach", skip_serializing_if = "Option::is_none")]
     pub for_each: Option<ForEachConfig>,
+
+    /// Wall-clock ceiling on ONE run (`30m`). Unset uses the project default from
+    /// `retention.runDeadline`.
+    ///
+    /// Not the same knob as `timeout`: that bounds a single HTTP request to a
+    /// backend, this bounds the run as a whole — every step, every job retry, and
+    /// every gap in between. A run past it is failed `deadline_exceeded` and its
+    /// jobs are killed, which is what stops one stuck run from holding its fan-out
+    /// key under `concurrency: skip` indefinitely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -348,6 +370,22 @@ fn validate_retry(label: &str, retry: Option<&RetryConfig>) -> Result<()> {
 }
 
 /// Kahn's algorithm over the step graph, mirroring the docker `dependsOn` check.
+/// A deadline must parse and must survive the conversion to whole seconds. `500ms`
+/// truncating to `0` would read as "no deadline", which is the opposite of what
+/// anyone writing a deadline meant.
+fn validate_deadline(label: &str, deadline: Option<&str>) -> Result<()> {
+    let Some(raw) = deadline else { return Ok(()) };
+    let ms = parse_duration_ms(raw)
+        .with_context(|| format!("{label}: `deadline: {raw}` is not a duration"))?;
+    if ms / 1000 < 1 {
+        bail!(
+            "{label}: `deadline: {raw}` is under a second — the engine works in whole \
+             seconds, so this would round to 0 and disable the deadline entirely"
+        );
+    }
+    Ok(())
+}
+
 fn validate_dag(label: &str, steps: &BTreeMap<String, WorkflowStep>) -> Result<()> {
     if steps.is_empty() {
         bail!("{label} has no steps");
@@ -404,6 +442,7 @@ pub fn validate_all(
         if let Some(timeout) = &s.timeout {
             parse_duration_ms(timeout)?;
         }
+        validate_deadline(&label, s.deadline.as_deref())?;
         if s.route.is_empty() {
             bail!("{label} has an empty route");
         }
@@ -422,6 +461,7 @@ pub fn validate_all(
             )?;
         }
         validate_for_each(&label, w.for_each.as_ref())?;
+        validate_deadline(&label, w.deadline.as_deref())?;
         validate_dag(&label, &w.steps)?;
         for (step_name, step) in &w.steps {
             let step_label = format!("{label} step '{step_name}'");
@@ -471,6 +511,7 @@ pub fn normalize_schedule(
         // The runner takes whole seconds.
         row.insert("timeout".into(), serde_json::json!(parse_duration_ms(timeout)? / 1000));
     }
+    insert_deadline(&mut row, cfg.deadline.as_deref())?;
     row.insert("config_disabled".into(), serde_json::json!(!cfg.enabled));
     insert_history(&mut row, cfg.history.as_ref(), default_mode)?;
     Ok(serde_json::Value::Object(row))
@@ -569,8 +610,21 @@ pub fn normalize_workflow(
             },
         }),
     );
+    insert_deadline(&mut row, cfg.deadline.as_deref())?;
     row.insert("config_disabled".into(), serde_json::json!(false));
     Ok(serde_json::Value::Object(row))
+}
+
+/// Flatten `deadline:` to the seconds the engine reads. Left OUT of the row when
+/// unset rather than nulled, so the engine sees NONE and applies the project
+/// default — `option<int>` rejects NULL.
+fn insert_deadline(
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    deadline: Option<&str>,
+) -> Result<()> {
+    let Some(deadline) = deadline else { return Ok(()) };
+    row.insert("deadline_secs".into(), serde_json::json!(parse_duration_ms(deadline)? / 1000));
+    Ok(())
 }
 
 fn insert_cadence(

@@ -100,6 +100,8 @@ DEFINE FIELD OVERWRITE errors[*] ON job TYPE object FLEXIBLE;
 DEFINE FIELD OVERWRITE updated_at ON job TYPE datetime DEFAULT ALWAYS time::now();
 DEFINE FIELD OVERWRITE created_at ON job TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE assignee ON job TYPE option<string>;
+DEFINE FIELD OVERWRITE lease_until ON job TYPE option<datetime>;
+DEFINE FIELD OVERWRITE lease_epoch ON job TYPE option<int>;
 DEFINE FIELD OVERWRITE result ON job TYPE any;
 DEFINE FIELD OVERWRITE timeout ON job TYPE option<int>;
 DEFINE FIELD OVERWRITE delay ON job TYPE option<int>;";
@@ -289,6 +291,56 @@ impl Harness {
             .expect("query")
             .take(0)
             .expect("take")
+    }
+
+    /// Age every workflow run by `interval`, to stand in for the passage of time.
+    ///
+    /// `_00_workflow_run.created_at` is `READONLY` in the shipped DDL, which is
+    /// exactly the property that makes it the right anchor for a deadline — it
+    /// cannot be moved by anything the engine or an operator does. So the field is
+    /// lifted for one statement and put back, rather than the production DDL being
+    /// loosened to suit a test.
+    async fn age_workflow_runs(&self, interval: &str) {
+        self.set("DEFINE FIELD OVERWRITE created_at ON TABLE _00_workflow_run TYPE datetime").await;
+        self.set(&format!("UPDATE _00_workflow_run SET created_at = time::now() - {interval}"))
+            .await;
+        self.set(
+            "DEFINE FIELD OVERWRITE created_at ON TABLE _00_workflow_run \
+             TYPE datetime DEFAULT time::now() READONLY",
+        )
+        .await;
+    }
+
+    /// The `error` object on a run row, as JSON. Read as an object rather than a
+    /// string because the tests assert on its fields — the whole point of the
+    /// error being structured is that `code` is machine-readable.
+    async fn run_error(&self, run: &ids::Ref) -> Option<Value> {
+        let mut response = self
+            .raw
+            .query("SELECT VALUE error FROM ONLY type::record($tb, $key)")
+            .bind(("tb", run.table.clone()))
+            .bind(("key", run.key.clone()))
+            .await
+            .expect("query");
+        let value: surrealdb::types::Value = response.take(0).expect("take");
+        Some(value.into_json_value()).filter(|v| v.is_object())
+    }
+
+    /// The `error` object on one step of one run.
+    async fn step_error(&self, run: &ids::Ref, step: &str) -> Option<Value> {
+        let mut response = self
+            .raw
+            .query(
+                "SELECT VALUE error FROM ONLY _00_step_run \
+                 WHERE workflow_run = type::record($tb, $key) AND step = $step LIMIT 1",
+            )
+            .bind(("tb", run.table.clone()))
+            .bind(("key", run.key.clone()))
+            .bind(("step", step.to_string()))
+            .await
+            .expect("query");
+        let value: surrealdb::types::Value = response.take(0).expect("take");
+        Some(value.into_json_value()).filter(|v| v.is_object())
     }
 
     /// A second engine over the same database — a replicated scheduler, or a
@@ -1164,7 +1216,12 @@ async fn plan_then_fire(h: &Harness, name: &str) -> crate::engine::TickReport {
 async fn a_schedule_that_declares_a_timeout_still_spawns_its_job() {
     let h = harness().await;
     let mut spec = every_5m_job();
-    spec.as_object_mut().unwrap().insert("timeout".into(), json!(30_000));
+    // SECONDS. The field's own DDL comment used to say milliseconds and this fixture
+    // used 30_000, which every consumer reads through `Duration::from_secs` as eight
+    // hours. Harmless while the value only bounded an HTTP call; it now also sizes the
+    // reclaim lease, so the unit decides whether a stuck row is recoverable this
+    // afternoon or next spring.
+    spec.as_object_mut().unwrap().insert("timeout".into(), json!(30));
     h.define_schedule("with-timeout", spec).await;
 
     let report = plan_then_fire(&h, "with-timeout").await;
@@ -1172,7 +1229,7 @@ async fn a_schedule_that_declares_a_timeout_still_spawns_its_job() {
     assert_eq!(report.spawned, 1, "a timeout on the schedule must not block the spawn");
     assert_eq!(report.errored, 0);
     assert_eq!(
-        h.count("SELECT VALUE count() FROM job WHERE timeout = 30000 GROUP ALL").await,
+        h.count("SELECT VALUE count() FROM job WHERE timeout = 30 GROUP ALL").await,
         1,
         "the per-job timeout override reaches the job row"
     );
@@ -2861,4 +2918,358 @@ async fn retrying_a_run_from_before_retry_count_existed_counts_from_zero() {
     assert_eq!(out.retry_count, 1, "NONE reads as 0, so the first retry is attempt 1");
     assert_eq!(h.run_field(&run, "retry_count").await.as_deref(), Some("1"));
     assert_eq!(h.run_status(&run).await.as_deref(), Some("running"));
+}
+
+// --- nothing stays stuck forever -------------------------------------------
+//
+// Every test below is a regression for a shape that, before this, held a run
+// `running` indefinitely — and with the default `concurrency: skip` that means it
+// held its fan-out key indefinitely too, so the schedule silently stopped doing
+// any work while every healthcheck stayed green.
+
+/// A step that won its `blocked -> ready` promotion and then failed to dispatch is
+/// unreachable by every other path in the engine: `ready_steps` yields only
+/// `blocked` steps and `CLAIM_STEP_READY` guards on `blocked`. This is the shape
+/// that sat untouched for four weeks in production.
+#[tokio::test]
+async fn a_step_stranded_at_ready_is_re_dispatched() {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+
+    // Rewind one root to the state a pass that died between the promotion and the
+    // job stamp leaves behind, and drop the job it had created.
+    let job = h.step_job_of(&run, "extract-orders").await.expect("dispatched");
+    h.set(&format!("DELETE {job}")).await;
+    h.set(
+        "UPDATE _00_step_run SET status = 'ready', job_id = NONE \
+         WHERE step = 'extract-orders'",
+    )
+    .await;
+    assert_eq!(h.step_status_of(&run, "extract-orders").await.as_deref(), Some("ready"));
+    assert_eq!(h.step_job_of(&run, "extract-orders").await, None);
+
+    h.engine.advance_workflow(&run).await.unwrap();
+
+    assert_eq!(
+        h.step_status_of(&run, "extract-orders").await.as_deref(),
+        Some("dispatched"),
+        "the stranded step is recovered rather than left behind"
+    );
+    let recovered = h.step_job_of(&run, "extract-orders").await.expect("a job again");
+    assert_eq!(recovered, job, "the deterministic id means recovery reuses it");
+    assert!(h.job_ids().await.contains(&recovered), "and the job row is really there");
+}
+
+/// The same, one state later: `dispatched` with no `job_id`. Step 1 of the
+/// advancement needs a job id to land anything, so this used to be skipped on
+/// every pass forever and `all_terminal` was never reached.
+#[tokio::test]
+async fn a_step_stranded_at_dispatched_without_a_job_is_re_dispatched() {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    let job = h.step_job_of(&run, "extract-users").await.expect("dispatched");
+    h.set(&format!("DELETE {job}")).await;
+    h.set("UPDATE _00_step_run SET job_id = NONE WHERE step = 'extract-users'").await;
+
+    h.engine.advance_workflow(&run).await.unwrap();
+
+    assert_eq!(h.step_job_of(&run, "extract-users").await.as_deref(), Some(job.as_str()));
+    assert_eq!(h.step_status_of(&run, "extract-users").await.as_deref(), Some("dispatched"));
+}
+
+/// Recovery is bounded. A step whose dispatch fails the same way every pass must
+/// fail the run rather than be retried every five seconds until the deployment
+/// ends. The dispatch here is impossible to satisfy: the step names an outbox
+/// table that does not exist.
+#[tokio::test]
+async fn a_step_that_cannot_be_dispatched_gives_up_and_fails_the_run() {
+    let h = harness().await;
+    // A CREATE against an UNKNOWN table succeeds on a non-strict database — it just
+    // defines a schemaless one. So the step is pointed at a table that exists and
+    // rejects the job instead: SCHEMAFULL with a required field nothing writes.
+    h.set(
+        "DEFINE TABLE OVERWRITE hostile SCHEMAFULL; \
+         DEFINE FIELD OVERWRITE required_by_nobody ON TABLE hostile TYPE string",
+    )
+    .await;
+    h.define_schedule(
+        "report",
+        json!({
+            "kind": "workflow",
+            "every_ms": 3_600_000,
+            "workflow": {
+                "steps": [{"name": "only", "path": "/x", "table": "hostile"}],
+                "on_failure": "halt",
+            },
+        }),
+    )
+    .await;
+    h.engine.tick_pass().await.unwrap();
+    h.set("UPDATE _00_schedule:report SET next_fire_at = time::now() - 1s").await;
+    h.engine.tick_pass().await.unwrap();
+    let run = workflow_run_id(&h).await;
+
+    // The job CREATE is rejected every time, so the step stays `ready` with no job
+    // — exactly the stranded shape, but a permanent one.
+    for _ in 0..6 {
+        // The dispatch error propagates, which is fine: the sweep logs it and the
+        // attempt has already been charged.
+        let _ = h.engine.advance_workflow(&run).await;
+    }
+
+    assert_eq!(
+        h.step_status_of(&run, "only").await.as_deref(),
+        Some("failed"),
+        "the engine gives up on the step instead of retrying it forever"
+    );
+    let error = h.step_error(&run, "only").await.expect("a reason");
+    assert_eq!(error.get("code").and_then(Value::as_str), Some("lost_dispatch"));
+    assert_eq!(
+        h.run_status(&run).await.as_deref(),
+        Some("failed"),
+        "and the run terminalizes rather than staying `running`"
+    );
+}
+
+/// A fire whose workflow-run skeleton cannot be written has already created the
+/// schedule run that gates it. Leaving that row `running` holds the key forever,
+/// so the spawn failure has to terminalize BOTH rows.
+#[tokio::test]
+async fn a_fire_that_cannot_write_its_steps_fails_instead_of_holding_the_key() {
+    let h = harness().await;
+    h.define_schedule(
+        "report",
+        json!({
+            "kind": "workflow",
+            "every_ms": 3_600_000,
+            "target_table": "job",
+            "workflow": { "steps": [{"name": "only", "path": "/x"}], "on_failure": "halt" },
+        }),
+    )
+    .await;
+    h.engine.tick_pass().await.unwrap();
+    // Make the step CREATE impossible. `_00_step_run` is SCHEMAFULL, so a required
+    // field the engine does not write rejects every CREATE against it.
+    h.set("DEFINE FIELD required_by_nobody ON TABLE _00_step_run TYPE string").await;
+    h.set("UPDATE _00_schedule:report SET next_fire_at = time::now() - 1s").await;
+
+    let report = h.engine.tick_pass().await.unwrap();
+    assert_eq!(report.errored, 1, "the fire is reported as an error, not as a success");
+
+    let run = workflow_run_id(&h).await;
+    assert_eq!(
+        h.run_status(&run).await.as_deref(),
+        Some("failed"),
+        "the workflow run does not stay `running` with no steps"
+    );
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM _00_schedule_run WHERE status = 'running' GROUP ALL")
+            .await,
+        0,
+        "and neither does the schedule run that holds the concurrency key"
+    );
+    let sched_run = ids::schedule_run(&run.key);
+    assert_eq!(
+        h.run_error(&sched_run).await.and_then(|e| e.get("code").and_then(Value::as_str).map(str::to_string)),
+        Some("spawn_failed".to_string()),
+        "and it says why"
+    );
+}
+
+/// The backstop. Every other mechanism needs something to observe; a clock does
+/// not. Here the step's job row is left `processing` forever — no terminal status
+/// to heal against, nothing missing to notice.
+#[tokio::test]
+async fn a_workflow_run_past_its_deadline_is_reaped() {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    h.set("UPDATE job SET status = 'processing'").await;
+
+    // Nothing to reap yet: the default ceiling is an hour.
+    let report = h.engine.tick_pass().await.unwrap();
+    assert_eq!(report.reaped, 0);
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("running"));
+
+    h.age_workflow_runs("2h").await;
+    let report = h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(report.reaped, 1);
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("failed"));
+    let error = h.run_error(&run).await.expect("a reason");
+    assert_eq!(error.get("code").and_then(Value::as_str), Some("deadline_exceeded"));
+    assert!(
+        !h.kill.killed.lock().unwrap().is_empty(),
+        "a reaped run's in-flight step jobs are killed, or reaping it achieved nothing"
+    );
+    // `failed`, not `killed`: nobody killed this, and it must not read as if
+    // someone had.
+    assert_ne!(h.run_status(&run).await.as_deref(), Some("killed"));
+    assert_eq!(
+        h.run_status(&ids::schedule_run(&run.key)).await.as_deref(),
+        Some("failed"),
+        "the owning schedule run releases the key too"
+    );
+}
+
+/// A per-schedule `deadline:` overrides the project default in both directions,
+/// and it is frozen onto the run so editing the schedule cannot move the ceiling
+/// of a run already in flight.
+#[tokio::test]
+async fn a_schedule_deadline_overrides_the_project_default() {
+    let h = harness().await;
+    h.define_schedule(
+        "sync",
+        json!({
+            "kind": "job",
+            "every_ms": 300_000,
+            "target_table": "job",
+            "path": "/sync",
+            "deadline_secs": 60,
+        }),
+    )
+    .await;
+    h.engine.tick_pass().await.unwrap();
+    h.set("UPDATE _00_schedule:sync SET next_fire_at = time::now() - 1s").await;
+    h.engine.tick_pass().await.unwrap();
+    h.set("UPDATE job SET status = 'processing'").await;
+
+    // Ten minutes old: inside the 1h project default, past this schedule's 60s.
+    h.set("UPDATE _00_schedule_run SET fire_at = time::now() - 10m").await;
+    // Raising the schedule's deadline now must not save the in-flight run: the
+    // ceiling travelled with it at spawn.
+    h.set("UPDATE _00_schedule:sync SET deadline_secs = 86400").await;
+
+    let report = h.engine.tick_pass().await.unwrap();
+    assert_eq!(report.reaped, 1, "the frozen 60s ceiling applies, not the schedule's new one");
+    let run = h
+        .one_string("SELECT VALUE type::string(id) FROM ONLY _00_schedule_run WHERE true LIMIT 1")
+        .await
+        .expect("a run");
+    let run = ids::Ref::parse(&run).expect("well-formed");
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("failed"));
+    assert_eq!(
+        h.run_error(&run).await.and_then(|e| e.get("deadline_secs").and_then(Value::as_i64)),
+        Some(60),
+    );
+}
+
+/// `run_deadline_secs = 0` is an explicit opt-out and must be honoured — it is the
+/// behaviour every deployment had before the reaper existed.
+#[tokio::test]
+async fn the_reaper_can_be_turned_off() {
+    let h = workflow_harness(diamond_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    h.set("UPSERT _00_retention:default MERGE { run_deadline_secs: 0 }").await;
+    h.age_workflow_runs("100d").await;
+
+    let report = h.engine.tick_pass().await.unwrap();
+    assert_eq!(report.reaped, 0);
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("running"));
+}
+
+/// Healing runs before reaping, so a run whose job finished a moment before the
+/// deadline is reported by its real outcome and not by the clock.
+#[tokio::test]
+async fn healing_beats_the_reaper_to_a_run_that_actually_finished() {
+    let h = workflow_harness(single_step_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    let job = h.step_job_of(&run, "only").await.expect("dispatched");
+    h.finish_job(&job, "success", json!({"ok": true})).await;
+    h.age_workflow_runs("2h").await;
+
+    let report = h.engine.tick_pass().await.unwrap();
+
+    assert_eq!(report.reaped, 0, "there was nothing left to reap");
+    assert_eq!(
+        h.run_status(&run).await.as_deref(),
+        Some("success"),
+        "a run that finished must never be relabelled by the reaper"
+    );
+}
+
+/// A job that fails without recording an error used to leave the step `failed`
+/// with `error = NONE` — a failure with no reason, which is exactly what an
+/// operator comes looking for. The runner's append is best-effort by necessity, so
+/// the engine synthesizes the shape instead.
+#[tokio::test]
+async fn a_step_whose_job_lost_its_error_still_says_why_it_failed() {
+    let h = workflow_harness(single_step_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    let job = h.step_job_of(&run, "only").await.expect("dispatched");
+
+    // Terminally failed, `errors` empty — the append the SSP could not make.
+    h.set(&format!("UPDATE {job} SET status = 'failed', errors = [], retries = 3")).await;
+    h.engine.advance_workflow(&run).await.unwrap();
+
+    let error = h.step_error(&run, "only").await.expect("a step failure always has a reason");
+    assert_eq!(error.get("code").and_then(Value::as_str), Some("job_failed"));
+    let reason = error.get("reason").and_then(Value::as_str).unwrap_or_default();
+    assert!(reason.contains(&job), "the reason names the job: {reason}");
+    assert!(reason.contains("3 of 3 attempts"), "and its attempt count: {reason}");
+    assert_eq!(error.get("retries").and_then(Value::as_i64), Some(3));
+}
+
+/// The real error still wins when there is one.
+#[tokio::test]
+async fn a_recorded_job_error_is_preferred_over_the_synthesized_one() {
+    let h = workflow_harness(single_step_workflow()).await;
+    let run = workflow_run_id(&h).await;
+    let job = h.step_job_of(&run, "only").await.expect("dispatched");
+    h.fail_job(&job, "backend said no").await;
+    h.engine.advance_workflow(&run).await.unwrap();
+
+    let error = h.step_error(&run, "only").await.expect("a reason");
+    assert_eq!(error.get("reason").and_then(Value::as_str), Some("backend said no"));
+    assert_eq!(error.get("code").and_then(Value::as_i64), Some(500));
+}
+
+/// A run that throws on every advancement must not take the sweep with it.
+///
+/// This is the failure that made every other guarantee moot: `heal_workflow_runs`
+/// propagated one run's error, which aborted `tick_pass` — so `reap_pass` and
+/// `prune_pass` never ran, and the one run nobody could advance blocked the very
+/// machinery meant to clear it, on every sweep, forever.
+#[tokio::test]
+async fn a_run_that_cannot_advance_does_not_abort_the_sweep() {
+    let h = harness().await;
+    h.set(
+        "DEFINE TABLE OVERWRITE hostile SCHEMAFULL; \
+         DEFINE FIELD OVERWRITE required_by_nobody ON TABLE hostile TYPE string",
+    )
+    .await;
+    h.define_schedule(
+        "doomed",
+        json!({
+            "kind": "workflow",
+            "every_ms": 3_600_000,
+            "workflow": { "steps": [{"name": "only", "path": "/x", "table": "hostile"}],
+                          "on_failure": "halt" },
+        }),
+    )
+    .await;
+    h.define_schedule("healthy", every_5m_job()).await;
+    h.engine.tick_pass().await.unwrap();
+    h.set("UPDATE _00_schedule:doomed SET next_fire_at = time::now() - 1s").await;
+    h.engine.tick_pass().await.unwrap();
+
+    // The doomed run is now `running` with a step nothing can dispatch.
+    h.set("UPDATE _00_schedule:healthy SET next_fire_at = time::now() - 1s").await;
+    let report = h.engine.tick_pass().await.expect("the sweep survives an unadvanceable run");
+
+    assert!(report.errored > 0, "the failure is counted, not hidden");
+    assert_eq!(report.fired, 1, "and the healthy schedule still fires");
+    assert_eq!(
+        h.count("SELECT VALUE count() FROM job WHERE true GROUP ALL").await,
+        1,
+        "the healthy schedule's job is really spawned"
+    );
+}
+
+fn single_step_workflow() -> Value {
+    json!({
+        "kind": "workflow",
+        "every_ms": 3_600_000,
+        "target_table": "job",
+        "workflow": { "steps": [{"name": "only", "path": "/x"}], "on_failure": "halt" },
+    })
 }

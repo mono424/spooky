@@ -77,16 +77,17 @@ const DRAIN_PAGE_MAX: u32 = 200;
 /// never wake itself up.
 const DRAIN_RETRY_SECS: u64 = 2;
 
-/// Age past which a `processing` row is presumed abandoned and stops counting
-/// against the cluster budget. Matches the recovery sweep's own staleness
-/// window: without it, one crashed SSP would hold a table at zero admissions
-/// for ten minutes.
-///
-/// Note this count also includes a job sitting in retry backoff, whose row
-/// stays `processing` until the moment it is re-admitted. The local permit is
-/// released for that window but the cluster budget is not, which is the
-/// conservative direction for a ceiling and is bounded by the backoff length.
-const STALE_PROCESSING_SECS: u64 = 600;
+// A `processing` row stops counting against the cluster budget exactly when its
+// LEASE expires — see `schedule_core::sql::LEASE_LIVE`. That pairing is the point:
+// the row that stops spending the budget is the same row that has become
+// reclaimable, so admission control and recovery can no longer disagree. Before it,
+// the two used different rules and a row could fall outside the budget while
+// remaining unreachable by recovery: invisible to both.
+//
+// Note this count still includes a job sitting in retry backoff, whose row stays
+// `processing` until the moment it is re-admitted. The local permit is released for
+// that window but the cluster budget is not, which is the conservative direction for
+// a ceiling and is bounded by the backoff length.
 
 /// Per-table admission state.
 #[derive(Debug)]
@@ -199,6 +200,12 @@ impl JobDispatcher {
             ssp_id,
             standalone,
         }
+    }
+
+    /// This node's SSP id, stamped onto a row as its lease owner. The runner needs it
+    /// at claim time and the dispatcher is the one that was handed it.
+    pub fn ssp_id(&self) -> &str {
+        &self.ssp_id
     }
 
     pub fn job_control(&self) -> &JobControl {
@@ -521,12 +528,12 @@ impl JobDispatcher {
             .collect())
     }
 
-    /// Non-stale `processing` rows across the whole deployment.
+    /// `processing` rows whose lease is still live, across the whole deployment.
     async fn count_processing(&self, table: &str) -> Option<u32> {
         let sql = format!(
             "SELECT VALUE count() FROM {table} \
-             WHERE status = 'processing' AND updated_at > time::now() - {stale}s GROUP ALL",
-            stale = STALE_PROCESSING_SECS,
+             WHERE status = 'processing' AND {live} GROUP ALL",
+            live = schedule_core::sql::LEASE_LIVE,
         );
         match self.db.query(&sql, &[]).await {
             Ok(values) => values.iter().find_map(count_value).map(|n| n as u32),

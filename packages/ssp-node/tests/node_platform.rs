@@ -1528,3 +1528,126 @@ async fn merging_disabled_keeps_one_graph_per_registration() {
     }
     assert_eq!(h.node.processor.read().await.graph_count(), 2);
 }
+
+// --- the recovery sweep reclaims on the lease, not on ownership --------------
+//
+// The sweep is only reachable from this harness (it is a method on `SspNode`, and the
+// in-crate job tests never build one), so the reclaim half of the lease lives here.
+
+/// Insert a `processing` row that is being held by a named, LIVE owner whose lease has
+/// already run out. This is the exact shape that was unreclaimable at any age: the
+/// cluster sweep skipped it because the assignee was in the pool, and the singlenode
+/// sweep skipped it because the request was still marked in-flight.
+async fn insert_held_job(db: &Surreal<MemEngine>, id: &str, lease: &str, epoch: i64) {
+    db.query(format!(
+        "CREATE job:{id} SET status = 'processing', path = '/run', payload = {{}}, \
+         retries = 0, max_retries = 3, retry_strategy = 'linear', errors = [], \
+         assignee = 'test-ssp', lease_epoch = {epoch}, \
+         lease_until = time::now() {lease}, \
+         created_at = time::now(), updated_at = time::now()"
+    ))
+    .await
+    .unwrap();
+}
+
+/// A string field, raw. Deliberately NOT via `type::string(...)`: that renders a NONE
+/// as the literal text "NONE", so "the field was cleared" and "the field holds the word
+/// NONE" would read identically — and clearing it is exactly what these assert.
+async fn job_field(db: &Surreal<MemEngine>, id: &str, field: &str) -> Option<String> {
+    db.query(format!("SELECT VALUE {field} FROM ONLY job:{id}"))
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_sweep_reclaims_an_expired_lease_from_a_live_owner() {
+    let h = build(HarnessOpts { job_tables: vec![("job", "http://b")], ..Default::default() }).await;
+    // `test-ssp` is this node's own id, so the owner could not look more alive.
+    insert_held_job(&h.raw_db, "held", "- 1s", 4).await;
+
+    h.node.job_recovery_sweep().await;
+
+    assert_eq!(
+        job_status(&h.raw_db, "held").await.as_deref(),
+        Some("pending"),
+        "an expired lease is reclaimed however alive its owner looks"
+    );
+    assert_eq!(
+        job_field(&h.raw_db, "held", "assignee").await,
+        None,
+        "and ownership is released, or no other node could ever drain the row"
+    );
+    let epoch: Option<i64> =
+        h.raw_db.query("SELECT VALUE lease_epoch FROM ONLY job:held").await.unwrap().take(0).unwrap();
+    assert_eq!(epoch, Some(5), "the fence moves on, so the old attempt cannot write");
+}
+
+#[tokio::test]
+async fn the_sweep_leaves_a_live_lease_alone() {
+    let h = build(HarnessOpts { job_tables: vec![("job", "http://b")], ..Default::default() }).await;
+    insert_held_job(&h.raw_db, "working", "+ 1h", 1).await;
+
+    h.node.job_recovery_sweep().await;
+
+    assert_eq!(
+        job_status(&h.raw_db, "working").await.as_deref(),
+        Some("processing"),
+        "work inside its lease must not be taken away from it"
+    );
+    assert_eq!(job_field(&h.raw_db, "working", "assignee").await.as_deref(), Some("test-ssp"));
+}
+
+/// A row on a table deployed before the lease fields existed has no `lease_until`, so
+/// the sweep falls back to the `updated_at` staleness rule it always used. Neither
+/// deployment gets worse, and none needs a coordinated upgrade.
+#[tokio::test]
+async fn an_unleased_row_still_follows_the_old_staleness_rule() {
+    let h = build(HarnessOpts { job_tables: vec![("job", "http://b")], ..Default::default() }).await;
+    // Fresh: inside the legacy window, so untouched.
+    insert_job(&h.raw_db, "fresh", "processing").await;
+    // Old: past it, so reclaimed — exactly today's behaviour.
+    h.raw_db
+        .query(
+            "CREATE job:ancient SET status = 'processing', path = '/run', payload = {}, \
+             retries = 0, max_retries = 3, retry_strategy = 'linear', errors = [], \
+             created_at = time::now() - 700s, updated_at = time::now() - 700s",
+        )
+        .await
+        .unwrap();
+
+    h.node.job_recovery_sweep().await;
+
+    assert_eq!(
+        job_status(&h.raw_db, "fresh").await.as_deref(),
+        Some("processing"),
+        "a row with no lease is not reclaimed on sight"
+    );
+    assert_eq!(
+        job_status(&h.raw_db, "ancient").await.as_deref(),
+        Some("pending"),
+        "but the legacy window still applies to it"
+    );
+}
+
+/// A request hung inside the HTTP call is the case the old guard got exactly backwards:
+/// being in-flight on this node meant "never touch it", so the one shape that most
+/// needed recovering was the one shape that could never be recovered. It now means
+/// "cancel it first".
+#[tokio::test]
+async fn the_sweep_cancels_a_local_request_past_its_lease() {
+    let h = build(HarnessOpts { job_tables: vec![("job", "http://b")], ..Default::default() }).await;
+    insert_held_job(&h.raw_db, "hung", "- 1s", 1).await;
+    // Stand in for the runner having a request out for this job.
+    let watch = h.node.job_control.register_inflight("job:hung");
+    assert!(!watch.is_cancelled(), "not cancelled before the sweep");
+
+    h.node.job_recovery_sweep().await;
+
+    assert!(
+        watch.is_cancelled(),
+        "the hung request is stopped, not left running while its replacement goes"
+    );
+    assert_eq!(job_status(&h.raw_db, "hung").await.as_deref(), Some("pending"));
+}

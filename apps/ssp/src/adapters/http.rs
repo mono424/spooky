@@ -42,24 +42,35 @@ impl HttpClient for ReqwestHttp {
             builder = builder.json(body);
         }
 
-        let send_fut = builder.send();
+        // Headers AND body inside one future, so both halves of the exchange are
+        // covered by the cancel race and by the error mapping below.
+        //
+        // The body read used to sit after the `select!`, with its error discarded by
+        // `unwrap_or_default()`. Two things went wrong there: a kill fired while the
+        // body was streaming was never observed, and — worse — a response whose
+        // headers arrived 2xx and whose body then stalled past the deadline was
+        // reported as a SUCCESSFUL empty-body response. A job that never delivered its
+        // output was recorded as having succeeded with no output, which is the one
+        // outcome an operator cannot tell from a real empty result.
+        let exchange = async {
+            let resp = builder.send().await?;
+            let status = resp.status().as_u16();
+            let body = resp.text().await?;
+            Ok::<_, reqwest::Error>(OutboundResponse { status, body })
+        };
 
         let response = if let Some(mut cancel) = cancel {
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(HttpError::Cancelled),
-                resp = send_fut => resp,
+                resp = exchange => resp,
             }
         } else {
-            send_fut.await
+            exchange.await
         };
 
         match response {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let body = resp.text().await.unwrap_or_default();
-                Ok(OutboundResponse { status, body })
-            }
+            Ok(resp) => Ok(resp),
             Err(e) if e.is_timeout() => Err(HttpError::Timeout(req.timeout)),
             Err(e) => Err(HttpError::Transport(e.to_string())),
         }

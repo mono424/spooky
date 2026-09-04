@@ -102,6 +102,23 @@ where
              PERMISSIONS FOR select WHERE true FOR create, update WHERE false;\n",
             table
         ));
+        // The reclaim lease and its fencing token. `assignee` above says who claimed
+        // the row; these say until when, which is the half that makes a stuck job
+        // recoverable — reclaim keys off `lease_until` and never off whether the
+        // assignee still looks alive. `lease_epoch` fences the original attempt's
+        // late write after a reclaim. Injected here so a project that has not
+        // re-applied its own schema still gets real leases on its next deploy; until
+        // it does, both sweeps fall back to the old `updated_at` staleness rule.
+        out.push_str(&format!(
+            "DEFINE FIELD IF NOT EXISTS lease_until ON {} TYPE option<datetime> \
+             PERMISSIONS FOR select WHERE true FOR create, update WHERE false;\n",
+            table
+        ));
+        out.push_str(&format!(
+            "DEFINE FIELD IF NOT EXISTS lease_epoch ON {} TYPE option<int> \
+             PERMISSIONS FOR select WHERE true FOR create, update WHERE false;\n",
+            table
+        ));
         out.push_str(&format!(
             "DEFINE FIELD IF NOT EXISTS result ON {} TYPE any \
              PERMISSIONS FOR select WHERE true FOR create, update WHERE false;\n",
@@ -908,6 +925,33 @@ mod outbox_platform_field_tests {
     fn injects_the_timeout_field_existing_schemas_are_missing() {
         let sql = build_outbox_platform_fields(["job"], &DeployMode::Singlenode);
         assert!(sql.contains("DEFINE FIELD IF NOT EXISTS timeout ON job TYPE option<int>"));
+    }
+
+    /// The lease fields must be injected, and both must be `option<T>`.
+    ///
+    /// A job's claim writes all of `assignee`, `lease_until` and `lease_epoch` in one
+    /// statement, so on a SCHEMAFULL table that is missing any of them the claim is
+    /// rejected outright. The runner degrades to an unleased claim rather than wedging
+    /// the table, but that degraded row is only reclaimable on the old flat staleness
+    /// window — so a table that never gets these fields never gets a real per-job
+    /// deadline either. This injection is the only thing that heals an existing project.
+    #[test]
+    fn injects_the_lease_fields_existing_schemas_are_missing() {
+        let sql = build_outbox_platform_fields(["job"], &DeployMode::Singlenode);
+        assert!(sql.contains("DEFINE FIELD IF NOT EXISTS lease_until ON job TYPE option<datetime>"));
+        assert!(sql.contains("DEFINE FIELD IF NOT EXISTS lease_epoch ON job TYPE option<int>"));
+        // Platform-written, exactly like `assignee`: a client that could forge a lease
+        // could keep a row unreclaimable forever.
+        for field in ["lease_until", "lease_epoch"] {
+            let def = sql
+                .lines()
+                .find(|l| l.contains(&format!("EXISTS {field} ON job")))
+                .unwrap_or_else(|| panic!("{field} is not injected"));
+            assert!(
+                def.contains("FOR create, update WHERE false"),
+                "{field} must not be client-writable: {def}"
+            );
+        }
     }
 
     /// The retention index must lead with `status` and follow with `updated_at`:

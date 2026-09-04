@@ -129,6 +129,8 @@ DEFINE FIELD OVERWRITE errors[*] ON job TYPE object FLEXIBLE;
 DEFINE FIELD OVERWRITE updated_at ON job TYPE datetime DEFAULT ALWAYS time::now();
 DEFINE FIELD OVERWRITE created_at ON job TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE assignee ON job TYPE option<string>;
+DEFINE FIELD OVERWRITE lease_until ON job TYPE option<datetime>;
+DEFINE FIELD OVERWRITE lease_epoch ON job TYPE option<int>;
 DEFINE FIELD OVERWRITE result ON job TYPE any;
 DEFINE FIELD OVERWRITE timeout ON job TYPE option<int>;
 DEFINE FIELD OVERWRITE delay ON job TYPE option<int>;";
@@ -232,6 +234,9 @@ fn job_entry(id: &str, base_url: String, max_retries: u32) -> JobEntry {
         retry_strategy: "linear".to_string(),
         auth_token: None,
         timeout: Duration::from_secs(5),
+        // Pre-claim value. `execute_job` takes the claim CAS and overwrites it with
+        // the epoch it mints, so a test never has to set this itself.
+        lease_epoch: None,
         // Driving `execute_job` directly, so no slot was taken.
         permit: None,
     }
@@ -730,6 +735,10 @@ async fn the_limit_comes_from_the_policy_row() {
 /// A row left `processing` by a crashed SSP would otherwise hold the cluster
 /// budget until the recovery sweep resets it — ten minutes of a table that
 /// admits nothing.
+///
+/// This row carries NO `lease_until`, which is what a table deployed before the lease
+/// fields existed looks like. So it also pins the un-migrated fallback: the count still
+/// ages such a row out on `updated_at` at exactly the window it always used.
 #[tokio::test]
 async fn the_cluster_count_ignores_stale_processing_rows() {
     let mut h = DispatchHarness::new(false, "http://unused".to_string()).await;
@@ -885,4 +894,252 @@ async fn a_retry_backoff_does_not_hold_the_slot() {
         Some("processing"),
         "the first job must still be in its backoff, not finished"
     );
+}
+
+// --- the lease: claim, fence, expiry -----------------------------------------
+//
+// A `processing` row used to be reclaimable only if its OWNER looked dead, which is a
+// different question from whether the work is progressing — and one that answers "yes,
+// it's fine" for an SSP that restarted under the same id, for a pool entry that is
+// merely present rather than healthy, and for a request hung inside the HTTP call on
+// this very node. These pin the replacement: the lease decides, ownership does not.
+
+/// The budget follows the LEASE, not the row's age. A row that is young but whose
+/// lease has already run out (a short job timeout) must stop spending the budget, or
+/// admission control and recovery disagree about which rows are alive — the state
+/// where a row is invisible to both.
+#[tokio::test]
+async fn the_cluster_count_follows_the_lease_not_the_row_age() {
+    let mut h = DispatchHarness::new(false, "http://unused".to_string()).await;
+    h.raw
+        .query(
+            "CREATE job:shortlease SET status = 'processing', retries = 0, max_retries = 1, \
+             path = '/run', payload = {}, retry_strategy = 'linear', errors = [], \
+             created_at = time::now(), updated_at = time::now(), \
+             lease_until = time::now() - 1s, lease_epoch = 1",
+        )
+        .await
+        .expect("insert expired-lease row");
+    h.pending("k1", 100, "/run").await;
+
+    h.dispatcher.note_backlog("job");
+    h.dispatcher.drain("job").await;
+
+    assert_eq!(
+        h.admitted(),
+        vec!["job:k1".to_string()],
+        "an expired lease frees the slot even though the row was touched a moment ago"
+    );
+}
+
+/// And the converse: a row far older than the legacy 600s window still holds the
+/// budget while its lease is live. A long job is not an abandoned one.
+#[tokio::test]
+async fn a_long_lease_keeps_the_budget_even_on_an_old_row() {
+    let mut h = DispatchHarness::new(false, "http://unused".to_string()).await;
+    h.raw
+        .query(
+            "CREATE job:longlease SET status = 'processing', retries = 0, max_retries = 1, \
+             path = '/run', payload = {}, retry_strategy = 'linear', errors = [], \
+             created_at = time::now() - 2h, updated_at = time::now() - 2h, \
+             lease_until = time::now() + 1h, lease_epoch = 1",
+        )
+        .await
+        .expect("insert long-lease row");
+    h.pending("k1", 100, "/run").await;
+
+    h.dispatcher.note_backlog("job");
+    h.dispatcher.drain("job").await;
+
+    assert!(
+        h.admitted().is_empty(),
+        "a live lease means the work is still running, whatever the row's age says"
+    );
+}
+
+/// Claiming is a compare-and-swap on `pending`. Before this, the transition to
+/// `processing` was an unguarded `SET`, so two nodes could both "start" one row.
+#[tokio::test]
+async fn only_one_claim_of_a_pending_row_can_win() {
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "c1", "pending").await;
+
+    let first = claim_processing(port.as_ref(), "job:c1", "ssp-a", 60).await.expect("claim");
+    let second = claim_processing(port.as_ref(), "job:c1", "ssp-b", 60).await.expect("claim");
+
+    assert!(matches!(first, Claim::Fenced(_)), "the first claim takes the row: {first:?}");
+    assert_eq!(second, Claim::Lost, "the second must not also start the job");
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE assignee FROM ONLY job:c1").await.as_deref(),
+        Some("ssp-a"),
+        "and the winner owns it",
+    );
+}
+
+/// A claim mints a lease that outlives the request it covers, and a fresh token.
+#[tokio::test]
+async fn a_claim_mints_a_lease_and_bumps_the_epoch() {
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "c2", "pending").await;
+
+    let claim = claim_processing(port.as_ref(), "job:c2", "ssp-a", 90).await.expect("claim");
+    assert_eq!(claim, Claim::Fenced(1), "the first claim opens the count at 1");
+    assert_eq!(
+        select_i64(&raw, "SELECT VALUE lease_epoch FROM ONLY job:c2").await,
+        Some(1)
+    );
+    assert_eq!(
+        select_bool(&raw, "SELECT VALUE lease_until > time::now() + 80s FROM ONLY job:c2").await,
+        Some(true),
+        "the lease covers the request plus its grace"
+    );
+
+    // Back to pending (a retry) and claimed again: a new attempt, a new token. The
+    // lease covers ONE attempt, which is why no renewal is needed for a job that
+    // burns several.
+    h_reset_pending(&raw, "job:c2").await;
+    let again = claim_processing(port.as_ref(), "job:c2", "ssp-a", 90).await.expect("claim");
+    assert_eq!(again, Claim::Fenced(2), "each attempt gets its own token");
+}
+
+/// The lease is derived from the job's own timeout, and clamped. An unbounded
+/// `timeout` on a row must not mint a lease so long the row becomes unreclaimable —
+/// that is the original bug arriving through a different door.
+#[test]
+fn a_lease_always_outlives_its_request_and_is_never_unbounded() {
+    assert!(
+        lease_secs(Duration::from_secs(10)) > 10,
+        "a lease shorter than its request would reclaim healthy work"
+    );
+    assert!(lease_secs(Duration::from_secs(300)) > 300);
+    let absurd = lease_secs(Duration::from_secs(u32::MAX as u64));
+    assert!(absurd <= 24 * 60 * 60, "a lease must stay finite, got {absurd}");
+}
+
+/// The whole point of the fencing token: a reclaimed job's ORIGINAL attempt must not
+/// be able to report an outcome over the top of the attempt that replaced it.
+#[tokio::test]
+async fn a_reclaimed_jobs_original_attempt_cannot_write_its_outcome() {
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "f1", "pending").await;
+
+    // Attempt one claims the row and is now "running".
+    let Claim::Fenced(first_epoch) =
+        claim_processing(port.as_ref(), "job:f1", "ssp-a", 60).await.expect("claim")
+    else {
+        panic!("expected a fenced claim")
+    };
+
+    // Its lease runs out and the sweep hands the row back to the queue.
+    raw.query("UPDATE job:f1 SET lease_until = time::now() - 1s")
+        .await
+        .expect("expire the lease");
+    assert!(
+        reclaim_expired_lease(port.as_ref(), "job:f1").await.expect("reclaim"),
+        "an expired lease is reclaimable"
+    );
+
+    // Attempt two picks it up.
+    let Claim::Fenced(second_epoch) =
+        claim_processing(port.as_ref(), "job:f1", "ssp-b", 60).await.expect("claim")
+    else {
+        panic!("expected a fenced claim")
+    };
+    assert!(second_epoch > first_epoch, "the token moved on");
+
+    // Now attempt one finally answers. It must not land.
+    complete_success_helper(port.as_ref(), "job:f1", "{\"ok\":true}", Some(first_epoch))
+        .await
+        .expect("a fenced write is not an error");
+
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:f1").await.as_deref(),
+        Some("processing"),
+        "the zombie's success must not terminalize the row attempt two is running"
+    );
+
+    // Attempt two's write, on the current token, does land.
+    complete_success_helper(port.as_ref(), "job:f1", "{\"ok\":true}", Some(second_epoch))
+        .await
+        .expect("the live attempt writes");
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:f1").await.as_deref(),
+        Some("success"),
+    );
+}
+
+/// Reclaim keys off the lease and NOTHING else. This row has a live, named assignee —
+/// the exact shape that was unreclaimable at any age.
+#[tokio::test]
+async fn an_expired_lease_is_reclaimed_even_with_a_live_assignee() {
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "r1", "pending").await;
+    claim_processing(port.as_ref(), "job:r1", "ssp-1", 60).await.expect("claim");
+    raw.query("UPDATE job:r1 SET lease_until = time::now() - 1s")
+        .await
+        .expect("expire the lease");
+
+    assert!(reclaim_expired_lease(port.as_ref(), "job:r1").await.expect("reclaim"));
+
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:r1").await.as_deref(),
+        Some("pending"),
+    );
+    // Clearing the owner is load-bearing, not tidying: `JobDispatcher::claim` only
+    // takes rows with `assignee = NONE OR assignee = $me`, so a reclaimed row that
+    // kept a dead node's id would be un-drainable by every other node.
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE assignee FROM ONLY job:r1").await,
+        None,
+        "the reclaim must release ownership or nobody else can pick the row up"
+    );
+}
+
+/// A live lease is left alone, whoever owns it and however long the row has existed.
+#[tokio::test]
+async fn a_live_lease_is_never_reclaimed() {
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "r2", "pending").await;
+    claim_processing(port.as_ref(), "job:r2", "ssp-1", 3600).await.expect("claim");
+    raw.query("UPDATE job:r2 SET created_at = time::now() - 3d")
+        .await
+        .expect("age the row");
+
+    assert!(
+        !reclaim_expired_lease(port.as_ref(), "job:r2").await.expect("reclaim"),
+        "work still inside its lease must not be taken away from it"
+    );
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:r2").await.as_deref(),
+        Some("processing"),
+    );
+}
+
+/// The reclaim re-checks the expiry in its own `WHERE`, so a row that finished between
+/// a sweep's SELECT and its write is left alone. The singlenode reset used to be
+/// unguarded and could flip a `success` row back to `pending`.
+#[tokio::test]
+async fn a_job_that_finished_under_the_sweep_is_not_dragged_back_to_pending() {
+    let (port, raw) = mem_db().await;
+    insert_job(&raw, "r3", "pending").await;
+    let claim = claim_processing(port.as_ref(), "job:r3", "ssp-1", 60).await.expect("claim");
+    raw.query("UPDATE job:r3 SET lease_until = time::now() - 1s")
+        .await
+        .expect("expire the lease");
+    // It completes just before the sweep gets to it.
+    complete_success_helper(port.as_ref(), "job:r3", "{}", claim.epoch()).await.expect("success");
+
+    assert!(
+        !reclaim_expired_lease(port.as_ref(), "job:r3").await.expect("reclaim"),
+        "only a `processing` row is reclaimable"
+    );
+    assert_eq!(
+        select_string(&raw, "SELECT VALUE status FROM ONLY job:r3").await.as_deref(),
+        Some("success"),
+    );
+}
+
+/// Back to `pending` the way a retry does, so a test can claim the same row twice.
+async fn h_reset_pending(db: &Surreal<MemEngine>, id: &str) {
+    db.query(format!("UPDATE {id} SET status = 'pending'")).await.expect("reset");
 }

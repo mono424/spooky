@@ -200,6 +200,43 @@ The query runs with root privileges on every fire, so it always sees current dat
   This is about **overlap**, not throughput. A fan-out over 10,000 rows spawns 10,000 jobs with 10,000 distinct keys, so no policy here restrains it — every one of them is a first run for its own key. What bounds how many actually execute at once is the job table's own [`concurrency`](/docs/jobs#concurrency), which holds the excess as `pending` rows and admits them oldest-first as slots free.
 </Note>
 
+## Run deadlines
+
+A run has a wall-clock ceiling. Past it, the run is failed with
+`{ code: "deadline_exceeded" }`, its in-flight jobs are killed, and — for a fanned-out
+schedule — the key it was holding is released.
+
+```yaml
+retention:
+  runDeadline: 1h      # project-wide default; 0 turns the reaper off
+
+schedules:
+  game-analysis:
+    every: 5m
+    deadline: 30m      # this schedule's own ceiling
+```
+
+`deadline` is not the same knob as `timeout`. `timeout` bounds a single HTTP request to
+a backend; `deadline` bounds the run as a whole, including every step of a workflow,
+every job-level retry, and every gap in between.
+
+<Note>
+  This exists because the alternative is a run that never ends. A run only leaves
+  `running` when something *observable* happens — a job reaching a terminal status, a
+  kill flag being set. When there is nothing left to observe (a step whose dispatch was
+  lost, a job row deleted underneath it), no amount of re-checking moves it, and with
+  the default `concurrency: skip` that one run suppresses every later fire for its key
+  indefinitely. Only a clock resolves that.
+
+  The default is deliberately generous: it is a backstop against a run that is *stuck*,
+  not a service-level objective. A schedule with genuinely long runs should set its own
+  `deadline` rather than raise the project default, because raising the default also
+  raises how long one wedged key can hold up the rest of its fan-out.
+
+  The resolved value is frozen onto each run when it spawns, like a workflow's DAG, so
+  retuning or deleting a schedule never changes the ceiling of work already in flight.
+</Note>
+
 ## Definitions in their own files
 
 Once you have more than a handful, `schedules:` can live in separate files, per entry or wholesale. Paths are relative to the manifest that names them.

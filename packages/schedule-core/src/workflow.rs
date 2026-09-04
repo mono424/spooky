@@ -25,7 +25,7 @@ use serde_json::{json, Map, Value};
 use crate::dag::{StepStatus, WorkflowDag};
 use crate::db::{first_row, rows};
 use crate::engine::{
-    bind_ref, build_job_content, build_payload, last_error, row_ref, ScheduleEngine, Trigger,
+    bind_ref, build_job_content, build_payload, job_failure_error, row_ref, ScheduleEngine, Trigger,
     ROLLUP_NAME_AD_HOC, SCOPE_SCHEDULE,
 };
 use crate::spec::{OnFailure, ScheduleSpec, StepDef, HISTORY_FAILURES_ONLY};
@@ -98,7 +98,19 @@ struct StepRow {
     status: StepStatus,
     job_id: Option<String>,
     output: Option<Value>,
+    /// Dispatch attempts charged so far. NONE on rows older than the field, which
+    /// reads as 0 — those get the full budget, which is the safe direction.
+    dispatch_attempts: i64,
 }
+
+/// Dispatch attempts a single step gets before the engine gives up on it and
+/// fails it. The first is charged by the `blocked -> ready` promotion, so this
+/// allows two recovery re-dispatches. Two, not one, because the first recovery
+/// runs on the next sweep after whatever killed the original attempt and may
+/// still hit the tail of it; and not unbounded, because a step whose dispatch
+/// fails deterministically (a rejected job CREATE) would otherwise be retried
+/// every five seconds for as long as the deployment lives.
+const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 
 impl ScheduleEngine {
     /// Spawn a workflow run for one fire (one fan-out item). `false` = this fire
@@ -153,6 +165,10 @@ impl ScheduleEngine {
         if let Some(mode) = spec.history_mode.as_deref() {
             content.insert("history_mode".into(), json!(mode));
         }
+        // Frozen for the same reason, and read by the reaper.
+        if let Some(secs) = spec.deadline_secs.filter(|n| *n > 0) {
+            content.insert("deadline_secs".into(), json!(secs));
+        }
         content.insert("status".into(), json!("running"));
         if let Some(table) = spec.target_table.as_deref() {
             content.insert("target_table".into(), json!(table));
@@ -163,9 +179,25 @@ impl ScheduleEngine {
         let mut binds = bind_ref("", &wf_run).to_vec();
         binds.extend(bind_ref("schedule", schedule_id));
         binds.push(("content", Value::Object(content)));
-        self.create_if_absent(sql::CREATE_WORKFLOW_RUN, &binds).await?;
 
-        self.create_step_rows(&dag, run_key, &wf_run).await?;
+        // The run row and its step rows are the run's SKELETON, and the schedule
+        // run that gates this fire is already `running` by now. So a half-written
+        // skeleton is not a fire that did not happen — it is a fire that can never
+        // finish: `advance_workflow` computes `all_terminal` over the step rows it
+        // finds, and a run missing some (or all) of them never reaches it. The
+        // schedule run then counts as in flight for `concurrency: skip` forever.
+        //
+        // Both writes are therefore terminalized on failure rather than merely
+        // reported, which is the workflow-kind twin of the `spawn_failed` path
+        // `spawn_one` already takes when a job CREATE fails.
+        let skeleton = match self.create_if_absent(sql::CREATE_WORKFLOW_RUN, &binds).await {
+            Ok(_) => self.create_step_rows(&dag, run_key, &wf_run).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = skeleton {
+            self.fail_unspawnable_run(&wf_run, run_key, &e).await;
+            return Err(e);
+        }
 
         let mut binds = bind_ref("", &ids::schedule_run(run_key)).to_vec();
         binds.extend(bind_ref("wf", &wf_run));
@@ -232,7 +264,7 @@ impl ScheduleEngine {
         content.insert("status".into(), json!("running"));
         content.insert("trigger".into(), json!(Trigger::Manual.as_str()));
         // Absent optionals are omitted, never nulled: `option<T>` rejects NULL.
-        for field in ["dag", "target_table", "input", "history_mode"] {
+        for field in ["dag", "target_table", "input", "history_mode", "deadline_secs"] {
             if let Some(v) = run.get(field).filter(|v| !v.is_null()) {
                 content.insert(field.into(), v.clone());
             }
@@ -418,6 +450,9 @@ impl ScheduleEngine {
             if step.status != StepStatus::Dispatched {
                 continue;
             }
+            // No job to read: the step won its promotion and then lost the
+            // dispatch. Nothing lands here — step 3 recovers it, or gives up on
+            // it once its attempt budget is spent.
             let Some(job_id) = step.job_id.as_deref() else { continue };
             let Some(job) = self.load_job(job_id).await? else {
                 self.finalize_step(
@@ -438,7 +473,10 @@ impl ScheduleEngine {
                     step.output = output;
                 }
                 Some("failed") => {
-                    self.finalize_step(&step.id, "failed", None, last_error(&job)).await?;
+                    // Never `None`: a step that failed must say why, even when the
+                    // job row lost its own error. See `job_failure_error`.
+                    let error = job_failure_error(&job, job_id);
+                    self.finalize_step(&step.id, "failed", None, Some(error)).await?;
                     step.status = StepStatus::Failed;
                 }
                 // pending / processing: the job is retrying or still running. A
@@ -481,6 +519,23 @@ impl ScheduleEngine {
                     step.status = StepStatus::Skipped;
                 }
             }
+
+            // `SKIP_STEP` matches only `blocked`/`ready`, and `doomed_steps`
+            // considers only those two, so a step stranded at `dispatched` with no
+            // job survives both — and then survives everything else, because it is
+            // not terminal and has no job that could ever make it terminal. It
+            // provably never ran (`job_id = NONE` is the statement's own guard), so
+            // under a failing run it is skipped like any other unstarted step.
+            for step in steps.iter_mut() {
+                if step.status != StepStatus::Dispatched || step.job_id.is_some() {
+                    continue;
+                }
+                let skipped =
+                    self.db.query(sql::SKIP_UNDISPATCHED_STEP, &bind_ref("", &step.id)).await?;
+                if first_row(skipped).is_some() {
+                    step.status = StepStatus::Skipped;
+                }
+            }
         }
 
         // 3. Dispatch whatever is ready now. Recompute statuses: step 2 may have
@@ -493,6 +548,89 @@ impl ScheduleEngine {
                 .filter(|s| s.status == StepStatus::Success)
                 .filter_map(|s| s.output.clone().map(|o| (s.step.clone(), o)))
                 .collect();
+
+            // 3a. Recover steps that are past `blocked` but hold no job.
+            //
+            // Two shapes reach here, both from a pass that won a promotion and then
+            // died (or hit a rejected write) before the job was stamped on the row:
+            // `ready` with no job, and `dispatched` with no job. Neither is
+            // reachable by anything else in this engine — `ready_steps` yields only
+            // `blocked` steps, `CLAIM_STEP_READY` guards on `blocked`, and step 1
+            // above needs a `job_id` to land anything — so a stranded step used to
+            // hold its run `running`, and its key held, indefinitely.
+            //
+            // Re-dispatching is the recovery rather than a second execution:
+            // `dispatch_step` mints a DETERMINISTIC job id, creates it through
+            // `create_if_absent`, and `MARK_STEP_DISPATCHED` tolerates `dispatched`.
+            // Worst case the job row already exists and the step is stamped with the
+            // id it would have used anyway.
+            for step in steps.iter_mut() {
+                let stranded = match step.status {
+                    StepStatus::Ready => true,
+                    StepStatus::Dispatched => step.job_id.is_none(),
+                    _ => false,
+                };
+                if !stranded {
+                    continue;
+                }
+                let Some(step_def) = dag.step(&step.step) else { continue };
+                // The same predicate `ready_steps` applies. However a step got
+                // here, it must not run before its dependencies have succeeded.
+                if !step_def
+                    .depends_on
+                    .iter()
+                    .all(|dep| statuses.get(dep).copied() == Some(StepStatus::Success))
+                {
+                    continue;
+                }
+
+                if step.dispatch_attempts >= MAX_DISPATCH_ATTEMPTS {
+                    // Give up, so the run can terminalize instead of looping. Which
+                    // statement applies depends on which status the step stranded
+                    // in; both are guarded so neither can touch a step that has
+                    // since moved on.
+                    let error = json!({
+                        "code": "lost_dispatch",
+                        "reason": format!(
+                            "step could not be dispatched in {MAX_DISPATCH_ATTEMPTS} attempts",
+                        ),
+                        "attempts": step.dispatch_attempts,
+                    });
+                    let mut binds = bind_ref("", &step.id).to_vec();
+                    binds.push(("error", error));
+                    let stmt = match step.status {
+                        StepStatus::Ready => sql::FAIL_UNDISPATCHABLE_STEP,
+                        _ => sql::FAIL_UNDISPATCHED_STEP,
+                    };
+                    self.db.query(stmt, &binds).await?;
+                    step.status = StepStatus::Failed;
+                    tracing::warn!(
+                        run = %wf_run,
+                        step = %step.step,
+                        attempts = step.dispatch_attempts,
+                        "gave up dispatching a workflow step",
+                    );
+                    continue;
+                }
+
+                // Charge the attempt BEFORE trying it. An attempt that dies partway
+                // still has to count, or a deterministically failing dispatch is
+                // retried on every sweep forever.
+                let charged =
+                    self.db.query(sql::BUMP_STEP_DISPATCH_ATTEMPT, &bind_ref("", &step.id)).await?;
+                let Some(charged) = first_row(charged) else { continue };
+                step.dispatch_attempts =
+                    charged.get("dispatch_attempts").and_then(Value::as_i64).unwrap_or(step.dispatch_attempts + 1);
+                tracing::warn!(
+                    run = %wf_run,
+                    step = %step.step,
+                    status = step.status.as_str(),
+                    attempt = step.dispatch_attempts,
+                    "re-dispatching a workflow step that lost its job",
+                );
+                self.dispatch_step(wf_run, &run, step_def, &step.id, &outputs).await?;
+                step.status = StepStatus::Dispatched;
+            }
 
             let ready: Vec<&StepDef> = dag.ready_steps(&statuses).collect();
             for step_def in ready {
@@ -605,6 +743,32 @@ impl ScheduleEngine {
     /// Kill a run an operator asked to stop: skip what hasn't started, kill the
     /// jobs of everything in flight, then terminalize.
     async fn kill_workflow_run(&self, wf_run: &ids::Ref, run: &Value) -> anyhow::Result<()> {
+        self.stop_workflow_run(
+            wf_run,
+            run,
+            "killed",
+            json!({ "code": "killed", "reason": "killed by operator" }),
+        )
+        .await
+    }
+
+    /// Stop a running run: skip every step that has not started, kill the job of
+    /// every step that has, and terminalize the run and its owning schedule run
+    /// with `status` and `error`.
+    ///
+    /// Parameterized because there are two reasons to stop a run and they must not
+    /// be reported as the same thing. An operator kill is `killed by operator`; the
+    /// reaper's is a blown deadline, and labelling that one "killed by operator"
+    /// tells whoever reads the row later that a human did this. The mechanics are
+    /// identical, so they stay one implementation — a reaped run whose step jobs
+    /// kept running would defeat the point of reaping it.
+    pub(crate) async fn stop_workflow_run(
+        &self,
+        wf_run: &ids::Ref,
+        run: &Value,
+        status: &str,
+        error: Value,
+    ) -> anyhow::Result<()> {
         let steps = self.load_step_rows(wf_run).await?;
         for step in &steps {
             match step.status {
@@ -612,9 +776,19 @@ impl ScheduleEngine {
                     self.db.query(sql::SKIP_STEP, &bind_ref("", &step.id)).await?;
                 }
                 StepStatus::Dispatched => {
-                    if let Some(job_id) = step.job_id.as_deref() {
-                        if let Err(e) = self.kill.kill(job_id).await {
-                            tracing::warn!(job_id, error = %e, "could not kill workflow step job");
+                    match step.job_id.as_deref() {
+                        Some(job_id) => {
+                            if let Err(e) = self.kill.kill(job_id).await {
+                                tracing::warn!(job_id, error = %e, "could not kill workflow step job");
+                            }
+                        }
+                        // Dispatched with no job: it never started, so there is
+                        // nothing to kill and it is safe to skip. Without this it
+                        // would survive the stop and hold the run non-terminal.
+                        None => {
+                            self.db
+                                .query(sql::SKIP_UNDISPATCHED_STEP, &bind_ref("", &step.id))
+                                .await?;
                         }
                     }
                 }
@@ -622,12 +796,15 @@ impl ScheduleEngine {
             }
         }
         let mut patch = Map::new();
-        patch.insert("status".into(), json!("killed"));
-        patch.insert("error".into(), json!({ "code": "killed", "reason": "killed by operator" }));
+        patch.insert("status".into(), json!(status));
+        patch.insert("error".into(), error.clone());
         let mut binds = bind_ref("", wf_run).to_vec();
         binds.push(("patch", Value::Object(patch)));
         self.db.query(sql::FINALIZE_WORKFLOW_RUN, &binds).await?;
-        self.finalize_owning_schedule_run(wf_run, run, "killed", None).await
+        // The schedule run carries the same reason, not a bare status: it is the row
+        // `spky schedules runs` and the dashboard read, and a terminal run with no
+        // error there is the exact gap that made a wedge look like a quiet skip.
+        self.finalize_owning_schedule_run(wf_run, run, status, Some(error)).await
     }
 
     /// Flag a run for the engine to kill on its next pass. Used by
@@ -646,28 +823,56 @@ impl ScheduleEngine {
 
     /// Re-examine every `running` workflow run, and honour any pending kill.
     /// This is the polling fallback for a lost job-completion event.
-    pub(crate) async fn heal_workflow_runs(&self) -> anyhow::Result<usize> {
+    ///
+    /// One run's failure never aborts the pass. That is the same rule the rest of
+    /// the sweep already follows — "one bad schedule never aborts the sweep" — and
+    /// getting it wrong here was worse than anywhere else: a run whose advancement
+    /// throws every time (a step whose job CREATE is rejected, say) would take down
+    /// `reap_pass` and `prune_pass` with it on every single sweep, including the
+    /// reaper whose whole job is to clear that run. The one thing that must not be
+    /// blocked by a stuck run is the machinery for unsticking it.
+    pub(crate) async fn heal_workflow_runs(
+        &self,
+        report: &mut crate::engine::TickReport,
+    ) -> anyhow::Result<usize> {
         let mut healed = 0;
 
         for id in rows(self.db.query(sql::SELECT_KILL_REQUESTED, &[]).await?) {
             let Some(wf_run) = id.as_str().and_then(ids::Ref::parse) else { continue };
-            if let Some(run) = self.load_workflow_run(&wf_run).await? {
-                self.kill_workflow_run(&wf_run, &run).await?;
-                healed += 1;
+            let run = match self.load_workflow_run(&wf_run).await {
+                Ok(Some(run)) => run,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!(run = %wf_run, error = %e, "could not read a run to kill");
+                    report.errored += 1;
+                    continue;
+                }
+            };
+            match self.kill_workflow_run(&wf_run, &run).await {
+                Ok(()) => healed += 1,
+                Err(e) => {
+                    tracing::warn!(run = %wf_run, error = %e, "could not honour a kill request");
+                    report.errored += 1;
+                }
             }
         }
 
         for id in rows(self.db.query(sql::SELECT_RUNNING_WORKFLOW_RUNS, &[]).await?) {
             let Some(wf_run) = id.as_str().and_then(ids::Ref::parse) else { continue };
-            self.advance_workflow(&wf_run).await?;
-            healed += 1;
+            match self.advance_workflow(&wf_run).await {
+                Ok(()) => healed += 1,
+                Err(e) => {
+                    tracing::warn!(run = %wf_run, error = %e, "could not advance a run");
+                    report.errored += 1;
+                }
+            }
         }
         Ok(healed)
     }
 
     // -- small helpers ------------------------------------------------------
 
-    async fn load_workflow_run(&self, wf_run: &ids::Ref) -> anyhow::Result<Option<Value>> {
+    pub(crate) async fn load_workflow_run(&self, wf_run: &ids::Ref) -> anyhow::Result<Option<Value>> {
         let results = self.db.query(sql::SELECT_WORKFLOW_RUN, &bind_ref("", wf_run)).await?;
         Ok(match results.into_iter().next() {
             Some(v @ Value::Object(_)) => Some(v),
@@ -689,6 +894,10 @@ impl ScheduleEngine {
                         .and_then(StepStatus::parse)?,
                     job_id: row.get("job_id").and_then(Value::as_str).map(str::to_string),
                     output: row.get("output").cloned().filter(|v| !v.is_null()),
+                    dispatch_attempts: row
+                        .get("dispatch_attempts")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
                 })
             })
             .collect())
@@ -762,6 +971,35 @@ impl ScheduleEngine {
             self.finalize_owning_schedule_run(wf_run, &run, "failed", Some(error)).await?;
         }
         Ok(())
+    }
+
+    /// Terminalize a fire whose workflow-run skeleton could not be written.
+    ///
+    /// Ordering matters. `fail_workflow_run` already mirrors its outcome onto the
+    /// owning schedule run, but it can only do so when the workflow run row
+    /// exists — and that row is one of the two things that may have failed. So the
+    /// schedule run is finalized directly as well. Both statements are guarded on
+    /// `running`, so the second is a no-op whenever the first got there first, and
+    /// neither can relabel a run something else already finished.
+    ///
+    /// Best-effort on purpose: the caller returns the original error either way,
+    /// and a failure to record the failure must not mask it.
+    async fn fail_unspawnable_run(
+        &self,
+        wf_run: &ids::Ref,
+        run_key: &str,
+        cause: &anyhow::Error,
+    ) {
+        // `{cause:#}` walks the context chain — the outermost context alone is
+        // rarely the part that says which write was rejected.
+        let error = json!({ "code": "spawn_failed", "reason": format!("{cause:#}") });
+        if let Err(e) = self.fail_workflow_run(wf_run, error.clone()).await {
+            tracing::warn!(run = %wf_run, error = %e, "could not fail an unspawnable workflow run");
+        }
+        let sched_run = ids::schedule_run(run_key);
+        if let Err(e) = self.finalize_schedule_run(&sched_run, "failed", Some(error)).await {
+            tracing::warn!(run = %sched_run, error = %e, "could not fail an unspawnable schedule run");
+        }
     }
 
     /// Under `history: failures-only`, a workflow run that succeeded leaves nothing

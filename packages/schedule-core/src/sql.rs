@@ -134,7 +134,10 @@ pub const CREATE_JOB: &str = "CREATE type::record($tb, $key) CONTENT $content";
 /// Terminal state of a spawned job, for the heal pass and the observer. `ONLY`
 /// yields NONE (not an error) when the row is gone, which the caller reads as
 /// "this job no longer exists".
-pub const SELECT_JOB: &str = "SELECT status, result, errors FROM ONLY type::record($tb, $key)";
+/// `retries`/`max_retries` are projected so a failed job with an empty `errors`
+/// array can still be reported with its attempt count — see `job_failure_error`.
+pub const SELECT_JOB: &str =
+    "SELECT status, result, errors, retries, max_retries FROM ONLY type::record($tb, $key)";
 
 /// Finalize a schedule run. Guarded on `running` so a heal pass racing the
 /// observer, or a late completion after a kill, can't revive or relabel it.
@@ -171,18 +174,50 @@ pub const REQUEST_WORKFLOW_KILL: &str =
     "UPDATE type::record($tb, $key) SET kill_requested = true WHERE status = 'running'";
 
 pub const SELECT_STEP_RUNS: &str = "\
-SELECT id, step, depends_on, status, job_id, output FROM _00_step_run \
+SELECT id, step, depends_on, status, job_id, output, dispatch_attempts FROM _00_step_run \
 WHERE workflow_run = type::record($wf_tb, $wf_key)";
 
 /// Promote a step to `ready`. Winning this CAS is the right to dispatch it, so
 /// two concurrent advancement passes can never both create the step's job.
-pub const CLAIM_STEP_READY: &str =
-    "UPDATE type::record($tb, $key) SET status = 'ready' WHERE status = 'blocked' RETURN AFTER";
+///
+/// The promotion also OPENS the dispatch-attempt count, because the promotion and
+/// the dispatch are two writes: a pass that wins this and then dies leaves a
+/// `ready` step with no job, and `dispatch_attempts` is the only record that an
+/// attempt was ever made. Recovery re-dispatches and bumps it; see
+/// [`BUMP_STEP_DISPATCH_ATTEMPT`].
+pub const CLAIM_STEP_READY: &str = "\
+UPDATE type::record($tb, $key) SET status = 'ready', dispatch_attempts = 1 \
+WHERE status = 'blocked' RETURN AFTER";
+
+/// Charge a recovery re-dispatch against the step's attempt budget. Written
+/// BEFORE the re-dispatch is attempted, never after: an attempt that dies partway
+/// still has to count, or a step whose dispatch fails the same way every pass
+/// retries forever.
+pub const BUMP_STEP_DISPATCH_ATTEMPT: &str = "\
+UPDATE type::record($tb, $key) SET dispatch_attempts = (dispatch_attempts ?? 0) + 1 \
+WHERE status INSIDE ['ready', 'dispatched'] RETURN AFTER";
+
+/// Skip a step that a kill or a halt caught between `ready` and a real job.
+/// `job_id = NONE` is what makes this safe: the step provably never dispatched, so
+/// nothing is running that the skip would orphan. `SKIP_STEP` deliberately matches
+/// only `blocked`/`ready`, and a step stranded at `dispatched` with no job is
+/// otherwise unskippable — and therefore immortal.
+pub const SKIP_UNDISPATCHED_STEP: &str = "\
+UPDATE type::record($tb, $key) SET status = 'skipped', finished_at = time::now() \
+WHERE status = 'dispatched' AND job_id = NONE";
+
+/// Fail a step whose dispatch could not be recovered inside its attempt budget.
+/// Same `job_id = NONE` guard and the same reason: this can only ever match a step
+/// that never got a job, so failing it cannot contradict work in flight.
+pub const FAIL_UNDISPATCHED_STEP: &str = "\
+UPDATE type::record($tb, $key) SET status = 'failed', error = $error, finished_at = time::now() \
+WHERE status = 'dispatched' AND job_id = NONE";
 
 /// Record the job a claimed step dispatched. Tolerates `dispatched` so the heal
 /// pass can re-stamp after a crash between creating the job and this write.
 pub const MARK_STEP_DISPATCHED: &str = "\
-UPDATE type::record($tb, $key) SET status = 'dispatched', job_id = $job_id \
+UPDATE type::record($tb, $key) SET status = 'dispatched', job_id = $job_id, \
+started_at = started_at ?? time::now() \
 WHERE status INSIDE ['ready', 'dispatched']";
 
 /// Land a step's terminal state (and its captured output). Guarded on
@@ -241,7 +276,7 @@ CREATE type::record($tb, $key) CONTENT object::extend($content, \
 /// what did not work.
 pub const RESET_STEP_FOR_RETRY: &str = "\
 UPDATE type::record($tb, $key) SET status = 'blocked', job_id = NONE, error = NONE, \
-output = NONE, finished_at = NONE \
+output = NONE, finished_at = NONE, started_at = NONE, dispatch_attempts = 0 \
 WHERE status INSIDE ['failed', 'skipped'] RETURN AFTER";
 
 /// Same, for a step a kill left `dispatched` whose job the caller has just seen
@@ -249,7 +284,7 @@ WHERE status INSIDE ['failed', 'skipped'] RETURN AFTER";
 /// job that finished between the read and this write leaves the step alone.
 pub const RESET_DISPATCHED_STEP_FOR_RETRY: &str = "\
 UPDATE type::record($tb, $key) SET status = 'blocked', job_id = NONE, error = NONE, \
-output = NONE, finished_at = NONE \
+output = NONE, finished_at = NONE, started_at = NONE, dispatch_attempts = 0 \
 WHERE status = 'dispatched' AND job_id = $job_id RETURN AFTER";
 
 /// Reopen a terminal run for a retry. One statement on purpose: clearing
@@ -304,7 +339,7 @@ WHERE job_id = $job_id AND status = 'dispatched'";
 /// Ids that no longer exist are simply absent from the result, which is how the
 /// caller detects a pruned or operator-deleted job.
 pub fn select_jobs_terminal(record_ids: &[String]) -> String {
-    format!("SELECT id, status, errors FROM {}", record_ids.join(", "))
+    format!("SELECT id, status, errors, retries, max_retries FROM {}", record_ids.join(", "))
 }
 
 /// Drop a run row outright. Used by `history: failures-only`, where a successful
@@ -363,6 +398,47 @@ pub fn is_success_shaped(status: &str) -> bool {
 /// Workflow runs to re-examine for the same reason.
 pub const SELECT_RUNNING_WORKFLOW_RUNS: &str =
     "SELECT VALUE id FROM _00_workflow_run WHERE status = 'running'";
+
+// ---------------------------------------------------------------------------
+// Reaping (the deadline)
+// ---------------------------------------------------------------------------
+
+/// Workflow runs past their deadline, oldest first.
+///
+/// The ceiling is per row: `deadline_secs` is frozen onto the run at spawn, and
+/// `$default` covers rows that were spawned without one (an older CLI, or a
+/// schedule that sets no `deadline:`). Building the interval from a column needs
+/// the `<duration>(string::concat(...))` form — SurrealDB will not multiply a
+/// duration by an int column.
+///
+/// A resolved deadline of `0` means OFF, never "expire immediately" — the same
+/// reading `_00_retention.run_deadline_secs = 0` has. Without the explicit guard a
+/// hand-edited `deadline_secs = 0` on one run would be reaped on the next sweep,
+/// which is the opposite of what a zero means everywhere else here.
+///
+/// `created_at` is projected because it is in the `ORDER BY`, which SurrealDB v3
+/// requires, and `ORDER BY … LIMIT` is what makes this an index scan against
+/// `idx_wfrun_deadline` instead of a whole-partition filter: a range predicate on
+/// the index's second column is not pushed into the scan.
+pub const SELECT_EXPIRED_WORKFLOW_RUNS: &str = "\
+SELECT id, created_at, deadline_secs FROM _00_workflow_run \
+WHERE status = 'running' \
+AND (deadline_secs ?? $default) > 0 \
+AND created_at + <duration>(string::concat(<string>(deadline_secs ?? $default), 's')) < time::now() \
+ORDER BY created_at ASC LIMIT $batch";
+
+/// Job-kind schedule runs past their deadline, oldest first. Workflow-kind runs
+/// are reached through their workflow run instead, which is what kills the step
+/// jobs and mirrors the outcome back here.
+///
+/// Bounded from `fire_at`, not `created_at`: the two are written in the same
+/// statement, and `fire_at` is the one an operator reads.
+pub const SELECT_EXPIRED_JOB_RUNS: &str = "\
+SELECT id, job_id, fire_at, deadline_secs FROM _00_schedule_run \
+WHERE status = 'running' AND kind = 'job' \
+AND (deadline_secs ?? $default) > 0 \
+AND fire_at + <duration>(string::concat(<string>(deadline_secs ?? $default), 's')) < time::now() \
+ORDER BY fire_at ASC LIMIT $batch";
 
 // ---------------------------------------------------------------------------
 // Retention
@@ -500,6 +576,43 @@ pub fn prune_job_table(table: &str) -> String {
 /// Terminal job statuses, shortest-lived bucket first. `pending` and `processing`
 /// are absent on purpose — an in-flight job is never pruned at any age.
 pub const JOB_PRUNABLE: [&str; 2] = ["success", "failed"];
+
+/// Fallback lease length, in seconds, for an outbox row that has no `lease_until`.
+///
+/// Such a row belongs to a table that has not been re-deployed since the lease
+/// fields were added, so the only clock available is `updated_at` — which is what
+/// both sweeps keyed off before leases existed. Keeping the old number means an
+/// un-migrated table behaves EXACTLY as it does today and gains real per-job leases
+/// on its next `spky deploy`: no deployment gets worse, and none needs a coordinated
+/// upgrade. It must stay equal to the dispatcher's own legacy window, or admission
+/// control and recovery disagree about which rows are still alive.
+pub const LEGACY_LEASE_SECS: u64 = 600;
+
+/// SQL predicate: this `processing` row's lease has EXPIRED, so it may be reclaimed.
+///
+/// The `?? ` is the un-migrated fallback described on [`LEGACY_LEASE_SECS`].
+///
+/// Shared, and deliberately so. The singlenode sweep (`ssp-node`) and the cluster
+/// sweep (`scheduler`) live in different crates that cannot see each other, and only
+/// one of them has tests; if each spelled this predicate itself they would drift, and
+/// the untested one is exactly where a drift would go unnoticed. `schedule-core` is
+/// the only crate both depend on, which is why an outbox-job fragment lives here
+/// alongside the outbox retention SQL.
+///
+/// Note what is NOT in here: any mention of `assignee`. Whether the owner looks alive
+/// answers "is that process up", not "is this work progressing", and conflating the
+/// two is what let a `processing` row sit forever behind an SSP that had restarted
+/// under the same id. Liveness may still trigger an EARLIER reclaim; it is never what
+/// makes reclaim possible.
+pub const LEASE_EXPIRED: &str =
+    "(lease_until ?? (updated_at + <duration>('600s'))) < time::now()";
+
+/// The complement: this `processing` row's lease is still LIVE, so it really is being
+/// worked on. Used by the dispatcher's cluster concurrency count, so that a row which
+/// stops spending the budget is precisely a row that has become reclaimable — before
+/// this pairing the two rules differed, and a row could fall outside the budget while
+/// remaining unreachable by recovery, invisible to both.
+pub const LEASE_LIVE: &str = "(lease_until ?? (updated_at + <duration>('600s'))) > time::now()";
 
 /// A table name safe to interpolate into a statement.
 pub fn is_plain_identifier(name: &str) -> bool {
@@ -716,6 +829,9 @@ mod tests {
             ("RESET_DISPATCHED_STEP_FOR_RETRY", RESET_DISPATCHED_STEP_FOR_RETRY),
             ("REOPEN_WORKFLOW_RUN", REOPEN_WORKFLOW_RUN),
             ("REOPEN_SCHEDULE_RUN", REOPEN_SCHEDULE_RUN),
+            ("BUMP_STEP_DISPATCH_ATTEMPT", BUMP_STEP_DISPATCH_ATTEMPT),
+            ("SKIP_UNDISPATCHED_STEP", SKIP_UNDISPATCHED_STEP),
+            ("FAIL_UNDISPATCHED_STEP", FAIL_UNDISPATCHED_STEP),
         ] {
             assert!(sql.contains(" WHERE "), "{name} must carry a WHERE guard");
         }
@@ -785,6 +901,7 @@ mod tests {
             FINALIZE_STEP, FAIL_UNDISPATCHABLE_STEP, SKIP_STEP, FINALIZE_WORKFLOW_RUN,
             SELECT_KILL_REQUESTED, FIND_RUN_BY_JOB, FIND_STEP_BY_JOB,
             SELECT_RUNNING_JOB_RUNS, SELECT_RUNNING_WORKFLOW_RUNS,
+            SELECT_EXPIRED_WORKFLOW_RUNS, SELECT_EXPIRED_JOB_RUNS,
             PRUNE_SCHEDULE_RUNS, PRUNE_WORKFLOW_RUNS,
             CREATE_WORKFLOW_RUN_RERUN, RESET_STEP_FOR_RETRY, RESET_DISPATCHED_STEP_FOR_RETRY,
             REOPEN_WORKFLOW_RUN, REOPEN_SCHEDULE_RUN,
@@ -880,6 +997,27 @@ mod tests {
         assert!(sql.contains("ORDER BY updated_at ASC"));
         assert!(!sql.contains("created_at"));
         assert!(sql.contains("LIMIT $batch"));
+    }
+
+    /// The two lease fragments must stay exact complements, and both must carry the
+    /// same un-migrated fallback window as [`LEGACY_LEASE_SECS`]. A mismatch is the
+    /// silent failure the pairing exists to prevent: rows that neither spend the
+    /// concurrency budget nor ever become reclaimable.
+    #[test]
+    fn the_lease_predicates_are_complements_of_one_window() {
+        let window = format!("<duration>('{LEGACY_LEASE_SECS}s')");
+        for (name, sql) in [("LEASE_EXPIRED", LEASE_EXPIRED), ("LEASE_LIVE", LEASE_LIVE)] {
+            assert!(sql.contains(&window), "{name} must fall back to {window}: {sql}");
+            assert!(sql.contains("lease_until ??"), "{name} must tolerate a missing lease: {sql}");
+            // Whether the owner is alive is a different question, and mixing it in
+            // here is the bug: a live assignee must never block a reclaim.
+            assert!(!sql.contains("assignee"), "{name} must not consult ownership: {sql}");
+        }
+        assert_eq!(
+            LEASE_EXPIRED.replace(" < ", " > "),
+            LEASE_LIVE,
+            "the live and expired predicates must differ ONLY in the comparison"
+        );
     }
 
     /// In-flight jobs are never prunable, whatever their age.
@@ -1021,11 +1159,16 @@ mod tests {
 
     /// The batched heal lookup must not select `result`: a job result is up to 64 KiB,
     /// so pulling it for every in-flight run of a wide fan-out would move megabytes
-    /// per sweep for a field the heal never reads.
+    /// per sweep for a field the heal never reads. Scalars are fine — `retries` and
+    /// `max_retries` are there so a failure with an empty `errors` array can still be
+    /// reported with its attempt count (see `job_failure_error`).
     #[test]
     fn the_batched_job_lookup_stays_narrow() {
         let sql = select_jobs_terminal(&["job:sch_a".to_string(), "job:sch_b".to_string()]);
-        assert!(sql.contains("SELECT id, status, errors FROM job:sch_a, job:sch_b"), "{sql}");
+        assert!(sql.ends_with(" FROM job:sch_a, job:sch_b"), "{sql}");
+        for field in ["id", "status", "errors", "retries", "max_retries"] {
+            assert!(sql.contains(field), "the heal needs {field}: {sql}");
+        }
         assert!(!sql.contains("result"), "the heal never needs the body: {sql}");
         // Bound string arrays do NOT coerce to record ids — `FROM $ids` echoes them
         // back and `id IN $ids` matches nothing, both silently. So the ids are

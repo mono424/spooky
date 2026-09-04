@@ -71,6 +71,7 @@ DEFINE FIELD retry_strategy ON TABLE job TYPE string DEFAULT ALWAYS "linear"
 -- Optional per-job overrides
 DEFINE FIELD delay ON TABLE job TYPE int DEFAULT ALWAYS 0
   PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
+-- Seconds, not milliseconds. It also sizes the reclaim lease (below).
 DEFINE FIELD timeout ON TABLE job TYPE option<int>
   PERMISSIONS FOR create, select WHERE true FOR update WHERE false;
 
@@ -86,6 +87,12 @@ DEFINE FIELD errors[*] ON TABLE job TYPE object FLEXIBLE;
 DEFINE FIELD result ON TABLE job TYPE any
   PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
 DEFINE FIELD assignee ON TABLE job TYPE option<string>
+  PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
+-- The lease: until when the current attempt may hold this row, and the fencing
+-- token it must present to write the outcome.
+DEFINE FIELD lease_until ON TABLE job TYPE option<datetime>
+  PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
+DEFINE FIELD lease_epoch ON TABLE job TYPE option<int>
   PERMISSIONS FOR select WHERE true FOR create, update WHERE false;
 
 DEFINE FIELD updated_at ON TABLE job TYPE datetime DEFAULT ALWAYS time::now()
@@ -112,7 +119,8 @@ retention:
   success: 6h        # job rows that succeeded
   failed: 14d        # job rows that failed
   runSuccess: 24h    # schedule/workflow run history for success|skipped|replaced
-  runFailed: 30d     # ... and for failed|killed`;
+  runFailed: 30d     # ... and for failed|killed
+  runDeadline: 1h    # ceiling on ONE run, for schedules with no deadline: of their own`;
 
 export const perScheduleRetentionCode = `schedules:
   sync-every-tenant:
@@ -252,10 +260,17 @@ The job runner is built into the SSP. There is nothing to install or implement:
 1. **Pickup is create-only.** Writing a `pending` row fires an event that hands the job to the runner, which is why `db.run()` creates a row rather than updating one.
 2. **The runner is the only writer of `status`.** Everything else (kill, retry, recovery) goes through guarded statements, so two writers can never disagree about a job's state.
 3. **Retries happen in-process,** with linear or exponential backoff. A job that exhausts them is marked `failed` with its error history intact.
-4. **A recovery sweep catches what events miss:** rows created while the SSP was down, jobs whose delay elapsed during a restart, and `processing` rows orphaned by a crash. In cluster mode the scheduler owns that sweep and uses `assignee` to tell whether the owning SSP is still alive.
+4. **A recovery sweep catches what events miss:** rows created while the SSP was down, jobs whose delay elapsed during a restart, and `processing` rows whose lease has run out.
+5. **Every attempt holds a lease, and it expires.** Claiming a job stamps `lease_until` (the job's own `timeout` plus a grace margin) and bumps `lease_epoch`. A `processing` row past its lease is handed back to the queue **regardless of whether the SSP that claimed it is still alive** — "that process is up" and "this work is progressing" are different questions, and an SSP that restarts under the same id, or one that is heartbeating but has lost its queue, answers the first one yes while holding rows it will never finish. A dead owner only makes the reclaim happen sooner.
+
+   The lease covers one *attempt*, not the whole retry budget: a job that fails and backs off is claimed again and gets a fresh window, so nothing has to renew anything.
+
+   `lease_epoch` is what makes reclaiming safe. Each of the runner's writes is guarded on the token it claimed under, so if a slow attempt wakes up after its row was reclaimed and re-run, its write matches nothing instead of overwriting the attempt that replaced it. Without that, reclaiming a stuck job would trade it for a corrupted one.
 
 <Warning>
-  A SCHEMAFULL job table must define the platform's own fields, or those writes are rejected at the statement level and quietly lost. `spky deploy` injects `assignee`, `result`, `errors[*]`, and `timeout` with `IF NOT EXISTS` (plus the retention index below), so re-deploying an older project fixes it.
+  A SCHEMAFULL job table must define the platform's own fields, or those writes are rejected at the statement level and quietly lost. `spky deploy` injects `assignee`, `lease_until`, `lease_epoch`, `result`, `errors[*]`, and `timeout` with `IF NOT EXISTS` (plus the retention index below), so re-deploying an older project fixes it.
+
+  Until it does, that table's jobs are claimed without a lease and fall back to the older rule: a `processing` row is reclaimed once it has been untouched for ten minutes. Nothing breaks, and nothing gains a per-job deadline either.
 
   One thing a deploy **cannot** fix for you: `assigned_to` must be optional. A scheduled job belongs to no domain record, so the scheduler creates rows without it — and if your outbox table declares `assigned_to TYPE record<...>` rather than `option<record<...>>`, every scheduled fire fails to spawn with `Expected record but found NONE`. Deploys never relax a field you defined yourself, so change it in your own `.surql`.
 </Warning>
@@ -303,6 +318,7 @@ Finished jobs are deleted automatically. Retention is asymmetric by outcome, bec
 | `runSuccess` | 24h | run history in `success`, `skipped`, `replaced` |
 | `runFailed` | 30d | run history in `failed`, `killed` |
 | `maxRows` | off | hard ceiling on successful rows per table, see below |
+| `runDeadline` | 1h | default wall-clock ceiling on one schedule/workflow run; `0` disables it. See [Run deadlines](/docs/jobs/schedules#run-deadlines). |
 
 `pending` and `processing` rows are **never** pruned, at any age. `skipped` and `replaced` follow the success window on purpose: with the default `concurrency: skip`, a slow wide fan-out writes one `skipped` row per item per fire, and those are the highest-volume, lowest-information rows in the system.
 
@@ -345,7 +361,7 @@ A single schedule can override the run-history windows, which is what a noisy fa
 <CodeBlock code={jobSchemaCode} lang="sql" />
 
 <Note>
-  `status`, `errors`, `result`, and `assignee` are platform-written: clients may read them but never set them. `assignee` is the owning SSP node id, used for cluster recovery.
+  `status`, `errors`, `result`, `assignee`, `lease_until`, and `lease_epoch` are platform-written: clients may read them but never set them. `assignee` is the owning SSP node id; the two `lease_*` fields are how a stuck job is reclaimed, so a client that could forge them could keep a row unreclaimable forever.
 </Note>
 
 ## See also

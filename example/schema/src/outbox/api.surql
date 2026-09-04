@@ -59,6 +59,24 @@ PERMISSIONS
   FOR select WHERE true
   FOR create, update WHERE false;
 
+-- Lease expiry for the attempt holding this row, and the fencing token that
+-- attempt presents to write its outcome. `assignee` says WHO claimed it; these say
+-- UNTIL WHEN, which is the half that makes a stuck job recoverable -- reclaim keys
+-- off `lease_until` alone, never off whether the assignee still looks alive.
+-- `lease_epoch` is bumped on every claim and every reclaim, and the runner's writes
+-- are guarded on the epoch they claimed under, so a reclaimed job's original
+-- attempt cannot overwrite the new one when it wakes up.
+-- Written server-side (root) only.
+DEFINE FIELD lease_until ON TABLE job TYPE option<datetime>
+PERMISSIONS
+  FOR select WHERE true
+  FOR create, update WHERE false;
+
+DEFINE FIELD lease_epoch ON TABLE job TYPE option<int>
+PERMISSIONS
+  FOR select WHERE true
+  FOR create, update WHERE false;
+
 DEFINE FIELD errors[*] ON TABLE job TYPE object FLEXIBLE;
 DEFINE FIELD errors ON TABLE job TYPE array<object> DEFAULT ALWAYS []
 PERMISSIONS
@@ -83,8 +101,12 @@ PERMISSIONS
   FOR create, select WHERE true
   FOR update WHERE false;
 
--- Per-job HTTP timeout in ms, overriding the backend default. Set by
--- `db.run(..., { timeout })` and by a schedule's `timeout:`. The field must exist:
+-- Per-job HTTP timeout in SECONDS, overriding the backend default. Set by
+-- `db.run(..., { timeout })` and by a schedule's `timeout:` (the CLI converts that
+-- duration to seconds at deploy time). Seconds, not milliseconds: every consumer
+-- reads it through `Duration::from_secs`, and it also sizes the reclaim lease, so a
+-- value written as ms would make the row unreclaimable for months.
+-- The field must exist:
 -- the scheduler puts it in the job content whenever the schedule declares one, and
 -- a SCHEMAFULL table without it rejects the whole CREATE with
 -- "Found field 'timeout', but no such field exists".

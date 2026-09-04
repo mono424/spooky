@@ -114,7 +114,9 @@ pub const CATCHUP_ROWS_DUMP_LIMIT: usize = 50_000;
 
 pub const JOB_RECOVERY_INTERVAL_SECS: u64 = 60;
 const JOB_RECOVERY_PENDING_GRACE_SECS: u64 = 30;
-const JOB_RECOVERY_STALE_PROCESSING_SECS: u64 = 600;
+// A `processing` row is reclaimed when its LEASE expires, not at a fixed age — see
+// `schedule_core::sql::LEASE_EXPIRED`. The old fixed 600s window survives only as
+// that predicate's fallback for a table deployed before the lease fields existed.
 /// Rows one sweep pass reads per table per category. A concurrency-limited
 /// table can hold an arbitrarily deep pending backlog, and the sweep is a
 /// safety net, not the pickup path — the drain is.
@@ -130,7 +132,8 @@ pub const JOB_DRAIN_INTERVAL_SECS: u64 = 2;
 /// them: SurrealDB v3 rejects an order idiom that the projection does not
 /// select. `from_record` ignores both.
 const RECOVERY_FIELDS: &str = "type::string(id) AS id, status, path, payload, retries, \
-                               max_retries, retry_strategy, timeout, created_at, updated_at";
+                               max_retries, retry_strategy, timeout, created_at, updated_at, \
+                               lease_until, lease_epoch";
 
 #[derive(Deserialize, Debug)]
 struct LogRequest {
@@ -1430,26 +1433,42 @@ impl SspNode {
             }
         }
 
-        // 2. Orphaned processing rows (processing far longer than any job runs).
+        // 2. `processing` rows whose LEASE has expired.
+        //
+        // The lease, not the owner. This used to skip any row still marked in-flight
+        // on this node, which meant a request hung inside the HTTP call — the exact
+        // thing that needs recovering — was skipped on every pass forever. An
+        // in-flight mark now says "cancel it first", not "leave it alone".
         let stale_q = format!(
             "SELECT {fields} FROM {table} WHERE status = 'processing' \
-             AND updated_at < time::now() - {stale}s \
+             AND {expired} \
              ORDER BY updated_at ASC LIMIT {limit}",
             fields = RECOVERY_FIELDS,
-            stale = JOB_RECOVERY_STALE_PROCESSING_SECS,
+            expired = schedule_core::sql::LEASE_EXPIRED,
             limit = JOB_RECOVERY_PAGE,
         );
         for row in rows_of(db.query(&stale_q, &[]).await?) {
             let Some(id) = row.get("id").and_then(|v| v.as_str()) else { continue };
-            if self.job_control.is_inflight(id) {
-                continue; // never touch a request in-flight on this node
+            // Still running here: the lease says it has had long enough, so stop it
+            // rather than leaving a zombie holding a backend connection while its
+            // replacement runs. Same mechanism `/job/kill` uses.
+            if self.job_control.cancel_inflight(id) {
+                warn!(target: "ssp::job_recovery", job_id = %id, "Cancelling a local request past its lease");
             }
-            if let Err(e) = crate::jobs::update_status_helper(db, id, "pending").await {
-                warn!(target: "ssp::job_recovery", job_id = %id, error = %e, "Failed to reset stale processing job");
-                continue;
+            // Guarded on `processing` AND on the expiry, so a row that finished (or
+            // renewed) between the SELECT and here is left alone — the previous
+            // unguarded reset could flip a `success` row back to `pending`. It also
+            // clears the assignee and bumps the fence; see `reclaim_expired_lease`.
+            match crate::jobs::reclaim_expired_lease(db, id).await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    warn!(target: "ssp::job_recovery", job_id = %id, error = %e, "Failed to reclaim a job past its lease");
+                    continue;
+                }
             }
             if crate::jobs::enqueue_recovered(&self.job_dispatcher, backend, id, &row).await {
-                warn!(target: "ssp::job_recovery", job_id = %id, "Recovered orphaned processing job");
+                warn!(target: "ssp::job_recovery", job_id = %id, "Recovered a job past its lease");
             } else {
                 deferred = true;
             }

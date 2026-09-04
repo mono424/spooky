@@ -35,6 +35,13 @@ struct ControlInner {
     /// consults this so it never re-enqueues a job that is already moving
     /// through the runner (which would double-execute it).
     enqueued: HashSet<String>,
+    /// Outbox tables whose `errors` append has already been reported at
+    /// `error!`. The append is best-effort, and the usual reason it fails is a
+    /// SCHEMAFULL table missing its `errors[*]` element declaration — a
+    /// deployment-wide condition, not a per-job one. Reporting it loudly once
+    /// per table makes it actionable; reporting it per job would bury the
+    /// remediation under thousands of identical lines.
+    append_failed_tables: HashSet<String>,
 }
 
 impl JobControl {
@@ -53,6 +60,14 @@ impl JobControl {
     /// (e.g. retried) life of the same id can be enqueued again.
     pub fn clear_enqueued(&self, id: &str) {
         self.0.lock().unwrap().enqueued.remove(id);
+    }
+
+    /// Record that appending to `errors` failed for a job in `table`. Returns
+    /// `true` the FIRST time for that table, which is the caller's signal to log
+    /// at `error!` with the remediation; later calls return `false` and the
+    /// caller stays at `warn!`.
+    pub fn note_append_failure(&self, table: &str) -> bool {
+        self.0.lock().unwrap().append_failed_tables.insert(table.to_string())
     }
 
     /// Register the in-flight request for `id`; the returned watch is passed
@@ -186,6 +201,17 @@ pub struct JobEntry {
     pub retry_strategy: String, // "linear" or "exponential"
     pub auth_token: Option<String>,
     pub timeout: Duration,
+    /// Fencing token for the attempt this entry represents: the value of the row's
+    /// `lease_epoch` at the moment this attempt claimed it.
+    ///
+    /// Every write the attempt makes is guarded on it, so if the row is reclaimed
+    /// underneath a slow attempt (its lease expired and someone re-ran it), the
+    /// original attempt's writes match no row instead of overwriting the new one.
+    /// `None` before the claim, and re-read from the claim on every attempt — the
+    /// lease covers ONE attempt, not the whole retry budget. It also stays `None` for
+    /// an outbox table that predates the lease fields, where there is nothing to fence
+    /// against and the writes keep their original unguarded form.
+    pub lease_epoch: Option<i64>,
     /// The execution slot this job holds, released when the entry is dropped.
     /// `None` only before admission, and in tests that drive the runner directly.
     pub permit: Option<super::Permit>,
@@ -222,6 +248,10 @@ impl JobEntry {
                 .to_string(),
             auth_token,
             timeout,
+            // Not read off the row: an entry is built BEFORE the claim, and the claim
+            // is what mints the epoch this attempt owns. Reading the row's current
+            // value here would fence against the PREVIOUS attempt's token.
+            lease_epoch: None,
             permit: None,
         }
     }

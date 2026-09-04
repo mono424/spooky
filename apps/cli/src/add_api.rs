@@ -100,6 +100,35 @@ PERMISSIONS
   FOR select WHERE true
   FOR create, update WHERE false;
 
+-- Lease expiry for the attempt currently holding this row, and the fencing token
+-- that attempt must present to write its outcome. Platform-written (root).
+--
+-- `assignee` above says WHO claimed the row; these say UNTIL WHEN, which is the
+-- part that makes a stuck job recoverable. Reclaim keys off `lease_until` alone --
+-- never off whether the assignee still looks alive -- because "the owner is up"
+-- and "the work is progressing" are different questions, and a process that
+-- restarts under a stable SPKY_SSP_ID answers the first one yes while abandoning
+-- every row it held.
+--
+-- `lease_epoch` is bumped on every claim AND on every reclaim, and each of the
+-- runner's writes is guarded on the epoch it claimed under. So when a reclaimed
+-- job is re-run and the ORIGINAL attempt later wakes up, its write matches no row
+-- instead of overwriting the new one. Without it, reclaiming would trade a stuck
+-- job for a corrupted one.
+--
+-- Both `option<T>`: DEFAULT only fills a CREATE while every UPDATE re-validates
+-- the whole row, so a non-option field would break every write to a row created
+-- before the field existed. Readers treat NONE as "no lease" / epoch 0.
+DEFINE FIELD lease_until ON TABLE {table} TYPE option<datetime>
+PERMISSIONS
+  FOR select WHERE true
+  FOR create, update WHERE false;
+
+DEFINE FIELD lease_epoch ON TABLE {table} TYPE option<int>
+PERMISSIONS
+  FOR select WHERE true
+  FOR create, update WHERE false;
+
 -- The backend's response body on success, stored by the job runner. Readable so
 -- you can inspect job output (`spky jobs get`), and it is what a scheduled
 -- workflow hands to the steps that depend on this one. Platform-written.
@@ -108,11 +137,19 @@ PERMISSIONS
   FOR select WHERE true
   FOR create, update WHERE false;
 
--- Per-job HTTP timeout in ms, overriding the backend default. Set by
--- `db.run(..., {{ timeout }})` and by a schedule's `timeout:`. The field must
--- exist: the scheduler puts it in the job content whenever the schedule declares
--- one, and a SCHEMAFULL table without it rejects the whole CREATE with
--- "Found field 'timeout', but no such field exists".
+-- Per-job HTTP timeout in SECONDS, overriding the backend default. Set by
+-- `db.run(..., {{ timeout }})` and by a schedule's `timeout:` (the CLI converts
+-- that duration to seconds at deploy time). Seconds, not milliseconds -- this
+-- comment used to say ms and every consumer has always read it as seconds
+-- (`BackendInfo::effective_timeout` -> `Duration::from_secs`).
+--
+-- The unit is load-bearing now that it also sizes the reclaim lease below: a
+-- value written as milliseconds would mint a lease thousands of times too long
+-- and make the row unreclaimable for months.
+--
+-- The field must exist: the scheduler puts it in the job content whenever the
+-- schedule declares one, and a SCHEMAFULL table without it rejects the whole
+-- CREATE with "Found field 'timeout', but no such field exists".
 DEFINE FIELD timeout ON TABLE {table} TYPE option<int>
 PERMISSIONS
   FOR create, select WHERE true
@@ -464,5 +501,34 @@ mod tests {
     fn error_entries_are_flexible_objects() {
         let ddl = outbox_template("job");
         assert!(ddl.contains("DEFINE FIELD errors[*] ON TABLE job TYPE object FLEXIBLE"));
+    }
+
+    /// The template documents the full shape of the table, so it must carry the lease
+    /// fields even though every deploy also injects them. A new project generated from
+    /// this template should not be relying on the healing path.
+    ///
+    /// `option<T>` rather than a bare type, for the reason `_00_workflow_run.retry_count`
+    /// spells out: DEFAULT only fills a CREATE while every UPDATE re-validates the whole
+    /// row, so a non-option field breaks every write to a row created before it existed.
+    #[test]
+    fn the_template_carries_the_lease_fields() {
+        let ddl = outbox_template("job");
+        assert!(ddl.contains("DEFINE FIELD lease_until ON TABLE job TYPE option<datetime>"));
+        assert!(ddl.contains("DEFINE FIELD lease_epoch ON TABLE job TYPE option<int>"));
+    }
+
+    /// `timeout` is SECONDS. The comment used to say milliseconds while every consumer
+    /// read it through `Duration::from_secs`, which was survivable while the value only
+    /// bounded an HTTP request. It now also sizes the reclaim lease, so a value written
+    /// in the wrong unit is the difference between a row recovering in a minute and
+    /// staying unreclaimable for months.
+    #[test]
+    fn the_timeout_field_documents_its_unit_as_seconds() {
+        let ddl = outbox_template("job");
+        assert!(
+            ddl.contains("Per-job HTTP timeout in SECONDS"),
+            "the unit must be stated, and stated correctly"
+        );
+        assert!(!ddl.contains("timeout in ms"), "the old wrong unit must not come back");
     }
 }

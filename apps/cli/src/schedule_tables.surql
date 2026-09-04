@@ -57,6 +57,16 @@ DEFINE FIELD OVERWRITE concurrency ON TABLE _00_schedule TYPE string DEFAULT 'sk
 DEFINE FIELD OVERWRITE max_retries ON TABLE _00_schedule TYPE option<int>;
 DEFINE FIELD OVERWRITE retry_strategy ON TABLE _00_schedule TYPE option<string>;
 DEFINE FIELD OVERWRITE timeout ON TABLE _00_schedule TYPE option<int>;
+-- Wall-clock ceiling on ONE run of this schedule, in seconds. Unset means "use the
+-- project default from _00_retention.run_deadline_secs".
+--
+-- Not the same thing as `timeout` above: that bounds a single HTTP request to a
+-- backend, while this bounds the run as a whole -- every step, every job retry, and
+-- every gap in between. Without it a run that stops making progress for a reason no
+-- job-level timeout can see (a step that lost its dispatch, a step job row deleted
+-- underneath it) stays `running` forever, and with the default `concurrency: skip`
+-- that holds its fan-out key forever too.
+DEFINE FIELD OVERWRITE deadline_secs ON TABLE _00_schedule TYPE option<int>;
 -- Hash of the spec fields. Deploy skips the UPSERT when unchanged, and resets
 -- next_fire_at when it moves so the engine replans against the new cadence.
 DEFINE FIELD OVERWRITE spec_hash ON TABLE _00_schedule TYPE option<string>;
@@ -141,6 +151,12 @@ DEFINE FIELD OVERWRITE error ON TABLE _00_schedule_run TYPE option<object> FLEXI
 -- free, and means changing the config never changes the fate of a run already in
 -- flight.
 DEFINE FIELD OVERWRITE history_mode ON TABLE _00_schedule_run TYPE option<string>;
+-- Resolved run deadline in seconds, frozen at spawn for the same reason as
+-- `history_mode` above: the reaper has to bound a run without a point read of the
+-- schedule row per in-flight run, and retuning (or deleting) the schedule must not
+-- move the ceiling of a run already in flight. NONE means the project default
+-- applies, which is what rows written before this field carry.
+DEFINE FIELD OVERWRITE deadline_secs ON TABLE _00_schedule_run TYPE option<int>;
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_schedule_run TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_schedule_run TYPE datetime VALUE time::now();
 DEFINE FIELD OVERWRITE finished_at ON TABLE _00_schedule_run TYPE option<datetime>;
@@ -190,6 +206,8 @@ DEFINE FIELD OVERWRITE error ON TABLE _00_workflow_run TYPE option<object> FLEXI
 -- _00_schedule_run may already be gone -- so the mode cannot be read back from
 -- there and has to live here.
 DEFINE FIELD OVERWRITE history_mode ON TABLE _00_workflow_run TYPE option<string>;
+-- Frozen resolved run deadline, as on `_00_schedule_run`. NONE = project default.
+DEFINE FIELD OVERWRITE deadline_secs ON TABLE _00_workflow_run TYPE option<int>;
 -- How this run was started: 'cron' for a schedule fire, 'manual' for an operator
 -- rerun. NONE on rows written before the field existed; readers treat that as
 -- 'cron'.
@@ -223,6 +241,12 @@ DEFINE INDEX OVERWRITE idx_wfrun_sched ON TABLE _00_workflow_run COLUMNS schedul
 -- for the heal pass's `status = 'running'` lookup.
 DEFINE INDEX OVERWRITE idx_wfrun_retention ON TABLE _00_workflow_run
     COLUMNS status, finished_at;
+-- The reaper's scan: `status = 'running'` by equality, then oldest-first by
+-- `created_at`. Same column-order reasoning as idx_srun_retention above -- a range
+-- predicate on the second column is not pushed into the scan, so the ordering is
+-- what keeps this an IndexScan with a LIMIT rather than a whole-partition filter.
+DEFINE INDEX OVERWRITE idx_wfrun_deadline ON TABLE _00_workflow_run
+    COLUMNS status, created_at;
 
 -- ==================================================
 -- SPOOKY STEP RUN (one node of one workflow run)
@@ -241,6 +265,22 @@ DEFINE FIELD OVERWRITE depends_on ON TABLE _00_step_run TYPE array<string> DEFAU
 DEFINE FIELD OVERWRITE status ON TABLE _00_step_run TYPE string DEFAULT 'blocked'
     ASSERT $value INSIDE ['blocked', 'ready', 'dispatched', 'success', 'failed', 'skipped'];
 DEFINE FIELD OVERWRITE job_id ON TABLE _00_step_run TYPE option<string>;
+-- Dispatch attempts made for this step, opened by the `blocked -> ready`
+-- promotion and incremented by every recovery re-dispatch. It is the give-up
+-- counter for a step that is past `blocked` but has no job to show for it:
+-- nothing else in the engine can rescue such a step (`ready_steps` yields only
+-- `blocked` steps and CLAIM_STEP_READY guards on `blocked`), so without a bound a
+-- lost dispatch either sits forever or retries forever.
+--
+-- `option<int>`, not `int`, and the same for `started_at` below -- see the note on
+-- `_00_workflow_run.retry_count`: DEFAULT applies only on CREATE while every
+-- UPDATE re-validates the whole row, so a non-option field breaks every write to a
+-- step row created before the field existed. Readers treat NONE as 0.
+DEFINE FIELD OVERWRITE dispatch_attempts ON TABLE _00_step_run TYPE option<int> DEFAULT 0;
+-- When the step's job was created. `created_at` is when the step ROW was made,
+-- which for a step deep in a DAG is the run's own start -- so it cannot answer
+-- "how long has this step been running".
+DEFINE FIELD OVERWRITE started_at ON TABLE _00_step_run TYPE option<datetime>;
 -- The step job's captured `result`, handed to dependent steps' payloads.
 -- `any` rather than `option<any>`: `any` already admits NONE.
 DEFINE FIELD OVERWRITE output ON TABLE _00_step_run TYPE any;
@@ -248,6 +288,10 @@ DEFINE FIELD OVERWRITE error ON TABLE _00_step_run TYPE option<object> FLEXIBLE;
 DEFINE FIELD OVERWRITE created_at ON TABLE _00_step_run TYPE datetime DEFAULT time::now() READONLY;
 DEFINE FIELD OVERWRITE updated_at ON TABLE _00_step_run TYPE datetime VALUE time::now();
 DEFINE FIELD OVERWRITE finished_at ON TABLE _00_step_run TYPE option<datetime>;
+
+-- Backfill rows from before the two fields above existed. Idempotent, and this
+-- file is re-applied by every `spky migrate` / `spky deploy`.
+UPDATE _00_step_run SET dispatch_attempts = 0 WHERE dispatch_attempts = NONE;
 
 DEFINE INDEX OVERWRITE idx_step_wf ON TABLE _00_step_run COLUMNS workflow_run, step UNIQUE;
 DEFINE INDEX OVERWRITE idx_step_job ON TABLE _00_step_run COLUMNS job_id;
@@ -286,6 +330,19 @@ DEFINE FIELD OVERWRITE failed_secs ON TABLE _00_retention TYPE int DEFAULT 12096
 -- never drop failure history a project already had.
 DEFINE FIELD OVERWRITE run_success_secs ON TABLE _00_retention TYPE int DEFAULT 86400;
 DEFINE FIELD OVERWRITE run_failed_secs ON TABLE _00_retention TYPE int DEFAULT 2592000;
+
+-- Wall-clock ceiling on ONE run, in seconds, for schedules that do not set their
+-- own `deadline:`. A run past this is failed `deadline_exceeded` by the reaper and
+-- its jobs are killed.
+--
+-- One hour is deliberately generous: this is a backstop against a run that is
+-- STUCK, not a service-level objective. A schedule with genuinely long runs sets
+-- its own `deadline:` rather than raising this, because raising this also raises
+-- how long one wedged key can hold up a whole fan-out under `concurrency: skip`.
+--
+-- 0 disables the reaper entirely. That is a supported answer -- it is the behaviour
+-- every deployment had before this field existed -- and a bad default.
+DEFINE FIELD OVERWRITE run_deadline_secs ON TABLE _00_retention TYPE int DEFAULT 3600;
 
 -- Hard cap on rows in a trimmable (success-shaped) status, per target. 0 = off.
 -- The windows above already bound volume at rate x window; this is the valve for

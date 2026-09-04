@@ -528,6 +528,18 @@ pub struct RetentionConfig {
     /// Failures are never trimmed by it.
     #[serde(default, rename = "maxRows", skip_serializing_if = "Option::is_none")]
     pub max_rows: Option<i64>,
+    /// Wall-clock ceiling on ONE run, for schedules that set no `deadline:` of
+    /// their own (`1h`). `0` disables the reaper entirely, which is the behaviour
+    /// every deployment had before this existed and a poor thing to choose.
+    ///
+    /// It lives under `retention:` because it is the same kind of knob: a
+    /// project-wide policy the engine reads out of the database, so it can be
+    /// retuned with one UPDATE and no redeploy. A schedule with genuinely
+    /// long-running work sets its own `deadline:` instead of raising this, since
+    /// raising this also raises how long one wedged fan-out key can suppress the
+    /// rest of its schedule under `concurrency: skip`.
+    #[serde(default, rename = "runDeadline", skip_serializing_if = "Option::is_none")]
+    pub run_deadline: Option<String>,
     /// Default history mode for every schedule. `failures-only` means a successful
     /// execution leaves nothing behind but a rollup counter. A schedule's own
     /// `history:` overrides this in either direction.
@@ -549,6 +561,8 @@ pub struct ResolvedRetention {
     pub run_failed_secs: i64,
     /// `0` disables the cap.
     pub max_rows: i64,
+    /// `0` disables the run reaper.
+    pub run_deadline_secs: i64,
 }
 
 impl RetentionConfig {
@@ -568,6 +582,10 @@ impl RetentionConfig {
         // surprises someone by deleting inside their retention window is worse than
         // no cap at all.
         max_rows: 0,
+        // On by default, and generous: this is a backstop against a run that is
+        // STUCK, not a service-level objective. Before it existed a run that stopped
+        // making progress stayed `running` forever and held its fan-out key with it.
+        run_deadline_secs: 60 * 60,
     };
 }
 
@@ -593,6 +611,9 @@ impl Sp00kyConfig {
             run_success_secs: secs(&cfg.run_success, d.run_success_secs)?,
             run_failed_secs: secs(&cfg.run_failed, d.run_failed_secs)?,
             max_rows: cfg.max_rows.unwrap_or(d.max_rows).max(0),
+            // `secs` already falls back to the default when unset; an explicit `0`
+            // is a deliberate opt-out and must survive.
+            run_deadline_secs: secs(&cfg.run_deadline, d.run_deadline_secs)?.max(0),
         })
     }
 

@@ -89,6 +89,14 @@ pub struct ScheduleSpec {
     /// `failures-only` never persists a successful one at all.
     #[serde(default)]
     pub history_mode: Option<String>,
+
+    /// Wall-clock ceiling on one run of this schedule, in seconds. Unset means
+    /// the project default (`_00_retention.run_deadline_secs`) applies.
+    ///
+    /// Distinct from `timeout`, which bounds one HTTP request: this bounds the
+    /// run, including every step and every job-level retry inside it.
+    #[serde(default)]
+    pub deadline_secs: Option<i64>,
 }
 
 /// `history_mode` value that suppresses successful run rows entirely.

@@ -16,8 +16,9 @@ mod db_tests;
 
 pub use dispatcher::{table_of, JobDispatcher, Permit, DEFAULT_CONCURRENCY};
 pub use runner::{
-    append_error_helper, complete_success_helper, enqueue_recovered, fail_if_pending_helper,
-    load_job_record, reset_for_retry_helper, set_assignee_helper, update_status_helper, JobRunner,
-    JOB_RESULT_MAX_BYTES, PENDING_DUE_CLAUSE,
+    append_error_helper, claim_processing, complete_success_helper, enqueue_recovered,
+    fail_if_pending_helper, lease_secs, load_job_record, reclaim_expired_lease,
+    reset_for_retry_helper, set_assignee_helper, update_status_fenced, update_status_helper,
+    JobRunner, JOB_RESULT_MAX_BYTES, PENDING_DUE_CLAUSE,
 };
 pub use types::{BackendInfo, JobConfig, JobControl, JobEntry};

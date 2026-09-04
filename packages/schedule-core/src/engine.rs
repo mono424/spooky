@@ -6,6 +6,7 @@
 //!   ├─ plan_pass      compute next_fire_at for unplanned schedules
 //!   ├─ fire_pass      due + operator-triggered schedules → claim → fan out → spawn
 //!   ├─ heal_pass      reconcile runs whose job already finished (lost event)
+//!   ├─ reap_pass      fail runs that blew their deadline, so none can wedge forever
 //!   └─ prune_pass     drop terminal history past the retention window
 //! ```
 //!
@@ -65,6 +66,9 @@ pub(crate) struct Retention {
     job_tables: Vec<String>,
     /// Hard cap on rows in a trimmable status, or `None` when disabled.
     max_rows: Option<usize>,
+    /// Default ceiling on one run, for schedules that set no `deadline:` of their
+    /// own. `None` when the reaper is disabled (`run_deadline_secs = 0`).
+    run_deadline: Option<Duration>,
 }
 
 impl Retention {
@@ -135,6 +139,15 @@ const PRUNE_MAX_BATCHES: usize = 20;
 /// bounds statement length as well as result size.
 const HEAL_LOOKUP_BATCH: usize = 500;
 
+/// Fallback run ceiling when `_00_retention` has nothing to say — a fresh database,
+/// or a stack deployed ahead of the CLI that writes the row. Matches the DDL default.
+const DEFAULT_RUN_DEADLINE_SECS: i64 = 3600;
+
+/// Runs terminalized per reap statement per pass. Each one kills jobs and writes
+/// two rows, so it is bounded for the same reason the prune is; a backlog of stuck
+/// runs drains over a few sweeps rather than in one spike.
+const REAP_BATCH: usize = 200;
+
 /// Run the row cap once every N prune passes. The cap has to COUNT, which is an
 /// index walk, and it is a safety valve rather than the main mechanism — the age
 /// windows already bound volume at rate x window.
@@ -162,6 +175,8 @@ pub struct TickReport {
     pub skipped: usize,
     pub replaced: usize,
     pub healed: usize,
+    /// Runs terminalized for blowing their deadline.
+    pub reaped: usize,
     pub pruned: usize,
     /// Schedules whose plan or fan-out failed. Recorded on the row's
     /// `last_error`; one bad schedule never aborts the sweep.
@@ -215,6 +230,7 @@ impl ScheduleEngine {
         self.plan_pass(now, &mut report).await?;
         self.fire_pass(now, &mut report).await?;
         self.heal_pass(&mut report).await?;
+        self.reap_pass(&mut report).await?;
         self.prune_pass(now, &mut report).await?;
 
         Ok(report)
@@ -608,6 +624,14 @@ impl ScheduleEngine {
         if failures_only {
             content.insert("history_mode".into(), json!(HISTORY_FAILURES_ONLY));
         }
+        // Frozen for the same reason as `history_mode`: the reaper must be able to
+        // bound a run without a point read of the schedule row per in-flight run,
+        // and editing or deleting the schedule must not move the ceiling of a run
+        // already in flight. Omitted when unset, so the reaper applies the project
+        // default — `option<int>` rejects NULL.
+        if let Some(secs) = spec.deadline_secs.filter(|n| *n > 0) {
+            content.insert("deadline_secs".into(), json!(secs));
+        }
 
         let mut binds = bind_ref("", &ids::schedule_run(run_key)).to_vec();
         binds.extend(bind_ref("schedule", schedule_id));
@@ -845,7 +869,12 @@ impl ScheduleEngine {
                         report.healed += 1;
                     }
                     "failed" => {
-                        self.finalize_schedule_run(run_ref, "failed", last_error(job)).await?;
+                        self.finalize_schedule_run(
+                            run_ref,
+                            "failed",
+                            Some(job_failure_error(job, job_id)),
+                        )
+                        .await?;
                         report.healed += 1;
                     }
                     _ => {}
@@ -853,7 +882,7 @@ impl ScheduleEngine {
             }
         }
 
-        report.healed += self.heal_workflow_runs().await?;
+        report.healed += self.heal_workflow_runs(report).await?;
         Ok(())
     }
 
@@ -864,6 +893,107 @@ impl ScheduleEngine {
             Some(v @ Value::Object(_)) => Some(v),
             _ => None,
         })
+    }
+
+    // -- reaping ------------------------------------------------------------
+
+    /// Terminalize runs that have blown their deadline.
+    ///
+    /// This is the backstop that makes "stuck forever" unreachable. Every other
+    /// mechanism in the engine is a reconciliation: it needs SOMETHING to observe —
+    /// a job row reaching a terminal status, a step holding a job id, a kill flag.
+    /// The failures that actually stranded runs in production were the ones where
+    /// there was nothing left to observe at all, and no amount of re-advancing a run
+    /// moves it. Only a clock does.
+    ///
+    /// Placed after `heal_pass` and before `prune_pass`, and the order is
+    /// load-bearing in both directions. Heal must get first refusal, or a run whose
+    /// job succeeded a second before the deadline is reported failed when it
+    /// actually finished. Prune must come after, for the reason spelled out on
+    /// `prune_pass`: a prune that runs first manufactures the `job_missing` failure
+    /// this pass would otherwise resolve honestly.
+    ///
+    /// Never returns `Err` for a single unreapable run — a run whose kill request
+    /// cannot be delivered is logged and retried next sweep, exactly like a
+    /// schedule whose fan-out failed.
+    async fn reap_pass(&self, report: &mut TickReport) -> anyhow::Result<()> {
+        let Some(default) = self.load_retention().await.run_deadline else {
+            // `run_deadline_secs = 0`: the operator has explicitly turned the
+            // reaper off. Their deployment, their call.
+            return Ok(());
+        };
+        let binds =
+            [("default", json!(default.num_seconds())), ("batch", json!(REAP_BATCH as i64))];
+
+        // Workflow runs first. Failing one kills its dispatched steps' jobs and
+        // mirrors the outcome onto its owning schedule run, so doing these before
+        // the job-kind scan means a workflow's schedule run is already terminal by
+        // the time the second query looks — it never sees it twice.
+        for row in rows(self.db.query(sql::SELECT_EXPIRED_WORKFLOW_RUNS, &binds).await?) {
+            let Some(wf_run) = row_ref(&row) else { continue };
+            let secs = row.get("deadline_secs").and_then(Value::as_i64).unwrap_or(default.num_seconds());
+            let error = json!({
+                "code": "deadline_exceeded",
+                "reason": format!("run exceeded its {secs}s deadline without finishing"),
+                "deadline_secs": secs,
+            });
+            // Re-read rather than trust the scan: `heal_pass` ran moments ago and
+            // may have landed a real completion. `stop_workflow_run` is guarded on
+            // `running` too, but skipping the steps of an already-finished run would
+            // be a visible lie in the step rows.
+            let loaded = match self.load_workflow_run(&wf_run).await {
+                Ok(Some(loaded)) => loaded,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!(run = %wf_run, error = %e, "could not re-read a run to reap");
+                    report.errored += 1;
+                    continue;
+                }
+            };
+            if loaded.get("status").and_then(Value::as_str) != Some("running") {
+                continue;
+            }
+            // Reuse the stop path rather than writing `failed` directly: it is the
+            // one place that skips what never started, kills the jobs of what did,
+            // and terminalizes both rows. Leaving a reaped run's step jobs running
+            // would defeat the point of reaping it. `failed`, not `killed` — nobody
+            // killed this, and it must not read as though someone did.
+            if let Err(e) = self.stop_workflow_run(&wf_run, &loaded, "failed", error).await {
+                tracing::warn!(run = %wf_run, error = %e, "could not stop a run past its deadline");
+                report.errored += 1;
+                continue;
+            }
+            tracing::warn!(run = %wf_run, deadline_secs = secs, "reaped a workflow run past its deadline");
+            report.reaped += 1;
+        }
+
+        // Job-kind runs. There is no DAG here: one run, one outbox job.
+        for row in rows(self.db.query(sql::SELECT_EXPIRED_JOB_RUNS, &binds).await?) {
+            let Some(run_ref) = row_ref(&row) else { continue };
+            let secs = row.get("deadline_secs").and_then(Value::as_i64).unwrap_or(default.num_seconds());
+            if let Some(job_id) = row.get("job_id").and_then(Value::as_str) {
+                // Best-effort: the job may already be terminal, or its SSP may be
+                // unreachable. Either way the run must stop being `running`, or the
+                // key it holds is exactly the wedge this pass exists to clear.
+                if let Err(e) = self.kill.kill(job_id).await {
+                    tracing::warn!(job_id, error = %e, "could not kill the job of a run past its deadline");
+                }
+            }
+            let error = json!({
+                "code": "deadline_exceeded",
+                "reason": format!("run exceeded its {secs}s deadline without finishing"),
+                "deadline_secs": secs,
+            });
+            if let Err(e) = self.finalize_schedule_run(&run_ref, "failed", Some(error)).await {
+                tracing::warn!(run = %run_ref, error = %e, "could not fail a run past its deadline");
+                report.errored += 1;
+                continue;
+            }
+            tracing::warn!(run = %run_ref, deadline_secs = secs, "reaped a job run past its deadline");
+            report.reaped += 1;
+        }
+
+        Ok(())
     }
 
     // -- retention ----------------------------------------------------------
@@ -1043,6 +1173,10 @@ impl ScheduleEngine {
             run_failed: self.cfg.history_max_age,
             job_tables: Vec::new(),
             max_rows: None,
+            // A stack running ahead of its CLI has no `_00_retention` row at all.
+            // Defaulting the reaper ON there matters more than the numbers being
+            // exact: the failure this guards against is a run that never ends.
+            run_deadline: Some(Duration::seconds(DEFAULT_RUN_DEADLINE_SECS)),
         };
         let row = match self.db.query(sql::SELECT_RETENTION, &[]).await {
             Ok(results) => first_row(results),
@@ -1077,6 +1211,13 @@ impl ScheduleEngine {
                 .and_then(Value::as_i64)
                 .filter(|n| *n > 0)
                 .map(|n| n as usize),
+            // Absent (a row written by an older CLI) falls back to the default;
+            // present-and-0 is an explicit "no reaper" and is honoured.
+            run_deadline: match row.get("run_deadline_secs").and_then(Value::as_i64) {
+                Some(n) if n > 0 => Some(Duration::seconds(n)),
+                Some(_) => None,
+                None => fallback.run_deadline,
+            },
         }
     }
 
@@ -1314,6 +1455,45 @@ pub(crate) fn row_ref(row: &Value) -> Option<ids::Ref> {
 /// Last entry of a job row's `errors` array, for the run's `error` field.
 pub(crate) fn last_error(job: &Value) -> Option<Value> {
     job.get("errors").and_then(Value::as_array).and_then(|errors| errors.last().cloned())
+}
+
+/// The `error` object to record for a job that failed terminally. NEVER `None`.
+///
+/// `last_error` is the preferred answer, but the runner's append to the outbox's
+/// `errors` array is best-effort by necessity (a `?` there wedges the job on the
+/// SSP), so a genuinely failed job can arrive here with an empty `errors`. That
+/// used to mean the step or run recorded `status = 'failed'` with `error = NONE`
+/// — a failure with no reason, which is the single least useful row this system
+/// can produce and exactly what an operator comes looking for.
+///
+/// So the shape is synthesized instead. `_00_step_run.error` and
+/// `_00_schedule_run.error` are `option<object> FLEXIBLE` on tables this crate
+/// owns, so unlike the outbox append this write cannot be rejected.
+pub(crate) fn job_failure_error(job: &Value, job_id: &str) -> Value {
+    if let Some(error) = last_error(job) {
+        return error;
+    }
+    let mut reason = format!(
+        "job {job_id} reported `failed` but recorded no error;          its `errors` array is empty"
+    );
+    let retries = job.get("retries").and_then(Value::as_i64);
+    let max_retries = job.get("max_retries").and_then(Value::as_i64);
+    if let (Some(retries), Some(max)) = (retries, max_retries) {
+        reason.push_str(&format!(" (after {retries} of {max} attempts)"));
+    }
+    // Name the likeliest cause: the append the SSP could not make. Its own log
+    // carries the rejection; this points the reader at it.
+    reason.push_str(". Check the SSP log for a failed `errors` append.");
+    let mut error = Map::new();
+    error.insert("code".into(), json!("job_failed"));
+    error.insert("reason".into(), json!(reason));
+    if let Some(retries) = retries {
+        error.insert("retries".into(), json!(retries));
+    }
+    if let Some(max) = max_retries {
+        error.insert("max_retries".into(), json!(max));
+    }
+    Value::Object(error)
 }
 
 /// Concurrency key for a fan-out row: the value at `key_field`, stringified.
