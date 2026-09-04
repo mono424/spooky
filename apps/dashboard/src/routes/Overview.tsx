@@ -20,7 +20,47 @@ import {
 } from '../components/ClusterActions';
 import { formatClock, formatCount, formatMs, formatUptime, splitValue } from '../lib/format';
 import { backendTone, schedulerTone, sspTone } from '../lib/status';
-import type { Overview as OverviewData } from '../api/types';
+import type { Overview as OverviewData, PresenceSample } from '../api/types';
+
+/**
+ * One count over time, in the same chrome as the latency chart beside it.
+ *
+ * The current value rides in the panel's action slot rather than as a big
+ * number above the plot: four panels in a row have to agree on their internal
+ * layout or the sparklines stop sharing a baseline, which is the whole point of
+ * putting them on one band.
+ */
+function PresenceChart(props: {
+  label: string;
+  sub: string;
+  ready: boolean;
+  value: number | undefined;
+  points: { ts: number; ms: number; ok: true }[];
+}) {
+  return (
+    <Panel
+      title={props.label}
+      sub={props.sub}
+      actions={
+        <Show when={props.ready}>
+          <Pill>{formatCount(props.value)} now</Pill>
+        </Show>
+      }
+    >
+      <Show
+        when={props.ready}
+        fallback={<Empty>Waiting for the first presence sample…</Empty>}
+      >
+        <Sparkline
+          points={props.points}
+          height={72}
+          format={formatCount}
+          ariaLabel={props.label}
+        />
+      </Show>
+    </Panel>
+  );
+}
 
 /**
  * Is the cluster healthy, and how fast is a write reaching a client right now.
@@ -42,6 +82,17 @@ export function Overview(props: {
 
   const points = () =>
     (heartbeat()?.samples ?? []).map((s) => ({ ts: s.ts, ms: s.ms, ok: s.ok }));
+
+  // The presence sampler's ring, folded into this same poll — so every readout
+  // and chart below costs no request of its own and no database work.
+  const presence = () => props.data?.presence;
+  const totals = () => presence()?.totals;
+  const series = (pick: (s: PresenceSample) => number) =>
+    (presence()?.samples ?? []).map((s) => ({
+      ts: s.ts,
+      ms: pick(s),
+      ok: true as const,
+    }));
 
   const failed = () => points().filter((p) => !p.ok);
   const lastFailure = () => {
@@ -134,10 +185,47 @@ export function Overview(props: {
                 />
               </Rail>
 
-              <div class="grid grid-2">
+              {/* Who is actually using the stack, on its own band. Every figure
+                  here counts only rows still inside `lastActiveAt + ttl`. */}
+              <Show when={presence()?.ready}>
+                <Rail>
+                  <Cell
+                    label="Users"
+                    value={formatCount(totals()?.users)}
+                    foot="signed in"
+                  />
+                  <Cell
+                    label="Sessions"
+                    value={formatCount(totals()?.sessions)}
+                    foot={`${formatCount(totals()?.anon_sessions)} anonymous`}
+                  />
+                  <Cell label="Views" value={formatCount(totals()?.views)} />
+                  <Cell
+                    label="Shared"
+                    value={formatCount(totals()?.shared_views)}
+                    foot="more than one subscriber"
+                  />
+                  <Cell
+                    label="Slow"
+                    value={formatCount(totals()?.slow_views)}
+                    tone={totals()?.slow_views ? 'warn' : undefined}
+                    foot="materialization p99"
+                  />
+                  <Cell
+                    label="Errored"
+                    value={formatCount(totals()?.errored_views)}
+                    tone={totals()?.errored_views ? 'bad' : undefined}
+                  />
+                </Rail>
+              </Show>
+
+              {/* One band, four series. Each keeps its own scale: views
+                  outnumber users by one to two orders of magnitude, and a
+                  shared axis would flatten the users line onto the baseline. */}
+              <div class="grid grid-4">
                 <Panel
                   title="Sync round trip"
-                  sub="DB write → scheduler → SSP circuit, per probe cycle"
+                  sub="DB write → SSP circuit, per probe"
                   actions={
                     <Show when={failed().length > 0}>
                       <span
@@ -153,9 +241,33 @@ export function Overview(props: {
                     </Show>
                   }
                 >
-                  <Sparkline points={points()} height={78} />
+                  <Sparkline points={points()} height={72} />
                 </Panel>
 
+                <PresenceChart
+                  label="Users"
+                  sub="signed in, fading out over ~9m"
+                  ready={!!presence()?.ready}
+                  value={totals()?.users}
+                  points={series((s) => s.users)}
+                />
+                <PresenceChart
+                  label="Sessions"
+                  sub="one per open tab"
+                  ready={!!presence()?.ready}
+                  value={totals()?.sessions}
+                  points={series((s) => s.sessions)}
+                />
+                <PresenceChart
+                  label="Registered views"
+                  sub="one per session, per query"
+                  ready={!!presence()?.ready}
+                  value={totals()?.views}
+                  points={series((s) => s.views)}
+                />
+              </div>
+
+              <div class="grid grid-2">
                 <Panel
                   title="Scheduler"
                   sub={sched()?.id}
@@ -178,10 +290,9 @@ export function Overview(props: {
                     ]}
                   />
                 </Panel>
-              </div>
 
-              <Panel
-                title="Sync processors"
+                <Panel
+                  title="Sync processors"
                 sub="Queries are pinned per SSP, so one lagging processor is a real outage for its clients"
                 actions={
                   <A href="/ssps" class="btn btn-sm">
@@ -265,7 +376,8 @@ export function Overview(props: {
                     </table>
                   </div>
                 </Show>
-              </Panel>
+                </Panel>
+              </div>
 
               <Show when={data().backends.length > 0}>
                 <Panel

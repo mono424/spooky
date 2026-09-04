@@ -45,12 +45,16 @@ function serverName(): string {
 /** Group a tool by its name prefix, so the list reads by area. */
 function groupOf(name: string): string {
   if (/^(workflow_|schedule_|schedules_|job_)/.test(name)) return 'Workflows';
+  // Before the `ssp` rule: `ssp` alone would otherwise swallow nothing here,
+  // but the presence tools have no shared prefix of their own, so they are
+  // matched by name.
+  if (/^(presence|views_|view_)/.test(name)) return 'Views';
   if (/^(ssp|scheduler_|cloud_)/.test(name)) return 'Restart';
   if (/^backup/.test(name)) return 'Backups';
   return 'Cluster';
 }
 
-const GROUP_ORDER = ['Cluster', 'Workflows', 'Restart', 'Backups'];
+const GROUP_ORDER = ['Cluster', 'Views', 'Workflows', 'Restart', 'Backups'];
 
 function toolTone(t: McpTool): { label: string; tone: string } {
   if (t.annotations?.destructiveHint) return { label: 'destructive', tone: 'bad' };

@@ -283,6 +283,9 @@ The dashboard and its MCP server, on their own port. See
 | `SPKY_ADMIN_PASSWORD` | Break-glass password, which signs in without the `_00_admin` roster. An empty value is treated as unset, so a deployment that templates the var but leaves it blank does not end up with a guessable password. | *(unset)* |
 | `SPKY_ADMIN_ACCESS` | Pins the SurrealDB record-access method used for admin sign-in. When unset the accesses are discovered from `INFO FOR DB`. | *(auto)* |
 | `SPKY_ADMIN_SESSION_TTL_SECS` | How long a signed-in session lasts | `28800` (8h) |
+| `SPKY_ADMIN_PRESENCE_INTERVAL_SECS` | How often the presence sampler reads `_00_query`, which feeds the Overview charts and the Views tab. One sampler serves every open dashboard, so this is the total cost however many people are watching. | `15` |
+| `SPKY_ADMIN_SLOW_VIEW_MS` | Materialization p99 at which a registered view is counted as slow. Only the default; `GET /admin/api/views?slow_ms=` overrides it per request. | `250` |
+| `SPKY_ADMIN_PRESENCE_MAX_ROWS` | Ceiling on the rows one presence or views query pulls back, so a tenant with a runaway number of registrations cannot make the sampler the expensive thing on the box. Above it the figures are reported as a floor. | `20000` |
 
 #### Backup storage
 

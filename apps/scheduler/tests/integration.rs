@@ -2128,6 +2128,12 @@ mod admin_plane {
             password: password.map(str::to_string),
             access: None,
             session_ttl: std::time::Duration::from_secs(3600),
+            // Long enough that the sampler never fires inside a test: these
+            // cover the plane with no database handle, and a tick would only
+            // add a race for nothing.
+            presence_interval: std::time::Duration::from_secs(3600),
+            presence_slow_ms: 250.0,
+            presence_max_rows: 20_000,
         };
         let (_state, router) = admin::build(config, h.admin_deps(None, None));
         router
@@ -2149,6 +2155,12 @@ mod admin_plane {
             password: password.map(str::to_string),
             access: None,
             session_ttl: std::time::Duration::from_secs(3600),
+            // Long enough that the sampler never fires inside a test: these
+            // cover the plane with no database handle, and a tick would only
+            // add a race for nothing.
+            presence_interval: std::time::Duration::from_secs(3600),
+            presence_slow_ms: 250.0,
+            presence_max_rows: 20_000,
         };
         let (_state, router) = admin::build(config, h.admin_deps(cloud_api_url, auth_secret));
         router
@@ -3221,6 +3233,147 @@ mod admin_plane {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .starts_with("text/event-stream"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Presence and registered views
+    // -----------------------------------------------------------------------
+
+    /// The harness never fills the db slot, which is exactly the state a
+    /// scheduler is in while it clones its replica. The sampler must not have
+    /// published anything, and the plane must say so rather than reporting an
+    /// empty stack as an idle one.
+    #[tokio::test]
+    async fn presence_is_not_ready_before_the_sampler_has_a_database() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .clone()
+            .oneshot(get_auth("/admin/api/presence", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = body_json(res).await;
+
+        // `ready: false` is the load-bearing bit. Zero users with `ready: true`
+        // means nobody is connected; zero users with `ready: false` means we do
+        // not know yet, and the dashboard draws those differently.
+        assert_eq!(body["ready"], false, "{body}");
+        assert_eq!(body["totals"]["users"], 0);
+        assert_eq!(body["totals"]["views"], 0);
+        assert_eq!(body["samples"], json!([]));
+        assert!(body["sample_interval_secs"].as_u64().unwrap() > 0);
+        assert!(body["slow_ms"].as_f64().unwrap() > 0.0);
+        assert_eq!(body["top_users"], json!([]));
+        assert_eq!(body["by_ssp"], json!([]));
+    }
+
+    /// The sidebar count and the overview tile ride this poll rather than a
+    /// request of their own, so the block has to be here.
+    #[tokio::test]
+    async fn the_overview_carries_the_presence_block() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(get_auth("/admin/api/overview", &token))
+            .await
+            .unwrap();
+        let body = body_json(res).await;
+        assert!(body["presence"].is_object(), "{body}");
+        assert_eq!(body["presence"]["ready"], false);
+        assert!(body["presence"]["totals"]["sessions"].is_number());
+    }
+
+    /// Unlike `/presence`, the listings read the database live, so with no
+    /// handle they must answer the same 503 every other database-backed admin
+    /// endpoint does — not an empty list, which reads as "no one is here".
+    #[tokio::test]
+    async fn view_listings_answer_503_without_a_database_handle() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        for path in ["/admin/api/views", "/admin/api/views/deadbeef"] {
+            let res = app.clone().oneshot(get_auth(path, &token)).await.unwrap();
+            assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            let body = body_json(res).await;
+            assert!(
+                body["error"].as_str().unwrap().contains("database handle"),
+                "{path}: {body}"
+            );
+        }
+    }
+
+    /// An unknown sort is rejected before it reaches SurrealDB. It has to be:
+    /// v3 refuses an ORDER BY on a field the projection does not carry, so a
+    /// pass-through would surface as an opaque 502 instead of a bad request.
+    #[tokio::test]
+    async fn an_unknown_sort_is_a_bad_request_not_a_database_error() {
+        let h = TestHarness::new().await;
+        let app = admin_app(&h, Some("pw"));
+        let token = breakglass_token(&app, "pw").await;
+
+        let res = app
+            .oneshot(get_auth("/admin/api/views?sort=sideways", &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(res).await;
+        assert!(body["error"].as_str().unwrap().contains("slowest"), "{body}");
+    }
+
+    /// All three are reads, so a read-scope agent token must see and be able to
+    /// call every one of them. This is the whole reason they are GETs.
+    #[tokio::test]
+    async fn a_read_token_can_see_and_call_the_presence_tools() {
+        let h = TestHarness::new().await;
+        let app = admin_app_with(&h, Some("pw"), None, Some("cluster-secret"));
+        let person = breakglass_token(&app, "pw").await;
+        let read = mint(&app, &person, "read").await;
+
+        let (_, list) = mcp_call(&app, &read, rpc(1, "tools/list", json!({}))).await;
+        let tools = list["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        for expected in ["presence", "views_list", "view_get"] {
+            assert!(names.contains(&expected), "{expected} missing from {names:?}");
+        }
+
+        let views_list = tools.iter().find(|t| t["name"] == "views_list").unwrap();
+        assert_eq!(views_list["annotations"]["readOnlyHint"], true);
+        assert_eq!(
+            views_list["inputSchema"]["properties"]["sort"]["enum"][0],
+            "slowest"
+        );
+        let view_get = tools.iter().find(|t| t["name"] == "view_get").unwrap();
+        assert_eq!(view_get["inputSchema"]["required"], json!(["key"]));
+
+        // Dispatch really goes through the router, so the tool answers with
+        // what the endpoint answers.
+        let (_, called) =
+            mcp_call(&app, &read, rpc(2, "tools/call", json!({ "name": "presence", "arguments": {} })))
+                .await;
+        assert_eq!(called["result"]["isError"], false, "{called}");
+        let text = called["result"]["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(parsed["ready"], false, "{parsed}");
+
+        // And a listing with no database is the endpoint's own 503, reported as
+        // a tool error rather than swallowed.
+        let (_, listing) = mcp_call(
+            &app,
+            &read,
+            rpc(3, "tools/call", json!({ "name": "views_list", "arguments": { "sort": "slowest" } })),
+        )
+        .await;
+        assert_eq!(listing["result"]["isError"], true, "{listing}");
+        assert!(listing["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("HTTP 503"));
     }
 
     // -----------------------------------------------------------------------

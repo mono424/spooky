@@ -50,6 +50,10 @@ pub async fn overview(State(state): State<AdminState>) -> Json<serde_json::Value
         // Running operations ride on the poll the dashboard already makes,
         // so an activity strip costs no extra request.
         "operations": state.ops.running(),
+        // Same bargain for presence: the sampler already holds these in memory,
+        // so the live-user tile and the sidebar count come free with the poll
+        // the app makes anyway, and add nothing to the database.
+        "presence": state.presence.overview_block(),
         "cloud_linked": state.cloud.is_some(),
         "server_time_ms": now_ms(),
     }))

@@ -313,6 +313,7 @@ before calling them. Restart, cancel, retry, backup and restore tools are asynch
 with an operation, and `operations_list` is how the agent watches it finish.
 
 - **Cluster**: `admin_config`, `overview`, `backends_list`, `backend_get`, `logs_recent` (bounded, non-streaming), `operations_list`
+- **Live**: `presence` (live users, sessions and views with recent samples), `views_list` (registered live queries, sortable by slowest), `view_get` (one view in full: SurrealQL, params, subscribers, percentiles, SSP memory, and the other sessions running the same query)
 - **Workflows**: `workflow_runs_list`, `workflow_run_get`, `workflow_run_cancel`, `workflow_run_rerun`, `workflow_run_retry`, `schedules_list`, `schedule_get`, `schedule_pause`, `schedule_resume`, `schedule_trigger`, `job_kill`, `job_retry`
 - **Restart**: `ssp_restart` (`restart`, `clean` or `reload`), `ssps_restart_all` (rolling by default), **`scheduler_restart`** (`restart`, `reclone` or `rehash`), `cloud_deployment`, **`cloud_restart`** (`upgrade`, `clean`, `surreal`)
 - **Backups**: `backups_list`, `backup_create`, **`backup_restore`**, `backup_restore_status`, **`backup_delete`**, `backups_configure`
@@ -323,6 +324,8 @@ server's `initialize` instructions say so up front.
 
 ### Example prompts
 
+- "How many people are connected right now, and how many queries are they running?"
+- "Which registered views are slowest, and who owns them?"
 - "How many SSPs are ready, and what is the end-to-end latency right now?"
 - "Show me the failed workflow runs from today and retry the nightly report."
 - "Restart ssp-1 cleanly and tell me when it is back."

@@ -180,11 +180,10 @@ button {
   gap: 8px;
   padding: 6px 8px;
   border-radius: var(--radius);
-  border-left: 2px solid transparent;
   color: var(--ink-dim);
   font-size: 12px;
   letter-spacing: 0.04em;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  transition: color 0.12s, background 0.12s;
 }
 
 .nav-link:hover {
@@ -195,7 +194,6 @@ button {
 .nav-link.active {
   color: var(--amber);
   background: var(--amber-wash);
-  border-left-color: var(--amber);
 }
 
 .nav-count {
@@ -304,6 +302,35 @@ h2 {
   /* Panels size to their own content. Stretching them to match the tallest in
      the row leaves a sparkline with no samples sitting in a 400px void. */
   align-items: start;
+}
+
+/* Three narrower panels, for a row of small charts that each need their own
+   scale. The narrower floor is what lets all three sit on one line on a laptop
+   instead of wrapping two-and-one. */
+.grid-3 {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  align-items: start;
+}
+
+/* A band of chart panels that belong together.
+   `stretch`, unlike every other grid here, because these ARE one row: a
+   sparkline band with panels of three different heights reads as three
+   unrelated boxes. The panels become flex columns and their bodies grow, so
+   the plots sit on a common baseline even when one heading wraps and its
+   neighbour's does not. */
+.grid-4 {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  align-items: stretch;
+}
+.grid-4 > .panel {
+  display: flex;
+  flex-direction: column;
+}
+.grid-4 > .panel > .panel-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 .stack {
@@ -612,6 +639,17 @@ tr.clickable:hover > td {
   border-right-color: transparent;
 }
 
+/* Start inferred from when the step's dependencies finished, because the run
+   predates the engine stamping `started_at`. A dashed left cap says "about
+   here" without touching the bar's length or its status colour, and it
+   composes with `.running`, whose own fade is on the right edge. */
+.tl-bar.estimated {
+  border-left-style: dashed;
+  border-left-color: var(--ink-faint);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
 .tl-duration {
   position: absolute;
   top: 50%;
@@ -730,6 +768,43 @@ input:focus,
 select:focus {
   border-color: var(--amber-deep);
   box-shadow: 0 0 0 3px var(--amber-wash);
+}
+
+/* A row of filter controls. Bare `input`/`select` are `width: 100%` because
+   every other form here is a stacked field with a label above it; in a filter
+   bar that makes each control claim its own line. These size to their content
+   and wrap together instead. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.filters input[type='text'],
+.filters input:not([type]),
+.filters select {
+  width: auto;
+  min-width: 140px;
+}
+.filters .grow {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+.filters label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.filters label input[type='checkbox'] {
+  width: auto;
+  min-width: 0;
+  margin: 0;
 }
 
 .btn {
@@ -1001,6 +1076,16 @@ select:focus {
 }
 .ghost {
   color: var(--ink-ghost);
+}
+
+/* Status colour on plain text, for a table cell that has to read as a warning
+   without becoming a pill. Green is deliberately absent: "fine" is the default
+   and does not need announcing. */
+.tone-warn {
+  color: var(--warn);
+}
+.tone-bad {
+  color: var(--bad);
 }
 
 .truncate {

@@ -29,6 +29,7 @@ pub mod logs;
 pub mod mcp;
 pub mod ops;
 pub mod overview;
+pub mod presence;
 pub mod session;
 pub mod tokens;
 pub mod workflows;
@@ -91,6 +92,9 @@ pub struct AdminState {
     pub heartbeat_interval_ms: u64,
     /// Long-running actions, watched by the dashboard.
     pub ops: Arc<Operations>,
+    /// Live users / sessions / registered views, sampled on a timer so every
+    /// reader serves from memory.
+    pub presence: Arc<presence::PresenceTracker>,
     /// The Sp00ky Cloud link, when this scheduler was given one.
     pub cloud: Option<CloudLink>,
     /// The backup plane's registries and queues, shared with the ingest port.
@@ -274,6 +278,9 @@ pub fn create_admin_router(state: AdminState) -> Router {
         .route("/me", get(me_handler))
         .route("/logout", post(logout_handler))
         .route("/overview", get(overview::overview))
+        .route("/presence", get(presence::presence))
+        .route("/views", get(presence::list_views))
+        .route("/views/:key", get(presence::view_detail))
         .route("/backends", get(backends::list))
         .route("/backends/:name", get(backends::detail))
         .route("/logs", get(logs::stream))
@@ -375,6 +382,9 @@ pub struct AdminDeps {
 pub fn build(config: AdminConfig, deps: AdminDeps) -> (AdminState, Router) {
     let project_slug = backups::project_slug(deps.cloud.as_ref());
     let scheduler_config = Arc::clone(&deps.resync.config);
+    // `config` is moved into the state below, so the presence knobs are read
+    // from a copy taken first.
+    let config_for_presence = config.clone();
     let state = AdminState {
         sessions: SessionStore::new(config.session_ttl, deps.auth_secret.as_deref()),
         config: Arc::new(config),
@@ -390,6 +400,7 @@ pub fn build(config: AdminConfig, deps: AdminDeps) -> (AdminState, Router) {
         health_check_interval_secs: scheduler_config.health_check_interval_secs,
         heartbeat_interval_ms: scheduler_config.heartbeat_interval_ms,
         ops: Operations::new(),
+        presence: presence::PresenceTracker::new(&config_for_presence),
         cloud: deps.cloud,
         backup: deps.backup,
         resync: deps.resync,
@@ -400,5 +411,10 @@ pub fn build(config: AdminConfig, deps: AdminDeps) -> (AdminState, Router) {
     let router = create_admin_router(state.clone());
     // The MCP server dispatches through the very router it is mounted on.
     let _ = state.router_slot.set(router.clone());
+    // One sampler for the whole plane. Spawned here rather than from
+    // `Scheduler::start` because everything it needs is already in `AdminState`:
+    // it reaches the database through the same late-bound slot every other
+    // admin reader uses, and simply does nothing until that slot fills.
+    Arc::clone(&state.presence).spawn(state.clone());
     (state, router)
 }

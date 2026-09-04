@@ -32,6 +32,17 @@ pub struct AdminConfig {
     pub access: Option<String>,
     /// How long a signed-in session lasts.
     pub session_ttl: std::time::Duration,
+    /// How often the presence sampler re-reads `_00_query`. One sampler feeds
+    /// every dashboard, so this is the total cost of the Overview charts and
+    /// the Views tab no matter how many people have them open.
+    pub presence_interval: std::time::Duration,
+    /// A registered view whose materialization p99 reaches this is counted as
+    /// slow. Only a default — `GET /views?slow_ms=` overrides it per request.
+    pub presence_slow_ms: f64,
+    /// Ceiling on rows any one presence/views query may pull back, so a tenant
+    /// with a runaway number of registrations cannot make the sampler the
+    /// expensive thing on the box.
+    pub presence_max_rows: usize,
 }
 
 impl AdminConfig {
@@ -53,6 +64,27 @@ impl AdminConfig {
             .filter(|n| *n > 0)
             .unwrap_or(8 * 60 * 60);
 
+        // Ticks under a second would put a sampler on the hot path for no gain:
+        // the underlying signal only moves when a client registers, unregisters
+        // or heartbeats a view.
+        let presence_interval_secs = std::env::var("SPKY_ADMIN_PRESENCE_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(15);
+
+        let presence_slow_ms = std::env::var("SPKY_ADMIN_SLOW_VIEW_MS")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|n| n.is_finite() && *n > 0.0)
+            .unwrap_or(250.0);
+
+        let presence_max_rows = std::env::var("SPKY_ADMIN_PRESENCE_MAX_ROWS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(20_000);
+
         Self {
             enabled,
             host: std::env::var("SPKY_ADMIN_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
@@ -70,6 +102,9 @@ impl AdminConfig {
                 .ok()
                 .filter(|s| !s.is_empty()),
             session_ttl: std::time::Duration::from_secs(session_ttl_secs),
+            presence_interval: std::time::Duration::from_secs(presence_interval_secs),
+            presence_slow_ms,
+            presence_max_rows,
         }
     }
 

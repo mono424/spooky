@@ -19,7 +19,11 @@ import { formatMs, splitValue } from '../lib/format';
 export interface Point {
   /** Epoch ms. */
   ts: number;
-  /** Null when the sample represents a failure — drawn as a gap. */
+  /**
+   * The plotted value. Latency in ms for the probe charts this was written
+   * for; a plain count for the presence charts, which pass their own
+   * `format`. Null when the sample represents a failure — drawn as a gap.
+   */
   ms: number | null;
   ok: boolean;
 }
@@ -35,6 +39,14 @@ export function Sparkline(props: {
   height?: number;
   /** Hide the min / last / max readout under the plot. */
   bare?: boolean;
+  /**
+   * How to render the min / last / max readout. Defaults to milliseconds,
+   * which is what every probe chart wants; a count chart passes
+   * `formatCount` and reuses everything else unchanged.
+   */
+  format?: (value: number | null | undefined) => string;
+  /** What the plot is of, for screen readers. */
+  ariaLabel?: string;
 }) {
   const gradientId = createUniqueId();
 
@@ -106,6 +118,7 @@ export function Sparkline(props: {
   });
 
   const colour = () => props.stroke ?? 'var(--amber)';
+  const fmt = (v: number | null | undefined) => (props.format ?? formatMs)(v);
 
   return (
     <Show
@@ -118,7 +131,7 @@ export function Sparkline(props: {
           preserveAspectRatio="none"
           style={{ width: '100%', height: `${props.height ?? H}px`, display: 'block' }}
           role="img"
-          aria-label={`Latency over the last ${stats().count} samples`}
+          aria-label={`${props.ariaLabel ?? 'Latency'} over the last ${stats().count} samples`}
         >
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -168,13 +181,13 @@ export function Sparkline(props: {
         <Show when={!props.bare && stats().last !== null}>
           <div class="spark-read">
             <span class="tag">
-              min<span class="val">{formatMs(stats().min)}</span>
+              min<span class="val">{fmt(stats().min)}</span>
             </span>
             <span class="tag">
-              last<span class="val">{formatMs(stats().last)}</span>
+              last<span class="val">{fmt(stats().last)}</span>
             </span>
             <span class="tag">
-              max<span class="val">{formatMs(stats().max)}</span>
+              max<span class="val">{fmt(stats().max)}</span>
             </span>
           </div>
         </Show>

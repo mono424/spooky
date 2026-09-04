@@ -102,6 +102,7 @@ const RESTART_MODES: &[&str] = &["restart", "clean", "reload"];
 const ALL_MODES: &[&str] = &["restart", "clean"];
 const SCHED_MODES: &[&str] = &["restart", "reclone", "rehash"];
 const RUN_STATUSES: &[&str] = &["running", "success", "failed", "killed"];
+const VIEW_SORTS: &[&str] = &["slowest", "newest", "rows", "updates", "errors", "active"];
 
 const fn t(
     name: &'static str,
@@ -137,6 +138,21 @@ pub const TOOLS: &[ToolDef] = &[
     tool!("backends_list", "Health-checked application backends with status and response time.", "GET", "/backends", read_only = true),
     tool!("backend_get", "One backend with its probe history and masked environment.", "GET", "/backends/{name}",
         path_params = &[req("name", "string", "Backend name as listed by backends_list")], read_only = true),
+    // ---- Views (who is connected, and what they are watching) ----
+    tool!("presence", "Live users, sessions and registered views right now, with a recent sample history and the heaviest users. A client refreshes its liveness on a 0.9 x ttl timer (about 9 minutes by default), so a closed tab decays out of these numbers rather than vanishing from them.", "GET", "/presence", read_only = true),
+    tool!("views_list", "Registered live queries. Sort by slowest to find what is costing materialization time, or filter to one user or SSP.", "GET", "/views",
+        query = &[
+            p("limit", "integer", "Rows to return (default 100, max 500)"),
+            p("user", "string", "auth_id to filter by, e.g. 'user:abc'"),
+            p("ssp", "string", "SSP id. Applied after the database query, so it narrows the page rather than the total"),
+            choice(p("sort", "string", "Order: slowest (default), newest, rows, updates, errors or active"), VIEW_SORTS),
+            p("slow_ms", "number", "Only views whose materialization p99 reaches this"),
+            p("q", "string", "Substring of the registered SurrealQL"),
+            p("shared", "boolean", "Only views more than one session subscribes to"),
+            p("include_expired", "boolean", "Include rows past lastActiveAt + ttl that the sweep has not reclaimed yet"),
+        ], read_only = true),
+    tool!("view_get", "One registered view in full: its SurrealQL and params, every subscribing session with its age, materialization percentiles, the SSP serving it with that view's memory footprint, and the other live sessions running the identical query.", "GET", "/views/{key}",
+        path_params = &[req("key", "string", "The _00_query key as listed by views_list; the _00_query:<key> spelling is accepted too")], read_only = true),
     tool!("logs_recent", "Recent log lines from the scheduler or one SSP (bounded, non-streaming).", "GET", "/logs",
         query = &[
             p("source", "string", "'scheduler' (default) or 'ssp:<id>'"),

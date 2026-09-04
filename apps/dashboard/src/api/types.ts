@@ -178,6 +178,146 @@ export interface Overview {
   server_time_ms: number;
   /** Operations still running. Finished ones live on `/operations`. */
   operations?: Operation[];
+  /**
+   * Live users / sessions / views, folded in from the presence sampler's
+   * memory. It rides this poll rather than a request of its own, so the
+   * sidebar count and the overview tile are free.
+   */
+  presence?: PresenceBlock;
+}
+
+/* ------------------------------------------------------------------ */
+/* Presence: who is connected and what they have registered.            */
+/* ------------------------------------------------------------------ */
+
+export interface PresenceTotals {
+  /** Distinct authenticated identities with at least one live view. */
+  users: number;
+  /** Live sessions that never signed in. Not folded into `users`. */
+  anon_sessions: number;
+  /** Distinct `clientId`s — live tabs, authenticated or not. */
+  sessions: number;
+  views: number;
+  shared_views: number;
+  slow_views: number;
+  errored_views: number;
+}
+
+export interface PresenceSample {
+  /** Epoch ms. */
+  ts: number;
+  users: number;
+  sessions: number;
+  views: number;
+}
+
+export interface PresenceBlock {
+  totals: PresenceTotals;
+  samples: PresenceSample[];
+  sample_interval_secs: number;
+  taken_at_ms: number | null;
+  /** The sampler's row cap was hit, so every figure is a floor. */
+  truncated: boolean;
+  /** Last sampling error. The totals are then the last good ones. */
+  error: string | null;
+  /** False until the sampler has run once. Distinct from "nobody is here". */
+  ready: boolean;
+}
+
+export interface Presence extends PresenceBlock {
+  slow_ms: number;
+  top_users: { auth_id: string; views: number; sessions: number }[];
+  by_ssp: { ssp_id: string; views: number }[];
+}
+
+/** A registered live query, as the list projects it. */
+export interface ViewSummary {
+  /** `_00_query:<key>`. */
+  id: string;
+  /** Just the key, which is what the detail route takes. */
+  key: string;
+  auth_id: string;
+  client_id: string;
+  surql: string | null;
+  subscriber_count: number;
+  shared: boolean;
+  ssp_id: string | null;
+  row_count: number;
+  update_count: number;
+  error_count: number;
+  registration_ms: number | null;
+  p55: number | null;
+  p90: number | null;
+  p99: number | null;
+  last_ingest_ms: number | null;
+  ttl_secs: number;
+  created_at: string | null;
+  last_active_at: string | null;
+  expires_at: string | null;
+  expires_at_ms: number | null;
+  /** Past its TTL, awaiting the SSP's sweep. */
+  expired: boolean;
+}
+
+export interface ViewsList {
+  views: ViewSummary[];
+  returned: number;
+  /** Counts the database filter only; an SSP filter narrows the page. */
+  total: number;
+  ssp_filtered: boolean;
+  limit: number;
+  sort: string;
+  slow_ms: number;
+  server_time_ms: number;
+}
+
+export interface ViewSubscriber {
+  id: string;
+  seen_at_ms: number | null;
+  age_secs: number | null;
+  /** Older than the row's own TTL, so no longer watching. */
+  stale: boolean;
+}
+
+export interface ViewDetailData {
+  view: ViewSummary & {
+    params: unknown;
+    subscribers: ViewSubscriber[];
+  };
+  /** Null when the SSP is unreachable or the view is unassigned. */
+  ssp: {
+    ssp_id: string;
+    view: {
+      query_id: string;
+      auth_id: string;
+      cached_records: number;
+      view_bytes: number;
+      operator_bytes: number;
+      total_bytes: number;
+    } | null;
+    /** Whether graph-level merging is enabled on that SSP at all. */
+    merging: boolean;
+    /** Operator DAGs against registrations: the merge win, measured. */
+    graphs: number;
+    subscribers: number;
+    total_bytes: number;
+  } | null;
+  siblings: {
+    /** Includes this view, so 1 reads as "only you". */
+    sessions: number;
+    users: number;
+    truncated: boolean;
+    rows: {
+      id: string;
+      key: string;
+      auth_id: string;
+      client_id: string;
+      row_count: number;
+      last_active_at: string | null;
+    }[];
+  };
+  slow_ms: number;
+  server_time_ms: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -413,8 +553,17 @@ export interface StepRun {
   job_id: string | null;
   output: unknown;
   error: unknown;
+  /** When the step ROW was made — the run's own start for every step in a DAG. */
   created_at: string | null;
+  /**
+   * When the step's job was actually created. `null` on runs recorded before
+   * the engine started stamping it, which is why the timeline still needs a
+   * fallback rather than trusting this outright.
+   */
+  started_at: string | null;
   finished_at: string | null;
+  /** Dispatch attempts, including recovery re-dispatches. */
+  dispatch_attempts?: number | null;
 }
 
 export interface Schedule {

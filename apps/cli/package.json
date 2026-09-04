@@ -10,6 +10,7 @@
     "spky": "./dist/cli.js"
   },
   "exports": {
+    "./devtools-mcp": "./devtools-mcp/index.js",
     ".": {
       "import": "./dist/syncgen.js",
       "require": "./dist/syncgen.cjs",
@@ -28,7 +29,7 @@
     "build:rust": "cargo build --release",
     "build:vite": "vite build",
     "build:types": "tsc --emitDeclarationOnly --declaration --declarationDir dist",
-    "build:devtools-mcp": "cd ../devtools-mcp && npm run build && cp -r dist ../cli/devtools-mcp",
+    "build:devtools-mcp": "vite build --config vite.config.devtools-mcp.ts",
     "build:js": "npm run build:vite && npm run build:types",
     "build": "npm run build:rust && npm run build:devtools-mcp && npm run build:js",
     "preview": "vite preview",

@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal, onCleanup, type JSX } from 'solid-js';
 import { A, useLocation } from '@solidjs/router';
+import { formatCount } from '../lib/format';
 import type { LoginResponse, Overview } from '../api/types';
 
 interface NavLink {
@@ -43,6 +44,16 @@ export function Shell(props: {
       label: 'Backends',
       count: props.overview
         ? `${props.overview.totals.backends_healthy}/${props.overview.totals.backends}`
+        : undefined,
+    },
+    {
+      href: '/views',
+      label: 'Views',
+      // Off the presence block the overview poll already carries. Absent until
+      // the scheduler's sampler has run once, which is not the same as "no
+      // views are registered".
+      count: props.overview?.presence?.ready
+        ? formatCount(props.overview.presence.totals.views)
         : undefined,
     },
     { href: '/workflows', label: 'Workflows' },

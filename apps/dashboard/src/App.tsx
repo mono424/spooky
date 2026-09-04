@@ -21,6 +21,7 @@ import { WorkflowDetail } from './routes/WorkflowDetail';
 import { ScheduleDetail, Schedules } from './routes/Schedules';
 import { Backups } from './routes/Backups';
 import { Logs } from './routes/Logs';
+import { ViewDetail, Views } from './routes/Views';
 import { Access } from './routes/Access';
 
 /** How often the overview is refreshed. Fast enough to feel live, slow enough
@@ -156,6 +157,8 @@ export function App() {
                   path="/backups"
                   component={() => <Backups overview={overview()} refresh={poll} />}
                 />
+                <Route path="/views" component={Views} />
+                <Route path="/views/:key" component={ViewDetail} />
                 <Route path="/logs" component={() => <Logs overview={overview()} />} />
                 <Route path="/access" component={Access} />
                 <Route path="*" component={() => <Overview data={overview()} refresh={poll} />} />

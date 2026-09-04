@@ -7,10 +7,14 @@ Full documentation: [Admin dashboard](https://sp00ky.dev/docs/reference/admin-da
 
 ## What it shows
 
-- **Overview** — scheduler and SSP health, backend health, ingest lag, and the
-  end-to-end sync latency with its sparkline
+- **Overview** — scheduler and SSP health, backend health, ingest lag, who is
+  connected (users / sessions / views / shared / slow / errored), and a band of
+  four charts: sync round trip, users, sessions and registered views
 - **SSPs** — per-processor state, with a bootstrap progress bar
 - **Backends** — health status and a ~30-minute response-time history
+- **Views** — every registered live query, filterable and sortable, with a
+  detail page carrying its SurrealQL, params, subscribers, materialization
+  percentiles and SSP memory footprint
 - **Workflows** — runs updating live over SSE, with per-step detail, and
   cancel / retry-from-failed / rerun
 - **Schedules** — definitions with next and last fire, pause/resume and run-now
@@ -121,6 +125,25 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
 - **`EventSource` is unusable here** — it cannot send an `Authorization`
   header, and we deliberately do not use cookies. `openStream()` in
   `api/client.ts` reads the `fetch` body and parses the event stream by hand.
+- **The presence numbers ride the overview poll.** The scheduler samples
+  `_00_query` on its own timer and folds the totals into `/overview`, so the
+  sidebar count, the presence rail and all three count charts cost no request
+  of their own. Only the Views tab fetches, because only it takes filters. Do
+  not add a second poll for the rollup.
+- **Presence decays; say so.** A client refreshes its liveness on a
+  `0.9 × ttl` timer (~9 minutes at the default `10m`), so a closed tab fades
+  out of the counts over minutes. Every surface that shows the number also
+  shows why it lags — a per-row `expires`, or the note on the page. Do not
+  quietly relabel it "online".
+- **Separate scales, not one axis.** Views outnumber users by one to two orders
+  of magnitude, so a shared y-axis flattens the users line onto the baseline.
+  `Sparkline` takes a `format` prop precisely so counts can reuse it without a
+  charting library.
+- **`.grid-4` stretches; every other grid does not.** A band of chart panels is
+  one row, and three different heights in it read as three unrelated boxes, so
+  the panels become flex columns whose bodies grow and the plots land on a
+  common baseline. `.grid-2`/`.grid-3` deliberately keep `align-items: start`
+  — stretching a panel whose sparkline has no samples leaves it in a tall void.
 - **`formatRelativeTime`, `formatDuration`, `formatMs` and `formatBytes` are
   duplicated** from `apps/devtools/src/utils/formatters.ts`. That app is a
   Chrome extension with no package exports, so a workspace import is not

@@ -20,6 +20,9 @@ import { formatDuration } from '../lib/format';
  *    because it has no end yet and a hard edge would claim one.
  *  - **Sub-millisecond steps still get a visible stub.** A real event that is
  *    too fast to plot must not become invisible.
+ *  - **An inferred start has an open left edge.** A step whose start was never
+ *    recorded is placed at the earliest instant it could have run; the fade
+ *    says so, rather than drawing a hard edge on a guess.
  */
 
 export interface Lane {
@@ -27,6 +30,12 @@ export interface Lane {
   label: string;
   /** Epoch ms. `null` when the step never started. */
   start: number | null;
+  /**
+   * `start` was inferred rather than recorded — see `WorkflowDetail.lanes`. The
+   * bar is drawn with an open left edge so it does not claim a precision it
+   * does not have, for the same reason a never-run step is hatched.
+   */
+  estimated?: boolean;
   /** Epoch ms. `null` while still running, or if it never started. */
   end: number | null;
   status: string;
@@ -180,11 +189,17 @@ export function Timeline(props: {
                           classList={{
                             [lane.tone]: true,
                             running: geo().running,
+                            estimated: !!lane.estimated,
                           }}
                           style={{
                             left: `${geo().left}%`,
                             width: `${geo().width}%`,
                           }}
+                          title={
+                            lane.estimated
+                              ? 'Start time was not recorded for this step; drawn from when its dependencies finished.'
+                              : undefined
+                          }
                         />
                         {/* Duration label sits after the bar, or before it once
                             the bar runs close to the right edge. */}

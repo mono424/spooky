@@ -334,6 +334,44 @@ restored state) and requires your migrations to be run again. The dialog asks
 you to type `restore` before it proceeds.
 </Warning>
 
+## Who is connected, and what they registered
+
+Two surfaces, split by the question each answers.
+
+**Overview** carries the rollup, because "is anyone using this?" is a
+landing-page question: a rail of users / sessions / views / shared / slow /
+errored, and a band of four charts — sync round trip alongside users, sessions
+and registered views over time. Each chart keeps its own scale; views outnumber
+users by one to two orders of magnitude, and a shared axis would flatten the
+users line onto the baseline.
+
+**Views** is the tab you open to ask *which* queries are registered: a
+filterable, sortable table of every live query with its owner, SSP, row count,
+subscribers, materialization percentiles and time to expiry. Clicking one opens
+its SurrealQL and params, every subscribing session with its age, that view's
+heap inside its SSP, and the other live sessions running the identical query.
+
+Everything is derived from `_00_query`, the registry of live queries. One row
+there is one *client session x query* — the query id is hashed with a
+per-browser-session salt, so two tabs of the same person register two rows.
+That is what makes the rollup possible: distinct `auth_id` counts people,
+distinct `clientId` counts open tabs, and the row count is registered views.
+
+<Note title="Liveness is TTL-shaped, not instant">
+A client proves it is still watching by refreshing `lastActiveAt` on a
+<code>0.9 &times; ttl</code> timer — about nine minutes at the default
+<code>10m</code>. A row counts as live while <code>lastActiveAt + ttl &gt;
+time::now()</code>, the same rule the TTL sweep uses, so a closed tab *decays*
+out of these counts over minutes rather than leaving at once. Every row on the
+Views tab carries its own <code>expires</code> so you can see which ones are on
+the way out. There is no finer signal to be had: the client's WebSocket goes to
+SurrealDB, not to the scheduler, so there is no connection to count.
+</Note>
+
+One background sampler feeds both surfaces, so ten open dashboards cost the
+database exactly what one does, and the totals ride the overview poll the app
+already makes rather than a request of their own.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -345,6 +383,9 @@ you to type `restore` before it proceeds.
 | `SPKY_ADMIN_PASSWORD` | unset | Break-glass password. Unset disables password-only login |
 | `SPKY_ADMIN_ACCESS` | auto | Pins the record-access method used for sign-in |
 | `SPKY_ADMIN_SESSION_TTL_SECS` | `28800` | Session lifetime (8 hours) |
+| `SPKY_ADMIN_PRESENCE_INTERVAL_SECS` | `15` | How often the presence sampler reads `_00_query`. One sampler serves every open dashboard |
+| `SPKY_ADMIN_SLOW_VIEW_MS` | `250` | Materialization p99 at which a view counts as slow. `?slow_ms=` overrides it per request |
+| `SPKY_ADMIN_PRESENCE_MAX_ROWS` | `20000` | Ceiling on rows one presence or views query may pull back |
 | `SPKY_CLOUD_API_URL` | unset | Sp00ky Cloud API base URL. Injected into the scheduler container by the control plane |
 | `SPKY_CLOUD_PROJECT` | unset | The project slug, injected alongside it |
 | `SPKY_PROJECT_SLUG` | `default` | Storage prefix for backups on an unlinked scheduler |
@@ -395,7 +436,10 @@ and port with no path lands on the dashboard.
 | `POST /admin/api/session` | Sign in. `{username, password}` or `{password}` for break-glass |
 | `POST /admin/api/logout` | Revoke the current token |
 | `GET /admin/api/me` | Current session's subject, label, mode and scope |
-| `GET /admin/api/overview` | Scheduler, SSP and backend entities plus totals |
+| `GET /admin/api/overview` | Scheduler, SSP and backend entities plus totals, and the presence rollup |
+| `GET /admin/api/presence` | Live users, sessions and views, the sample ring behind the charts, the heaviest users and the per-SSP split. Served from the sampler's memory |
+| `GET /admin/api/views` | Registered live queries. `?limit=`, `?user=`, `?ssp=`, `?sort=`, `?slow_ms=`, `?q=`, `?shared=`, `?include_expired=` |
+| `GET /admin/api/views/:key` | One view: SurrealQL, params, subscribers, percentiles, its SSP's memory attribution, and the other sessions running the identical query |
 | `GET /admin/api/backends` | Backend list |
 | `GET /admin/api/backends/:name` | One backend with probe history and masked env |
 | `GET /admin/api/logs` | SSE. `?source=scheduler` or `ssp:<id>`, `&tail=`, `&backfill=` |
@@ -442,3 +486,11 @@ database directly because `_00_workflow_run`, `_00_step_run` and
 `_00_schedule_run` are `PERMISSIONS NONE` — no record-auth token can read them.
 The scheduler holds root and is the cluster's only schedule ticker, which makes
 it the right place to serve them.
+
+Each step in `GET /admin/api/workflows/runs/:id` carries both `created_at` and
+`started_at`, and the distinction matters: the engine creates every step row when
+the run is spawned, so `created_at` on a step deep in a DAG is the *run's* start,
+not the step's. `started_at` is stamped when the step's job is created and is the
+only honest answer to "when did this begin". The Timeline draws from it, and
+falls back to the moment the step's last dependency finished — marked as an
+estimate — for runs recorded before the engine stamped it.

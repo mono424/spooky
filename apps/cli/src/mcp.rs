@@ -29,19 +29,25 @@ fn resolve_devtools_mcp() -> Result<PathBuf> {
         }
     }
 
-    // Try node resolution as last resort
-    let output = Command::new("node")
-        .args([
-            "-e",
-            "console.log(require.resolve('@spooky-sync/devtools-mcp'))",
-        ])
-        .output();
+    // Fall back to node's own resolver, run from the CWD rather than from the
+    // binary. Under pnpm the platform binary lives in its own .pnpm directory
+    // with no @spooky-sync/cli sibling, so none of the relative candidates
+    // above can hit; the consumer's node_modules still has the symlink.
+    // The server ships inside @spooky-sync/cli, so ask for that subpath first.
+    for specifier in ["@spooky-sync/cli/devtools-mcp", "@spooky-sync/devtools-mcp"] {
+        let output = Command::new("node")
+            .args([
+                "-e",
+                &format!("console.log(require.resolve('{specifier}'))"),
+            ])
+            .output();
 
-    if let Ok(output) = output {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Ok(PathBuf::from(path));
+        if let Ok(output) = output {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return Ok(PathBuf::from(path));
+                }
             }
         }
     }
@@ -52,8 +58,9 @@ fn resolve_devtools_mcp() -> Result<PathBuf> {
          - {}\n  \
          - {}\n  \
          - {}\n  \
-         - node require.resolve()\n\
-         Try: pnpm install && pnpm --filter @spooky-sync/devtools-mcp build",
+         - node require.resolve('@spooky-sync/cli/devtools-mcp')\n\
+         - node require.resolve('@spooky-sync/devtools-mcp')\n\
+         Try reinstalling @spooky-sync/cli; the MCP server ships inside it.",
         candidates[0].display(),
         candidates[1].display(),
         candidates[2].display(),

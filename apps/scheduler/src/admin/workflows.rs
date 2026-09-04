@@ -162,8 +162,15 @@ pub async fn run_detail(
     let steps = rows(
         &db,
         &format!(
+            // `started_at` is when the step's job was created; `created_at` is
+            // when the ROW was made, which for a step deep in a DAG is the run's
+            // own start. Plotting the latter draws every dependent step from
+            // +0ms, so the timeline needs both: the truth, and the fallback for
+            // rows written before `started_at` was stamped.
             "SELECT step, depends_on, status, job_id, output, error, \
+             dispatch_attempts, \
              type::string(created_at) AS created_at, \
+             type::string(started_at) AS started_at, \
              type::string(finished_at) AS finished_at \
              FROM _00_step_run WHERE type::string(workflow_run) = '{}';",
             esc(&id)

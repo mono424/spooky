@@ -130,17 +130,59 @@ export function WorkflowDetail() {
   const hasStarted = (status: string) =>
     status !== 'blocked' && status !== 'ready' && status !== 'skipped';
 
-  const lanes = (): Lane[] =>
-    orderedSteps().map((s) => ({
-      id: s.step,
-      label: s.step,
-      start: hasStarted(s.status) ? parse(s.created_at) : null,
-      end: hasStarted(s.status) ? parse(s.finished_at) : null,
-      status: s.status,
-      tone: stepTone(s.status),
-      dependsOn: s.depends_on,
-      detail: () => <StepDetail step={s} onChange={refreshAll} />,
-    }));
+  /**
+   * When a step actually began, and whether that is known or inferred.
+   *
+   * `started_at` is stamped when the step's job is created, which is the only
+   * honest answer. `created_at` is when the step ROW was made, and the engine
+   * makes every row up front — so for a step deep in a DAG it is the RUN's
+   * start, and plotting it drew every dependent step from +0ms alongside the
+   * step it was waiting for.
+   *
+   * Runs recorded before the engine stamped `started_at` have none, so falling
+   * straight back to `created_at` would keep drawing exactly that. Instead,
+   * infer the earliest instant the step COULD have been dispatched — when the
+   * last of its dependencies finished — and mark the lane estimated so the bar
+   * does not claim a precision it has not got. A step with no dependencies has
+   * nothing to infer from, and for it `created_at` is the right answer anyway.
+   */
+  const startOf = (
+    s: StepRun,
+    byName: Map<string, StepRun>,
+  ): { at: number | null; estimated: boolean } => {
+    const recorded = parse(s.started_at);
+    if (recorded !== null) return { at: recorded, estimated: false };
+
+    const depEnds = s.depends_on
+      .map((d) => parse(byName.get(d)?.finished_at))
+      .filter((v): v is number => typeof v === 'number');
+    if (depEnds.length) return { at: Math.max(...depEnds), estimated: true };
+
+    const created = parse(s.created_at);
+    // Estimated only when there were dependencies we failed to resolve; for a
+    // root step `created_at` IS when the run began working on it.
+    return { at: created, estimated: s.depends_on.length > 0 };
+  };
+
+  const lanes = (): Lane[] => {
+    const byName = new Map((data()?.steps ?? []).map((s) => [s.step, s]));
+    return orderedSteps().map((s) => {
+      const started = hasStarted(s.status)
+        ? startOf(s, byName)
+        : { at: null, estimated: false };
+      return {
+        id: s.step,
+        label: s.step,
+        start: started.at,
+        estimated: started.estimated,
+        end: hasStarted(s.status) ? parse(s.finished_at) : null,
+        status: s.status,
+        tone: stepTone(s.status),
+        dependsOn: s.depends_on,
+        detail: () => <StepDetail step={s} onChange={refreshAll} />,
+      };
+    });
+  };
 
   const counts = () => {
     const steps = data()?.steps ?? [];
@@ -431,7 +473,8 @@ function StepDetail(props: { step: StepRun; onChange: () => void }) {
               </Show>
             </div>,
           ],
-          ['Started', formatStamp(s().created_at)],
+          ['Queued', formatStamp(s().created_at)],
+          ['Started', formatStamp(s().started_at)],
           ['Finished', formatStamp(s().finished_at)],
         ]}
       />
