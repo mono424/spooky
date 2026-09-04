@@ -1304,6 +1304,10 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   authenticate(token: string) {
+    // Record it before authenticating, so a socket the supervisor rebuilds
+    // later comes back as this identity rather than anonymous. See
+    // `RemoteDatabaseService.setAuthToken`.
+    this.remote.setAuthToken(token);
     return this.remote.getClient().authenticate(token);
   }
 

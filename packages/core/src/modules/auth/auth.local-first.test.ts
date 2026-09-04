@@ -22,7 +22,11 @@ function makeAuth(opts: { token?: string | null; query?: any; authenticate?: any
   } as any;
   const remote = {
     query: opts.query ?? vi.fn(async () => [[]]),
-    getClient: () => ({ authenticate: opts.authenticate ?? vi.fn(async () => undefined) }),
+    setAuthToken: vi.fn(),
+    getClient: () => ({
+      authenticate: opts.authenticate ?? vi.fn(async () => undefined),
+      invalidate: vi.fn(async () => undefined),
+    }),
   } as any;
   return { auth: new AuthService({} as any, remote, persistence, silentLogger()), remote, persistence, store };
 }
@@ -97,5 +101,41 @@ describe('check() error handling', () => {
 
     expect(auth.isAuthenticated).toBe(false);
     expect(store.get('sp00ky_auth_token')).toBeUndefined();
+  });
+});
+
+// The transport authenticates a NEW socket from the token it was handed, not
+// from the one the app passed at construction (most apps pass none and sign in
+// later). If sign-in never reaches it, the supervisor's revive loop rebuilds a
+// socket that comes back anonymous and stays that way for the life of the page,
+// while `currentUser` — restored from local storage — keeps the UI signed in.
+// Every view registered after that carries `auth_id = ''`, so `$auth.id`
+// predicates resolve false and the user's own rows silently vanish.
+describe('auth token reaches the transport', () => {
+  it('hands the token to the transport when restoring from cache', async () => {
+    const token = jwt({ AC: 'account', ID: 'user:abc' });
+    const { auth, remote } = makeAuth({ token });
+
+    await auth.restoreSessionFromToken();
+
+    expect(remote.setAuthToken).toHaveBeenCalledWith(token);
+  });
+
+  it('hands the token to the transport on check()', async () => {
+    const token = jwt({ AC: 'account', ID: 'user:abc' });
+    const { auth, remote } = makeAuth({ token });
+
+    await auth.check();
+
+    expect(remote.setAuthToken).toHaveBeenCalledWith(token);
+  });
+
+  it('clears it on sign-out so a revived socket does not come back as the old user', async () => {
+    const { auth, remote } = makeAuth({ token: jwt({ AC: 'account', ID: 'user:abc' }) });
+    await auth.restoreSessionFromToken();
+
+    await auth.signOut();
+
+    expect(remote.setAuthToken).toHaveBeenLastCalledWith(null);
   });
 });

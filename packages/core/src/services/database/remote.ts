@@ -40,6 +40,26 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
    * racing two sockets. Cleared on settle, so a later call always reconnects.
    */
   private connecting: Promise<void> | null = null;
+  /**
+   * The token to re-authenticate a freshly opened socket with, kept current by
+   * {@link setAuthToken}.
+   *
+   * `config.token` is fixed at construction and most apps never set it: they
+   * sign in later, which authenticates the socket that happens to be open at
+   * the time. That is enough for the SDK's OWN reconnects (it replays
+   * `version`/`use`/`authenticate` itself), but not for the supervisor's revive
+   * loop, which builds a socket from scratch. Without this the revived socket
+   * came back UNAUTHENTICATED and stayed that way for the life of the page,
+   * while the client's `currentUserId` — restored from local storage — kept
+   * reporting the user as signed in.
+   *
+   * The visible damage is silent and total: `fn::query::register` sends
+   * `<string>($auth.id OR '')`, so every view registered afterwards is stamped
+   * with an empty identity, and every `$auth.id` predicate in it resolves
+   * false. Public tables keep returning rows while everything owned by the user
+   * returns nothing, on a page that still looks signed in.
+   */
+  private authToken: string | null = null;
 
   constructor(config: Sp00kyConfig<any>['database'], logger: Logger) {
     const events = createDatabaseEventSystem();
@@ -74,6 +94,18 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
 
   getConfig(): Sp00kyConfig<any>['database'] {
     return this.config;
+  }
+
+  /**
+   * Record the token every future connect should authenticate with, or `null`
+   * on sign-out. See {@link authToken}.
+   *
+   * Does not touch the CURRENT socket: callers authenticate that themselves
+   * (sign-in and session restore both already do). This only makes the next
+   * from-scratch connect reproduce that state.
+   */
+  setAuthToken(token: string | null): void {
+    this.authToken = token;
   }
 
   /** Resolved reconnect tunables; the supervisor reads its own knobs here. */
@@ -130,7 +162,10 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
   }
 
   private async doConnect(): Promise<void> {
-    const { endpoint, token, namespace, database } = this.getConfig();
+    const { endpoint, namespace, database } = this.getConfig();
+    // The live token wins over the constructor-time one: this connect may be
+    // the supervisor rebuilding a socket long after sign-in. See `authToken`.
+    const token = this.authToken ?? this.getConfig().token;
     if (endpoint) {
       this.logger.info(
         {

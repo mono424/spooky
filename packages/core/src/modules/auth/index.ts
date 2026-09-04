@@ -153,6 +153,11 @@ export class AuthService<S extends SchemaStructure> {
     if (!userId) return null;
 
     this.token = token;
+    // Hand it to the transport too, so a socket rebuilt from scratch later
+    // (the supervisor's revive loop) comes back authenticated. Without this the
+    // page kept reporting this user while its session was anonymous, and every
+    // view registered afterwards was stamped with an empty identity.
+    this.remote.setAuthToken(token);
     // Only the id: the full row is not in the token. It lands from the local
     // cache when the app's own `user` query paints, and is replaced wholesale
     // by `check()` once the server answers.
@@ -187,7 +192,10 @@ export class AuthService<S extends SchemaStructure> {
         return;
       }
 
-      // Authenticate with the token
+      // Authenticate with the token, and record it for future connects so a
+      // socket rebuilt from scratch reproduces this identity (see
+      // `RemoteDatabaseService.setAuthToken`).
+      this.remote.setAuthToken(token);
       await this.remote.getClient().authenticate(token);
 
       // Verify the session by fetching the full user record using $auth.id
@@ -259,6 +267,7 @@ export class AuthService<S extends SchemaStructure> {
    */
   async signOut() {
     this.token = null;
+    this.remote.setAuthToken(null);
     this.currentUser = null;
     this.isAuthenticated = false;
     this.access = null;
@@ -276,6 +285,7 @@ export class AuthService<S extends SchemaStructure> {
 
   private async setSession(token: string, user: any) {
     this.token = token;
+    this.remote.setAuthToken(token);
     this.currentUser = user;
     this.isAuthenticated = true;
     // Resolve the access-method name (e.g. "account") for in-browser SSP
