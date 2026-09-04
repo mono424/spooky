@@ -840,6 +840,259 @@ impl SspNode {
     }
 
     /// `POST /view/register` — create/refresh a view and seed its edges.
+    /// Give a view that was registered without an identity the one this
+    /// registration asserts, and clear the rows it stranded in the global
+    /// table on the way.
+    ///
+    /// Deliberately does NOT republish here. Adoption changes which table
+    /// `edges::build_edge_batch` routes to, so once the circuit and
+    /// `_00_query` agree on the new identity, `repair_stranded_view` (called
+    /// later in this same request) finds zero edges in the now-correct
+    /// `_00_list_ref_user_<uid>` and republishes there. One publish path, not
+    /// two.
+    ///
+    /// The per-user table itself already exists: `ensure_user_tables` ran on
+    /// the incoming `auth_id` at the top of the handler.
+    async fn adopt_view_identity(
+        &self,
+        view_id: &str,
+        incantation_id: &str,
+        old_auth: &str,
+        new_auth: &str,
+    ) {
+        {
+            let mut circuit = self.processor.write().await;
+            if !circuit.adopt_auth_id(view_id, new_auth.to_string()) {
+                return;
+            }
+        }
+
+        info!(
+            target: "ssp::edges",
+            view_id = %view_id,
+            adopted = %new_auth,
+            "View had no identity recorded - adopting the registrant's so its edges become readable"
+        );
+
+        if let Err(e) = self
+            .platform
+            .db
+            .query(
+                "UPDATE type::record($id) SET auth_id = <string>$authId",
+                &[
+                    ("id", json!(incantation_id)),
+                    ("authId", json!(new_auth)),
+                ],
+            )
+            .await
+        {
+            error!(
+                view_id = %view_id,
+                error = %e,
+                "Failed to persist an adopted auth_id; the view keeps routing to the old table"
+            );
+            return;
+        }
+
+        // Drop what the view wrote while it had no identity. Those rows carry
+        // `auth_id = ''`, so nobody could read them, but leaving them behind
+        // would double-count membership if the view ever routes back here.
+        let stale = crate::tables::list_ref_table(self.ref_mode, old_auth);
+        let fresh = crate::tables::list_ref_table(self.ref_mode, new_auth);
+        if stale == fresh {
+            return;
+        }
+        let cleanup = format!(
+            "LET $from = type::record('_00_query', $qid); \
+             DELETE {stale} WHERE in = $from;"
+        );
+        if let Err(e) = self
+            .platform
+            .db
+            .query(&cleanup, &[("qid", json!(view_id))])
+            .await
+        {
+            warn!(
+                target: "ssp::edges",
+                view_id = %view_id,
+                table = %stale,
+                error = %e,
+                "Failed to clear edges stranded under the empty identity"
+            );
+        }
+    }
+
+    /// Republish a warm-path view whose `_00_list_ref` rows have gone missing.
+    ///
+    /// The warm path is deliberately metadata-only, on the stated assumption
+    /// that a joiner reads current membership itself out of `_00_list_ref*`.
+    /// That holds only while the DB side still matches the circuit, and it
+    /// stops matching when a TTL sweep releases a row and its edges while
+    /// another holder keeps the graph alive. The next registration then finds
+    /// the view in the circuit, takes this path, and its metadata `UPDATE`
+    /// recreates `_00_query` with `rowCount` back at its schema `DEFAULT 0`
+    /// and nothing behind it. A client cannot tell that from a genuinely empty
+    /// result: it stops loading and renders nothing, permanently.
+    ///
+    /// Verify-then-heal rather than republish-always, because
+    /// `edges::build_edge_batch` writes additions with a bare `RELATE`, so
+    /// republishing over live edges would duplicate every row. One `SELECT`
+    /// per warm registration buys the difference between a transient gap and a
+    /// permanent one.
+    ///
+    /// `view_id` is already canonical (`<hash>`), `incantation_id` is the
+    /// `_00_query:<hash>` record id.
+    async fn repair_stranded_view(
+        &self,
+        view_id: &str,
+        incantation_id: &str,
+        meta: &Value,
+        auth_id: &str,
+    ) {
+        // Read the row count and the STORED auth id: the latter is what
+        // `build_edge_batch` routes on, so the probe has to look in the same
+        // table a republish would write to.
+        let (expected_rows, view_auth) = {
+            let circuit = self.processor.read().await;
+            match circuit.get_view(view_id) {
+                Some(v) => (v.cache.len() as i64, v.auth_id.clone()),
+                None => return,
+            }
+        };
+        let list_ref = crate::tables::list_ref_table(self.ref_mode, &view_auth);
+        let probe = format!(
+            "LET $from = type::record('_00_query', $qid); \
+             SELECT VALUE count() FROM {list_ref} WHERE in = $from GROUP ALL; \
+             SELECT VALUE count() FROM _00_query WHERE id = $from GROUP ALL;"
+        );
+        let count_at = |results: &Vec<Value>, idx: usize| -> i64 {
+            results
+                .get(idx)
+                .and_then(|v| v.as_array())
+                .and_then(|rows| rows.first())
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+        };
+        let (edge_count, row_present) = match self
+            .platform
+            .db
+            .query(&probe, &[("qid", json!(view_id))])
+            .await
+        {
+            Ok(results) => (count_at(&results, 1), count_at(&results, 2) > 0),
+            Err(e) => {
+                // Unknown state. Do NOT republish blind: duplicate edges are a
+                // worse failure than the stall this is guarding against.
+                warn!(
+                    target: "ssp::edges",
+                    view_id = %view_id,
+                    error = %e,
+                    "Stranded-view probe failed; leaving the view untouched"
+                );
+                return;
+            }
+        };
+        // Healthy: the row is there, and either it has edges or the view is
+        // genuinely empty (`rowCount = 0` is then the truth, not a default
+        // standing in for one).
+        if row_present && (expected_rows == 0 || edge_count > 0) {
+            return;
+        }
+
+        warn!(
+            target: "ssp::edges",
+            view_id = %view_id,
+            expected_rows,
+            edge_count,
+            row_present,
+            list_ref = %list_ref,
+            "Re-registered view is not backed by the DB - republishing from the live view"
+        );
+
+        // UPSERT, not UPDATE. The warm path's own metadata write is an
+        // `UPDATE`, which on a record that no longer exists matches nothing and
+        // silently writes NOTHING — so a sweep that took the row while the
+        // circuit kept the view left the client with no `_00_query` row at all,
+        // and a re-registration could not put it back. Rebuild the whole row,
+        // with the same fields the cold path writes (minus `registrationTime`,
+        // which belongs to a real registration).
+        //
+        // `rowCount` rides along in the same statement: it is how the client
+        // tells "no results" from "edges still flushing", so it must be true
+        // before the edges land, never after.
+        let meta_str = |key: &str| meta.get(key).and_then(|v| v.as_str()).unwrap_or_default();
+        let stmt = "UPSERT type::record($id) SET clientId = <string>$clientId, \
+                    auth_id = <string>$authId, surql = <string>$surql, params = $params, \
+                    ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt, \
+                    rowCount = <int>$rowCount, \
+                    subscribers = array::append( \
+                        array::filter(subscribers ?? [], |$s| \
+                            <string>$s.id != $sid \
+                            AND <datetime>$s.seenAt + <duration>$ttl > time::now()), \
+                        { id: $sid, seenAt: time::now() })";
+        if let Err(e) = self
+            .platform
+            .db
+            .query(
+                stmt,
+                &[
+                    ("id", json!(incantation_id)),
+                    ("clientId", json!(meta_str("clientId"))),
+                    ("sid", json!(meta_str("clientId"))),
+                    ("authId", json!(if view_auth.is_empty() { auth_id } else { &view_auth })),
+                    ("surql", json!(meta_str("sql"))),
+                    ("params", meta.get("safe_params").cloned().unwrap_or(Value::Null)),
+                    ("ttl", json!(meta_str("ttl"))),
+                    ("lastActiveAt", json!(meta_str("lastActiveAt"))),
+                    ("rowCount", json!(expected_rows)),
+                ],
+            )
+            .await
+        {
+            error!(
+                view_id = %view_id,
+                error = %e,
+                "Failed to rebuild the _00_query row for a stranded view"
+            );
+            return;
+        }
+
+        if expected_rows == 0 {
+            return;
+        }
+
+        // Snapshot the live view rather than rebuilding it: `snapshot_delta`
+        // clones the cache and leaves the graph and dependency map alone,
+        // which is exactly what the early return above exists to protect.
+        let delta = {
+            let circuit = self.processor.read().await;
+            circuit.snapshot_delta(view_id, view_auth)
+        };
+        let Some(delta) = delta else { return };
+
+        if let Err(send_err) = self.edge_update_tx.send(vec![delta]) {
+            let circuit = self.processor.read().await;
+            let left = crate::edges::write_deltas_resilient(
+                self.platform.db.as_ref(),
+                send_err.0,
+                &circuit,
+                self.ref_mode,
+                self.platform.telemetry.as_ref(),
+            )
+            .await;
+            if !left.is_empty() {
+                error!(
+                    views = left.len(),
+                    "stranded-view republish not written after retries (direct path)"
+                );
+                self.platform
+                    .telemetry
+                    .counter("edge_deltas_dropped", left.len() as u64);
+            }
+        }
+        self.platform.telemetry.counter("stranded_view_repaired", 1);
+    }
+
     async fn register_view_handler(&self, req: &ApiRequest) -> Option<ApiResponse> {
         use ssp::circuit::view::OutputFormat;
 
@@ -956,6 +1209,21 @@ impl SspNode {
                         "This query id belongs to a different identity",
                     ));
                 }
+
+                // The reverse of the guard above: this caller DOES assert an
+                // identity and the view holds none. Adopt it, because a view
+                // stuck on `''` is not merely unlabelled, it is unreachable.
+                // Its edges route to the global `_00_list_ref` (empty does not
+                // sanitize to a per-user table) and land there with
+                // `auth_id = ''`, while a signed-in client reads
+                // `_00_list_ref_user_<uid>` and could not read the global rows
+                // anyway (`PERMISSIONS FOR select WHERE auth_id = $auth.id`).
+                // Without this the view stays invisible for the rest of its
+                // life and the UI simply never updates.
+                if !auth_id.is_empty() && existing.is_empty() {
+                    self.adopt_view_identity(&data.plan.id, &incantation_id, &existing, &auth_id)
+                        .await;
+                }
             }
 
             info!(target: "ssp::edges", view_id = %incantation_id, "View already existed - joining as an additional subscriber");
@@ -998,6 +1266,13 @@ impl SspNode {
             {
                 error!("Failed to update incantation metadata: {}", e);
             }
+
+            // The metadata write above is all the warm path used to do. That
+            // assumes the DB still holds the edges this view published when it
+            // was cold — see `repair_stranded_view` for when it does not.
+            self.repair_stranded_view(&data.plan.id, &incantation_id, &data.metadata, &auth_id)
+                .await;
+
             return Some(ok_json(Value::Null));
         }
 

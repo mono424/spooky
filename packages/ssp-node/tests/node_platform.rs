@@ -1651,3 +1651,190 @@ async fn the_sweep_cancels_a_local_request_past_its_lease() {
     );
     assert_eq!(job_status(&h.raw_db, "hung").await.as_deref(), Some("pending"));
 }
+
+// --- Stranded views ----------------------------------------------------------
+//
+// The warm ("view already exists") register path is metadata-only, on the
+// assumption that a joiner can read current membership straight out of
+// `_00_list_ref*`. That assumption fails whenever the circuit view outlives its
+// DB rows: the metadata UPDATE recreates `_00_query` with `rowCount` back at its
+// schema DEFAULT 0 and nothing behind it, which a client cannot tell from a
+// genuinely empty result. It stops loading and renders nothing, for good.
+//
+// `Node::repair_stranded_view` is what closes that: it probes, and republishes
+// from the live view when the DB side has gone missing.
+
+async fn thread_harness() -> Harness {
+    let h = build(HarnessOpts { ref_mode: ssp_protocol::RefMode::Single, ..Default::default() }).await;
+    h.raw_db
+        .query("DEFINE TABLE thread SCHEMALESS PERMISSIONS FOR select FULL;")
+        .await
+        .unwrap();
+    {
+        let mut c = h.node.processor.write().await;
+        c.set_permission("thread", "true");
+    }
+    h
+}
+
+fn thread_register(id: &str) -> Value {
+    json!({
+        "id": id,
+        "surql": "SELECT * FROM thread",
+        "clientId": "tab-a",
+        "ttl": "30m",
+        "lastActiveAt": "2024-01-01T00:00:00Z",
+        "params": { "auth": { "id": "user:alice" } }
+    })
+}
+
+async fn row_count_of(h: &Harness, key: &str) -> i64 {
+    let v: Option<i64> = h
+        .raw_db
+        .query(format!("SELECT VALUE rowCount FROM ONLY _00_query:{key}"))
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap_or(None);
+    v.unwrap_or(-1)
+}
+
+#[tokio::test]
+async fn re_registration_republishes_a_view_whose_rows_went_missing() {
+    let h = thread_harness().await;
+
+    assert_eq!(
+        h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap().status,
+        200
+    );
+    // Give the view something to hold, so the repair has membership to restore.
+    let ingest = json!({ "table": "thread", "op": "CREATE", "id": "thread:1", "record": { "title": "t" } });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", ingest)).await.unwrap().status, 200);
+    assert_eq!(h.node.processor.read().await.get_view("v1").map(|v| v.cache.len()), Some(1));
+
+    // Wipe the DB side the way a TTL sweep would, but leave the circuit view
+    // in place — that mismatch is the whole bug.
+    h.raw_db.query("DELETE _00_query:v1->_00_list_ref; DELETE _00_query:v1;").await.unwrap();
+
+    // The re-registration now takes the warm path against an empty DB.
+    let r = h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap();
+    assert_eq!(r.status, 200, "warm re-register: {:?}", json_of(&r));
+
+    assert_eq!(
+        row_count_of(&h, "v1").await,
+        1,
+        "rowCount must be restored from the live view, not left at its DEFAULT 0 — \
+         a client reads 0-with-no-edges as 'confirmed empty' and stops loading forever"
+    );
+
+    // The regression the early return exists to prevent: a repair must publish
+    // what the view already holds, never rebuild it.
+    let c = h.node.processor.read().await;
+    assert_eq!(c.view_count(), 1, "repair must not insert a second view");
+    assert_eq!(c.graph_count(), 1, "repair must not build a second operator graph");
+}
+
+#[tokio::test]
+async fn re_registration_leaves_a_healthy_view_alone() {
+    let h = thread_harness().await;
+
+    assert_eq!(
+        h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap().status,
+        200
+    );
+    let ingest = json!({ "table": "thread", "op": "CREATE", "id": "thread:1", "record": { "title": "t" } });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", ingest)).await.unwrap().status, 200);
+
+    // The ingest delta's edge write is spawned, so let it land before reading.
+    let edges = || async {
+        let n: Option<i64> = h
+            .raw_db
+            .query("SELECT VALUE count() FROM _00_list_ref WHERE in = _00_query:v1 GROUP ALL")
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap_or(None);
+        n.unwrap_or(0)
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Edges present: the probe must find them and return without republishing,
+    // because `build_edge_batch` writes additions with a bare RELATE and a
+    // blind republish would duplicate every row.
+    let before = edges().await;
+    assert!(before > 0, "precondition: the ingest delta produced edges");
+
+    assert_eq!(
+        h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap().status,
+        200
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    assert_eq!(before, edges().await, "a healthy view must not have its edges republished");
+}
+
+// A view registered before its session had an identity routes its edges to the
+// global `_00_list_ref` stamped `auth_id = ''`, which that table's own
+// permission rule (`auth_id = $auth.id`) makes unreadable to the very user who
+// registered it. Write-once would keep it that way for life, so an
+// authenticated re-registration adopts the identity instead.
+#[tokio::test]
+async fn an_authenticated_re_registration_adopts_an_empty_identity() {
+    let h = thread_harness().await;
+
+    let anonymous = json!({
+        "id": "_00_query:v1",
+        "surql": "SELECT * FROM thread",
+        "clientId": "tab-a",
+        "ttl": "30m",
+        "lastActiveAt": "2024-01-01T00:00:00Z",
+        "params": { "auth": { "id": "" } }
+    });
+    assert_eq!(h.node.route(authed(Method::Post, "/view/register", anonymous)).await.unwrap().status, 200);
+    assert_eq!(h.node.processor.read().await.get_view("v1").map(|v| v.auth_id.clone()), Some(String::new()));
+
+    // Same query id, this time asserting who is asking.
+    let r = h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap();
+    assert_eq!(r.status, 200, "an identity-asserting re-register must join, not 409: {:?}", json_of(&r));
+
+    assert_eq!(
+        h.node.processor.read().await.get_view("v1").map(|v| v.auth_id.clone()),
+        Some("user:alice".to_string()),
+        "the view must adopt the identity so its edges become reachable"
+    );
+    let stored: Option<String> = h
+        .raw_db
+        .query("SELECT VALUE auth_id FROM ONLY _00_query:v1")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap_or(None);
+    assert_eq!(stored.as_deref(), Some("user:alice"), "and persist it to _00_query");
+}
+
+// The guard the adoption above must not weaken: one concrete identity may never
+// be replaced by another, or edges get stamped for one user and routed to
+// another's table.
+#[tokio::test]
+async fn adoption_never_overwrites_a_concrete_identity() {
+    let h = thread_harness().await;
+    assert_eq!(
+        h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap().status,
+        200
+    );
+
+    let mallory = json!({
+        "id": "_00_query:v1",
+        "surql": "SELECT * FROM thread",
+        "clientId": "tab-b",
+        "ttl": "30m",
+        "lastActiveAt": "2024-01-01T00:00:00Z",
+        "params": { "auth": { "id": "user:mallory" } }
+    });
+    let r = h.node.route(authed(Method::Post, "/view/register", mallory)).await.unwrap();
+    assert_eq!(r.status, 409, "cross-identity join must still be refused");
+    assert_eq!(
+        h.node.processor.read().await.get_view("v1").map(|v| v.auth_id.clone()),
+        Some("user:alice".to_string())
+    );
+}

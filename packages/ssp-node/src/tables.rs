@@ -16,7 +16,7 @@
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::collections::HashSet;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use ssp_protocol::{list_ref_table_for, sanitize_user_id, RefMode, ANON_AUTH_ID};
 
@@ -81,11 +81,24 @@ pub async fn ensure_user_tables(db: &dyn Db, mode: RefMode, auth_id: &str) -> Re
         return Ok(());
     }
     let Some(uid) = sanitize_user_id(auth_id) else {
-        warn!(
-            target: "ssp::tables",
-            auth_id = %auth_id,
-            "auth_id is not a valid table-name segment; dedicated tables skipped, falling back to global"
-        );
+        if auth_id.is_empty() {
+            // Routine, not a fault: `fn::query::register` sends
+            // `<string>($auth.id OR '')`, so any registration issued before
+            // the session's auth is established carries ''. It used to warn
+            // once per registration, which on a busy client meant dozens of
+            // WARN lines a minute for something the register handler now
+            // repairs itself (`Node::adopt_view_identity`).
+            debug!(
+                target: "ssp::tables",
+                "registration asserted no identity; per-user tables skipped until one does"
+            );
+        } else {
+            warn!(
+                target: "ssp::tables",
+                auth_id = %auth_id,
+                "auth_id is not a valid table-name segment; dedicated tables skipped, falling back to global"
+            );
+        }
         return Ok(());
     };
 
