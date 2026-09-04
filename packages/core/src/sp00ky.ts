@@ -981,6 +981,24 @@ export class Sp00kyClient<S extends SchemaStructure> {
       await this.sync.init();
       this.logger.debug({ Category: 'sp00ky-client::Sp00kyClient::init' }, 'Sync initialized');
 
+      // Hand this tab's views back when the page goes away. Without it they
+      // stay materialized on the SSP for a whole TTL after the tab is gone —
+      // see `Sp00kySync.releaseViewsOnUnload`.
+      //
+      // `pagehide` rather than `beforeunload`: it is the one teardown event
+      // that also fires on mobile, where tabs are discarded rather than
+      // closed. `persisted` means the page went into the bfcache and can come
+      // BACK, so releasing there would tear down views a live page still
+      // needs.
+      if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+        const onPageHide = (event: PageTransitionEvent) => {
+          if (event.persisted) return;
+          this.sync.releaseViewsOnUnload();
+        };
+        window.addEventListener('pagehide', onPageHide);
+        this.detachUnloadRelease = () => window.removeEventListener('pagehide', onPageHide);
+      }
+
       this.featureFlags.init();
       this.logger.debug(
         { Category: 'sp00ky-client::Sp00kyClient::init' },
@@ -1229,6 +1247,9 @@ export class Sp00kyClient<S extends SchemaStructure> {
     );
   }
 
+  /** Removes the `pagehide` listener installed in `init`; see `close`. */
+  private detachUnloadRelease: (() => void) | null = null;
+
   async close() {
     // Before anything else: a live supervisor would read the intentional
     // `remote.close()` below as a failure and immediately reconnect.
@@ -1245,6 +1266,8 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // Leaving the broker first hands leadership to another tab (and releases
     // the OPFS handles via the worker shutdown) before the store closes.
     if (this.tabsCoordinator) await this.tabsCoordinator.stop();
+    this.detachUnloadRelease?.();
+    this.detachUnloadRelease = null;
     await this.local.close();
     await this.remote.close();
     // Free the wasm circuit explicitly. V8 cannot see wasm-internal bytes, so

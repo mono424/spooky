@@ -1843,6 +1843,50 @@ export class Sp00kySync<S extends SchemaStructure> {
     this.scheduler.enqueueMutation(mutations);
   }
 
+  /**
+   * Best-effort release of THIS tab's views as the page goes away.
+   *
+   * Without it a closed tab's views stay materialized on the SSP for a full
+   * TTL (10 minutes by default), because nothing else tears them down:
+   * `releaseQueriesEagerly` is off, so the TTL sweep is the only reclaim path.
+   * On a busy tenant that is a generation of live views per reload, each still
+   * being stepped by every ingest, for ten minutes after the last human left.
+   *
+   * This is NOT `releaseQueriesEagerly` re-enabled. That released views
+   * mid-session on a viewport change and tore the window out from under a live
+   * page (see `cleanupQuery`); this runs only when the page itself is going
+   * away and nothing is left to render.
+   *
+   * Safe against other tabs by construction: `fn::query::unsubscribe` drops
+   * only this session from `subscribers` and deletes the row solely when it
+   * was the last one, so a second tab of the same user keeps its view.
+   *
+   * One statement, not one per id: an unload handler gets a few milliseconds,
+   * and N round trips would not survive it. Fire-and-forget — if the frame
+   * does not make it out, the TTL sweep still reclaims exactly as before, so
+   * the worst case is today's behaviour.
+   */
+  releaseViewsOnUnload(): void {
+    let ids: unknown[];
+    try {
+      ids = this.dataModule
+        .getActiveQueryHashes()
+        .map((hash) => this.dataModule.getQueryByHash(hash)?.config.id)
+        .filter((id): id is NonNullable<typeof id> => id != null);
+    } catch {
+      return;
+    }
+    if (ids.length === 0) return;
+
+    try {
+      void this.remote
+        .query('FOR $id IN $ids { LET $_released = fn::query::unsubscribe($id); };', { ids })
+        .catch(() => {});
+    } catch {
+      // Socket already gone: the TTL sweep is the fallback, as before.
+    }
+  }
+
   private async registerQuery(queryHash: string) {
     // Hold `fetching` across the WHOLE registration (remote view creation +
     // initial sync + post-sync notify). A query is born `fetching` in
