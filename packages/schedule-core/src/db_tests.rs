@@ -3273,3 +3273,42 @@ fn single_step_workflow() -> Value {
         "workflow": { "steps": [{"name": "only", "path": "/x"}], "on_failure": "halt" },
     })
 }
+
+/// A workflow must still dispatch when the deployment's schema is OLDER than the
+/// engine running it.
+///
+/// This is not hypothetical: it is what whitepawn ran into on 2026-09-04. A
+/// `spky deploy --upgrade` replaces the SurrealDB container, the internal-schema batch
+/// raced that restart and failed, and the images rolled anyway — so the engine was
+/// writing `dispatch_attempts` to a SCHEMAFULL `_00_step_run` that had no such field.
+/// Every promotion was rejected and no workflow could dispatch a single step, silently.
+///
+/// The fields are dropped here to stand in for that state. A step must still reach
+/// `dispatched` and land its job; only the two newer bookkeeping fields may be lost.
+#[tokio::test]
+async fn a_workflow_dispatches_against_a_schema_that_predates_the_engine() {
+    let h = harness().await;
+    // Roll `_00_step_run` back to before the lease/attempt work, keeping it SCHEMAFULL
+    // so a statement naming a missing field is rejected exactly as it would be live.
+    h.set("REMOVE FIELD dispatch_attempts ON TABLE _00_step_run").await;
+    h.set("REMOVE FIELD started_at ON TABLE _00_step_run").await;
+
+    h.define_schedule("report", single_step_workflow()).await;
+    h.engine.tick_pass().await.unwrap();
+    h.set("UPDATE _00_schedule:report SET next_fire_at = time::now() - 1s").await;
+    h.engine.tick_pass().await.unwrap();
+
+    let run = workflow_run_id(&h).await;
+    assert_eq!(
+        h.step_status_of(&run, "only").await.as_deref(),
+        Some("dispatched"),
+        "the step must dispatch even though the schema is missing newer fields"
+    );
+    let job = h.step_job_of(&run, "only").await.expect("the step holds its job id");
+    assert!(h.job_ids().await.contains(&job), "and the job row really exists");
+
+    // And the run still completes end to end.
+    h.finish_job(&job, "success", json!({"ok": true})).await;
+    h.engine.tick_pass().await.unwrap();
+    assert_eq!(h.run_status(&run).await.as_deref(), Some("success"));
+}

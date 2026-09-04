@@ -103,13 +103,20 @@ struct StepRow {
     dispatch_attempts: i64,
 }
 
-/// Dispatch attempts a single step gets before the engine gives up on it and
-/// fails it. The first is charged by the `blocked -> ready` promotion, so this
-/// allows two recovery re-dispatches. Two, not one, because the first recovery
-/// runs on the next sweep after whatever killed the original attempt and may
-/// still hit the tail of it; and not unbounded, because a step whose dispatch
-/// fails deterministically (a rejected job CREATE) would otherwise be retried
-/// every five seconds for as long as the deployment lives.
+/// Recovery re-dispatches a single step gets before the engine gives up and fails it.
+///
+/// Only RECOVERY attempts are counted. The original dispatch is not, because the
+/// promotion that precedes it deliberately writes no new field (see
+/// `CLAIM_STEP_READY`), so there is nowhere to record it that would not put the
+/// dispatch path at the mercy of this deployment's schema. Counting only recoveries
+/// costs one extra retry of a hopeless step and buys a dispatch path that cannot be
+/// broken by a field.
+///
+/// Three, not unbounded, because a step whose dispatch fails deterministically — a
+/// job CREATE the outbox rejects — would otherwise be retried every five seconds for
+/// as long as the deployment lives. And not one, because the first recovery runs on
+/// the very next sweep and may still be racing the tail of whatever killed the
+/// original attempt.
 const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 
 impl ScheduleEngine {
@@ -737,6 +744,15 @@ impl ScheduleEngine {
         let mut binds = bind_ref("", step_row).to_vec();
         binds.push(("job_id", json!(job.as_string())));
         self.db.query(sql::MARK_STEP_DISPATCHED, &binds).await?;
+
+        // Best-effort, and separate on purpose: `started_at` is newer than the table
+        // it lives on, so a deployment whose schema has not caught up rejects it. That
+        // must cost a timestamp, never the step — by this point the job row exists, so
+        // a failure here that took the whole statement with it would strand a real job
+        // with no step pointing at it.
+        if let Err(e) = self.db.query(sql::STAMP_STEP_STARTED, &bind_ref("", step_row)).await {
+            tracing::debug!(step = %step_row, error = %e, "could not stamp a step's start time");
+        }
         Ok(())
     }
 

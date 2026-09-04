@@ -180,14 +180,17 @@ WHERE workflow_run = type::record($wf_tb, $wf_key)";
 /// Promote a step to `ready`. Winning this CAS is the right to dispatch it, so
 /// two concurrent advancement passes can never both create the step's job.
 ///
-/// The promotion also OPENS the dispatch-attempt count, because the promotion and
-/// the dispatch are two writes: a pass that wins this and then dies leaves a
-/// `ready` step with no job, and `dispatch_attempts` is the only record that an
-/// attempt was ever made. Recovery re-dispatches and bumps it; see
-/// [`BUMP_STEP_DISPATCH_ATTEMPT`].
-pub const CLAIM_STEP_READY: &str = "\
-UPDATE type::record($tb, $key) SET status = 'ready', dispatch_attempts = 1 \
-WHERE status = 'blocked' RETURN AFTER";
+/// Touches `status` and NOTHING else, and that restraint is deliberate — see
+/// `the_dispatch_path_writes_no_field_newer_than_itself`. `_00_step_run` is
+/// SCHEMAFULL, so naming a field this deployment's schema has not got makes
+/// SurrealDB reject the whole statement; a rejected promotion is an undispatchable
+/// step, which is an undispatchable workflow. This briefly also set
+/// `dispatch_attempts = 1`, and on a tenant whose images had rolled while the
+/// internal-schema batch failed, that stalled every workflow. The attempt counter
+/// is owned by [`BUMP_STEP_DISPATCH_ATTEMPT`] instead, which runs only on the
+/// recovery path where a rejection costs an extra retry rather than all progress.
+pub const CLAIM_STEP_READY: &str =
+    "UPDATE type::record($tb, $key) SET status = 'ready' WHERE status = 'blocked' RETURN AFTER";
 
 /// Charge a recovery re-dispatch against the step's attempt budget. Written
 /// BEFORE the re-dispatch is attempted, never after: an attempt that dies partway
@@ -216,9 +219,23 @@ WHERE status = 'dispatched' AND job_id = NONE";
 /// Record the job a claimed step dispatched. Tolerates `dispatched` so the heal
 /// pass can re-stamp after a crash between creating the job and this write.
 pub const MARK_STEP_DISPATCHED: &str = "\
-UPDATE type::record($tb, $key) SET status = 'dispatched', job_id = $job_id, \
-started_at = started_at ?? time::now() \
+UPDATE type::record($tb, $key) SET status = 'dispatched', job_id = $job_id \
 WHERE status INSIDE ['ready', 'dispatched']";
+
+/// Stamp when the step's job was created. Its own statement, run after the job id
+/// has landed, and best-effort.
+///
+/// Splitting it off costs one round-trip per dispatch and buys the guarantee that a
+/// missing `started_at` cannot cost a step its job. Folded into
+/// [`MARK_STEP_DISPATCHED`] it was strictly worse than the promotion case: the job
+/// row has already been CREATEd by then, so a rejected stamp left a real job running
+/// with no step pointing at it — the exact stranded shape the recovery pass exists to
+/// clean up, manufactured by the write meant to record success.
+///
+/// `?? ` so a re-dispatch keeps the original start rather than sliding it forward.
+pub const STAMP_STEP_STARTED: &str = "\
+UPDATE type::record($tb, $key) SET started_at = started_at ?? time::now() \
+WHERE status = 'dispatched'";
 
 /// Land a step's terminal state (and its captured output). Guarded on
 /// `dispatched`: only a step whose job actually ran can report an outcome.
@@ -831,6 +848,7 @@ mod tests {
             ("REOPEN_SCHEDULE_RUN", REOPEN_SCHEDULE_RUN),
             ("BUMP_STEP_DISPATCH_ATTEMPT", BUMP_STEP_DISPATCH_ATTEMPT),
             ("SKIP_UNDISPATCHED_STEP", SKIP_UNDISPATCHED_STEP),
+            ("STAMP_STEP_STARTED", STAMP_STEP_STARTED),
             ("FAIL_UNDISPATCHED_STEP", FAIL_UNDISPATCHED_STEP),
         ] {
             assert!(sql.contains(" WHERE "), "{name} must carry a WHERE guard");
@@ -1018,6 +1036,57 @@ mod tests {
             LEASE_LIVE,
             "the live and expired predicates must differ ONLY in the comparison"
         );
+    }
+
+    /// The statements that move a step toward running may only ever write fields that
+    /// are older than the engine writing them.
+    ///
+    /// `_00_step_run` is SCHEMAFULL, so a statement naming a field this deployment's
+    /// schema has not got is rejected whole. On the dispatch path that is not a lost
+    /// field, it is a workflow that cannot start — and the two halves come apart
+    /// exactly when `spky deploy --upgrade` rolls the images while the internal-schema
+    /// batch fails, which is a real and recurring shape, not a hypothetical one.
+    ///
+    /// So the allow-list is explicit rather than implied: adding a field here should
+    /// require reading this comment and deciding, deliberately, that a schema older
+    /// than the binary may stop work from flowing. The usual answer is to write it in
+    /// its own best-effort statement instead — see `STAMP_STEP_STARTED`.
+    #[test]
+    fn the_dispatch_path_writes_no_field_newer_than_itself() {
+        // Present since `_00_step_run` was introduced.
+        const SETTLED: [&str; 3] = ["status", "job_id", "finished_at"];
+        // Newer than the table, therefore banned from the critical path.
+        const NEWER: [&str; 2] = ["dispatch_attempts", "started_at"];
+
+        for (name, sql) in
+            [("CLAIM_STEP_READY", CLAIM_STEP_READY), ("MARK_STEP_DISPATCHED", MARK_STEP_DISPATCHED)]
+        {
+            let sets = sql.split(" SET ").nth(1).expect("a SET clause").split(" WHERE ").next().unwrap();
+            for field in NEWER {
+                assert!(
+                    !sets.contains(field),
+                    "{name} writes `{field}`, which is newer than _00_step_run. A deployment \
+                     whose schema has not caught up would then be unable to dispatch ANY \
+                     workflow step. Put it in its own best-effort statement instead."
+                );
+            }
+            // And nothing else has crept in either.
+            for assigned in sets.split(',') {
+                let Some(field) = assigned.split('=').next().map(str::trim) else { continue };
+                if field.is_empty() {
+                    continue;
+                }
+                assert!(
+                    SETTLED.contains(&field),
+                    "{name} writes `{field}`, which is not on the settled-field allow-list. \
+                     If it really is old enough, add it to SETTLED and say why."
+                );
+            }
+        }
+
+        // The counter and the stamp live on their own, where a rejection is survivable.
+        assert!(BUMP_STEP_DISPATCH_ATTEMPT.contains("dispatch_attempts"));
+        assert!(STAMP_STEP_STARTED.contains("started_at"));
     }
 
     /// In-flight jobs are never prunable, whatever their age.
