@@ -70,8 +70,36 @@ export class DownQueue {
   }
 
   push(event: DownEvent) {
+    // Coalesce repeat registrations. Four separate paths re-enqueue `register`
+    // for every active hash — reconnect, self-heal while degraded, a
+    // re-mounted subscription, and a failed event re-headed by `run` — and
+    // they stack, so one tab was observed issuing 84 `fn::query::register`
+    // round trips in 93 seconds for 38 hashes. A register is idempotent and
+    // carries no payload beyond the hash, so a second one queued behind the
+    // first would re-do identical work.
+    //
+    // Only when the LAST queued event for the hash is itself a `register`.
+    // Ordering never mattered globally but it does per hash (see `takeNext`):
+    // dropping a register queued behind a `cleanup` would let the cleanup tear
+    // the query down with nothing to re-establish it.
+    if (event.type === 'register' && this.lastQueuedTypeFor(event.payload.hash) === 'register') {
+      this.logger.debug(
+        { hash: event.payload.hash, Category: 'sp00ky-client::DownQueue::push' },
+        'Register already queued for this hash; coalescing'
+      );
+      return;
+    }
     this.queue.push(event);
     this.emitPushEvent();
+  }
+
+  /** Type of the last queued event for `hash`, or `undefined` if none. */
+  private lastQueuedTypeFor(hash: string): DownEvent['type'] | undefined {
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const queued = this.queue[i]!;
+      if (queued.payload.hash === hash) return queued.type;
+    }
+    return undefined;
   }
 
   private emitPushEvent() {

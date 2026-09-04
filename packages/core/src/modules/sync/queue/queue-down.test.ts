@@ -12,6 +12,7 @@ const silentLogger = {
 } as any;
 
 const register = (hash: string) => ({ type: 'register', payload: { hash } }) as DownEvent;
+const cleanup = (hash: string) => ({ type: 'cleanup', payload: { hash } }) as DownEvent;
 
 const hashOf = (e: DownEvent) => e.payload.hash;
 
@@ -129,7 +130,7 @@ describe('DownQueue.takeNext (per-hash ordering under concurrency)', () => {
     // queue and is simply passed over.
     const q = makeQueue();
     q.push(register('a'));
-    q.push(register('a'));
+    q.push(cleanup('a'));
     q.push(register('b'));
 
     const busy = new Set(['a']);
@@ -138,7 +139,7 @@ describe('DownQueue.takeNext (per-hash ordering under concurrency)', () => {
 
     // Once 'a' frees up, its two events come back out in their original order.
     const rest = [q.takeNext(new Set())!, q.takeNext(new Set())!];
-    expect(rest.map(hashOf)).toEqual(['a', 'a']);
+    expect(rest.map((e) => e.type)).toEqual(['register', 'cleanup']);
     expect(q.size).toBe(0);
   });
 
@@ -176,5 +177,52 @@ describe('DownQueue.run', () => {
     const taken = q.takeNext(new Set())!;
     await expect(q.run(taken, async () => {})).resolves.toBeUndefined();
     expect(q.size).toBe(0);
+  });
+});
+
+describe('DownQueue.push register coalescing', () => {
+  it('drops a register for a hash that already has one queued', () => {
+    // Four paths re-enqueue `register` for every active hash (reconnect,
+    // self-heal, re-mount, and a re-headed failure) and they stack: one tab was
+    // measured issuing 84 registrations in 93 seconds for 38 hashes. A register
+    // carries nothing but the hash, so the second is identical work.
+    const q = makeQueue();
+    q.push(register('a'));
+    q.push(register('a'));
+    q.push(register('a'));
+
+    expect(q.size).toBe(1);
+  });
+
+  it('keeps registers for DIFFERENT hashes', () => {
+    const q = makeQueue();
+    q.push(register('a'));
+    q.push(register('b'));
+
+    expect(q.size).toBe(2);
+  });
+
+  it('does NOT coalesce a register queued behind a cleanup for the same hash', () => {
+    // Ordering is per hash: dropping this register would let the cleanup tear
+    // the query down with nothing left to re-establish it.
+    const q = makeQueue();
+    q.push(register('a'));
+    q.push(cleanup('a'));
+    q.push(register('a'));
+
+    expect(q.size).toBe(3);
+    expect([q.takeNext(new Set())!, q.takeNext(new Set())!, q.takeNext(new Set())!].map((e) => e.type)).toEqual([
+      'register',
+      'cleanup',
+      'register',
+    ]);
+  });
+
+  it('leaves non-register events alone', () => {
+    const q = makeQueue();
+    q.push(cleanup('a'));
+    q.push(cleanup('a'));
+
+    expect(q.size).toBe(2);
   });
 });

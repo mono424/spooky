@@ -126,6 +126,10 @@ export class Sp00kySync<S extends SchemaStructure> {
    * that a genuine drop minutes later still refetches.
    */
   private static readonly RECONNECT_REFETCH_COOLDOWN_MS = 10_000;
+  /** Poll interval while waiting for a reconnected session to re-authenticate. */
+  private static readonly AUTH_READY_RETRY_MS = 500;
+  /** Attempts before giving up on re-auth and skipping the refetch entirely. */
+  private static readonly AUTH_READY_MAX_ATTEMPTS = 10;
   public events = createSyncEventSystem();
 
   // Auth identity that drives per-user `_00_list_ref_user_<id>` routing
@@ -405,8 +409,14 @@ export class Sp00kySync<S extends SchemaStructure> {
           // re-register active queries — mirroring the reconnect handler — so
           // there's a concrete op whose success flips health. If there are no
           // active queries either, probe connectivity directly.
+          // Same identity gate as the reconnect path: self-heal fires while
+          // sync is degraded, which is exactly when a session is most likely
+          // to have lost its `$auth`, and a register issued there stamps the
+          // view with an empty identity permanently. See
+          // `remoteAuthEstablished`.
           const hashes = this.dataModule.getActiveQueryHashes();
-          if (hashes.length > 0) {
+          const canRegister = hashes.length > 0 && (await this.remoteAuthEstablished());
+          if (canRegister) {
             for (const hash of hashes) {
               this.scheduler.enqueueDownEvent({ type: 'register', payload: { hash } });
             }
@@ -1177,29 +1187,89 @@ export class Sp00kySync<S extends SchemaStructure> {
         return;
       }
       this.lastReconnectRefetchAt = Date.now();
-      const hashes = this.dataModule.getActiveQueryHashes();
-      this.logger.info(
-        { queries: hashes.length, Category: 'sp00ky-client::Sp00kySync::onReconnect' },
-        'Remote reconnected, refetching active queries'
-      );
-      for (const hash of hashes) {
-        this.scheduler.enqueueDownEvent({ type: 'register', payload: { hash } });
-      }
-      // The WS reconnect leaves the server-side LIVE subscription dead — the
-      // re-enqueued `register` events only re-fetch initial state, they don't
-      // re-subscribe. Without this, LIVE never recovers after a reconnect and
-      // the poll silently becomes the sole sync path (and never backs off).
-      // Authenticated → per-user table; signed-out with anon live enabled →
-      // the shared `_00_list_ref_anon`. Otherwise there's no table to re-bind.
-      if (this.currentUserId || this.anonLiveEnabled) {
-        this.restartRefLiveQuery().catch((err) => {
-          this.logger.debug(
-            { err, Category: 'sp00ky-client::Sp00kySync::onReconnect' },
-            'LIVE restart after reconnect failed; relying on poll fallback'
-          );
-        });
-      }
+      void this.refetchAfterReconnect();
     });
+  }
+
+  /**
+   * Whether the REMOTE SESSION currently carries `$auth.id`.
+   *
+   * Not the same question as `currentUserId`, and that gap is the whole point:
+   * `currentUserId` is this client's own record of who signed in and survives a
+   * socket drop untouched, while `$auth` lives on the WebSocket session and has
+   * to be re-applied after every reconnect. Registering in the window between
+   * the two is silently destructive, because `fn::query::register` sends
+   * `<string>($auth.id OR '')` and the SSP stores that value write-once: the
+   * view's edges then route to the global `_00_list_ref` stamped `auth_id = ''`,
+   * which that table's own permission rule (`auth_id = $auth.id`) makes
+   * unreadable to the very user who registered it.
+   *
+   * Signed-out clients answer `true`: `''` is the honest identity there, not a
+   * race.
+   */
+  private async remoteAuthEstablished(): Promise<boolean> {
+    if (!this.currentUserId) return true;
+    try {
+      const result = await this.remote.query<[string]>("RETURN <string>($auth.id OR '')");
+      const authId = Array.isArray(result) ? result[0] : undefined;
+      return typeof authId === 'string' && authId.length > 0;
+    } catch (err) {
+      this.logger.debug(
+        { err, Category: 'sp00ky-client::Sp00kySync::remoteAuthEstablished' },
+        'Auth probe failed; treating the session as not yet authenticated'
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Wait for the reconnected session to carry an identity again, then
+   * re-register every active query and re-bind LIVE.
+   *
+   * Giving up without registering is deliberately better than registering
+   * anyway: a registration made with no `$auth.id` produces a view its own
+   * owner cannot read, and it is write-once, so it stays that way. Skipping
+   * leaves the query unregistered and visibly loading, which the next
+   * reconnect or heartbeat retries.
+   */
+  private async refetchAfterReconnect(): Promise<void> {
+    for (let attempt = 1; attempt <= Sp00kySync.AUTH_READY_MAX_ATTEMPTS; attempt++) {
+      if (await this.remoteAuthEstablished()) break;
+      if (attempt === Sp00kySync.AUTH_READY_MAX_ATTEMPTS) {
+        this.logger.warn(
+          {
+            attempts: attempt,
+            Category: 'sp00ky-client::Sp00kySync::onReconnect',
+          },
+          'Reconnected but the session still carries no $auth.id; not re-registering (a registration now would stamp every view with an empty identity)'
+        );
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, Sp00kySync.AUTH_READY_RETRY_MS));
+    }
+
+    const hashes = this.dataModule.getActiveQueryHashes();
+    this.logger.info(
+      { queries: hashes.length, Category: 'sp00ky-client::Sp00kySync::onReconnect' },
+      'Remote reconnected, refetching active queries'
+    );
+    for (const hash of hashes) {
+      this.scheduler.enqueueDownEvent({ type: 'register', payload: { hash } });
+    }
+    // The WS reconnect leaves the server-side LIVE subscription dead — the
+    // re-enqueued `register` events only re-fetch initial state, they don't
+    // re-subscribe. Without this, LIVE never recovers after a reconnect and
+    // the poll silently becomes the sole sync path (and never backs off).
+    // Authenticated → per-user table; signed-out with anon live enabled →
+    // the shared `_00_list_ref_anon`. Otherwise there's no table to re-bind.
+    if (this.currentUserId || this.anonLiveEnabled) {
+      this.restartRefLiveQuery().catch((err) => {
+        this.logger.debug(
+          { err, Category: 'sp00ky-client::Sp00kySync::onReconnect' },
+          'LIVE restart after reconnect failed; relying on poll fallback'
+        );
+      });
+    }
   }
 
   private async startRefLiveQueries() {
