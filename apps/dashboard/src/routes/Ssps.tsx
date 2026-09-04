@@ -1,6 +1,6 @@
 import { For, Show } from 'solid-js';
 import { A } from '@solidjs/router';
-import { Empty, PageHead, Panel, Pill, StatusDot } from '../components/Chrome';
+import { Bento, Empty, PageHead, Panel, Pill, StatusDot, Tile } from '../components/Chrome';
 import { BootstrapProgress } from '../components/BootstrapProgress';
 import { ActivityStrip, OpBadge } from '../components/Actions';
 import { AllSspsActions, SspActions, SspLogsLink } from '../components/ClusterActions';
@@ -38,35 +38,34 @@ export function Ssps(props: { data: Overview | undefined; refresh: () => void })
                 </Panel>
               }
             >
-              <div class="grid grid-2">
+              {/* One tile per SSP on the bento, so a row of processors shares
+                  one bottom edge whatever each one is doing. */}
+              <Bento>
                 <For each={data().ssps}>
-                  {(ssp) => (
-                    <div class="card">
-                      <div class="card-head">
-                        <div>
-                          <h2 class="mono" style={{ 'font-size': '13px' }}>
-                            {ssp.id}
-                          </h2>
-                          <div class="card-sub">
-                            {ssp.ip ?? 'no address'} · v{ssp.version}
-                          </div>
-                        </div>
-                        <div class="row">
+                  {(ssp, i) => (
+                    <Tile
+                      i={i()}
+                      span={4}
+                      label={ssp.id}
+                      raw
+                      sub={`${ssp.ip ?? 'no address'} · v${ssp.version}`}
+                      tone={sspTone(ssp.status)}
+                      pulse={ssp.status !== 'ready'}
+                      actions={
+                        <>
                           <OpBadge operations={data().operations} target={ssp.id} />
                           <Pill tone={sspTone(ssp.status)}>
                             <StatusDot tone={sspTone(ssp.status)} />
                             {ssp.status}
                           </Pill>
-                        </div>
-                      </div>
-
+                        </>
+                      }
+                    >
                       <Show when={ssp.status !== 'ready'}>
-                        <div style={{ 'margin-bottom': '14px' }}>
-                          <BootstrapProgress
-                            ssp={ssp}
-                            timeoutSecs={data().bootstrap_timeout_secs}
-                          />
-                        </div>
+                        <BootstrapProgress
+                          ssp={ssp}
+                          timeoutSecs={data().bootstrap_timeout_secs}
+                        />
                       </Show>
 
                       <dl class="kv">
@@ -83,7 +82,7 @@ export function Ssps(props: { data: Overview | undefined; refresh: () => void })
                       </dl>
 
                       <Show when={ssp.env && Object.keys(ssp.env).length > 0}>
-                        <details style={{ 'margin-top': '14px' }}>
+                        <details>
                           <summary class="faint" style={{ cursor: 'pointer', 'font-size': '12px' }}>
                             Environment
                           </summary>
@@ -100,7 +99,7 @@ export function Ssps(props: { data: Overview | undefined; refresh: () => void })
                         </details>
                       </Show>
 
-                      <div class="spread" style={{ 'margin-top': '16px' }}>
+                      <div class="spread tile-end" style={{ 'padding-top': '4px' }}>
                         <A
                           href={`/logs?source=ssp:${encodeURIComponent(ssp.id)}`}
                           class="btn btn-sm"
@@ -110,10 +109,10 @@ export function Ssps(props: { data: Overview | undefined; refresh: () => void })
                         <SspActions ssp={ssp} size="sm" onDone={props.refresh} />
                         <SspLogsLink ssp={ssp} />
                       </div>
-                    </div>
+                    </Tile>
                   )}
                 </For>
-              </div>
+              </Bento>
             </Show>
           )}
         </Show>

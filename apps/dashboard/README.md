@@ -7,9 +7,10 @@ Full documentation: [Admin dashboard](https://sp00ky.dev/docs/reference/admin-da
 
 ## What it shows
 
-- **Overview** — scheduler and SSP health, backend health, ingest lag, who is
-  connected (users / sessions / views / shared / slow / errored), and a band of
-  four charts: sync round trip, users, sessions and registered views
+- **Overview** — a bento of tiles: sync round trip as the hero, SSPs ready,
+  backends healthy, ingest lag and the scheduler's details beside it; who is
+  connected (users / sessions / views, each with its history, plus shared /
+  slow / errored); then the SSP and backend fleets in full
 - **SSPs** — per-processor state, with a bootstrap progress bar
 - **Backends** — health status and a ~30-minute response-time history
 - **Views** — every registered live query, filterable and sortable, with a
@@ -63,6 +64,7 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
 | `src/components/` | Shell, bootstrap progress |
 | `src/routes/` | One file per view |
 | `src/styles/theme.css` | Design tokens and every rule |
+| `src/styles/fonts.css` | The vendored fonts (`src/assets/fonts`) |
 
 ## Conventions worth keeping
 
@@ -72,9 +74,20 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
 - **No charting library.** `components/Sparkline.tsx` is hand-rolled SVG. A
   failed probe is drawn as a *gap*, not a full-height bar — an outage is the
   absence of a measurement, not the slowest possible one.
-- **No webfonts.** The dashboard is served by a scheduler on a private network,
-  so a request to a font CDN would hang. The character comes from the
-  monospace-forward hierarchy, not a downloaded typeface.
+- **Fonts ship in the bundle.** The dashboard is served by a scheduler on a
+  private network, so a request to a font CDN would hang. Space Grotesk (labels,
+  prose) and JetBrains Mono (every figure and identifier) are vendored as
+  variable woff2 subsets under `src/assets/fonts` and declared in
+  `styles/fonts.css`; nothing may reference a remote font.
+- **The overview is a bento, not a stack.** `Bento` is a 12-column grid and
+  every `Tile` declares its span (`span`, `rows`), so the composition is a
+  decision rather than a side effect of `auto-fit`. Rows stretch, and a tile
+  puts its plot or footer in a `.tile-end` block so a band of tiles shares one
+  bottom edge. A tile's `tone` is the only thing that colours it: `warn` and
+  `bad` glow in the corner, `ok` is plain, because fine is the default.
+- **Green and red are still reserved; the accent is steel blue.** Only tokens
+  declared in `:root` may be referenced from TSX, and the accent is
+  `var(--accent)`, never a colour literal.
 - **The timeline must not draw work that did not happen.** `_00_step_run`
   defaults `created_at` at row creation, so a `blocked` step has a timestamp;
   plotting from it invents a bar. See `hasStarted` in `WorkflowDetail.tsx`.
@@ -139,11 +152,15 @@ SPKY_ADMIN_DIR=apps/dashboard/dist cargo run -p scheduler
   of magnitude, so a shared y-axis flattens the users line onto the baseline.
   `Sparkline` takes a `format` prop precisely so counts can reuse it without a
   charting library.
-- **`.grid-4` stretches; every other grid does not.** A band of chart panels is
-  one row, and three different heights in it read as three unrelated boxes, so
-  the panels become flex columns whose bodies grow and the plots land on a
-  common baseline. `.grid-2`/`.grid-3` deliberately keep `align-items: start`
-  — stretching a panel whose sparkline has no samples leaves it in a tall void.
+- **`.bento` and `.grid-4` stretch; `.grid-2`/`.grid-3` do not.** A band of
+  chart tiles is one row, and three different heights in it read as three
+  unrelated boxes. The two-and-three-column grids deliberately keep
+  `align-items: start` — stretching a panel whose sparkline has no samples
+  leaves it in a tall void.
+- **The card is the scroll container.** `Shell` renders the routed page inside
+  `.main`, one rounded card inset from the dark frame; the shell grid uses
+  `minmax(0, 1fr)` rows so the card scrolls itself rather than the window, and
+  each page's `PageHead` is sticky to the card's top edge.
 - **`formatRelativeTime`, `formatDuration`, `formatMs` and `formatBytes` are
   duplicated** from `apps/devtools/src/utils/formatters.ts`. That app is a
   Chrome extension with no package exports, so a workspace import is not

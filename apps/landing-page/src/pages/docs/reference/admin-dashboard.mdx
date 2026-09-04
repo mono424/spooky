@@ -118,11 +118,14 @@ at an IP address is exactly how a scheduler is usually reached.
 
 ## What it shows
 
-**Overview** — scheduler status, SSPs ready, backends healthy, ingest lag, and
-the end-to-end sync latency with a 30-minute sparkline. That latency is the
-scheduler's own heartbeat probe: it writes `_00_heartbeat:probe` upstream and
-times the full round trip through `/ingest`, the WAL, the broadcast and every
-SSP's circuit. It measures the real sync path, not a synthetic ping.
+**Overview** — a grid of tiles, one per question: the end-to-end sync latency
+with a 30-minute chart as the large tile, then SSPs ready, backends healthy,
+ingest lag and the scheduler's own details beside it. A tile whose subject is
+degraded is tinted, so the problem is the first thing on the page. The
+latency is the scheduler's own heartbeat probe: it writes `_00_heartbeat:probe`
+upstream and times the full round trip through `/ingest`, the WAL, the
+broadcast and every SSP's circuit. It measures the real sync path, not a
+synthetic ping.
 
 **SSPs** — per-processor status, live view count, uptime and environment. An SSP
 that is bootstrapping or replaying shows a progress bar: tables loaded and rows
@@ -339,9 +342,9 @@ you to type `restore` before it proceeds.
 Two surfaces, split by the question each answers.
 
 **Overview** carries the rollup, because "is anyone using this?" is a
-landing-page question: a rail of users / sessions / views / shared / slow /
-errored, and a band of four charts — sync round trip alongside users, sessions
-and registered views over time. Each chart keeps its own scale; views outnumber
+landing-page question: a band of four tiles — users, sessions and registered
+views, each with its count and its history, and a view-health tile with the
+shared / slow / errored counts. Each chart keeps its own scale; views outnumber
 users by one to two orders of magnitude, and a shared axis would flatten the
 users line onto the baseline.
 

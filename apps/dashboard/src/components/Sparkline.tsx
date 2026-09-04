@@ -47,6 +47,11 @@ export function Sparkline(props: {
   format?: (value: number | null | undefined) => string;
   /** What the plot is of, for screen readers. */
   ariaLabel?: string;
+  /**
+   * Grow to fill a flex column instead of taking a fixed height. Used by the
+   * bento tiles, whose height is set by the grid row rather than the chart.
+   */
+  fill?: boolean;
 }) {
   const gradientId = createUniqueId();
 
@@ -117,7 +122,7 @@ export function Sparkline(props: {
       .map(({ i }) => x(i));
   });
 
-  const colour = () => props.stroke ?? 'var(--amber)';
+  const colour = () => props.stroke ?? 'var(--accent)';
   const fmt = (v: number | null | undefined) => (props.format ?? formatMs)(v);
 
   return (
@@ -125,11 +130,15 @@ export function Sparkline(props: {
       when={stats().count > 0}
       fallback={<div class="empty" style={{ padding: '18px 0' }}>No samples yet</div>}
     >
-      <div>
+      <div classList={{ 'spark-fill': !!props.fill }}>
         <svg
           viewBox={`0 0 ${W} ${H}`}
           preserveAspectRatio="none"
-          style={{ width: '100%', height: `${props.height ?? H}px`, display: 'block' }}
+          style={{
+            width: '100%',
+            height: props.fill ? undefined : `${props.height ?? H}px`,
+            display: 'block',
+          }}
           role="img"
           aria-label={`${props.ariaLabel ?? 'Latency'} over the last ${stats().count} samples`}
         >

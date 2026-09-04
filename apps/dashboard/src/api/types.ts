@@ -76,6 +76,8 @@ export interface HeartbeatSample {
 
 export interface HeartbeatInfo {
   enabled?: boolean;
+  /** Seconds between probes. */
+  interval_secs?: number;
   last_e2e_ms?: number | null;
   last_ok_epoch_ms?: number | null;
   last_attempt_epoch_ms?: number | null;
@@ -138,7 +140,12 @@ export interface SspEntity {
 export type BackendStatus = 'healthy' | 'unhealthy' | 'unreachable' | 'unknown';
 
 export interface BackendSummary {
+  /**
+   * The overview serialises the registry entity, which carries `id`; the
+   * backends routes answer with `name`. Read whichever is present.
+   */
   name: string;
+  id?: string;
   url: string;
   ip: string | null;
   port: number | null;

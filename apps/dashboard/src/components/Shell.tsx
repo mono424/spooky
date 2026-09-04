@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createSignal, onCleanup, type JSX } from 'solid-js';
 import { A, useLocation } from '@solidjs/router';
 import { formatCount } from '../lib/format';
+import { Logo } from './Chrome';
 import type { LoginResponse, Overview } from '../api/types';
 
 interface NavLink {
@@ -12,14 +13,18 @@ interface NavLink {
 /**
  * Sidebar + content frame.
  *
+ * The sidebar sits on the dark frame; the routed page lives in `.main`, one
+ * rounded card inset from the frame (see theme.css, LAYOUT). The card is the
+ * scroll container, which is what lets each page's header stick to its top.
+ *
  * Nav counts come from the overview poll the app already runs, so the rail is
  * live without a request of its own.
  *
- * Below 860px the rail becomes an off-canvas drawer behind a top bar (see
- * theme.css): 208px of a 375px viewport is more than half the screen spent on
- * navigation. The drawer is CSS-driven; this component owns only the open
- * state and the things JS has to do — close on navigation, close on Escape,
- * and stop the page behind it scrolling.
+ * Below 860px the rail becomes an off-canvas drawer behind a top bar: 224px of
+ * a 375px viewport is more than half the screen spent on navigation. The
+ * drawer is CSS-driven; this component owns only the open state and the
+ * things JS has to do — close on navigation, close on Escape, and stop the
+ * page behind it scrolling.
  */
 export function Shell(props: {
   session: LoginResponse;
@@ -99,7 +104,8 @@ export function Shell(props: {
           <span />
           <span />
         </button>
-        <span class="brand-mark">Sp00ky</span>
+        <Logo />
+        <span class="brand-tag">admin</span>
       </header>
 
       <Show when={open()}>
@@ -108,10 +114,8 @@ export function Shell(props: {
 
       <nav class="sidebar" classList={{ open: open() }}>
         <div class="brand">
-          <span class="brand-mark">Sp00ky</span>
-          <span class="brand-version">
-            {props.overview?.scheduler?.version ?? ''}
-          </span>
+          <Logo />
+          <span class="brand-tag">admin</span>
         </div>
 
         <div class="nav">
@@ -138,27 +142,36 @@ export function Shell(props: {
         </div>
 
         <div class="sidebar-foot">
-          <span class="truncate" title={props.session.subject}>
-            {props.session.label}
-          </span>
-          <button class="link-btn" onClick={props.onSignOut}>
-            Sign out
-          </button>
+          <div class="spread">
+            <span class="truncate" title={props.session.subject}>
+              {props.session.label}
+            </span>
+            <button class="link-btn" onClick={props.onSignOut}>
+              Sign out
+            </button>
+          </div>
+          <Show when={props.overview?.scheduler?.version}>
+            <div class="sidebar-version" title="Scheduler version">
+              scheduler v{props.overview!.scheduler!.version}
+            </div>
+          </Show>
         </div>
       </nav>
 
-      <main class="main">
-        {props.children}
-        <Show when={props.session.mode === 'breakglass'}>
-          <div class="page-body">
-            <div class="banner" style={{ 'margin-top': '16px' }}>
-              <span class="dot warn" />
-              Signed in with the break-glass password — the{' '}
-              <span class="dim">_00_admin</span> roster was bypassed.
+      <div class="main-frame">
+        <main class="main">
+          {props.children}
+          <Show when={props.session.mode === 'breakglass'}>
+            <div class="page-body">
+              <div class="banner" style={{ 'margin-top': '16px' }}>
+                <span class="dot warn" />
+                Signed in with the break-glass password — the{' '}
+                <span class="dim mono">_00_admin</span> roster was bypassed.
+              </div>
             </div>
-          </div>
-        </Show>
-      </main>
+          </Show>
+        </main>
+      </div>
     </div>
   );
 }

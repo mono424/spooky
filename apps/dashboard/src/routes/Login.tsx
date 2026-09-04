@@ -1,6 +1,7 @@
 import { Show, createEffect, createSignal } from 'solid-js';
 import { currentMode, login, setEndpoint } from '../api/client';
 import type { LoginResponse } from '../api/types';
+import { Logo } from '../components/Chrome';
 
 /**
  * Sign-in.
@@ -64,7 +65,10 @@ export function Login(props: { onSignedIn: (session: LoginResponse) => void }) {
   return (
     <div class="login-wrap">
       <form class="login-card" onSubmit={submit}>
-        <div class="login-title">Sp00ky Admin</div>
+        <div class="login-title">
+          <Logo />
+          <span class="brand-tag">admin</span>
+        </div>
         <div class="login-sub">
           <Show
             when={config()}

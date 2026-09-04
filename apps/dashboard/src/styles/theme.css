@@ -1,68 +1,75 @@
 /*
  * SP00KY ADMIN — visual system
  *
- * Direction: an instrument panel. Amber phosphor on near-black, hairline rules
- * instead of boxes, and monospace as the DOMINANT voice rather than an accent.
- * The reference points are lab equipment and Swiss data typography, not a SaaS
- * dashboard: this is a screen an operator stares at during an incident, so
- * density and legibility beat decoration everywhere they conflict.
+ * Direction: a matte, blue-grey instrument. The frame is near-black slate, the
+ * working surface is one rounded card floating inside it (the same structure
+ * WhitePawn uses), and the overview is a bento of self-contained tiles: every
+ * tile answers one question, the biggest number on the page is the one that
+ * matters most, and a tile that is wrong glows in its own corner so the eye
+ * lands on it first.
  *
- * Two rules the whole system rests on:
+ * Type is Space Grotesk for labels and prose, JetBrains Mono for every figure
+ * and identifier — the numbers are the data, so they are the ones that get
+ * the tabular, technical voice. Both ship INSIDE the bundle (fonts.css): the
+ * dashboard is served by a scheduler on a private network, and a request to a
+ * font CDN would simply hang, so no rule here may reference a remote font.
  *
- *  1. GREEN AND RED ARE RESERVED FOR STATUS. Nothing decorative may use them,
- *     which is what keeps a red dot meaning something is actually wrong. Amber
- *     is the only free accent.
- *  2. NO WEBFONTS. This is served by a scheduler on a private network; a
- *     request to a font CDN would simply hang. The character comes from the
- *     monospace-forward hierarchy, not from a downloaded typeface.
+ * The rule the whole system rests on: GREEN AND RED ARE RESERVED FOR STATUS.
+ * Nothing decorative may use them, which is what keeps a red dot meaning
+ * something is actually wrong. The steel-blue accent is the only free colour.
  */
 
 :root {
   /* --- ground ------------------------------------------------------ */
-  /* Warm near-black rather than blue-black; the whole panel sits in amber. */
-  --bg: #0c0b09;
-  --bg-panel: #131110;
-  --bg-raised: #1a1715;
-  --bg-sunken: #080706;
-  --bg-hover: #201c19;
+  /* The frame (sidebar and the gutter around the card) is the darkest tone;
+     the card sits a step up, tiles a step above that. Cool, low-saturation
+     greys so the status colours are the only thing with any chroma. */
+  --bg: #0a0d11;
+  --bg-panel: #10141a;
+  --bg-raised: #161b22;
+  --bg-sunken: #0c0f14;
+  --bg-hover: #1d242d;
 
-  /* Hairlines, not borders. The heavier one is for structural separation. */
-  --rule: #262019;
-  --rule-strong: #3a3128;
+  /* Hairlines, not borders. Translucent so they read on every surface. */
+  --rule: rgba(255, 255, 255, 0.07);
+  --rule-strong: rgba(255, 255, 255, 0.14);
 
   /* --- ink --------------------------------------------------------- */
-  --ink: #efe8dc;
-  --ink-dim: #9b9186;
-  --ink-faint: #635b53;
-  --ink-ghost: #403a34;
+  --ink: #e7ebf1;
+  --ink-dim: #9aa5b4;
+  --ink-faint: #6b7788;
+  --ink-ghost: #4a5461;
 
   /* --- accent (the only free colour) -------------------------------- */
-  /* Only tokens declared here may be referenced from TSX (`var(--amber)`,
+  /* Only tokens declared here may be referenced from TSX (`var(--accent)`,
      never an invented alias): a missing custom property fails silently and
      the shape simply does not draw. */
-  --amber: #f0a83c;
-  --amber-deep: #b87d24;
-  --amber-wash: rgba(240, 168, 60, 0.1);
-  --amber-line: rgba(240, 168, 60, 0.32);
+  --accent: #86a8d8;
+  --accent-deep: #5f83b4;
+  --accent-wash: rgba(134, 168, 216, 0.12);
+  --accent-line: rgba(134, 168, 216, 0.35);
 
   /* --- status (reserved) -------------------------------------------- */
-  --ok: #62b97f;
-  --ok-wash: rgba(98, 185, 127, 0.12);
-  --warn: #e2a53f;
-  --warn-wash: rgba(226, 165, 63, 0.12);
-  --bad: #dc6d5c;
-  --bad-wash: rgba(220, 109, 92, 0.13);
-  --idle: #565049;
-  --idle-wash: rgba(86, 80, 73, 0.18);
+  --ok: #57b98b;
+  --ok-wash: rgba(87, 185, 139, 0.13);
+  --warn: #d9a441;
+  --warn-wash: rgba(217, 164, 65, 0.13);
+  --bad: #e06b66;
+  --bad-wash: rgba(224, 107, 102, 0.14);
+  --idle: #4d5766;
+  --idle-wash: rgba(77, 87, 102, 0.22);
 
   /* --- type -------------------------------------------------------- */
-  --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono",
-    "Roboto Mono", Menlo, Consolas, monospace;
-  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo,
+    Consolas, monospace;
+  --sans: "Space Grotesk", ui-sans-serif, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
 
-  --radius: 4px;
-  --radius-lg: 6px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 * {
@@ -80,18 +87,43 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: var(--mono);
+  font-family: var(--sans);
   font-size: 13px;
   line-height: 1.5;
+  letter-spacing: -0.005em;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
-  /* A faint horizontal ruling, like a plotter grid. Sits under everything and
-     is invisible until you look for it. */
-  background-image: repeating-linear-gradient(
-    to bottom,
-    rgba(255, 255, 255, 0.011) 0 1px,
-    transparent 1px 4px
-  );
+  overflow: hidden;
+}
+
+/* Thin, translucent scrollbars: the card has its own scroll region and a
+   classic grey bar would read as a window inside a window. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.14);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Figures and identifiers. Everything that is data rather than label. */
+.mono,
+.id,
+.num {
+  font-family: var(--mono);
 }
 
 a {
@@ -108,19 +140,20 @@ button {
 /* Every label in the chrome is a small-caps mono tag. This single rule is most
    of what makes the panel read as an instrument rather than a web page. */
 .tag {
-  font-size: 10px;
-  letter-spacing: 0.13em;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 /* A measurement inside a tag keeps its own case: uppercasing "4.8m" reads as
    megabytes, not minutes. */
 .tag .val {
   text-transform: none;
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
   color: var(--ink-dim);
+  font-family: var(--mono);
 }
 
 .prose {
@@ -128,46 +161,63 @@ button {
 }
 
 /* ================================================================
-   LAYOUT
+   LAYOUT — dark frame, one floating card
+
+   The sidebar sits on the frame. The routed page lives inside `.main`, a
+   rounded card inset 8px from the frame on three sides; the card is the
+   scroll container, so the page header can stick to its top edge.
    ================================================================ */
 
 .shell {
   display: grid;
-  grid-template-columns: 208px 1fr;
+  grid-template-columns: 224px minmax(0, 1fr);
+  /* `minmax(0, 1fr)`, not `1fr`: a grid track's default minimum is the
+     content's height, so a long page would grow the row past the viewport
+     and the card would scroll the window instead of itself. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  background: var(--bg);
 }
 
 .sidebar {
-  background: var(--bg-sunken);
-  border-right: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  min-height: 0;
+  padding: 6px 0 0;
 }
 
 .brand {
-  padding: 16px 16px 14px;
-  border-bottom: 1px solid var(--rule);
+  padding: 18px 20px 14px;
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+}
+
+.brand-logo {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  color: var(--ink);
 }
 
-.brand-mark {
+.brand-logo svg {
+  display: block;
+  flex: none;
+}
+
+/* "admin", set as a word beside the wordmark rather than a badge. */
+.brand-tag {
   font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--amber);
-}
-
-.brand-version {
-  font-size: 10px;
-  color: var(--ink-ghost);
+  font-weight: 500;
+  color: var(--ink-faint);
+  letter-spacing: -0.01em;
+  padding-top: 1px;
 }
 
 .nav {
-  padding: 10px 8px;
+  padding: 6px 10px;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -178,52 +228,85 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px;
-  border-radius: var(--radius);
+  padding: 7px 10px;
+  border-radius: 8px;
   color: var(--ink-dim);
-  font-size: 12px;
-  letter-spacing: 0.04em;
+  font-size: 13px;
+  font-weight: 500;
   transition: color 0.12s, background 0.12s;
 }
 
 .nav-link:hover {
-  background: var(--bg-hover);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--ink);
 }
 
 .nav-link.active {
-  color: var(--amber);
-  background: var(--amber-wash);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .nav-count {
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--ink-ghost);
 }
 
 .nav-link.active .nav-count {
-  color: var(--amber-deep);
+  color: var(--ink-dim);
 }
 
 .sidebar-foot {
   margin-top: auto;
-  padding: 12px 16px;
+  padding: 12px 18px 14px;
   border-top: 1px solid var(--rule);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ink-faint);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-version {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The sign-out control never wraps, whatever the account label does. */
+.sidebar-foot .link-btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+.main-frame {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  padding: 12px 12px 12px 6px;
 }
 
 .main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-xl);
   overflow-y: auto;
-  padding: 0 0 60px;
+  overflow-x: hidden;
+  padding: 0 0 48px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
 }
 
-/* Page header spans the full width and is separated by a rule, not a gap. */
+/* Page header sticks to the card's top edge as the page scrolls under it. */
 .page-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -231,6 +314,7 @@ button {
   padding: 18px 24px 14px;
   border-bottom: 1px solid var(--rule);
   margin-bottom: 18px;
+  background: var(--bg-panel);
 }
 
 .page-body {
@@ -238,17 +322,18 @@ button {
 }
 
 .crumb {
-  font-size: 10px;
-  letter-spacing: 0.13em;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  font-weight: 600;
   color: var(--ink-ghost);
-  margin-bottom: 5px;
+  margin-bottom: 4px;
 }
 
 h1 {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.01em;
   margin: 0;
   word-break: break-all;
 }
@@ -256,7 +341,7 @@ h1 {
 h2 {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.11em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-dim);
   margin: 0;
@@ -267,9 +352,9 @@ h2 {
    ================================================================ */
 
 .panel {
-  background: var(--bg-panel);
+  background: var(--bg-raised);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
 }
 
 .panel-head {
@@ -347,8 +432,8 @@ h2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   border: 1px solid var(--rule);
-  border-radius: var(--radius-lg);
-  background: var(--bg-panel);
+  border-radius: var(--radius-xl);
+  background: var(--bg-raised);
   overflow: hidden;
 }
 
@@ -366,13 +451,15 @@ h2 {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
-  letter-spacing: 0.13em;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  font-weight: 600;
   color: var(--ink-faint);
 }
 
 .rail-value {
+  font-family: var(--mono);
   font-size: 23px;
   font-weight: 500;
   letter-spacing: -0.02em;
@@ -428,10 +515,22 @@ h2 {
   animation: pulse 1.9s ease-in-out infinite;
 }
 
+.dot.ok {
+  --pulse-wash: var(--ok-wash);
+}
+.dot.bad {
+  --pulse-wash: var(--bad-wash);
+}
+.dot.live {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+  --pulse-wash: var(--accent-wash);
+}
+
 @keyframes pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 3px var(--warn-wash);
+    box-shadow: 0 0 0 3px var(--pulse-wash, var(--warn-wash));
   }
   50% {
     box-shadow: 0 0 0 6px transparent;
@@ -445,9 +544,10 @@ h2 {
   padding: 2px 7px;
   border-radius: 3px;
   font-size: 10px;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   font-weight: 600;
+  font-family: var(--sans);
   background: var(--idle-wash);
   color: var(--ink-dim);
   border: 1px solid transparent;
@@ -470,9 +570,9 @@ h2 {
   border-color: rgba(220, 109, 92, 0.24);
 }
 .pill.live {
-  background: var(--amber-wash);
-  color: var(--amber);
-  border-color: var(--amber-line);
+  background: var(--accent-wash);
+  color: var(--accent);
+  border-color: var(--accent-line);
 }
 
 /* ================================================================
@@ -487,9 +587,9 @@ table {
 
 th {
   text-align: left;
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.13em;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-ghost);
   padding: 9px 14px;
@@ -703,6 +803,8 @@ tr.clickable:hover > td {
   padding: 5px 0;
   border-bottom: 1px solid var(--rule);
   word-break: break-all;
+  font-family: var(--mono);
+  font-size: 11.5px;
 }
 
 .kv > dt:last-of-type,
@@ -739,9 +841,10 @@ pre.json.bad {
 
 label {
   display: block;
-  font-size: 10px;
-  letter-spacing: 0.13em;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  font-weight: 600;
   color: var(--ink-faint);
   margin-bottom: 5px;
 }
@@ -755,6 +858,7 @@ select {
   border-radius: var(--radius);
   color: var(--ink);
   font: inherit;
+  font-family: var(--mono);
   font-size: 12px;
   outline: none;
   transition: border-color 0.12s, box-shadow 0.12s;
@@ -766,8 +870,8 @@ input::placeholder {
 
 input:focus,
 select:focus {
-  border-color: var(--amber-deep);
-  box-shadow: 0 0 0 3px var(--amber-wash);
+  border-color: var(--accent-deep);
+  box-shadow: 0 0 0 3px var(--accent-wash);
 }
 
 /* A row of filter controls. Bare `input`/`select` are `width: 100%` because
@@ -808,14 +912,13 @@ select:focus {
 }
 
 .btn {
-  padding: 7px 13px;
+  padding: 6px 12px;
   border-radius: var(--radius);
   border: 1px solid var(--rule-strong);
-  background: var(--bg-raised);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-weight: 600;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  letter-spacing: 0;
+  font-weight: 500;
   color: var(--ink-dim);
   white-space: nowrap;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
@@ -823,7 +926,7 @@ select:focus {
 
 .btn:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--amber-deep);
+  border-color: var(--accent-deep);
   color: var(--ink);
 }
 
@@ -833,20 +936,20 @@ select:focus {
 }
 
 .btn-primary {
-  background: var(--amber);
-  border-color: var(--amber);
-  color: #171004;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0a0d11;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #f8b954;
-  border-color: #f8b954;
-  color: #171004;
+  background: #9dbbe4;
+  border-color: #9dbbe4;
+  color: #0a0d11;
 }
 
 .btn-sm {
-  padding: 4px 9px;
-  font-size: 10px;
+  padding: 3px 9px;
+  font-size: 11px;
 }
 
 .link-btn {
@@ -861,8 +964,8 @@ select:focus {
 }
 
 .link-btn:hover {
-  color: var(--amber);
-  text-decoration-color: var(--amber-deep);
+  color: var(--accent);
+  text-decoration-color: var(--accent-deep);
 }
 
 /* ================================================================
@@ -877,7 +980,7 @@ select:focus {
   background:
     radial-gradient(
       120% 80% at 50% 112%,
-      rgba(240, 168, 60, 0.13),
+      rgba(134, 168, 216, 0.12),
       transparent 60%
     ),
     var(--bg);
@@ -886,22 +989,21 @@ select:focus {
 .login-card {
   width: 100%;
   max-width: 330px;
-  background: var(--bg-panel);
+  background: var(--bg-raised);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   padding: 22px;
-  /* A single amber hairline along the top edge: the panel's power light. */
+  /* A single accent hairline along the top edge: the panel's power light. */
   box-shadow:
-    inset 0 1px 0 var(--amber-line),
+    inset 0 1px 0 var(--accent-line),
     0 20px 50px rgba(0, 0, 0, 0.5);
 }
 
 .login-title {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--amber);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
 }
 
 .login-sub {
@@ -950,7 +1052,8 @@ select:focus {
 .logs {
   background: var(--bg-sunken);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  font-family: var(--mono);
   font-size: 11.5px;
   line-height: 1.65;
   padding: 10px 12px;
@@ -995,7 +1098,7 @@ select:focus {
 }
 
 .log-target {
-  color: var(--amber-deep);
+  color: var(--accent-deep);
   flex: none;
 }
 
@@ -1023,7 +1126,7 @@ select:focus {
 
 .bar-fill {
   height: 100%;
-  background: var(--amber);
+  background: var(--accent);
   transition: width 0.4s ease;
 }
 
@@ -1112,7 +1215,7 @@ select:focus {
 }
 
 .copy:hover {
-  color: var(--amber);
+  color: var(--accent);
 }
 
 /* Section divider inside a panel body. */
@@ -1179,7 +1282,7 @@ select:focus {
 }
 
 .split.open .split-toggle {
-  border-color: var(--amber-deep);
+  border-color: var(--accent-deep);
   color: var(--ink);
 }
 
@@ -1285,12 +1388,12 @@ dialog.confirm::backdrop {
 .confirm-card {
   width: min(440px, calc(100vw - 32px));
   margin: 0;
-  background: var(--bg-panel);
+  background: var(--bg-raised);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-lg);
   padding: 18px 20px 16px;
   box-shadow:
-    inset 0 1px 0 var(--amber-line),
+    inset 0 1px 0 var(--accent-line),
     0 30px 70px rgba(0, 0, 0, 0.6);
 }
 
@@ -1370,7 +1473,6 @@ dialog.confirm::backdrop {
   padding: 10px 12px;
   background: var(--bg-raised);
   border: 1px solid var(--rule-strong);
-  border-left: 2px solid var(--amber);
   border-radius: var(--radius-lg);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
   animation: toast-in 0.18s ease-out;
@@ -1378,16 +1480,6 @@ dialog.confirm::backdrop {
 
 .toast .dot {
   margin-top: 4px;
-}
-
-.toast.ok {
-  border-left-color: var(--ok);
-}
-.toast.bad {
-  border-left-color: var(--bad);
-}
-.toast.warn {
-  border-left-color: var(--warn);
 }
 
 .toast-text {
@@ -1442,11 +1534,10 @@ dialog.confirm::backdrop {
 }
 
 .activity-item {
-  background: var(--bg-panel);
+  background: var(--bg-raised);
   border: 1px solid var(--rule);
-  border-left: 2px solid var(--amber);
-  border-radius: var(--radius-lg);
-  padding: 9px 12px 10px;
+  border-radius: var(--radius-xl);
+  padding: 11px 14px 12px;
 }
 
 .activity-head {
@@ -1544,9 +1635,9 @@ tr:hover .row-actions,
 }
 
 .step.active .step-marker {
-  border-color: var(--amber);
-  color: var(--amber);
-  background: var(--amber-wash);
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-wash);
   animation: pulse 1.6s ease-in-out infinite;
 }
 
@@ -1608,7 +1699,7 @@ tr:hover .row-actions,
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--amber);
+  color: var(--accent);
 }
 
 .reconnect-msg {
@@ -1684,17 +1775,17 @@ tr:hover .row-actions,
 }
 
 .switch input:checked + .switch-track {
-  background: var(--amber-wash);
-  border-color: var(--amber-deep);
+  background: var(--accent-wash);
+  border-color: var(--accent-deep);
 }
 
 .switch input:checked + .switch-track::after {
   transform: translateX(14px);
-  background: var(--amber);
+  background: var(--accent);
 }
 
 .switch input:focus-visible + .switch-track {
-  box-shadow: 0 0 0 3px var(--amber-wash);
+  box-shadow: 0 0 0 3px var(--accent-wash);
 }
 
 /* Sparkline readout: three quiet measurements under the plot. */
@@ -1737,8 +1828,8 @@ tr:hover .row-actions,
   font-size: 9px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: var(--amber-deep);
-  border: 1px solid var(--amber-line);
+  color: var(--accent-deep);
+  border: 1px solid var(--accent-line);
   border-radius: 3px;
   padding: 0 4px;
   margin-left: 6px;
@@ -1759,11 +1850,11 @@ tr:hover .row-actions,
   gap: 12px;
   height: 48px;
   padding: 0 12px;
-  background: var(--bg-sunken);
-  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
   position: sticky;
   top: 0;
   z-index: 30;
+  color: var(--ink);
 }
 
 .burger {
@@ -1838,7 +1929,7 @@ tr:hover .row-actions,
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--amber-line);
+  border: 1px solid var(--accent-line);
   border-radius: var(--radius);
   background: var(--bg-sunken);
   font-family: var(--mono);
@@ -1897,13 +1988,13 @@ tr:hover .row-actions,
 }
 
 .choice.on {
-  border-color: var(--amber-deep);
-  background: var(--amber-wash);
+  border-color: var(--accent-deep);
+  background: var(--accent-wash);
 }
 
 .choice input {
   margin: 3px 0 0;
-  accent-color: var(--amber);
+  accent-color: var(--accent);
 }
 
 /* Inside a <label>, which the form rules set as an uppercase tag; these are
@@ -1982,8 +2073,21 @@ tr:hover .row-actions,
   }
 
   .shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  /* The card gives up its inset on a phone: the gutter is dead space there. */
+  .main-frame {
+    padding: 0;
+    min-height: 0;
+  }
+  .main {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    box-shadow: none;
   }
 
   .sidebar {
@@ -1991,9 +2095,11 @@ tr:hover .row-actions,
     top: 0;
     bottom: 0;
     left: 0;
-    width: 232px;
+    width: 240px;
     max-width: 82vw;
     z-index: 50;
+    padding-top: 0;
+    background: var(--bg);
     transform: translateX(-100%);
     transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
     border-right: 1px solid var(--rule-strong);
@@ -2243,7 +2349,410 @@ tr:hover .row-actions,
   .rail-value {
     font-size: 19px;
   }
-  .brand-mark {
-    font-size: 12px;
+}
+
+/* ================================================================
+   BENTO — the overview
+
+   A 12-column grid of tiles. Spans are explicit (`.span-3` … `.span-12`,
+   `.rows-2`) so the composition is a decision, not a side effect of
+   `auto-fit`. Every tile is a flex column and the grid stretches rows, so a
+   band of tiles shares one bottom edge: no ragged gaps between cards.
+   ================================================================ */
+
+.bento {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  grid-auto-flow: dense;
+}
+
+.tile,
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  background: var(--bg-raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-xl);
+  min-width: 0;
+  overflow: hidden;
+  transition: border-color 0.15s;
+  animation: tile-in 0.5s var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 35ms);
+}
+
+.tile:hover,
+.card:hover {
+  border-color: var(--rule-strong);
+}
+
+@keyframes tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile,
+  .card {
+    animation: none;
+  }
+}
+
+.span-3 {
+  grid-column: span 3;
+}
+.span-4 {
+  grid-column: span 4;
+}
+.span-6 {
+  grid-column: span 6;
+}
+.span-8 {
+  grid-column: span 8;
+}
+.span-9 {
+  grid-column: span 9;
+}
+.span-12 {
+  grid-column: span 12;
+}
+.rows-2 {
+  grid-row: span 2;
+}
+
+/* A tile whose body is a table: the head keeps the padding, the table runs
+   edge to edge. */
+.tile.flush {
+  padding: 0;
+  gap: 0;
+}
+.tile.flush > .tile-head {
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.tile.flush > .table-scroll {
+  flex: 1;
+}
+
+.tile-head,
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+/* The title keeps a readable width; when the pills beside it do not fit on
+   the same line they wrap under it rather than squeezing it. */
+.tile-head > div:first-child {
+  flex: 1 1 150px;
+}
+
+.card-head {
+  margin-bottom: 2px;
+}
+
+.tile-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+.tile-sub,
+.card-sub {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.tile-actions {
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tile-label.raw {
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+/* A quiet link to the page behind the tile. */
+.tile-go {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-ghost);
+  padding: 2px 0;
+  transition: color 0.12s;
+}
+.tile-go:hover {
+  color: var(--accent);
+}
+
+/* The number. */
+.readout {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.readout-value {
+  font-family: var(--mono);
+  font-size: 30px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.readout-unit {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+.tile.hero .readout-value {
+  font-size: 58px;
+  letter-spacing: -0.045em;
+}
+
+.tile.hero .readout-unit {
+  font-size: 16px;
+}
+
+/* Small facts beside a hero number. */
+.readout-aside {
+  display: flex;
+  gap: 14px;
+  margin-left: auto;
+  align-self: flex-end;
+  padding-bottom: 6px;
+}
+
+.tile-foot {
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  line-height: 1.4;
+  text-wrap: balance;
+}
+
+/* Pushes whatever follows to the tile's bottom edge, so a band of tiles that
+   differ in content still lands its plots and feet on one line. */
+.tile-end {
+  margin-top: auto;
+}
+
+/* A plot bleeds to the tile's edges and takes the leftover height. */
+.tile-plot {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 64px;
+  margin: 4px -18px -16px;
+}
+
+.tile.hero .tile-plot {
+  min-height: 150px;
+}
+
+.spark-fill {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.spark-fill svg {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+  display: block;
+}
+
+/* Status tint: a tile that is wrong glows in its top-right corner. `ok` is
+   deliberately plain — fine is the default and does not need announcing. */
+.tile.warn,
+.tile.bad {
+  isolation: isolate;
+}
+.tile.warn::before,
+.tile.bad::before {
+  content: '';
+  position: absolute;
+  top: -35%;
+  right: -20%;
+  width: 60%;
+  height: 90%;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: -1;
+  filter: blur(18px);
+}
+.tile.warn {
+  border-color: rgba(217, 164, 65, 0.3);
+}
+.tile.warn::before {
+  background: radial-gradient(closest-side, var(--warn-wash), transparent);
+}
+.tile.bad {
+  border-color: rgba(224, 107, 102, 0.32);
+}
+.tile.bad::before {
+  background: radial-gradient(closest-side, var(--bad-wash), transparent);
+}
+
+/* One segment per member of a fleet: ready, in flight, down. */
+.segs {
+  display: grid;
+  gap: 3px;
+  height: 10px;
+}
+
+.seg {
+  border-radius: 3px;
+  background: var(--idle);
+  min-width: 0;
+}
+.seg.ok {
+  background: var(--ok);
+}
+.seg.warn {
+  background: var(--warn);
+  animation: seg-pulse 1.6s ease-in-out infinite;
+}
+.seg.bad {
+  background: var(--bad);
+}
+
+@keyframes seg-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Three small figures in one tile. */
+.stat3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stat3 > div {
+  min-width: 0;
+}
+
+.stat3 .k {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.stat3 .v {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+
+/* Loading: the grid's own shape, shimmering, instead of a "Loading…" line. */
+.tile.skeleton {
+  border-color: transparent;
+  min-height: 132px;
+  background: linear-gradient(
+    100deg,
+    var(--bg-raised) 30%,
+    var(--bg-hover) 50%,
+    var(--bg-raised) 70%
+  );
+  background-size: 220% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+/* Identifiers in tables never wrap; a long one truncates and shows in full
+   on hover. */
+td .ident {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+@media (max-width: 1180px) {
+  .span-3,
+  .span-4 {
+    grid-column: span 6;
+  }
+  .span-6,
+  .span-8,
+  .span-9 {
+    grid-column: span 12;
+  }
+  .rows-2 {
+    grid-row: auto;
+  }
+  .tile.hero .readout-value {
+    font-size: 46px;
+  }
+}
+
+@media (max-width: 640px) {
+  .bento > .tile {
+    grid-column: span 12;
+  }
+  .tile,
+  .card {
+    padding: 14px 16px;
+  }
+  .tile-plot {
+    margin: 4px -16px -14px;
+  }
+  .readout-value {
+    font-size: 26px;
+  }
+  .tile.hero .readout-value {
+    font-size: 40px;
   }
 }
