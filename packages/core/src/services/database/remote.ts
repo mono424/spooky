@@ -97,6 +97,52 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
   }
 
   /**
+   * Send one SurrealQL statement so that it survives the page going away.
+   *
+   * A WebSocket `send()` during `pagehide` is not guaranteed to flush — the
+   * browser may tear the socket down first, and the frame is simply lost.
+   * Measured: an unload-time release over the live socket reached the server
+   * zero times out of one. `fetch` with `keepalive` is the primitive the
+   * platform actually guarantees here, so this goes over SurrealDB's HTTP
+   * `/sql` endpoint instead of the RPC socket.
+   *
+   * Best-effort by design: no await, no retry, errors swallowed. Every caller
+   * must have a server-side fallback that makes a lost beacon a non-event.
+   */
+  beaconSql(sql: string): void {
+    try {
+      const { endpoint, namespace, database } = this.getConfig();
+      if (!endpoint || typeof fetch !== 'function') return;
+
+      // `ws(s)://host/rpc` is the socket; `http(s)://host/sql` is the same
+      // server's statement endpoint.
+      const url = new URL(endpoint);
+      url.protocol = url.protocol === 'wss:' ? 'https:' : url.protocol === 'ws:' ? 'http:' : url.protocol;
+      url.pathname = url.pathname.replace(/\/rpc\/?$/, '') + '/sql';
+
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+        'Content-Type': 'text/plain',
+      };
+      if (namespace) headers['surreal-ns'] = namespace;
+      if (database) headers['surreal-db'] = database;
+      // Without this the statement runs unauthenticated and `$auth.id` is NONE,
+      // which for a per-user release means it matches nothing.
+      if (this.authToken) headers.Authorization = `Bearer ${this.authToken}`;
+
+      void fetch(url.toString(), {
+        method: 'POST',
+        headers,
+        body: sql,
+        keepalive: true,
+        credentials: 'omit',
+      }).catch(() => {});
+    } catch {
+      // Malformed endpoint, no fetch, blocked by CSP: the caller's fallback owns it.
+    }
+  }
+
+  /**
    * Record the token every future connect should authenticate with, or `null`
    * on sign-out. See {@link authToken}.
    *

@@ -1878,13 +1878,24 @@ export class Sp00kySync<S extends SchemaStructure> {
     }
     if (ids.length === 0) return;
 
-    try {
-      void this.remote
-        .query('FOR $id IN $ids { LET $_released = fn::query::unsubscribe($id); };', { ids })
-        .catch(() => {});
-    } catch {
-      // Socket already gone: the TTL sweep is the fallback, as before.
-    }
+    // Over HTTP with `keepalive`, NOT the live socket. A WebSocket send during
+    // `pagehide` is not guaranteed to flush — the browser may tear the socket
+    // down first and the frame is lost. Measured on staging: releasing over the
+    // socket reached the server zero times; `fetch`/`keepalive` is the only
+    // primitive the platform promises to finish after the page is gone.
+    //
+    // Ids are inlined rather than bound because this is a bare statement, not
+    // an RPC call with a params channel. They are `_00_query:<sha256>` record
+    // ids the client itself derived, so the only interpolation is a hex digest.
+    const list = ids
+      .map((id) => String(id))
+      .filter((id) => /^_00_query:[0-9a-f]{64}$/.test(id))
+      .join(', ');
+    if (!list) return;
+
+    this.remote.beaconSql(
+      `FOR $id IN [${list}] { LET $_released = fn::query::unsubscribe($id); };`
+    );
   }
 
   private async registerQuery(queryHash: string) {
