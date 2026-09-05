@@ -389,6 +389,51 @@ impl MockSsp {
         Self::start_with_health("ready").await
     }
 
+    /// An SSP whose `/ingest` refuses the first `fail_first` deliveries (503)
+    /// and accepts everything after. Stands in for a node that was blocked
+    /// behind its circuit lock for one scheduler POST timeout.
+    async fn start_flaky_ingest(fail_first: usize) -> Self {
+        let received = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let received_clone = Arc::clone(&received);
+        let failures_left = Arc::new(std::sync::atomic::AtomicUsize::new(fail_first));
+
+        let app = Router::new()
+            .route(
+                "/ingest",
+                axum::routing::post({
+                    let received = Arc::clone(&received_clone);
+                    move |axum::Json(body): axum::Json<Value>| {
+                        let received = Arc::clone(&received);
+                        let failures_left = Arc::clone(&failures_left);
+                        async move {
+                            let left = failures_left.load(Ordering::SeqCst);
+                            if left > 0 {
+                                failures_left.store(left - 1, Ordering::SeqCst);
+                                return StatusCode::SERVICE_UNAVAILABLE;
+                            }
+                            received.lock().await.push(body);
+                            StatusCode::OK
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/health",
+                axum::routing::get(|| async { axum::Json(json!({"status": "ready"})) }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind mock SSP");
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        MockSsp { addr, received }
+    }
+
     /// Like `start`, but `/health` reports the given status (e.g. `"failed"`
     /// to exercise the scheduler's bootstrap-failure path).
     async fn start_with_health(health_status: &'static str) -> Self {
@@ -504,6 +549,67 @@ fn ingest_payload(table: &str, op: &str, id: &str) -> Value {
 
 mod ingest_tests {
     use super::*;
+
+    /// A live delivery the SSP did not acknowledge is not lost: the SSP is
+    /// parked in `Lagging`, later events queue behind the missed one, and a
+    /// redelivery task drains the queue in order and brings it back to Ready.
+    /// Before this, a `/ingest` POST that timed out was only logged, and the
+    /// row it carried was missing from every view on that SSP until a cold
+    /// re-registration.
+    #[tokio::test]
+    async fn a_failed_live_delivery_is_redelivered_in_order() {
+        let h = TestHarness::new().await;
+        let ssp = MockSsp::start_flaky_ingest(1).await;
+        h.add_ready_ssp("ssp-flaky", &ssp.addr).await;
+        let app = h.ingest_router();
+
+        // The first delivery is refused: the scheduler still answers the
+        // upstream 200 (the event is in the WAL) and parks the SSP.
+        let (status, _) =
+            post_json(app.clone(), "/ingest", &ingest_payload("game", "CREATE", "game:1")).await;
+        assert_eq!(status, StatusCode::OK);
+        {
+            let pool = h.ssp_pool.read().await;
+            assert!(pool.is_lagging("ssp-flaky"), "missed delivery parks the SSP");
+            assert!(!pool.is_ready("ssp-flaky"));
+        }
+
+        // A second event while lagging must queue behind the first, never
+        // overtake it on the live path.
+        let (status, _) =
+            post_json(app.clone(), "/ingest", &ingest_payload("game", "CREATE", "game:2")).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The redelivery task retries with backoff (500ms first) and drains
+        // the queue once the SSP answers again.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let caught_up = h.ssp_pool.read().await.is_ready("ssp-flaky");
+            if caught_up && ssp.received_count().await == 2 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "SSP never caught up: ready={caught_up} received={}",
+                ssp.received_count().await
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let ids: Vec<String> = ssp
+            .received_bodies()
+            .await
+            .iter()
+            .map(|b| b["id"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(ids, ["game:1", "game:2"], "redelivered in original order");
+
+        // Back on the live path: the next event goes straight through.
+        let (status, _) =
+            post_json(app, "/ingest", &ingest_payload("game", "CREATE", "game:3")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ssp.received_count().await, 3);
+        assert!(h.ssp_pool.read().await.is_ready("ssp-flaky"));
+    }
 
     #[tokio::test]
     async fn ingest_rejects_during_cloning() {

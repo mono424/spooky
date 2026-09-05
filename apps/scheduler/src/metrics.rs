@@ -527,6 +527,7 @@ pub async fn build_entities(state: &MetricsState) -> Vec<serde_json::Value> {
                     Some(SspState::Bootstrapping) => "bootstrapping",
                     Some(SspState::Replaying) => "replaying",
                     Some(SspState::Ready) => "ready",
+                    Some(SspState::Lagging) => "lagging",
                     None => "unknown",
                 };
                 let last_heartbeat_seconds_ago = now

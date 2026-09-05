@@ -231,6 +231,9 @@ async fn handle_ingest(
             .collect::<Vec<_>>()
     };
 
+    // SSPs that missed THIS event and need a redelivery task (see below).
+    let mut newly_lagging: Vec<String> = Vec::new();
+
     if !ready_ssps.is_empty() {
         info!("Broadcasting to {} ready SSPs", ready_ssps.len());
         let results = state
@@ -241,11 +244,25 @@ async fn handle_ingest(
         for (ssp_id, result) in results {
             if let Err(e) = result {
                 error!("Failed to send to SSP '{}': {}", ssp_id, e);
+                // A Ready SSP that did not acknowledge this event has not
+                // applied it (a POST that times out is dropped with the
+                // connection), and nothing downstream would ever resend it:
+                // the row would be missing from every view on that SSP until
+                // a cold re-registration. Park the SSP in `Lagging`: the
+                // not-ready buffering below then queues this event, and every
+                // later one behind it. The redelivery task is started only
+                // after that buffering, or it could find an empty queue, flip
+                // the SSP back to Ready, and lose exactly this event.
+                if state.ssp_pool.write().await.mark_lagging(&ssp_id) {
+                    newly_lagging.push(ssp_id);
+                }
             }
         }
     }
 
-    // Buffer for bootstrapping SSPs
+    // Buffer for SSPs that are not on the live path: bootstrapping,
+    // replaying, or lagging behind a failed delivery (including one that
+    // failed for this very event, parked above).
     {
         let mut pool = state.ssp_pool.write().await;
         let bootstrapping_ids: Vec<String> = pool
@@ -269,6 +286,106 @@ async fn handle_ingest(
         }
     }
 
+    // Only now, with the missed event safely queued, start catching up the
+    // SSPs that missed it. One task per `Ready → Lagging` transition.
+    for ssp_id in newly_lagging {
+        tokio::spawn(redeliver_to_lagging_ssp(state.clone(), ssp_id));
+    }
+
     info!(seq, "Ingest processed successfully");
     Ok(StatusCode::OK)
+}
+
+/// The `/ingest` body for a buffered event — the same shape the bootstrap
+/// replay sends (`ssp_management::poll_and_replay_ssp`).
+fn replay_payload(message: &RecordUpdate) -> serde_json::Value {
+    serde_json::json!({
+        "table": message.table,
+        "op": message.operation.to_string(),
+        "id": message.record_id,
+        "record": message.data.clone().unwrap_or(serde_json::json!({}))
+    })
+}
+
+/// Bring a `Lagging` SSP back to `Ready` by delivering its buffered events in
+/// order, retrying with backoff while it stays unresponsive.
+///
+/// Spawned by `handle_ingest` on the `Ready → Lagging` transition, exactly
+/// once per episode. Runs until the SSP is caught up (buffer empty, flipped
+/// back to `Ready` atomically with the final drain), or until the episode is
+/// over for another reason: the SSP was evicted by the heartbeat-stale sweep,
+/// re-registered (which re-bootstraps it, replaying from the frozen
+/// snapshot), or overflowed its buffer (its next heartbeat gets 409 and it
+/// re-bootstraps). In every one of those the events reach it another way.
+pub async fn redeliver_to_lagging_ssp(state: IngestState, ssp_id: String) {
+    const INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_millis(500);
+    const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(10);
+    let mut backoff = INITIAL_BACKOFF;
+
+    loop {
+        let (url, batch) = {
+            let mut pool = state.ssp_pool.write().await;
+            let Some(url) = pool.get(&ssp_id).map(|info| info.url.clone()) else {
+                info!(ssp_id, "Redelivery stopped: SSP no longer in the pool");
+                return;
+            };
+            if !pool.is_lagging(&ssp_id) {
+                info!(ssp_id, "Redelivery stopped: SSP re-registered, its bootstrap replays instead");
+                return;
+            }
+            if pool.has_buffer_overflow(&ssp_id) {
+                warn!(ssp_id, "Redelivery stopped: buffer overflowed, SSP will re-bootstrap");
+                return;
+            }
+            let batch = pool.drain_buffer(&ssp_id);
+            if batch.is_empty() {
+                // Nothing left: go Ready atomically with a final drain. An
+                // event that landed between the drain above and `mark_ready`
+                // comes back here and keeps the SSP lagging until it is out.
+                let remaining = pool.mark_ready(&ssp_id);
+                if remaining.is_empty() {
+                    info!(ssp_id, "SSP caught up on missed live events, back to ready");
+                    return;
+                }
+                pool.mark_lagging(&ssp_id);
+                pool.requeue_front(&ssp_id, remaining);
+                continue;
+            }
+            (url, batch)
+        };
+
+        let mut failed_at = None;
+        for (i, message) in batch.iter().enumerate() {
+            if let Err(e) = state
+                .transport
+                .post_to_ssp(&url, "/ingest", &replay_payload(message))
+                .await
+            {
+                warn!(
+                    ssp_id,
+                    error = %e,
+                    undelivered = batch.len() - i,
+                    "Redelivery to lagging SSP failed; retrying after backoff"
+                );
+                failed_at = Some(i);
+                break;
+            }
+        }
+
+        match failed_at {
+            None => {
+                info!(ssp_id, delivered = batch.len(), "Redelivered missed events to lagging SSP");
+                backoff = INITIAL_BACKOFF;
+            }
+            Some(i) => {
+                state
+                    .ssp_pool
+                    .write()
+                    .await
+                    .requeue_front(&ssp_id, batch[i..].to_vec());
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+            }
+        }
+    }
 }

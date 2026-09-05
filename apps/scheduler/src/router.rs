@@ -14,6 +14,12 @@ pub enum SspState {
     Replaying,
     /// SSP is fully caught up and receiving live updates
     Ready,
+    /// A Ready SSP that missed at least one live delivery (the `/ingest` POST
+    /// failed or timed out). Its events queue in the per-SSP buffer, in
+    /// order, until `ingest::redeliver_to_lagging_ssp` has caught it up. Not
+    /// a bootstrap state: it neither freezes the snapshot nor counts as an
+    /// active bootstrap, and the heartbeat-stale sweep still applies.
+    Lagging,
 }
 
 /// What a forced re-bootstrap should do on the SSP's side before it exits.
@@ -235,9 +241,10 @@ impl SspPool {
     /// Buffer a message for an SSP that's not ready yet
     /// Returns true if buffered successfully, false if buffer overflow requires re-bootstrap
     pub fn buffer_message(&mut self, ssp_id: &str, message: RecordUpdate) -> bool {
-        // Buffer for SSPs that are bootstrapping or replaying
+        // Buffer for SSPs that are bootstrapping, replaying, or lagging behind
+        // a failed live delivery.
         match self.ssp_states.get(ssp_id) {
-            Some(SspState::Bootstrapping) | Some(SspState::Replaying) => {
+            Some(SspState::Bootstrapping) | Some(SspState::Replaying) | Some(SspState::Lagging) => {
                 let buffer = self
                     .message_buffers
                     .entry(ssp_id.to_string())
@@ -306,6 +313,43 @@ impl SspPool {
         self.ssp_states
             .insert(ssp_id.to_string(), SspState::Replaying);
         self.state_since.insert(ssp_id.to_string(), Instant::now());
+    }
+
+    /// A live delivery to a `Ready` SSP failed: park it in `Lagging` so
+    /// subsequent events queue behind the missed one instead of overtaking
+    /// it. Returns `true` only on the `Ready → Lagging` transition, which is
+    /// the caller's cue to start exactly one redelivery task; a concurrent
+    /// failure for an SSP already lagging just buffers. Any other state
+    /// (bootstrapping, replaying, evicted) is left alone.
+    pub fn mark_lagging(&mut self, ssp_id: &str) -> bool {
+        if self.ssp_states.get(ssp_id) != Some(&SspState::Ready) {
+            return false;
+        }
+        self.ssp_states
+            .insert(ssp_id.to_string(), SspState::Lagging);
+        self.state_since.insert(ssp_id.to_string(), Instant::now());
+        true
+    }
+
+    pub fn is_lagging(&self, ssp_id: &str) -> bool {
+        matches!(self.ssp_states.get(ssp_id), Some(SspState::Lagging))
+    }
+
+    /// Put undelivered events back at the FRONT of an SSP's buffer, keeping
+    /// their order, so a redelivery that failed part-way resumes from the
+    /// first event the SSP never acknowledged. Does not count toward the
+    /// overflow bound: these events were already admitted once.
+    pub fn requeue_front(&mut self, ssp_id: &str, messages: Vec<RecordUpdate>) {
+        if messages.is_empty() {
+            return;
+        }
+        let buffer = self
+            .message_buffers
+            .entry(ssp_id.to_string())
+            .or_insert_with(VecDeque::new);
+        for message in messages.into_iter().rev() {
+            buffer.push_front(message);
+        }
     }
 
     /// Bump and return the registration generation for this SSP id. Called by
@@ -581,6 +625,57 @@ mod tests {
         assert_eq!(p.record_bootstrap_failure("ssp-1"), 1);
         p.reset_bootstrap_failures("ssp-1");
         assert_eq!(p.record_bootstrap_failure("ssp-1"), 1);
+    }
+
+    fn update(id: &str) -> RecordUpdate {
+        RecordUpdate {
+            table: "game".to_string(),
+            operation: crate::messages::RecordOp::Create,
+            record_id: id.to_string(),
+            data: None,
+            version: 0,
+        }
+    }
+
+    #[test]
+    fn lagging_is_entered_only_from_ready_and_buffers_in_order() {
+        let mut p = pool();
+        // Not registered / bootstrapping: a failed delivery is not "lagging".
+        assert!(!p.mark_lagging("ssp-0"));
+        p.mark_bootstrapping("ssp-0");
+        assert!(!p.mark_lagging("ssp-0"));
+
+        let _ = p.mark_ready("ssp-0");
+        assert!(p.mark_lagging("ssp-0"), "Ready → Lagging");
+        assert!(!p.mark_lagging("ssp-0"), "second failure: already lagging, no new task");
+        assert!(p.is_lagging("ssp-0"));
+        assert!(!p.is_ready("ssp-0"), "a lagging SSP is not a live broadcast target");
+        assert!(!p.is_active_bootstrap("ssp-0"), "lagging must not freeze the snapshot");
+        assert!(!p.has_active_bootstrap());
+
+        // Events queue behind the missed one, in order, and a partial
+        // redelivery resumes from the first unacknowledged event.
+        assert!(p.buffer_message("ssp-0", update("game:1")));
+        assert!(p.buffer_message("ssp-0", update("game:2")));
+        assert!(p.buffer_message("ssp-0", update("game:3")));
+        let batch = p.drain_buffer("ssp-0");
+        assert_eq!(
+            batch.iter().map(|u| u.record_id.as_str()).collect::<Vec<_>>(),
+            ["game:1", "game:2", "game:3"]
+        );
+        p.requeue_front("ssp-0", batch[1..].to_vec());
+        assert!(p.buffer_message("ssp-0", update("game:4")));
+        assert_eq!(
+            p.drain_buffer("ssp-0").iter().map(|u| u.record_id.as_str()).collect::<Vec<_>>(),
+            ["game:2", "game:3", "game:4"]
+        );
+
+        // Caught up: back to Ready, buffer handed over atomically.
+        assert!(p.buffer_message("ssp-0", update("game:5")));
+        let remaining = p.mark_ready("ssp-0");
+        assert_eq!(remaining.len(), 1);
+        assert!(p.is_ready("ssp-0"));
+        assert!(!p.is_lagging("ssp-0"));
     }
 
     #[test]

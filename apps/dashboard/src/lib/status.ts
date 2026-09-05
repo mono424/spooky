@@ -30,6 +30,7 @@ export function sspTone(status: string | undefined): Tone {
       return 'ok';
     case 'bootstrapping':
     case 'replaying':
+    case 'lagging':
       return 'warn';
     default:
       return 'idle';
