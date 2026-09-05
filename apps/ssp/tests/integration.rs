@@ -627,7 +627,8 @@ mod ingest_tests {
     #[tokio::test]
     async fn ingest_rejects_invalid_op() {
         let h = TestHarness::new();
-        let payload = ingest_payload("user", "MERGE", "user:1");
+        // MERGE became a real operation; use something that never will be.
+        let payload = ingest_payload("user", "FROBNICATE", "user:1");
         let (status, _) = post_authed(h.app(), "/ingest", &payload).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
@@ -1081,9 +1082,13 @@ mod permission_register_tests {
     #[tokio::test]
     async fn subquery_permission_returns_400() {
         let h = TestHarness::new();
+        // `$auth.id IN (SELECT ...)` became a supported single-hop semijoin,
+        // so it no longer serves as the unsupported example. `EXISTS (...)`
+        // is still refused by the injector's construct check, which runs
+        // before parsing and names the offending snippet.
         h.set_permission(
             "thread",
-            "$auth.id IN (SELECT VALUE in FROM collaborates_on)",
+            "EXISTS (SELECT VALUE member FROM collaborates_on)",
         )
         .await;
 
@@ -1173,20 +1178,22 @@ mod permission_register_tests {
         assert!(view.cache.is_present("user:2"));
     }
 
-    /// A query referencing two tables in a subquery: each scan must get its
-    /// own permission predicate. Default-deny on the inner table aborts the
-    /// whole registration even though the outer scan would have succeeded.
-    /// We exercise this through `prepare_registration_dbsp` directly because
-    /// the HTTP `/view/register` path tries to upsert metadata into an
-    /// unconnected DB after the perm check, which would 500 in this harness.
+    /// A query referencing two tables in a subquery: each scan gets its own
+    /// permission predicate. An inner table with NO permission registered
+    /// no longer aborts the registration (that rejected whole views over one
+    /// optional subquery); the inner scan is forced empty instead and the
+    /// outer scan proceeds. The precise plan shape is pinned by
+    /// `permission_inject::unpermitted_subquery_table_degrades_to_empty_not_rejection`;
+    /// this exercises the same contract through `prepare_registration_dbsp`,
+    /// which is what `/view/register` calls (the HTTP path itself would 500
+    /// in this harness on the metadata upsert against an unconnected DB).
     #[tokio::test]
-    async fn subquery_inner_scan_is_validated() {
+    async fn subquery_inner_scan_without_permission_degrades_to_empty() {
         let h = TestHarness::new();
         // The harness seeds `comment` permissive; remove it so the inner
         // scan is genuinely default-deny.
         {
             let mut circuit = h.processor.write().await;
-            // Replace permissions with only thread set permissive.
             *circuit = {
                 let mut c = Circuit::new();
                 c.set_permission("thread", "true");
@@ -1199,21 +1206,19 @@ mod permission_register_tests {
             "SELECT *, (SELECT * FROM comment WHERE thread=$parent.id) AS comments FROM thread",
         );
         let circuit = h.processor.read().await;
-        let result = ssp::service::view::prepare_registration_dbsp(
+        let data = ssp::service::view::prepare_registration_dbsp(
             payload,
             circuit.permissions(),
             circuit.link_targets(),
             circuit.opaque_fields(),
-        );
-        let err = match result {
-            Ok(_) => panic!("expected Err, got Ok"),
-            Err(e) => e,
-        };
-        let msg = err.to_string();
-        assert!(msg.contains("comment"), "must name the inner table; got {msg}");
+        )
+        .expect("a view with an unpermitted subquery table must still register");
+        // The `comments` subquery is forced empty (a `Filter` on `False`)
+        // rather than scanning a table the registrant may not read.
+        let plan = format!("{:?}", data.plan);
         assert!(
-            msg.to_lowercase().contains("default-deny"),
-            "must explain default-deny; got {msg}"
+            plan.contains("False"),
+            "unpermitted inner scan must be forced empty; plan was {plan}"
         );
     }
 
