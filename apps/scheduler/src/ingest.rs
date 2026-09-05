@@ -124,6 +124,25 @@ async fn handle_ingest(
         }
     };
 
+    // An event whose record id belongs to ANOTHER table is not a row of
+    // `request.table` and must not enter the WAL, the replica or an SSP.
+    // Observed on SurrealDB 3.0.5 during `spky release`: deleting
+    // `_00_app_release:web` cascade-deleted the `_00_list_ref_*` edges that
+    // pointed at it, and the vertex table's DELETE event fired once per edge
+    // with the EDGE as `$before`, so the scheduler got
+    // `table=_00_app_release id=_00_list_ref_anon:<edge>`. Applying that
+    // produced `DELETE _00_app_release:_00_list_ref_anon:…` (a parse error)
+    // on every drain. Answer 200 so the upstream event does not retry.
+    if let Some(foreign) = foreign_table_prefix(&request.table, &request.id) {
+        warn!(
+            table = %request.table,
+            record_id = %request.id,
+            foreign_table = %foreign,
+            "Ignoring ingest event whose record id belongs to another table (cascaded edge delete?)"
+        );
+        return Ok(StatusCode::OK);
+    }
+
     // Assign monotonic sequence number
     let seq = state.seq_counter.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -294,6 +313,26 @@ async fn handle_ingest(
 
     info!(seq, "Ingest processed successfully");
     Ok(StatusCode::OK)
+}
+
+/// The table an event's record id names when it is NOT `table`.
+///
+/// Ids arrive either bare (`abc`) or qualified (`game:abc`). A qualified id
+/// whose prefix is a different table name means the event is not about a row
+/// of `table` at all. Ids with escaped or composite forms (`⟨…⟩`, `{…}`,
+/// backticks, or a first segment that is not a plain identifier) are left
+/// alone: only a clean `identifier:` prefix is compared.
+pub fn foreign_table_prefix(table: &str, id: &str) -> Option<String> {
+    let (prefix, _) = id.split_once(':')?;
+    let is_ident = !prefix.is_empty()
+        && prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if is_ident && prefix != table {
+        Some(prefix.to_string())
+    } else {
+        None
+    }
 }
 
 /// The `/ingest` body for a buffered event — the same shape the bootstrap

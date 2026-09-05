@@ -611,6 +611,49 @@ mod ingest_tests {
         assert!(h.ssp_pool.read().await.is_ready("ssp-flaky"));
     }
 
+    /// SurrealDB can fire a vertex table's DELETE event with a cascaded EDGE
+    /// as `$before` (seen on `spky release`: `_00_app_release` events carrying
+    /// `_00_list_ref_anon:<edge>` ids). Such an event is not a row of the
+    /// table: it must be answered 200 (so upstream does not retry) and go
+    /// nowhere — not to the buffer, the WAL, or any SSP.
+    #[tokio::test]
+    async fn ingest_ignores_an_event_whose_id_belongs_to_another_table() {
+        let h = TestHarness::new().await;
+        let ssp = MockSsp::start().await;
+        h.add_ready_ssp("ssp-a", &ssp.addr).await;
+        let app = h.ingest_router();
+
+        let (status, _) = post_json(
+            app.clone(),
+            "/ingest",
+            &ingest_payload("_00_app_release", "DELETE", "_00_list_ref_anon:b0va68i1z27z68tzgycm"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(h.event_buffer.read().await.len(), 0, "not buffered");
+        assert_eq!(ssp.received_count().await, 0, "not broadcast");
+
+        // The ordinary qualified and bare forms still flow.
+        let (status, _) =
+            post_json(app.clone(), "/ingest", &ingest_payload("_00_app_release", "DELETE", "_00_app_release:web")).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = post_json(app, "/ingest", &ingest_payload("_00_app_release", "CREATE", "web")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(h.event_buffer.read().await.len(), 2);
+        assert_eq!(ssp.received_count().await, 2);
+    }
+
+    #[test]
+    fn foreign_table_prefix_only_flags_a_clean_other_table_name() {
+        use scheduler::ingest::foreign_table_prefix;
+        assert_eq!(foreign_table_prefix("_00_app_release", "_00_list_ref_anon:abc"), Some("_00_list_ref_anon".into()));
+        assert_eq!(foreign_table_prefix("game", "game:abc"), None);
+        assert_eq!(foreign_table_prefix("game", "abc"), None);
+        // Escaped / composite ids are not second-guessed.
+        assert_eq!(foreign_table_prefix("game", "⟨weird:id⟩"), None);
+        assert_eq!(foreign_table_prefix("game", "{a:1}"), None);
+    }
+
     #[tokio::test]
     async fn ingest_rejects_during_cloning() {
         let h = TestHarness::with_status(SchedulerStatus::Cloning).await;
