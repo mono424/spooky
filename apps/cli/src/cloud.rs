@@ -2251,16 +2251,17 @@ pub fn deploy(
             Err(ureq::Error::Status(code, resp)) => {
                 println!();
                 let body = resp.into_string().unwrap_or_default();
-                bail!(
-                    "Image upload failed for '{}' (HTTP {}): {}",
-                    name,
-                    code,
-                    body
-                );
+                let err = format!("HTTP {}: {}", code, body);
+                if !upload_landed_despite_error(&client, &pid, name, image_id.as_deref(), &err) {
+                    bail!("Image upload failed for '{}' ({})", name, err);
+                }
             }
             Err(ureq::Error::Transport(t)) => {
                 println!();
-                bail!("Image upload failed for '{}': {}", name, t);
+                let err = t.to_string();
+                if !upload_landed_despite_error(&client, &pid, name, image_id.as_deref(), &err) {
+                    bail!("Image upload failed for '{}': {}", name, err);
+                }
             }
         }
 
@@ -2462,16 +2463,17 @@ pub fn deploy(
             }
             Err(ureq::Error::Status(code, resp)) => {
                 println!();
-                bail!(
-                    "Image upload failed for '{}' (HTTP {}): {}",
-                    name,
-                    code,
-                    resp.into_string().unwrap_or_default()
-                );
+                let err = format!("HTTP {}: {}", code, resp.into_string().unwrap_or_default());
+                if !upload_landed_despite_error(&client, &pid, name, image_id.as_deref(), &err) {
+                    bail!("Image upload failed for '{}' ({})", name, err);
+                }
             }
             Err(ureq::Error::Transport(t)) => {
                 println!();
-                bail!("Image upload failed for '{}': {}", name, t);
+                let err = t.to_string();
+                if !upload_landed_despite_error(&client, &pid, name, image_id.as_deref(), &err) {
+                    bail!("Image upload failed for '{}': {}", name, err);
+                }
             }
         }
         let _ = fs::remove_file(&tmp_tar);
@@ -2828,11 +2830,17 @@ pub fn deploy(
                 Err(ureq::Error::Status(code, resp)) => {
                     println!();
                     let body = resp.into_string().unwrap_or_default();
-                    bail!("Frontend image upload failed (HTTP {}): {}", code, body);
+                    let err = format!("HTTP {}: {}", code, body);
+                    if !upload_landed_despite_error(&client, &pid, "frontend", frontend_image_id.as_deref(), &err) {
+                        bail!("Frontend image upload failed ({})", err);
+                    }
                 }
                 Err(ureq::Error::Transport(t)) => {
                     println!();
-                    bail!("Frontend image upload failed: {}", t);
+                    let err = t.to_string();
+                    if !upload_landed_despite_error(&client, &pid, "frontend", frontend_image_id.as_deref(), &err) {
+                        bail!("Frontend image upload failed: {}", err);
+                    }
                 }
             }
             let _ = fs::remove_file(&tmp_tar);
@@ -3427,6 +3435,38 @@ fn get_docker_cmd(tag: &str) -> Option<String> {
         })
         .collect();
     Some(quoted.join(" "))
+}
+
+/// Decide whether a failed image upload actually landed.
+///
+/// The upload goes through the edge proxy, which gives up on a request that
+/// has produced no response bytes for 100 s. A large image on a slow uplink
+/// takes longer than that to *send*, so the proxy answers 502 (or drops the
+/// socket: "Broken pipe") while the origin is still reading the body, stores
+/// it, and logs a 200 nobody saw. The control plane writes the image's `hash`
+/// file only after the body was read to completion, so a remote hash equal to
+/// the one we just sent is proof the upload succeeded, and the deploy can go
+/// on instead of failing after a full rebuild and a five-minute upload.
+fn upload_landed_despite_error(
+    client: &CloudClient,
+    pid: &str,
+    image_name: &str,
+    local_hash: Option<&str>,
+    error: &str,
+) -> bool {
+    let Some(local) = local_hash.filter(|h| !h.is_empty()) else {
+        return false;
+    };
+    match get_remote_image_hash(client, pid, image_name) {
+        Some(remote) if remote == local => {
+            println!(
+                "  ▸ Upload of '{}' reported an error ({}), but the server holds this exact image; continuing.",
+                image_name, error
+            );
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Get the remote image hash from the API.
