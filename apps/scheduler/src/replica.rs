@@ -132,6 +132,12 @@ struct SnapshotState {
     seq: u64,
     hashes: BTreeMap<String, String>,
     tables: BTreeSet<String>,
+    /// A drain wrote rows past `seq` and never committed: set by
+    /// `begin_apply` before the first event of a batch is applied, cleared
+    /// by `commit_snapshot_state`. A fresh process that finds it set cannot
+    /// fold the recovered WAL backlog (some of it is already in the rows) and
+    /// rehashes those tables from content instead.
+    applying: bool,
 }
 
 /// Chunk of replica data for bootstrap
@@ -201,6 +207,11 @@ pub struct Replica {
     /// stale (or absent) hash indefinitely. Not persisted: a fresh process
     /// re-derives the truth via `startup_integrity_check`.
     dirty_hashes: BTreeSet<String>,
+    /// The persisted `applying` marker as read at open (see
+    /// [`SnapshotState::applying`]): the previous process died inside a
+    /// drain, after writing rows and before committing. Cleared by the next
+    /// commit.
+    interrupted_apply: bool,
     /// Lock-free mirror of `snapshot_seq` for health/metrics readers. A drain
     /// or reclone holds the replica write lock for a long time; probes must
     /// never queue behind it just to read one number.
@@ -254,11 +265,13 @@ impl Replica {
             seq: snapshot_seq,
             hashes: snapshot_hashes,
             tables: known_tables,
+            applying: interrupted_apply,
         } = Self::read_snapshot_state_from_db(&db).await.unwrap_or_default();
         if snapshot_seq > 0 {
             info!(
                 snapshot_seq,
                 hash_tables = snapshot_hashes.len(),
+                interrupted_apply,
                 "Restored snapshot state from metadata"
             );
         }
@@ -271,6 +284,7 @@ impl Replica {
             snapshot_hashes,
             known_tables,
             dirty_hashes,
+            interrupted_apply,
             // Re-derived from upstream DDL on the first clone/rediscover; a
             // fresh process starts with no exclusions.
             opaque_fields: BTreeMap::new(),
@@ -433,14 +447,42 @@ impl Replica {
         )
         .context("Serialize known_tables failed")?;
 
+        // `applying = false`: the batch whose rows were written under the
+        // marker is now described by `seq` + `hashes`.
         self.db
-            .query("UPSERT _00_metadata:snapshot SET seq = $seq, hashes = $hashes, tables = $tables")
+            .query("UPSERT _00_metadata:snapshot SET seq = $seq, hashes = $hashes, tables = $tables, applying = false")
             .bind(("seq", seq))
             .bind(("hashes", hashes_value))
             .bind(("tables", tables_value))
             .await
             .context("Failed to persist snapshot state")?;
+        self.interrupted_apply = false;
         Ok(())
+    }
+
+    /// Persist the `applying` marker before the first event of a drain batch
+    /// touches the rows. Until `commit_snapshot_state` clears it, the rows
+    /// may be ahead of the persisted `seq`/`hashes`; a process that opens the
+    /// replica in that state (see [`Replica::interrupted_apply`]) must rehash
+    /// the WAL backlog's tables from content instead of folding them.
+    ///
+    /// Ordering holds under RocksDB's `sync=never`: the marker is a write
+    /// sequenced before the row writes, so a lost suffix of the RocksDB WAL
+    /// either drops the marker together with every row written after it, or
+    /// keeps the marker (a harmless extra rehash).
+    pub async fn begin_apply(&mut self) -> Result<()> {
+        self.db
+            .query("UPSERT _00_metadata:snapshot SET applying = true")
+            .await
+            .context("Failed to persist the applying marker")?;
+        Ok(())
+    }
+
+    /// Whether the persisted state was opened with the `applying` marker set:
+    /// the previous process died between writing a batch's rows and
+    /// committing its `seq` + `hashes`. Stays true until the next commit.
+    pub fn interrupted_apply(&self) -> bool {
+        self.interrupted_apply
     }
 
     /// Backward-compatible single-field setter used by `drain_and_apply`
@@ -664,7 +706,7 @@ impl Replica {
         db: &Surreal<surrealdb::engine::local::Db>,
     ) -> Result<SnapshotState> {
         let mut response = db
-            .query("SELECT seq, hashes, tables FROM _00_metadata:snapshot")
+            .query("SELECT seq, hashes, tables, applying FROM _00_metadata:snapshot")
             .await
             .context("Failed to query snapshot metadata")?;
 
@@ -675,6 +717,7 @@ impl Replica {
         };
 
         let seq = row.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
+        let applying = row.get("applying").and_then(|v| v.as_bool()).unwrap_or(false);
         let hashes: BTreeMap<String, String> = row
             .get("hashes")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -691,6 +734,7 @@ impl Replica {
             seq,
             hashes,
             tables: known,
+            applying,
         })
     }
 
@@ -1466,6 +1510,7 @@ impl Replica {
         self.snapshot_hashes.clear();
         self.known_tables.clear();
         self.dirty_hashes.clear();
+        self.interrupted_apply = false;
         self.opaque_fields.clear();
         info!(path = ?self.db_path, "Replica reset (REMOVE DATABASE)");
         Ok(())
@@ -1530,6 +1575,7 @@ impl Replica {
         self.dirty_hashes = Self::stale_format_hashes(&state.hashes);
         self.snapshot_hashes = state.hashes;
         self.known_tables = state.tables;
+        self.interrupted_apply = state.applying;
         Ok(self.snapshot_seq)
     }
 

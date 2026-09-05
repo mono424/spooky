@@ -469,57 +469,82 @@ async fn handle_register(
     // in the pool and skips its drain.
     //
     // Latency: registration runs under the SSP's 10s client timeout with
-    // retry/backoff. A pathological backlog may push the first attempt past
-    // that timeout — the drain still completes server-side, and the retry
+    // retry/backoff. A backlog, or a from-content rehash of a dirty table,
+    // may push the first attempt past that timeout. The critical section
+    // therefore runs in its own task: when the client times out, hyper drops
+    // the handler future, and an inline drain that died mid-way had already
+    // taken its events out of the buffer (lost until the next boot's WAL
+    // recovery) and left every retry restarting the rehash from scratch —
+    // the SSP never registered until its budget ran out. The task holds
+    // `drain_lock` for the whole section, so a retry queues behind it and
     // registers against the drained state.
-    let (snapshot_seq, table_hashes, generation) = {
-        let _drain_guard = state.drain_lock.lock().await;
+    let critical = {
+        let state = state.clone();
+        let ssp_info = ssp_info.clone();
+        let ssp_id = request.ssp_id.clone();
+        tokio::spawn(async move {
+            let _drain_guard = state.drain_lock.lock().await;
 
-        *state.status.write().await = SchedulerStatus::SnapshotFrozen;
+            *state.status.write().await = SchedulerStatus::SnapshotFrozen;
 
-        // Exclude ourselves: a re-registering SSP is still parked in
-        // `Bootstrapping` from its previous attempt, and treating that as a
-        // sibling skipped the drain and handed back the same hashes it just
-        // failed against — making the SSP's single integrity retry pointless.
-        let sibling_active = state
-            .ssp_pool
-            .read()
-            .await
-            .has_active_bootstrap_excluding(&request.ssp_id);
-        if sibling_active {
-            // A sibling bootstrap holds hashes captured earlier; mutating the
-            // replica now would invalidate them mid-flight. This SSP still
-            // gets a self-consistent (if slightly stale) snapshot — nothing
-            // else can drain while the status stays frozen.
-            info!("Skipping pre-registration drain: sibling SSP bootstrap in flight");
-        } else {
-            match crate::drain_and_apply(&state.event_buffer, &state.replica, &state.wal).await
-            {
-                Ok(0) => {}
-                Ok(applied) => {
-                    info!(applied, "Drained pending events before handing bootstrap hashes")
-                }
-                Err(e) => {
-                    warn!(error = %e, "Pre-registration drain failed; handing out persisted hashes")
+            // Exclude ourselves: a re-registering SSP is still parked in
+            // `Bootstrapping` from its previous attempt, and treating that as
+            // a sibling skipped the drain and handed back the same hashes it
+            // just failed against — making the SSP's single integrity retry
+            // pointless.
+            let sibling_active = state
+                .ssp_pool
+                .read()
+                .await
+                .has_active_bootstrap_excluding(&ssp_id);
+            if sibling_active {
+                // A sibling bootstrap holds hashes captured earlier; mutating
+                // the replica now would invalidate them mid-flight. This SSP
+                // still gets a self-consistent (if slightly stale) snapshot —
+                // nothing else can drain while the status stays frozen.
+                info!("Skipping pre-registration drain: sibling SSP bootstrap in flight");
+            } else {
+                match crate::drain_and_apply(&state.event_buffer, &state.replica, &state.wal)
+                    .await
+                {
+                    Ok(0) => {}
+                    Ok(applied) => {
+                        info!(applied, "Drained pending events before handing bootstrap hashes")
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Pre-registration drain failed; handing out persisted hashes")
+                    }
                 }
             }
+
+            let (snapshot_seq, table_hashes) = {
+                let replica = state.replica.read().await;
+                (replica.snapshot_seq(), replica.snapshot_hashes().clone())
+            };
+
+            // Add to pool, mark as bootstrapping, record snapshot_seq, and
+            // bump the registration generation so any poll task from a
+            // previous registration of this ssp_id knows it has been
+            // superseded.
+            let mut pool = state.ssp_pool.write().await;
+            pool.upsert(ssp_info);
+            pool.mark_bootstrapping(&ssp_id);
+            pool.set_bootstrap_seq(&ssp_id, snapshot_seq);
+            let generation = pool.bump_registration_gen(&ssp_id);
+
+            (snapshot_seq, table_hashes, generation)
+        })
+        .await
+    };
+    let (snapshot_seq, table_hashes, generation) = match critical {
+        Ok(v) => v,
+        Err(e) => {
+            error!(error = %e, "Registration critical section panicked");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "registration failed; retry".to_string(),
+            ));
         }
-
-        let (snapshot_seq, table_hashes) = {
-            let replica = state.replica.read().await;
-            (replica.snapshot_seq(), replica.snapshot_hashes().clone())
-        };
-
-        // Add to pool, mark as bootstrapping, record snapshot_seq, and bump
-        // the registration generation so any poll task from a previous
-        // registration of this ssp_id knows it has been superseded.
-        let mut pool = state.ssp_pool.write().await;
-        pool.upsert(ssp_info);
-        pool.mark_bootstrapping(&request.ssp_id);
-        pool.set_bootstrap_seq(&request.ssp_id, snapshot_seq);
-        let generation = pool.bump_registration_gen(&request.ssp_id);
-
-        (snapshot_seq, table_hashes, generation)
     };
     info!(snapshot_seq, "Snapshot frozen for SSP bootstrap");
 

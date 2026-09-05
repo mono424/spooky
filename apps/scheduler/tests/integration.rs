@@ -2118,6 +2118,8 @@ mod bootstrap_protocol_tests {
             .unwrap();
             rep.set_snapshot_state(1, None).await.unwrap();
             sched.wal.write().await.append(&update).unwrap();
+            // What a drain does: marker, then rows, then (not reached) commit.
+            rep.begin_apply().await.unwrap();
             rep.apply(
                 "user",
                 scheduler::replica::RecordOp::Update,
@@ -2126,7 +2128,8 @@ mod bootstrap_protocol_tests {
             )
             .await
             .unwrap();
-            // No set_snapshot_state: the persisted hash still describes name=a.
+            // No commit_snapshot_state: the persisted hash still describes
+            // name=a and the marker is still set.
         }
 
         // "Process 2" on the same RocksDB handle (RocksDB releases its LOCK
@@ -2136,6 +2139,7 @@ mod bootstrap_protocol_tests {
         {
             let mut rep = sched.replica.write().await;
             assert_eq!(rep.reload_snapshot_seq().await.unwrap(), 1);
+            assert!(rep.interrupted_apply(), "the marker survived the crash");
             assert!(rep.dirty_tables().is_empty(), "fresh process: nothing flagged yet");
             assert_ne!(
                 rep.snapshot_hashes()["user"],
@@ -2162,11 +2166,132 @@ mod bootstrap_protocol_tests {
 
         let rep = sched.replica.read().await;
         assert!(rep.dirty_tables().is_empty(), "the drain cleared the flag");
+        assert!(!rep.interrupted_apply(), "the commit cleared the marker");
         assert_eq!(rep.snapshot_seq(), 2);
         assert_eq!(
             rep.snapshot_hashes(),
             &rep.compute_table_hashes().await.unwrap(),
             "hashes agree with content after the first drain"
+        );
+    }
+
+    /// The normal restart: the previous process stopped between two drains,
+    /// so the WAL backlog was buffered but never applied. Nothing is dirty
+    /// and the first drain folds the backlog like any batch — no rehash.
+    #[tokio::test]
+    async fn a_never_applied_wal_backlog_folds_at_the_first_drain() {
+        let replica_dir = TempDir::new().unwrap();
+        let wal_dir = TempDir::new().unwrap();
+        let config = SchedulerConfig {
+            replica_db_path: replica_dir.path().join("replica_db"),
+            wal_path: wal_dir.path().join("event_wal.log"),
+            scheduler_id: "test-scheduler".to_string(),
+            ..SchedulerConfig::default()
+        };
+        let sched = scheduler::Scheduler::new(config, Arc::new(HttpTransport::new()))
+            .await
+            .unwrap();
+        {
+            let mut rep = sched.replica.write().await;
+            rep.apply(
+                "user",
+                scheduler::replica::RecordOp::Create,
+                "user:u1",
+                Some(json!({"name": "a"})),
+            )
+            .await
+            .unwrap();
+            rep.set_snapshot_state(1, None).await.unwrap();
+            sched
+                .wal
+                .write()
+                .await
+                .append(&BufferedEvent {
+                    seq: 2,
+                    update: scheduler::messages::RecordUpdate {
+                        table: "user".to_string(),
+                        operation: scheduler::messages::RecordOp::Update,
+                        record_id: "user:u1".to_string(),
+                        data: Some(json!({"name": "b"})),
+                        version: 2,
+                    },
+                    received_at: 0,
+                })
+                .unwrap();
+            // Stopped here: seq 2 is in the WAL, not in the rows.
+        }
+
+        {
+            let mut rep = sched.replica.write().await;
+            assert_eq!(rep.reload_snapshot_seq().await.unwrap(), 1);
+            assert!(!rep.interrupted_apply());
+            let wal = sched.wal.read().await;
+            let (backlog, initial_seq) = scheduler::recover_wal_backlog(&mut rep, &wal).unwrap();
+            assert_eq!((backlog.len(), initial_seq), (1, 2));
+            assert!(rep.dirty_tables().is_empty(), "no crash inside a drain: nothing to rehash");
+            *sched.event_buffer.write().await = backlog;
+        }
+
+        let applied = scheduler::drain_and_apply(&sched.event_buffer, &sched.replica, &sched.wal)
+            .await
+            .unwrap();
+        assert_eq!(applied, 1);
+        let rep = sched.replica.read().await;
+        assert_eq!(rep.snapshot_seq(), 2);
+        assert!(rep.dirty_tables().is_empty());
+        assert_eq!(
+            rep.snapshot_hashes(),
+            &rep.compute_table_hashes().await.unwrap(),
+            "the folded hash agrees with content"
+        );
+    }
+
+    /// A drain with nothing to apply must still rehash dirty tables: the
+    /// persisted hash is wrong until then, and a registration would hand it
+    /// out to the SSP.
+    #[tokio::test]
+    async fn an_empty_drain_still_rehashes_dirty_tables() {
+        let replica_dir = TempDir::new().unwrap();
+        let wal_dir = TempDir::new().unwrap();
+        let config = SchedulerConfig {
+            replica_db_path: replica_dir.path().join("replica_db"),
+            wal_path: wal_dir.path().join("event_wal.log"),
+            scheduler_id: "test-scheduler".to_string(),
+            ..SchedulerConfig::default()
+        };
+        let sched = scheduler::Scheduler::new(config, Arc::new(HttpTransport::new()))
+            .await
+            .unwrap();
+        {
+            let mut rep = sched.replica.write().await;
+            rep.apply(
+                "user",
+                scheduler::replica::RecordOp::Create,
+                "user:u1",
+                Some(json!({"name": "a"})),
+            )
+            .await
+            .unwrap();
+            rep.set_snapshot_state(3, None).await.unwrap();
+            rep.query("UPDATE user:u1 SET name = 'b'").await.unwrap();
+            rep.mark_tables_dirty(["user".to_string()]);
+            assert_ne!(
+                rep.snapshot_hashes()["user"],
+                rep.compute_table_hashes().await.unwrap()["user"]
+            );
+        }
+
+        let applied = scheduler::drain_and_apply(&sched.event_buffer, &sched.replica, &sched.wal)
+            .await
+            .unwrap();
+        assert_eq!(applied, 0, "no events were applied");
+        let rep = sched.replica.read().await;
+        assert_eq!(rep.snapshot_seq(), 3, "the seq does not move");
+        assert!(rep.dirty_tables().is_empty());
+        assert_eq!(
+            rep.snapshot_hashes(),
+            &rep.compute_table_hashes().await.unwrap(),
+            "the dirty table was rehashed from content"
         );
     }
 

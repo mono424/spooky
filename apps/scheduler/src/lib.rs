@@ -67,12 +67,15 @@ fn touched_tables(events: &[BufferedEvent]) -> BTreeSet<String> {
 /// Boot-time WAL recovery. Returns the backlog (events past the persisted
 /// `snapshot_seq`, in order) and the seq the counter resumes from.
 ///
-/// A backlog means the previous process died between applying events and
-/// committing the snapshot state, or never got to apply them. Re-applying
-/// them folds "before out, after in" against rows that may already carry the
-/// change, which would leave those tables' hashes wrong for good. So the
-/// backlog's tables are flagged dirty on the replica: the first drain
-/// rehashes exactly those tables from content, and nothing else. This is what
+/// A backlog is the normal case after a restart: events land in the buffer
+/// and the WAL and are only applied at the next drain, so a stop between two
+/// drains leaves everything since the last one unapplied. Those fold at the
+/// first drain like any other batch. The exception is a process that died
+/// inside a drain, after writing some of the batch's rows and before
+/// committing (`Replica::interrupted_apply`): re-folding "before out, after
+/// in" against rows that already carry the change would leave those tables'
+/// hashes wrong for good, so their tables are flagged dirty and the first
+/// drain rehashes exactly those from content, and nothing else. This is what
 /// replaced the boot-time full rehash of every table.
 pub fn recover_wal_backlog(
     replica: &mut Replica,
@@ -101,11 +104,18 @@ pub fn recover_wal_backlog(
     }
     if !event_buffer.is_empty() {
         let tables = touched_tables(event_buffer.make_contiguous());
-        info!(
-            tables = ?tables,
-            "Tables touched by the WAL backlog will be rehashed from content at the first drain"
-        );
-        replica.mark_tables_dirty(tables);
+        if replica.interrupted_apply() {
+            warn!(
+                tables = ?tables,
+                "The previous process died inside a drain; the WAL backlog's tables will be rehashed from content at the first drain"
+            );
+            replica.mark_tables_dirty(tables);
+        } else {
+            info!(
+                tables = ?tables,
+                "WAL backlog was never applied; it folds into the table hashes at the first drain"
+            );
+        }
     }
     Ok((event_buffer, initial_seq))
 }
@@ -123,16 +133,32 @@ pub async fn drain_and_apply(
         buffer.drain(..).collect()
     };
 
-    if events.is_empty() {
-        return Ok(0);
-    }
-
-    let event_count = events.len();
-    let max_seq = events.last().map(|e| e.seq).unwrap_or(0);
-
     // Track which tables this batch touched so the snapshot-state writer
     // only rehashes the affected tables, not the whole replica.
     let touched = touched_tables(&events);
+
+    // Nothing to apply, and every hash current: done. A dirty table with
+    // nothing to apply still needs its from-content rehash below — the
+    // persisted hash is wrong until then and a registration would hand it
+    // out (the WAL-backlog case at boot, a failed fold, a failed hash).
+    let (event_count, max_seq) = if events.is_empty() {
+        let rep = replica.read().await;
+        if rep.dirty_tables().is_empty() {
+            return Ok(0);
+        }
+        info!(dirty = rep.dirty_tables().len(), "Nothing to apply; rehashing dirty tables from content");
+        (0, rep.snapshot_seq())
+    } else {
+        // Persist the marker before the first row write; if that fails,
+        // the touched tables are rehashed from content at this drain's end,
+        // which is the same protection by a costlier route.
+        let mut rep = replica.write().await;
+        if let Err(e) = rep.begin_apply().await {
+            warn!(error = %e, "Could not persist the applying marker; rehashing this batch's tables from content");
+            rep.mark_tables_dirty(touched.iter().cloned());
+        }
+        (events.len(), events.last().map(|e| e.seq).unwrap_or(0))
+    };
 
     // Apply in bounded chunks, releasing the write guard between chunks so
     // queued readers (/proxy pages, registration, integrity checks) interleave
