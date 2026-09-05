@@ -568,9 +568,11 @@ impl SspNode {
 
         // Per-table content hashes — bit-identical to scheduler hashes when
         // the circuit is in sync with the frozen snapshot. Used by `spky
-        // verify` and the scheduler's post-replay integrity check.
+        // verify` and the bootstrap integrity check. The `x3:` set-hash the
+        // circuit already maintains per collection: O(tables) to read, where
+        // the sorted digest walked every row on each status call.
         let circuit_hashes: serde_json::Map<String, Value> = circuit
-            .compute_table_hashes()
+            .compute_catchup_hashes()
             .into_iter()
             .map(|(t, h)| (t, Value::String(h)))
             .collect();

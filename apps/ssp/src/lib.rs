@@ -1247,9 +1247,13 @@ pub async fn run_server() -> anyhow::Result<()> {
                         // the process; supervisor restarts → fresh
                         // registration with the current frozen snapshot.
                         if !expected_hashes.is_empty() {
+                            // The XOR set-hash the reseed above just settled:
+                            // the same family the scheduler now maintains per
+                            // event, and O(tables) to read instead of a full
+                            // sorted digest over every row.
                             let actual = {
                                 let guard = processor.read().await;
-                                guard.compute_table_hashes()
+                                guard.compute_catchup_hashes()
                             };
                             let mut diffs = ssp_protocol::snapshot_hash::diff_table_hashes(
                                 &expected_hashes,

@@ -298,7 +298,7 @@ async fn handle_bootstrap_verify(
     // Compare with the same semantics as `diff_table_hashes`: a table absent on
     // either side counts as the empty-table hash. The SSP creates no collection
     // for a zero-row table, so "absent on the SSP" must match "empty here".
-    let empty = ssp_protocol::snapshot_hash::empty_table_hash();
+    let empty = ssp_protocol::snapshot_hash::xor_empty_table_hash();
     let still: Vec<String> = disputed
         .iter()
         .filter(|t| {

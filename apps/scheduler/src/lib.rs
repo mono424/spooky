@@ -124,15 +124,19 @@ pub async fn drain_and_apply(
         }
     }
 
-    // Rehash the touched tables under a READ guard — hashing pages whole
-    // tables out of RocksDB and was the dominant write-lock hold (it starved
-    // /proxy for minutes on large tables, livelocking SSP bootstraps). The
-    // content can't move underneath us: drains are serialized by `drain_lock`
-    // and ingest only appends to the buffer, never the replica.
+    // The per-table hashes were folded event by event inside `apply` above,
+    // so this rehashes only tables the fold could not keep current (dirty).
+    // Under a READ guard: a from-content hash pages a whole table out of
+    // RocksDB, and holding the write lock for that starved /proxy for minutes
+    // on large tables. The content can't move underneath us: drains are
+    // serialized by `drain_lock` and ingest only appends to the buffer.
     let (hashed, failed) = {
         let rep = replica.read().await;
-        rep.compute_hashes_for(Some(&touched)).await
+        // An empty explicit set: nothing beyond the dirty tables. `touched`
+        // is only kept for the trace below.
+        rep.compute_hashes_for(Some(&BTreeSet::new())).await
     };
+    debug!(touched = touched.len(), rehashed = hashed.len(), "Drain hashes folded; rehashed only dirty tables");
     {
         let mut rep = replica.write().await;
         if let Err(e) = rep.commit_snapshot_state(max_seq, hashed, failed).await {

@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::fs;
 
 #[test]
+#[ignore = "reads /tmp/all_games.json, a local debugging fixture; run explicitly with --ignored"]
 fn test_real_hash() {
     let json_data = fs::read_to_string("/tmp/all_games.json").unwrap();
     let rows: Vec<Value> = serde_json::from_str(&json_data).unwrap();

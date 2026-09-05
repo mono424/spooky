@@ -262,6 +262,7 @@ impl Replica {
                 "Restored snapshot state from metadata"
             );
         }
+        let dirty_hashes = Self::stale_format_hashes(&snapshot_hashes);
 
         Ok(Self {
             db,
@@ -269,7 +270,7 @@ impl Replica {
             snapshot_seq,
             snapshot_hashes,
             known_tables,
-            dirty_hashes: BTreeSet::new(),
+            dirty_hashes,
             // Re-derived from upstream DDL on the first clone/rediscover; a
             // fresh process starts with no exclusions.
             opaque_fields: BTreeMap::new(),
@@ -298,6 +299,32 @@ impl Replica {
     /// Per-table content hashes at the current `snapshot_seq`.
     pub fn snapshot_hashes(&self) -> &BTreeMap<String, String> {
         &self.snapshot_hashes
+    }
+
+    /// Tables whose hash must be recomputed from content on the next drain:
+    /// a failed hash, an event that could not be folded, or a table that has
+    /// no accumulator yet.
+    pub fn dirty_tables(&self) -> &BTreeSet<String> {
+        &self.dirty_hashes
+    }
+
+    /// Persisted hashes that predate the incremental `x3:` format (or are
+    /// otherwise unparsable) cannot be folded into, so they are rehashed from
+    /// content once. Happens exactly once per replica on the upgrade to the
+    /// incremental scheme, at the first drain, and never again.
+    fn stale_format_hashes(hashes: &BTreeMap<String, String>) -> BTreeSet<String> {
+        let stale: BTreeSet<String> = hashes
+            .iter()
+            .filter(|(_, h)| snapshot_hash::xor_acc_from_hex(h).is_none())
+            .map(|(t, _)| t.clone())
+            .collect();
+        if !stale.is_empty() {
+            info!(
+                tables = stale.len(),
+                "Persisted table hashes predate the incremental format; rehashing them from content on the next drain"
+            );
+        }
+        stale
     }
 
     /// All tables this replica has ever written to.
@@ -337,6 +364,11 @@ impl Replica {
         &self,
         touched_tables: Option<&BTreeSet<String>>,
     ) -> (BTreeMap<String, String>, BTreeSet<String>) {
+        // `Some(tables)`: hash exactly those from content (the admin rehash,
+        // the bootstrap-verify dispute) plus whatever is dirty. The drain
+        // passes an EMPTY set: its tables were folded event by event in
+        // `apply`, so only the dirty ones need content. `None` (after a
+        // clone) recomputes every known table.
         let mut to_hash: BTreeSet<String> = match touched_tables {
             Some(t) => t.clone(),
             None => self.known_tables.clone(),
@@ -483,7 +515,10 @@ impl Replica {
     /// "Failed to hash table" forever and never hashed such tables).
     async fn hash_one_table(&self, table: &str) -> Result<String> {
         const HASH_PAGE_SIZE: usize = 500;
-        let mut hasher = snapshot_hash::TableHasher::new();
+        // The `x3:` set-hash: what `apply` folds into per event. Computing it
+        // from content is the exception (clone, upgrade, a fold that failed),
+        // not the every-drain rule it used to be.
+        let mut acc = snapshot_hash::xor_empty();
         let mut after_id: Option<String> = None;
         loop {
             let query =
@@ -528,7 +563,7 @@ impl Replica {
                     continue;
                 };
                 let raw_id = id.strip_prefix(&format!("{}:", table)).unwrap_or(&id).to_string();
-                hasher.add(&raw_id, row);
+                snapshot_hash::xor_in(&mut acc, &raw_id, &row);
             }
             if n < HASH_PAGE_SIZE {
                 break;
@@ -539,7 +574,78 @@ impl Replica {
                 None => break,
             }
         }
-        Ok(hasher.finish())
+        Ok(snapshot_hash::xor_acc_to_hex(&acc))
+    }
+
+    /// Project one replica row into the `(raw_id, value)` pair the table hash
+    /// is computed over: opaque fields dropped (what `SELECT * OMIT` does on
+    /// the paged path) and the id stripped of its table prefix.
+    fn hash_pair_for(&self, table: &str, mut row: Value) -> Option<(String, Value)> {
+        let obj = row.as_object_mut()?;
+        for field in self.omit_for(table).iter() {
+            obj.remove(field);
+        }
+        let id = obj.get("id")?.as_str()?.to_string();
+        let raw_id = id.strip_prefix(&format!("{}:", table)).unwrap_or(&id).to_string();
+        Some((raw_id, row))
+    }
+
+    /// The first row of a statement's result as JSON (`RETURN AFTER` /
+    /// `RETURN BEFORE` / a single-record SELECT), or `None` when it produced
+    /// nothing.
+    fn first_row_json(v: surrealdb::types::Value) -> Option<Value> {
+        match v.into_json_value() {
+            Value::Array(arr) => arr.into_iter().next(),
+            Value::Null => None,
+            other => Some(other),
+        }
+    }
+
+    /// The current replica row for `thing_id`, projected for hashing. `None`
+    /// when the record (or its table) does not exist.
+    async fn read_row_for_hash(&self, table: &str, thing_id: &str) -> Result<Option<(String, Value)>> {
+        let omit = ssp_protocol::omit_clause(self.omit_for(table));
+        let mut response = match self.db.query(format!("SELECT *{} FROM {}", omit, thing_id)).await {
+            Ok(r) => r,
+            Err(e) if is_missing_error(&e) => return Ok(None),
+            Err(e) => {
+                return Err(anyhow::Error::from(e)
+                    .context(format!("read_row_for_hash: SELECT {} failed", thing_id)))
+            }
+        };
+        let v: surrealdb::types::Value = match response.take(0) {
+            Ok(v) => v,
+            Err(e) if is_missing_error(&e) => return Ok(None),
+            Err(e) => {
+                return Err(anyhow::Error::from(e)
+                    .context(format!("read_row_for_hash: take(0) failed for {}", thing_id)))
+            }
+        };
+        Ok(Self::first_row_json(v).and_then(|row| self.hash_pair_for(table, row)))
+    }
+
+    /// Fold one applied event into `table`'s accumulator: the before-image
+    /// out, the after-image in. A table whose accumulator cannot be parsed
+    /// is marked dirty instead, so the next drain rehashes it from content.
+    fn fold_hash_delta(
+        &mut self,
+        table: &str,
+        before: Option<&(String, Value)>,
+        after: Option<&(String, Value)>,
+    ) {
+        let Some(current) = self.snapshot_hashes.get(table) else { return };
+        let Some(mut acc) = snapshot_hash::xor_acc_from_hex(current) else {
+            self.dirty_hashes.insert(table.to_string());
+            return;
+        };
+        if let Some((id, value)) = before {
+            snapshot_hash::xor_out(&mut acc, id, value);
+        }
+        if let Some((id, value)) = after {
+            snapshot_hash::xor_in(&mut acc, id, value);
+        }
+        self.snapshot_hashes
+            .insert(table.to_string(), snapshot_hash::xor_acc_to_hex(&acc));
     }
 
     /// Read combined snapshot state (seq + hashes + tables) from metadata.
@@ -1179,10 +1285,40 @@ impl Replica {
 
     /// Apply a single record event to the snapshot
     pub async fn apply(&mut self, table: &str, op: RecordOp, id: &str, record: Option<Value>) -> Result<()> {
-        if !ssp_protocol::table_excluded_from_sync(table) {
+        let synced = !ssp_protocol::table_excluded_from_sync(table);
+        if synced {
             self.known_tables.insert(table.to_string());
         }
         let thing_id = build_thing_id(table, id);
+
+        // Incremental hash maintenance. The table hash is an XOR set-hash of
+        // per-row digests, so one event is folded as "old row out, new row
+        // in" — two small reads instead of the drain paging the whole table
+        // out of RocksDB again (408k rows every five minutes on whitepawn).
+        // A table with no accumulator yet (first seen through this event) or
+        // one already flagged dirty is left to the drain's from-content hash;
+        // any failure to read a before/after image flags the table the same
+        // way, never guesses. The write itself is applied regardless.
+        let tracking = synced
+            && self.snapshot_hashes.contains_key(table)
+            && !self.dirty_hashes.contains(table);
+        if synced && !self.snapshot_hashes.contains_key(table) {
+            self.dirty_hashes.insert(table.to_string());
+        }
+        let mut before: Option<(String, Value)> = None;
+        let mut after: Option<(String, Value)> = None;
+        let mut fold_failed = false;
+
+        if tracking && matches!(op, RecordOp::Update) {
+            match self.read_row_for_hash(table, &thing_id).await {
+                Ok(row) => before = row,
+                Err(e) => {
+                    warn!(table = %table, error = %e, "Could not read the before-image for the table hash; rehashing from content on the next drain");
+                    fold_failed = true;
+                }
+            }
+        }
+
         match op {
             RecordOp::Create => {
                 if let Some(mut data) = record {
@@ -1198,13 +1334,23 @@ impl Replica {
                     if let Some(obj) = data.as_object_mut() {
                         obj.remove("id");
                     }
-                    self.db
-                        .query(format!("CREATE {} CONTENT $data", thing_id))
+                    let mut response = self
+                        .db
+                        .query(format!("CREATE {} CONTENT $data RETURN AFTER", thing_id))
                         .bind(("data", data))
                         .await
                         .with_context(|| format!("CREATE {} send failed", thing_id))?
                         .check()
                         .with_context(|| format!("CREATE {} returned a statement error", thing_id))?;
+                    if tracking {
+                        match response.take::<surrealdb::types::Value>(0) {
+                            Ok(v) => after = Self::first_row_json(v).and_then(|r| self.hash_pair_for(table, r)),
+                            Err(e) => {
+                                warn!(table = %table, error = %e, "Could not read the after-image for the table hash");
+                                fold_failed = true;
+                            }
+                        }
+                    }
                 }
             }
             RecordOp::Update => {
@@ -1212,22 +1358,50 @@ impl Replica {
                     if let Some(obj) = data.as_object_mut() {
                         obj.remove("id");
                     }
-                    self.db
-                        .query(format!("UPDATE {} MERGE $data", thing_id))
+                    let mut response = self
+                        .db
+                        .query(format!("UPDATE {} MERGE $data RETURN AFTER", thing_id))
                         .bind(("data", data))
                         .await
                         .with_context(|| format!("UPDATE {} send failed", thing_id))?
                         .check()
                         .with_context(|| format!("UPDATE {} returned a statement error", thing_id))?;
+                    if tracking {
+                        match response.take::<surrealdb::types::Value>(0) {
+                            Ok(v) => after = Self::first_row_json(v).and_then(|r| self.hash_pair_for(table, r)),
+                            Err(e) => {
+                                warn!(table = %table, error = %e, "Could not read the after-image for the table hash");
+                                fold_failed = true;
+                            }
+                        }
+                    }
                 }
             }
             RecordOp::Delete => {
-                self.db
-                    .query(format!("DELETE {}", thing_id))
+                let mut response = self
+                    .db
+                    .query(format!("DELETE {} RETURN BEFORE", thing_id))
                     .await
                     .with_context(|| format!("DELETE {} send failed", thing_id))?
                     .check()
                     .with_context(|| format!("DELETE {} returned a statement error", thing_id))?;
+                if tracking {
+                    match response.take::<surrealdb::types::Value>(0) {
+                        Ok(v) => before = Self::first_row_json(v).and_then(|r| self.hash_pair_for(table, r)),
+                        Err(e) => {
+                            warn!(table = %table, error = %e, "Could not read the before-image for the table hash");
+                            fold_failed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if tracking {
+            if fold_failed {
+                self.dirty_hashes.insert(table.to_string());
+            } else {
+                self.fold_hash_delta(table, before.as_ref(), after.as_ref());
             }
         }
 
@@ -1342,6 +1516,7 @@ impl Replica {
             .unwrap_or_default();
         self.snapshot_seq = state.seq;
         self.publish_seq();
+        self.dirty_hashes = Self::stale_format_hashes(&state.hashes);
         self.snapshot_hashes = state.hashes;
         self.known_tables = state.tables;
         Ok(self.snapshot_seq)

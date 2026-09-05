@@ -1786,6 +1786,60 @@ mod bootstrap_protocol_tests {
         );
     }
 
+    /// The drain used to rehash every touched table from content; on whitepawn
+    /// that paged the 408k-row `analysis` table out of RocksDB every five
+    /// minutes and pinned the scheduler's whole CPU quota for minutes. Hashes
+    /// are now folded per event in `Replica::apply` (XOR set-hash), so a drain
+    /// rehashes nothing unless an event could not be folded. The fold must
+    /// agree with a from-content rehash for every operation.
+    #[tokio::test]
+    async fn incremental_table_hash_agrees_with_a_full_rehash() {
+        use scheduler::replica::RecordOp;
+        let h = TestHarness::new().await;
+        let mut rep = h.replica.write().await;
+
+        // A table first seen through an event has no accumulator: it is
+        // flagged for a from-content hash, which the drain computes once.
+        rep.apply("user", RecordOp::Create, "user:u1", Some(json!({"name": "a", "_00_rv": 1})))
+            .await
+            .unwrap();
+        assert!(rep.dirty_tables().contains("user"));
+        rep.set_snapshot_state(1, Some(&std::collections::BTreeSet::new())).await.unwrap();
+        assert!(rep.dirty_tables().is_empty());
+        let after_create = rep.snapshot_hashes()["user"].clone();
+        assert!(after_create.starts_with("x3:"), "got {after_create}");
+
+        // From here every event is folded, never rehashed: a create, an
+        // update carrying a reserved key and a null optional (both stripped
+        // by the digest), a delete, another create.
+        rep.apply("user", RecordOp::Create, "user:u2", Some(json!({"name": "b", "age": 2, "_00_rv": 1})))
+            .await
+            .unwrap();
+        rep.apply("user", RecordOp::Update, "user:u1", Some(json!({"name": "a2", "nick": null, "_00_rv": 2})))
+            .await
+            .unwrap();
+        rep.apply("user", RecordOp::Delete, "user:u2", None).await.unwrap();
+        rep.apply("user", RecordOp::Create, "user:u3", Some(json!({"name": "c", "_00_rv": 1})))
+            .await
+            .unwrap();
+        assert!(rep.dirty_tables().is_empty(), "no event needed a from-content rehash");
+
+        let touched: std::collections::BTreeSet<String> = ["user".to_string()].into_iter().collect();
+        rep.set_snapshot_state(2, Some(&touched)).await.unwrap();
+        let folded = rep.snapshot_hashes()["user"].clone();
+        let full = rep.compute_table_hashes().await.unwrap()["user"].clone();
+        assert_eq!(folded, full, "folded hash must equal a from-content rehash");
+        assert_ne!(folded, after_create);
+
+        // Deleting everything folds back to the empty-table hash.
+        rep.apply("user", RecordOp::Delete, "user:u1", None).await.unwrap();
+        rep.apply("user", RecordOp::Delete, "user:u3", None).await.unwrap();
+        assert_eq!(
+            rep.snapshot_hashes()["user"],
+            ssp_protocol::snapshot_hash::xor_empty_table_hash()
+        );
+    }
+
     #[tokio::test]
     async fn register_skips_drain_while_sibling_bootstraps() {
         let h = TestHarness::new().await;
@@ -1882,14 +1936,10 @@ mod bootstrap_protocol_tests {
             .await
             .unwrap();
             rep.set_snapshot_state(1, None).await.unwrap();
-            rep.apply(
-                "user",
-                scheduler::replica::RecordOp::Update,
-                "user:u1",
-                Some(json!({"name": "b"})),
-            )
-            .await
-            .unwrap();
+            // Past `apply`: an event folds its own delta into the hash now, so
+            // stale metadata has to be produced the way it happens in the
+            // wild — content changing underneath the cached hash.
+            rep.query("UPDATE user:u1 SET name = 'b'").await.unwrap();
         }
         {
             let rep = h.replica.read().await;

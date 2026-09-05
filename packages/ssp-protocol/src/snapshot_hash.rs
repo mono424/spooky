@@ -3,15 +3,27 @@
 //!
 //! Both producers (scheduler replica, SSP circuit) feed `(raw_id, value)`
 //! pairs through the same code path so digests are bit-identical when the
-//! contents agree. Hash inputs are sorted by `raw_id` and JSON objects are
-//! recursively key-sorted before serialization, so HashMap iteration order
-//! and SurrealDB column ordering can never change the output.
+//! contents agree. JSON objects are recursively key-sorted before
+//! serialization, so HashMap iteration order and SurrealDB column ordering
+//! can never change the output.
 //!
-//! Output is lowercase hex of a blake3-256 digest, prefixed `b3:` so future
-//! algorithm changes are visible in diagnostics.
+//! Two families, told apart by prefix:
 //!
-//! See `Replica::compute_table_hashes` (apps/scheduler/src/replica.rs) and
-//! `Circuit::compute_table_hashes` (packages/ssp/src/circuit/circuit.rs).
+//! - `x3:` — the XOR set-hash of per-record digests (see the section at the
+//!   bottom). Order-independent and self-inverse, so both sides maintain it
+//!   INCREMENTALLY: the scheduler folds every applied event into it
+//!   (`Replica::apply`) and the SSP circuit keeps it per collection
+//!   (`catchup_xor`). This is the hash the cluster exchanges — bootstrap
+//!   integrity, catch-up verification, `spky verify`. It replaced the sorted
+//!   digest there because recomputing that one meant paging every row of a
+//!   table out of RocksDB on every snapshot drain; on a 400k-row table that
+//!   pinned the scheduler's CPU quota for minutes, every five minutes.
+//! - `b3:` — the sorted blake3 digest over all records (`hash_table`,
+//!   `TableHasher`). Kept for the standalone circuit checkpoint's resume
+//!   point and for tests that pin canonicalization.
+//!
+//! See `Replica::hash_one_table` (apps/scheduler/src/replica.rs) and
+//! `Circuit::compute_catchup_hashes` (packages/ssp/src/circuit/circuit.rs).
 
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -277,19 +289,33 @@ pub fn is_reserved_key(key: &str) -> bool {
     key.starts_with("_00_")
 }
 
+/// The empty-table hash in the same family as `like`: a table that exists on
+/// one side only is compared against "no rows" spelled the way that side
+/// spells it, so an `x3:` map and a `b3:` map each get their own zero.
+pub fn empty_hash_like(like: &str) -> String {
+    if like.starts_with(XOR_PREFIX) {
+        xor_empty_table_hash()
+    } else {
+        empty_table_hash()
+    }
+}
+
 /// Compare two per-table hash maps and return the tables that disagree.
-/// A table missing on one side counts as a mismatch (paired with
-/// `empty_table_hash()` on the missing side).
+/// A table missing on one side counts as a mismatch (paired with the
+/// empty-table hash of the present side's family, see [`empty_hash_like`]).
 pub fn diff_table_hashes(
     a: &BTreeMap<String, String>,
     b: &BTreeMap<String, String>,
 ) -> Vec<TableHashMismatch> {
-    let empty = empty_table_hash();
     let all: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
     all.into_iter()
         .filter_map(|table| {
-            let av = a.get(table).cloned().unwrap_or_else(|| empty.clone());
-            let bv = b.get(table).cloned().unwrap_or_else(|| empty.clone());
+            let (av, bv) = match (a.get(table), b.get(table)) {
+                (Some(av), Some(bv)) => (av.clone(), bv.clone()),
+                (Some(av), None) => (av.clone(), empty_hash_like(av)),
+                (None, Some(bv)) => (empty_hash_like(bv), bv.clone()),
+                (None, None) => return None,
+            };
             if av == bv {
                 None
             } else {
@@ -352,10 +378,32 @@ pub fn xor_empty() -> [u8; 32] {
     [0u8; 32]
 }
 
+const XOR_PREFIX: &str = "x3:";
+
 /// Format an XOR accumulator as `x3:<hex>`.
 pub fn xor_acc_to_hex(acc: &[u8; 32]) -> String {
     let hex: String = acc.iter().map(|b| format!("{:02x}", b)).collect();
-    format!("x3:{}", hex)
+    format!("{}{}", XOR_PREFIX, hex)
+}
+
+/// Parse an `x3:<hex>` table hash back into its accumulator, so a persisted
+/// hash can keep being folded incrementally. `None` for anything that is not
+/// a well-formed `x3:` value (including the older `b3:` family).
+pub fn xor_acc_from_hex(s: &str) -> Option<[u8; 32]> {
+    let hex = s.strip_prefix(XOR_PREFIX)?;
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut acc = [0u8; 32];
+    for (i, byte) in acc.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(acc)
+}
+
+/// The `x3:` hash of an empty table.
+pub fn xor_empty_table_hash() -> String {
+    xor_acc_to_hex(&xor_empty())
 }
 
 /// On-demand XOR set-hash of a table's records — equivalent to folding
@@ -504,6 +552,38 @@ mod tests {
     }
 
     // --- XOR set-hash ---
+
+    #[test]
+    fn xor_hex_round_trips_and_rejects_the_sorted_family() {
+        let mut acc = xor_empty();
+        xor_in(&mut acc, "u1", &json!({"v": 1}));
+        xor_in(&mut acc, "u2", &json!({"v": 2}));
+        let hex = xor_acc_to_hex(&acc);
+        assert_eq!(xor_acc_from_hex(&hex), Some(acc));
+        assert_eq!(xor_acc_from_hex(&xor_empty_table_hash()), Some(xor_empty()));
+        assert_eq!(xor_acc_from_hex(&empty_table_hash()), None, "b3: is not an accumulator");
+        assert_eq!(xor_acc_from_hex("x3:zz"), None);
+    }
+
+    #[test]
+    fn diff_pairs_a_missing_table_with_the_empty_hash_of_the_same_family() {
+        // A table with no rows on the SSP has no collection at all, so it is
+        // absent from its map; the scheduler holds `x3:00…` for it. Those must
+        // compare equal — and the same holds for the `b3:` family.
+        let mut xor_side = BTreeMap::new();
+        xor_side.insert("t1".to_string(), xor_empty_table_hash());
+        assert!(diff_table_hashes(&xor_side, &BTreeMap::new()).is_empty());
+        assert!(diff_table_hashes(&BTreeMap::new(), &xor_side).is_empty());
+
+        let mut b3_side = BTreeMap::new();
+        b3_side.insert("t1".to_string(), empty_table_hash());
+        assert!(diff_table_hashes(&b3_side, &BTreeMap::new()).is_empty());
+
+        // A populated table missing on the other side is still a mismatch.
+        let mut populated = BTreeMap::new();
+        populated.insert("t1".to_string(), xor_table_hash(vec![("a".to_string(), json!({"v": 1}))]));
+        assert_eq!(diff_table_hashes(&populated, &BTreeMap::new()).len(), 1);
+    }
 
     #[test]
     fn xor_is_order_independent() {

@@ -150,7 +150,9 @@ fn fetch_main_stats(
                     .collect()
             })
             .unwrap_or_default();
-        let hash = snapshot_hash::hash_table(pairs);
+        // The `x3:` set-hash: what the scheduler maintains per event and the
+        // SSP keeps per collection, so all three sides compare like for like.
+        let hash = snapshot_hash::xor_table_hash(pairs);
 
         out.insert(
             table,
