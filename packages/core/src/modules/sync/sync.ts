@@ -1803,8 +1803,21 @@ export class Sp00kySync<S extends SchemaStructure> {
         // Land the coalesced result BEFORE flipping to idle: the final stream
         // update sits on a debounce timer, and an `idle` that races ahead of it
         // would let consumers treat a partially-filled window as authoritative.
+        //
+        // A fetch that changed a row already in membership can come with no
+        // stream update at all: the body lands in the local store, but the
+        // circuit sees the same id-set and stays silent (measured: a peer's
+        // UPDATE to a `conversation` row reached the store at `_00_rv` 8 while
+        // the query kept rendering version 2 indefinitely). Nothing else
+        // re-reads the query then, so ask for a synthetic re-materialize and
+        // land it here too. It is one local select, and a no-op when a real
+        // update was pending, which the first flush already processed.
         try {
-          await this.dataModule.flushPendingStreamUpdate(hash);
+          const landed = await this.dataModule.flushPendingStreamUpdate(hash);
+          if (!landed) {
+            this.dataModule.scheduleRematerialize(hash);
+            await this.dataModule.flushPendingStreamUpdate(hash);
+          }
         } catch (err) {
           this.logger.warn(
             { err, hash, Category: 'sp00ky-client::Sp00kySync::runSyncForQuery' },

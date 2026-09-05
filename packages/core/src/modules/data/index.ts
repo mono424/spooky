@@ -492,16 +492,17 @@ export class DataModule<S extends SchemaStructure> {
    * No-op when nothing is pending. The pending entry is removed before the
    * await so a concurrently-firing timer can't process it twice.
    */
-  async flushPendingStreamUpdate(queryHash: string): Promise<void> {
+  async flushPendingStreamUpdate(queryHash: string): Promise<boolean> {
     const timer = this.debounceTimers.get(queryHash);
     if (timer) {
       clearTimeout(timer);
       this.debounceTimers.delete(queryHash);
     }
     const pending = this.pendingStreamUpdates.get(queryHash);
-    if (!pending) return;
+    if (!pending) return false;
     this.pendingStreamUpdates.delete(queryHash);
     await this.processStreamUpdate(pending);
+    return true;
   }
 
   /**
