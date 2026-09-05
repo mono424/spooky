@@ -249,9 +249,14 @@ pub fn load_config() -> Config {
 /// Why a registration attempt failed, used by the caller's retry loop to decide
 /// whether retrying can ever succeed.
 enum RegisterError {
-    /// Transient: scheduler still cloning (503), a 5xx, a transport/timeout
-    /// error, or an unparseable response. Worth retrying — the scheduler may
-    /// just not be `Ready` yet (e.g. a cold `--clean` re-clone).
+    /// The scheduler answered 503: it is up and reachable but `Cloning` /
+    /// `Restoring` (a cold `--clean` re-clone, or the startup drift re-clone,
+    /// which on a large tenant runs for ten minutes). Nothing to do but wait;
+    /// see `register_with_retry` for why this does not burn the exit budget.
+    NotReady(String),
+    /// Transient: another 5xx, a transport/timeout error, or an unparseable
+    /// response. Worth retrying, but bounded — a scheduler that never answers
+    /// is a supervisor problem, and exiting hands it over.
     Retryable(String),
     /// Permanent for this process: the scheduler rejected the request with a
     /// 4xx (e.g. 400 bad ssp_id/url). Retrying the same payload won't help —
@@ -262,10 +267,20 @@ enum RegisterError {
 impl std::fmt::Display for RegisterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RegisterError::NotReady(m) => write!(f, "{}", m),
             RegisterError::Retryable(m) => write!(f, "{}", m),
             RegisterError::Fatal(m) => write!(f, "{}", m),
         }
     }
+}
+
+/// Whether a failed registration attempt restarts the exit budget instead of
+/// spending it. A scheduler that answers "not ready" is alive and will admit us
+/// when its clone finishes; exiting on a timer there only re-runs the same
+/// wait from zero (observed as two pointless SSP restarts, `RestartCount`
+/// climbing, and a ~2-minute gap in registration attempts each time).
+fn registration_budget_restarts_on(err: &RegisterError) -> bool {
+    matches!(err, RegisterError::NotReady(_))
 }
 
 /// Build the SSP registration payload and POST it to the scheduler.
@@ -328,8 +343,12 @@ async fn register_with_scheduler(
             // A 2xx with an unparseable body is almost always a transient proxy
             // hiccup — retry rather than give up.
             .map_err(|e| RegisterError::Retryable(format!("Failed to parse registration response: {}", e))),
-        // 503 (Cloning/Restoring) and any 5xx: scheduler not ready yet → retry.
-        Ok(resp) if resp.status() == StatusCode::SERVICE_UNAVAILABLE || resp.status().is_server_error() => {
+        // 503: the scheduler is up but Cloning/Restoring → wait it out.
+        Ok(resp) if resp.status() == StatusCode::SERVICE_UNAVAILABLE => {
+            Err(RegisterError::NotReady(format!("HTTP {}", resp.status())))
+        }
+        // Any other 5xx: scheduler unhealthy → retry within the budget.
+        Ok(resp) if resp.status().is_server_error() => {
             Err(RegisterError::Retryable(format!("HTTP {}", resp.status())))
         }
         // 4xx (e.g. 400 bad ssp_id/url): a real misconfiguration → fatal.
@@ -364,7 +383,11 @@ async fn register_with_retry(
     status: &Arc<RwLock<SspStatus>>,
 ) -> ssp_protocol::SspRegistrationResponse {
     let max_wait = std::time::Duration::from_secs(register_max_wait_secs);
-    let start = std::time::Instant::now();
+    let started = std::time::Instant::now();
+    // The exit budget counts time since the scheduler last answered "not
+    // ready", not since we started: a reachable scheduler mid-clone is not a
+    // failure to escalate, it is the thing we are waiting for.
+    let mut start = started;
     let mut backoff_ms: u64 = 1000;
     loop {
         match register_with_scheduler(client, scheduler_url, ssp_id, listen_addr, advertise_addr)
@@ -374,7 +397,7 @@ async fn register_with_retry(
                 info!(
                     snapshot_seq = r.snapshot_seq,
                     tables = r.table_hashes.len(),
-                    waited_secs = start.elapsed().as_secs(),
+                    waited_secs = started.elapsed().as_secs(),
                     "Successfully registered with scheduler"
                 );
                 return r;
@@ -387,7 +410,17 @@ async fn register_with_retry(
                 *status.write().await = SspStatus::Failed;
                 std::process::exit(6);
             }
-            Err(RegisterError::Retryable(e)) => {
+            Err(err @ RegisterError::NotReady(_)) if registration_budget_restarts_on(&err) => {
+                start = std::time::Instant::now();
+                info!(
+                    error = %err,
+                    waited_secs = started.elapsed().as_secs(),
+                    "Scheduler is up but not ready (cloning or restoring); waiting for it"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                backoff_ms = (backoff_ms * 2).min(10_000);
+            }
+            Err(RegisterError::Retryable(e)) | Err(RegisterError::NotReady(e)) => {
                 let elapsed = start.elapsed();
                 if elapsed >= max_wait {
                     error!(
@@ -1646,6 +1679,17 @@ mod checkpoint_gating_tests {
     #[test]
     fn unparseable_interval_falls_back_to_default() {
         assert_eq!(resolve_checkpoint_interval(true, Some("soon"), true), Some(300));
+    }
+
+    #[test]
+    fn a_not_ready_scheduler_does_not_spend_the_registration_exit_budget() {
+        use super::{registration_budget_restarts_on, RegisterError};
+        // 503 = alive and cloning: keep waiting, however long it takes.
+        assert!(registration_budget_restarts_on(&RegisterError::NotReady("HTTP 503".into())));
+        // Unreachable or broken: bounded, then exit for the supervisor.
+        assert!(!registration_budget_restarts_on(&RegisterError::Retryable("HTTP 502".into())));
+        assert!(!registration_budget_restarts_on(&RegisterError::Retryable("connection refused".into())));
+        assert!(!registration_budget_restarts_on(&RegisterError::Fatal("HTTP 400".into())));
     }
 
     #[tokio::test]
