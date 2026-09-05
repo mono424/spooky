@@ -112,7 +112,54 @@ pub struct AppState {
 /// so both shells share one definition; this shell builds it from env vars.
 pub use ssp_node::NodeConfig as Config;
 
+/// Resolve the circuit checkpoint cadence from the environment.
+///
+/// `None` means "never checkpoint", and it is the answer whenever a checkpoint
+/// could not be consumed:
+///
+/// - no `SPKY_SSP_SNAPSHOT_DIR`: there is no store to write into;
+/// - a cluster node (scheduler URL set): the cluster bootstrap pages the
+///   database through the scheduler proxy and never calls
+///   `CircuitStore::load` (`ssp_node::Runtime::bootstrap` is the standalone
+///   path only), so a checkpoint here is write-only. On a large tenant that
+///   write was measured at 709 MB every ~6 minutes, serialised under the
+///   circuit read lock: `/ingest` blocked for a minute, SurrealDB's fsyncs
+///   stalled past 25 s behind it, and the SSP heartbeat queued behind the
+///   blocked ingest writer until the scheduler evicted the node;
+/// - `SPKY_SSP_CHECKPOINT_INTERVAL_SECS=0`: explicit opt-out. Before this
+///   guard a zero re-armed the timer immediately, i.e. checkpointed in a loop.
+pub fn resolve_checkpoint_interval(
+    snapshot_dir_set: bool,
+    interval_env: Option<&str>,
+    standalone: bool,
+) -> Option<u64> {
+    if !snapshot_dir_set || !standalone {
+        return None;
+    }
+    let secs = interval_env
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(300);
+    (secs > 0).then_some(secs)
+}
+
+/// The view count a heartbeat reports, without waiting on the circuit.
+///
+/// Liveness must not queue behind the circuit lock: a checkpoint or a long
+/// registration holds it for tens of seconds, and tokio's `RwLock` is
+/// write-preferring, so once an `/ingest` writer is parked behind that holder
+/// a plain `read()` here parks behind the writer too. Past 30 s of silence
+/// the scheduler evicts the SSP and it exits — for a view count nobody needed
+/// to be exact. When the lock is busy the last observed count is reported.
+pub fn heartbeat_view_count(processor: &Arc<RwLock<Circuit>>, last: &mut usize) -> usize {
+    if let Ok(circuit) = processor.try_read() {
+        *last = circuit.view_count();
+    }
+    *last
+}
+
 pub fn load_config() -> Config {
+    let scheduler_url = std::env::var("SPKY_SCHEDULER_URL").ok();
+    let standalone = scheduler_url.is_none();
     Config {
         listen_addr: std::env::var("SPKY_SSP_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8667".to_string()),
         // SPKY_DB_URL is canonical; SPKY_DB_WS kept as a legacy fallback
@@ -124,7 +171,7 @@ pub fn load_config() -> Config {
         db_pass: std::env::var("SPKY_DB_PASS").unwrap_or_else(|_| "root".to_string()),
         db_ns: std::env::var("SPKY_DB_NS").unwrap_or_else(|_| "test".to_string()),
         db_db: std::env::var("SPKY_DB_NAME").unwrap_or_else(|_| "test".to_string()),
-        scheduler_url: std::env::var("SPKY_SCHEDULER_URL").ok(),
+        scheduler_url,
         ssp_id: std::env::var("SPKY_SSP_ID")
             .unwrap_or_else(|_| format!("ssp-{}", uuid::Uuid::new_v4())),
         heartbeat_interval_ms: std::env::var("HEARTBEAT_INTERVAL_MS")
@@ -183,21 +230,16 @@ pub fn load_config() -> Config {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(15),
-        // Only meaningful alongside a real `CircuitStore`; with the noop store
-        // a checkpoint writes nothing, so leaving this unset when snapshots
-        // are off avoids paying for a serialization no one reads.
-        //
-        // Arming it used to be unsafe at any interval: `Circuit::save` cloned
-        // the entire store before serializing it, so a checkpoint on a large
-        // circuit was an OOM generator inside a capped container. It no longer
-        // clones, and rows are flat-encoded, so the peak is now roughly the
-        // JSON text itself.
-        checkpoint_interval_secs: std::env::var_os("SPKY_SSP_SNAPSHOT_DIR").map(|_| {
-            std::env::var("SPKY_SSP_CHECKPOINT_INTERVAL_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(300)
-        }),
+        // Standalone hosts with a snapshot dir only; see
+        // `resolve_checkpoint_interval` for why a cluster node never
+        // checkpoints. `Circuit::save` still builds the whole JSON text in
+        // memory (and clones every view's params on the way), so even where it
+        // runs the peak is the serialised store, not a no-op.
+        checkpoint_interval_secs: resolve_checkpoint_interval(
+            std::env::var_os("SPKY_SSP_SNAPSHOT_DIR").is_some(),
+            std::env::var("SPKY_SSP_CHECKPOINT_INTERVAL_SECS").ok().as_deref(),
+            standalone,
+        ),
         max_snapshot_age_secs: 3600,
     }
 }
@@ -1356,9 +1398,16 @@ pub async fn run_server() -> anyhow::Result<()> {
         let clean_requested_for_heartbeat = Arc::clone(&clean_requested);
 
         tokio::spawn(async move {
-            let client = reqwest::Client::new();
+            // Bounded request: the scheduler evicts an SSP after 30 s of
+            // silence, so one heartbeat that hangs on a slow scheduler must
+            // not be allowed to eat the next few ticks as well.
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
             let heartbeat_url = format!("{}/ssp/heartbeat", scheduler_url_clone.trim_end_matches('/'));
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(heartbeat_interval));
+            let mut last_views: usize = 0;
 
             loop {
                 interval.tick().await;
@@ -1372,10 +1421,7 @@ pub async fn run_server() -> anyhow::Result<()> {
                     continue;
                 }
 
-                let views = {
-                    let circuit = processor_clone.read().await;
-                    circuit.view_count()
-                };
+                let views = heartbeat_view_count(&processor_clone, &mut last_views);
 
                 let payload = ssp_protocol::SspHeartbeat {
                     ssp_id: ssp_id.clone(),
@@ -1461,9 +1507,8 @@ pub async fn run_server() -> anyhow::Result<()> {
         .await;
     info!(interval_ms = config.view_metrics_flush_ms, "View metrics flush timer armed");
 
-    // Circuit checkpoint: only when a host opts in (ephemeral/edge). The VM
-    // leaves checkpoint_interval_secs unset — its NoopCircuitStore holds the
-    // circuit in-process, so periodic snapshots would be pure overhead.
+    // Circuit checkpoint: only where a later boot can restore it, which is the
+    // standalone path with a snapshot dir (see `resolve_checkpoint_interval`).
     if let Some(secs) = config.checkpoint_interval_secs {
         platform
             .scheduler
@@ -1473,6 +1518,11 @@ pub async fn run_server() -> anyhow::Result<()> {
             )
             .await;
         info!(interval_secs = secs, "Circuit checkpoint timer armed");
+    } else if std::env::var_os("SPKY_SSP_SNAPSHOT_DIR").is_some() {
+        info!(
+            standalone = config.scheduler_url.is_none(),
+            "Circuit checkpoints disabled: a cluster node bootstraps from the scheduler proxy and never restores a checkpoint, so writing one would only stall ingest"
+        );
     }
 
     axum::serve(listener, app)
@@ -1558,6 +1608,63 @@ async fn shutdown_signal(
 // `extract_select_permission_text`) and the standalone rebuild now live in the
 // portable core (`ssp_node::bootstrap`); the shell keeps only the cluster
 // split-source path below.
+
+#[cfg(test)]
+mod checkpoint_gating_tests {
+    use super::{heartbeat_view_count, resolve_checkpoint_interval};
+    use ssp::circuit::Circuit;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    #[test]
+    fn standalone_with_snapshot_dir_checkpoints_every_300s_by_default() {
+        assert_eq!(resolve_checkpoint_interval(true, None, true), Some(300));
+        assert_eq!(resolve_checkpoint_interval(true, Some("45"), true), Some(45));
+    }
+
+    #[test]
+    fn no_snapshot_dir_means_no_checkpoint() {
+        assert_eq!(resolve_checkpoint_interval(false, None, true), None);
+        assert_eq!(resolve_checkpoint_interval(false, Some("45"), true), None);
+    }
+
+    #[test]
+    fn cluster_node_never_checkpoints() {
+        // The cluster bootstrap goes through the scheduler proxy and never
+        // restores a checkpoint, so writing one is pure cost (709 MB every
+        // ~6 min on whitepawn, under the circuit lock).
+        assert_eq!(resolve_checkpoint_interval(true, None, false), None);
+        assert_eq!(resolve_checkpoint_interval(true, Some("45"), false), None);
+    }
+
+    #[test]
+    fn zero_interval_is_an_opt_out_not_a_tight_loop() {
+        assert_eq!(resolve_checkpoint_interval(true, Some("0"), true), None);
+        assert_eq!(resolve_checkpoint_interval(true, Some(" 0 "), true), None);
+    }
+
+    #[test]
+    fn unparseable_interval_falls_back_to_default() {
+        assert_eq!(resolve_checkpoint_interval(true, Some("soon"), true), Some(300));
+    }
+
+    #[tokio::test]
+    async fn heartbeat_reports_last_count_while_circuit_is_write_locked() {
+        let processor = Arc::new(RwLock::new(Circuit::new()));
+        let mut last = 0usize;
+        // Free lock: the real count is read and remembered.
+        assert_eq!(heartbeat_view_count(&processor, &mut last), 0);
+
+        // A checkpoint / registration holding the lock must not park the
+        // heartbeat: the remembered count is reported instead.
+        last = 7;
+        let guard = processor.write().await;
+        assert_eq!(heartbeat_view_count(&processor, &mut last), 7);
+        drop(guard);
+
+        assert_eq!(heartbeat_view_count(&processor, &mut last), 0);
+    }
+}
 
 #[cfg(test)]
 mod bootstrap_pagination_tests {

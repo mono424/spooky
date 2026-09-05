@@ -230,6 +230,14 @@ impl Runtime {
     /// `NoopCircuitStore` makes `save` a cheap no-op.
     pub async fn checkpoint(&self) {
         let node = &self.node;
+        // Checkpoints off (no snapshot dir, cluster node, or an explicit 0)
+        // means off for the shutdown checkpoint too: the shell used to
+        // serialise the whole store on every SIGTERM of a cluster node that
+        // could never read it back, which turned each restart into an extra
+        // minute of lock-held serialisation before the real bootstrap began.
+        if node.checkpoint_interval_secs.is_none() {
+            return;
+        }
         // Skip while not Ready — a half-built circuit is not a valid snapshot.
         if *node.status.read().await != SspStatus::Ready {
             return;

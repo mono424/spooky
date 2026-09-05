@@ -1139,11 +1139,13 @@ async fn checkpoint_persists_snapshot_with_resume_point() {
     use ssp_node::{CircuitStore, Runtime};
 
     let store = MemStore::default();
-    let h = build(HarnessOpts {
+    let mut h = build(HarnessOpts {
         circuit_store: Some(Arc::new(store.clone()) as Arc<dyn ssp_node::CircuitStore>),
         ..Default::default() // Ready
     })
     .await;
+    // Checkpoints are opt-in (build() has no knob; mutate the node pre-share).
+    Arc::get_mut(&mut h.node).unwrap().checkpoint_interval_secs = Some(300);
 
     // A couple of versioned rows in the circuit store.
     {
@@ -1167,12 +1169,39 @@ async fn checkpoint_persists_snapshot_with_resume_point() {
 async fn checkpoint_skips_when_not_ready() {
     use ssp_node::{CircuitStore, Runtime};
     let store = MemStore::default();
-    let h = build(HarnessOpts {
+    let mut h = build(HarnessOpts {
         status: SspStatus::Bootstrapping,
         circuit_store: Some(Arc::new(store.clone()) as Arc<dyn ssp_node::CircuitStore>),
         ..Default::default()
     })
     .await;
+    Arc::get_mut(&mut h.node).unwrap().checkpoint_interval_secs = Some(300);
+    Runtime::new(Arc::clone(&h.node)).checkpoint().await;
+    assert!(matches!(store.load().await, Err(ssp_node::CircuitStoreError::NotFound)));
+}
+
+#[tokio::test]
+async fn checkpoint_writes_nothing_when_disabled() {
+    // `checkpoint_interval_secs: None` means off — for the shutdown checkpoint
+    // as much as for the timer. A cluster node bootstraps from the scheduler
+    // proxy and never restores a snapshot, so the only thing a write here
+    // could do is stall ingest under the circuit lock (709 MB per checkpoint
+    // on the first tenant this was measured on).
+    use ssp_node::{CircuitStore, Runtime};
+    let store = MemStore::default();
+    let h = build(HarnessOpts {
+        circuit_store: Some(Arc::new(store.clone()) as Arc<dyn ssp_node::CircuitStore>),
+        ..Default::default() // Ready, interval None
+    })
+    .await;
+    {
+        let mut c = h.node.processor.write().await;
+        c.load(vec![ssp::circuit::Record::new(
+            "thread",
+            "1",
+            json!({ "id": "thread:1", "_00_rv": 5 }),
+        )]);
+    }
     Runtime::new(Arc::clone(&h.node)).checkpoint().await;
     assert!(matches!(store.load().await, Err(ssp_node::CircuitStoreError::NotFound)));
 }
