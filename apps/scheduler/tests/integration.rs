@@ -656,10 +656,35 @@ mod ingest_tests {
 
     #[tokio::test]
     async fn ingest_rejects_during_cloning() {
+        // The initial clone: no replica content yet (snapshot_seq 0), so
+        // there is nowhere to put the event. The upstream write aborts.
         let h = TestHarness::with_status(SchedulerStatus::Cloning).await;
+        assert_eq!(h.snapshot_seq_cell.load(Ordering::SeqCst), 0);
         let app = h.ingest_router();
 
         let (status, _) = post_json(app, "/ingest", &ingest_payload("user", "CREATE", "u1")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn ingest_is_accepted_while_booting_on_a_persisted_snapshot() {
+        // A restart on a persisted snapshot spends its `Cloning` phase on
+        // checks, not on a clone: the replica and the WAL are there, so the
+        // event is buffered like during normal operation. Refusing it would
+        // abort the user's write for the whole boot.
+        let h = TestHarness::with_status(SchedulerStatus::Cloning).await;
+        h.snapshot_seq_cell.store(468_893, Ordering::SeqCst);
+        let app = h.ingest_router();
+
+        let (status, _) = post_json(app, "/ingest", &ingest_payload("user", "CREATE", "u1")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(h.event_buffer.read().await.len(), 1, "buffered for the first drain");
+        assert_eq!(h.wal.read().await.recover().unwrap().len(), 1, "and durable in the WAL");
+
+        // Restoring is a real gap (the replica is being replaced): still refused.
+        *h.status.write().await = SchedulerStatus::Restoring;
+        let (status, _) =
+            post_json(h.ingest_router(), "/ingest", &ingest_payload("user", "CREATE", "u2")).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
@@ -2045,8 +2070,111 @@ mod bootstrap_protocol_tests {
         );
     }
 
+    /// The crash the boot path has to survive: the previous process applied
+    /// a batch to the replica (rows on disk, hash folded in memory) and died
+    /// before `set_snapshot_state` persisted the new seq + hashes. On
+    /// restart the WAL still holds that batch past the persisted seq, and
+    /// re-folding an already-applied UPDATE ("before out, after in" against a
+    /// row that already carries the change) would leave the persisted hash
+    /// wrong for good. The boot marks the backlog's tables dirty instead, and
+    /// the first drain rehashes them from content. No boot-time full rehash.
     #[tokio::test]
-    async fn startup_integrity_check_repairs_stale_hashes() {
+    async fn wal_backlog_tables_are_rehashed_from_content_at_the_first_drain() {
+        let replica_dir = TempDir::new().unwrap();
+        let wal_dir = TempDir::new().unwrap();
+        let config = SchedulerConfig {
+            replica_db_path: replica_dir.path().join("replica_db"),
+            wal_path: wal_dir.path().join("event_wal.log"),
+            scheduler_id: "test-scheduler".to_string(),
+            ..SchedulerConfig::default()
+        };
+        let update = BufferedEvent {
+            seq: 2,
+            update: scheduler::messages::RecordUpdate {
+                table: "user".to_string(),
+                operation: scheduler::messages::RecordOp::Update,
+                record_id: "user:u1".to_string(),
+                data: Some(json!({"name": "b"})),
+                version: 2,
+            },
+            received_at: 0,
+        };
+
+        let sched = scheduler::Scheduler::new(config, Arc::new(HttpTransport::new()))
+            .await
+            .unwrap();
+
+        // "Process 1": commit seq 1, then apply seq 2 and crash before
+        // committing it.
+        {
+            let mut rep = sched.replica.write().await;
+            rep.apply(
+                "user",
+                scheduler::replica::RecordOp::Create,
+                "user:u1",
+                Some(json!({"name": "a"})),
+            )
+            .await
+            .unwrap();
+            rep.set_snapshot_state(1, None).await.unwrap();
+            sched.wal.write().await.append(&update).unwrap();
+            rep.apply(
+                "user",
+                scheduler::replica::RecordOp::Update,
+                "user:u1",
+                Some(json!({"name": "b"})),
+            )
+            .await
+            .unwrap();
+            // No set_snapshot_state: the persisted hash still describes name=a.
+        }
+
+        // "Process 2" on the same RocksDB handle (RocksDB releases its LOCK
+        // lazily, so a real reopen in-process races): reload the persisted
+        // metadata the way a fresh `Replica::new` reads it, then run the
+        // boot recovery.
+        {
+            let mut rep = sched.replica.write().await;
+            assert_eq!(rep.reload_snapshot_seq().await.unwrap(), 1);
+            assert!(rep.dirty_tables().is_empty(), "fresh process: nothing flagged yet");
+            assert_ne!(
+                rep.snapshot_hashes()["user"],
+                rep.compute_table_hashes().await.unwrap()["user"],
+                "the persisted hash is stale (describes name=a)"
+            );
+
+            let wal = sched.wal.read().await;
+            let (backlog, initial_seq) =
+                scheduler::recover_wal_backlog(&mut rep, &wal).unwrap();
+            assert_eq!(backlog.len(), 1, "seq 2 recovered as backlog");
+            assert_eq!(initial_seq, 2);
+            assert!(
+                rep.dirty_tables().contains("user"),
+                "backlog table flagged for a content rehash"
+            );
+            *sched.event_buffer.write().await = backlog;
+        }
+
+        let applied = scheduler::drain_and_apply(&sched.event_buffer, &sched.replica, &sched.wal)
+            .await
+            .unwrap();
+        assert_eq!(applied, 1);
+
+        let rep = sched.replica.read().await;
+        assert!(rep.dirty_tables().is_empty(), "the drain cleared the flag");
+        assert_eq!(rep.snapshot_seq(), 2);
+        assert_eq!(
+            rep.snapshot_hashes(),
+            &rep.compute_table_hashes().await.unwrap(),
+            "hashes agree with content after the first drain"
+        );
+    }
+
+    /// `startup_integrity_check` is no longer on the boot path (it paged
+    /// every table out of RocksDB on every start); it stays available as an
+    /// explicit full check and must still repair when called.
+    #[tokio::test]
+    async fn startup_integrity_check_repairs_stale_hashes_when_invoked() {
         let replica_dir = TempDir::new().unwrap();
         let wal_dir = TempDir::new().unwrap();
         let config = SchedulerConfig {
@@ -2070,14 +2198,13 @@ mod bootstrap_protocol_tests {
             .await
             .unwrap();
             rep.set_snapshot_state(1, None).await.unwrap();
-            rep.apply(
-                "user",
-                scheduler::replica::RecordOp::Update,
-                "user:u1",
-                Some(json!({"name": "b"})),
-            )
-            .await
-            .unwrap();
+            // Content changes underneath the replica (manual edit, bad backup):
+            // nothing folds, the persisted hash is now wrong.
+            rep.query("UPDATE user:u1 SET name = 'b'").await.unwrap();
+            assert_ne!(
+                rep.snapshot_hashes()["user"],
+                rep.compute_table_hashes().await.unwrap()["user"]
+            );
         }
 
         sched.startup_integrity_check().await.unwrap();
@@ -2086,7 +2213,7 @@ mod bootstrap_protocol_tests {
         assert_eq!(
             rep.snapshot_hashes(),
             &rep.compute_table_hashes().await.unwrap(),
-            "startup check must repair, not just log"
+            "the check must repair, not just log"
         );
     }
 

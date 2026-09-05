@@ -87,10 +87,18 @@ async fn handle_ingest(
     State(state): State<IngestState>,
     Json(request): Json<IngestRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    // Gate: reject if scheduler is cloning or restoring
+    // Gate. A 503 here is not a soft failure upstream: the `_00_<table>_*`
+    // DB events `http::post` to this endpoint inside the user's transaction,
+    // so a refused ingest ABORTS the user's write. That is acceptable only
+    // while there is genuinely nowhere to put the event — the initial clone
+    // (no replica yet, and the event may or may not be inside the clone's
+    // cut) and a restore. A scheduler booting on a persisted snapshot has a
+    // replica and a WAL: the event is appended and applied at the first
+    // drain, exactly as during normal operation. Before this, every
+    // scheduler restart was a multi-minute window of failed writes.
     let scheduler_status = *state.status.read().await;
     match scheduler_status {
-        SchedulerStatus::Cloning => {
+        SchedulerStatus::Cloning if state.snapshot_seq.load(Ordering::Relaxed) == 0 => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
                 "SSP_NOT_READY: Scheduler is cloning database".to_string(),

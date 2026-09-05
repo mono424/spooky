@@ -308,6 +308,17 @@ impl Replica {
         &self.dirty_hashes
     }
 
+    /// Flag tables for a from-content rehash at the next drain. Used at boot
+    /// for the tables a recovered WAL backlog touches, whose events may have
+    /// been applied before the crash and cannot be folded a second time.
+    pub fn mark_tables_dirty(&mut self, tables: impl IntoIterator<Item = String>) {
+        for table in tables {
+            if !ssp_protocol::table_excluded_from_sync(&table) {
+                self.dirty_hashes.insert(table);
+            }
+        }
+    }
+
     /// Persisted hashes that predate the incremental `x3:` format (or are
     /// otherwise unparsable) cannot be folded into, so they are rehashed from
     /// content once. Happens exactly once per replica on the upgrade to the

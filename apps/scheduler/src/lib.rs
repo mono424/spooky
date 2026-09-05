@@ -64,6 +64,52 @@ fn touched_tables(events: &[BufferedEvent]) -> BTreeSet<String> {
         .collect()
 }
 
+/// Boot-time WAL recovery. Returns the backlog (events past the persisted
+/// `snapshot_seq`, in order) and the seq the counter resumes from.
+///
+/// A backlog means the previous process died between applying events and
+/// committing the snapshot state, or never got to apply them. Re-applying
+/// them folds "before out, after in" against rows that may already carry the
+/// change, which would leave those tables' hashes wrong for good. So the
+/// backlog's tables are flagged dirty on the replica: the first drain
+/// rehashes exactly those tables from content, and nothing else. This is what
+/// replaced the boot-time full rehash of every table.
+pub fn recover_wal_backlog(
+    replica: &mut Replica,
+    wal: &EventWal,
+) -> Result<(VecDeque<BufferedEvent>, u64)> {
+    let snapshot_seq = replica.snapshot_seq();
+    let recovered_events = wal.recover()?;
+    let recovered_count = recovered_events.len();
+
+    let max_wal_seq = recovered_events.last().map(|e| e.seq).unwrap_or(0);
+    let initial_seq = max_wal_seq.max(snapshot_seq);
+
+    let mut event_buffer: VecDeque<BufferedEvent> = recovered_events
+        .into_iter()
+        .filter(|e| e.seq > snapshot_seq)
+        .collect();
+
+    if recovered_count > 0 {
+        info!(
+            recovered_count,
+            buffer_size = event_buffer.len(),
+            snapshot_seq,
+            initial_seq,
+            "Recovered events from WAL"
+        );
+    }
+    if !event_buffer.is_empty() {
+        let tables = touched_tables(event_buffer.make_contiguous());
+        info!(
+            tables = ?tables,
+            "Tables touched by the WAL backlog will be rehashed from content at the first drain"
+        );
+        replica.mark_tables_dirty(tables);
+    }
+    Ok((event_buffer, initial_seq))
+}
+
 /// Drain the in-memory event buffer and apply all events to the replica.
 /// Also advances `snapshot_seq` and truncates the WAL up to that seq.
 /// Returns the number of events applied (may be 0). Does NOT touch `SchedulerStatus`.
@@ -226,37 +272,14 @@ impl Scheduler {
         let strategy = config.load_balance.clone();
 
         // Initialize persistent replica with embedded SurrealDB/RocksDB
-        let replica = Replica::new(
+        let mut replica = Replica::new(
             config.replica_db_path.clone(),
         ).await?;
 
         // Initialize WAL
         let wal = EventWal::new(config.wal_path.clone())?;
 
-        // Recover state from WAL if available
-        let snapshot_seq = replica.snapshot_seq();
-        let recovered_events = wal.recover()?;
-        let recovered_count = recovered_events.len();
-
-        // Determine seq_counter from WAL or snapshot
-        let max_wal_seq = recovered_events.last().map(|e| e.seq).unwrap_or(0);
-        let initial_seq = max_wal_seq.max(snapshot_seq);
-
-        // Rebuild event buffer from WAL (only events after snapshot)
-        let event_buffer: VecDeque<BufferedEvent> = recovered_events
-            .into_iter()
-            .filter(|e| e.seq > snapshot_seq)
-            .collect();
-
-        if recovered_count > 0 {
-            info!(
-                recovered_count,
-                buffer_size = event_buffer.len(),
-                snapshot_seq,
-                initial_seq,
-                "Recovered events from WAL"
-            );
-        }
+        let (event_buffer, initial_seq) = recover_wal_backlog(&mut replica, &wal)?;
 
         let max_buffer_per_ssp = config.max_buffer_per_ssp;
         let snapshot_seq_cell = replica.snapshot_seq_cell();
@@ -561,13 +584,24 @@ impl Scheduler {
             );
         }
 
-        // Startup self-check: hash the replica fresh and compare against
-        // what's persisted. Mismatch ⇒ the on-disk metadata disagrees with
-        // the replica content (crash mid-drain, bad backup, manual edits);
-        // the content is what /proxy serves, so the hashes are recomputed
-        // from it before any SSP can register against stale ones.
-        if let Err(e) = self.startup_integrity_check().await {
-            warn!(error = %e, "Startup integrity check encountered errors");
+        // No boot-time rehash from content. It used to page every table out
+        // of RocksDB on every start (two to four minutes on whitepawn, during
+        // which no SSP could register and every upstream write was refused).
+        // The two ways persisted hashes go stale are covered without it:
+        // - a crash between applying and committing: the WAL backlog's tables
+        //   were marked dirty in `new()` and are rehashed at the first drain;
+        // - content changed underneath (bad backup, manual edit): the first
+        //   SSP to bootstrap disputes the table and `handle_bootstrap_verify`
+        //   rehashes exactly the disputed tables from content.
+        // `startup_integrity_check` stays available for an explicit full check.
+        {
+            let replica = self.replica.read().await;
+            let dirty = replica.dirty_tables().len();
+            info!(
+                tables = replica.snapshot_hashes().len(),
+                dirty,
+                "Persisted table hashes reused; stale ones are repaired at the first drain or on dispute"
+            );
         }
 
         // Bootstrap is done with the raw handle; hand it to the long-lived
@@ -591,14 +625,25 @@ impl Scheduler {
         // internally consistent and serves every SSP an empty table. Nothing
         // is buffered yet, so counts are comparable, and no SSP can register
         // until `Ready`, so a re-clone here costs nobody a bootstrap.
+        let drift_started = std::time::Instant::now();
         match crate::drift::run_check(&drift_hook, &self.replica).await {
-            crate::drift::Action::Clean => info!("Startup drift check passed"),
-            other => warn!(action = ?other, "Startup drift check acted"),
+            crate::drift::Action::Clean => info!(
+                elapsed_ms = drift_started.elapsed().as_millis() as u64,
+                "Startup drift check passed"
+            ),
+            other => warn!(
+                action = ?other,
+                elapsed_ms = drift_started.elapsed().as_millis() as u64,
+                "Startup drift check acted"
+            ),
         }
 
         // Transition to Ready
         *self.status.write().await = SchedulerStatus::Ready;
-        info!("Scheduler is ready and running");
+        info!(
+            boot_ms = self.start_time.elapsed().as_millis() as u64,
+            "Scheduler is ready and running"
+        );
 
         // Step 3: Spawn periodic snapshot update task (which also runs the
         // periodic drift check after each drain).
