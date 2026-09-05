@@ -90,6 +90,15 @@ export interface DurableMembership {
   confirmed: boolean;
 }
 
+/**
+ * Fraction of a query's TTL after which the client refreshes `lastActiveAt`.
+ *
+ * Must leave room for at least one retry: the server sweeps a view — and its
+ * `_00_list_ref` edges — the moment `lastActiveAt + ttl` passes, and the client
+ * is LIVE on those edges, so a swept-but-still-watched view empties the UI.
+ */
+const TTL_HEARTBEAT_FRACTION = 0.5;
+
 export class DataModule<S extends SchemaStructure> {
   /** Tab identity baked into mutation ids (shared-tabs rollback routing);
    *  undefined in solo mode, where mutation-id falls back to a session id. */
@@ -2452,7 +2461,25 @@ export class DataModule<S extends SchemaStructure> {
   private startTTLHeartbeat(queryState: QueryState, hash: QueryHash): void {
     if (queryState.ttlTimer) return;
 
-    const heartbeatTime = Math.floor(queryState.ttlDurationMs * 0.9);
+    // Half the TTL, not 0.9 of it, so ONE failed beat is survivable.
+    //
+    // The timer re-arms after each beat, so expiry sits a full TTL after the
+    // last SUCCESSFUL refresh. At 0.9 a beat that fails — the SSP restarting,
+    // a reconnect, a slow database — left 10% of the TTL before the sweep
+    // deleted the row AND its `_00_list_ref` edges, with no second attempt in
+    // between. On a 10m TTL that is 60 seconds of slack against an SSP
+    // bootstrap that takes ~2 minutes on a large tenant, so the view lost a
+    // race it could not win.
+    //
+    // The user-visible form is content vanishing and coming back: the client
+    // is LIVE on those edges, so it sees the sweep's deletes immediately, and
+    // only restores them once its heartbeat notices the row is gone and
+    // re-registers. Reported as chat messages disappearing for 10+ seconds.
+    //
+    // At 0.5 a single failure still leaves another attempt and half the TTL.
+    // The cost is one extra beat per view per TTL, which is a single
+    // `UPDATE ... SET lastActiveAt`.
+    const heartbeatTime = Math.floor(queryState.ttlDurationMs * TTL_HEARTBEAT_FRACTION);
 
     queryState.ttlTimer = setTimeout(() => {
       queryState.ttlTimer = null;
