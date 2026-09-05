@@ -22,6 +22,43 @@ use ssp_protocol::{list_ref_table_for, sanitize_user_id, RefMode, ANON_AUTH_ID};
 
 use crate::ports::Db;
 
+/// Per-user tables this process has already defined, keyed by sanitized uid.
+///
+/// `ensure_user_tables` used to issue `DEFINE TABLE OVERWRITE` on EVERY
+/// registration. A client registering its 70 views after a bootstrap fired 70
+/// schema statements against the same table inside a few seconds, and
+/// SurrealDB answered some of them with a transaction conflict, which the
+/// register handler turned into a 500 for that registration. The DDL is
+/// idempotent and the definition only changes with a release, so once per
+/// process per user is enough. The drop paths evict the entry so a re-created
+/// table is defined again.
+static ENSURED_USER_TABLES: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
+    std::sync::OnceLock::new();
+static ENSURED_ANON_TABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn ensured_user_tables() -> &'static std::sync::Mutex<HashSet<String>> {
+    ENSURED_USER_TABLES.get_or_init(|| std::sync::Mutex::new(HashSet::new()))
+}
+
+fn user_table_ensured(uid: &str) -> bool {
+    ensured_user_tables()
+        .lock()
+        .map(|set| set.contains(uid))
+        .unwrap_or(false)
+}
+
+fn mark_user_table_ensured(uid: &str) {
+    if let Ok(mut set) = ensured_user_tables().lock() {
+        set.insert(uid.to_string());
+    }
+}
+
+fn forget_user_table(uid: &str) {
+    if let Ok(mut set) = ensured_user_tables().lock() {
+        set.remove(uid);
+    }
+}
+
 /// Returns the `_00_list_ref` table name for the given mode + user.
 pub fn list_ref_table(mode: RefMode, auth_id: &str) -> String {
     list_ref_table_for(mode, auth_id)
@@ -52,6 +89,10 @@ DEFINE FIELD OVERWRITE parent_rel ON TABLE {tbl} TYPE option<string>;
 /// tables are `select WHERE true`). Writes stay SSP-only (root bypasses the
 /// rule). Independent of `RefMode` and never auto-dropped.
 pub async fn ensure_anon_table(db: &dyn Db) -> Result<()> {
+    use std::sync::atomic::Ordering;
+    if ENSURED_ANON_TABLE.load(Ordering::Acquire) {
+        return Ok(());
+    }
     let tbl = "_00_list_ref_anon";
     let ddl = format!(
         "DEFINE TABLE OVERWRITE {tbl} SCHEMALESS \
@@ -64,6 +105,7 @@ pub async fn ensure_anon_table(db: &dyn Db) -> Result<()> {
     db.query(&ddl, &[])
         .await
         .context("Failed to ensure anonymous list_ref table")?;
+    ENSURED_ANON_TABLE.store(true, Ordering::Release);
     Ok(())
 }
 
@@ -102,6 +144,10 @@ pub async fn ensure_user_tables(db: &dyn Db, mode: RefMode, auth_id: &str) -> Re
         return Ok(());
     };
 
+    if user_table_ensured(&uid) {
+        return Ok(());
+    }
+
     let tbl = format!("_00_list_ref_user_{}", uid);
     let ddl = format!(
         "DEFINE TABLE OVERWRITE {tbl} SCHEMALESS \
@@ -115,6 +161,7 @@ pub async fn ensure_user_tables(db: &dyn Db, mode: RefMode, auth_id: &str) -> Re
     db.query(&ddl, &[])
         .await
         .with_context(|| format!("Failed to ensure per-user list_ref table for {}", auth_id))?;
+    mark_user_table_ensured(&uid);
     Ok(())
 }
 
@@ -128,6 +175,10 @@ pub async fn drop_user_tables(db: &dyn Db, mode: RefMode, auth_id: &str) -> Resu
     let Some(uid) = sanitize_user_id(auth_id) else {
         return Ok(());
     };
+    // Forget first: if the REMOVE fails half-way the next registration
+    // re-issues the DEFINE, which is harmless; the reverse order could skip
+    // a DEFINE the table now needs.
+    forget_user_table(&uid);
     let ddl = format!("REMOVE TABLE IF EXISTS _00_list_ref_user_{};", uid);
     db.query(&ddl, &[])
         .await
@@ -201,6 +252,7 @@ pub async fn drop_orphaned_user_tables(db: &dyn Db, mode: RefMode) -> Result<()>
     for tbl in per_user {
         let uid = tbl.trim_start_matches("_00_list_ref_user_");
         if !live_uids.contains(uid) {
+            forget_user_table(uid);
             if let Err(e) = db.query(&format!("REMOVE TABLE IF EXISTS {tbl};"), &[]).await {
                 warn!(target: "ssp::tables", table = %tbl, error = %e, "drop orphaned per-user table failed");
             }
@@ -215,5 +267,94 @@ fn first_i64(v: &serde_json::Value) -> Option<i64> {
     match v {
         serde_json::Value::Array(a) => a.first().and_then(|x| x.as_i64()),
         other => other.as_i64(),
+    }
+}
+
+#[cfg(test)]
+mod ensure_once_tests {
+    use super::*;
+    use crate::ports::DbError;
+    use std::sync::Mutex;
+
+    /// Records every statement it is asked to run and answers nothing.
+    #[derive(Default)]
+    struct RecordingDb {
+        statements: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Db for RecordingDb {
+        async fn query(
+            &self,
+            surql: &str,
+            _binds: &[(&str, serde_json::Value)],
+        ) -> Result<Vec<serde_json::Value>, DbError> {
+            self.statements.lock().unwrap().push(surql.to_string());
+            Ok(vec![])
+        }
+        async fn version(&self) -> Result<String, DbError> {
+            Ok("test".into())
+        }
+    }
+
+    fn ddl_count(db: &RecordingDb, needle: &str) -> usize {
+        db.statements
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.contains(needle))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn per_user_ddl_runs_once_per_process_until_the_table_is_dropped() {
+        // Unique per test: the cache is process-wide and tests run in parallel.
+        let auth_id = "user:ensureonce_a1b2c3";
+        let db = RecordingDb::default();
+
+        ensure_user_tables(&db, RefMode::Dedicated, auth_id).await.unwrap();
+        ensure_user_tables(&db, RefMode::Dedicated, auth_id).await.unwrap();
+        ensure_user_tables(&db, RefMode::Dedicated, auth_id).await.unwrap();
+        assert_eq!(
+            ddl_count(&db, "DEFINE TABLE OVERWRITE _00_list_ref_user_ensureonce_a1b2c3"),
+            1,
+            "a burst of registrations issues the DDL once"
+        );
+
+        // Dropping the table (user deleted, or TTL sweep found it unused)
+        // must make the next registration define it again.
+        drop_user_tables(&db, RefMode::Dedicated, auth_id).await.unwrap();
+        ensure_user_tables(&db, RefMode::Dedicated, auth_id).await.unwrap();
+        assert_eq!(ddl_count(&db, "REMOVE TABLE IF EXISTS _00_list_ref_user_ensureonce_a1b2c3"), 1);
+        assert_eq!(
+            ddl_count(&db, "DEFINE TABLE OVERWRITE _00_list_ref_user_ensureonce_a1b2c3"),
+            2,
+            "re-defined after a drop"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_define_is_not_remembered() {
+        struct FailingDb;
+        #[async_trait::async_trait]
+        impl Db for FailingDb {
+            async fn query(
+                &self,
+                _surql: &str,
+                _binds: &[(&str, serde_json::Value)],
+            ) -> Result<Vec<serde_json::Value>, DbError> {
+                Err(DbError::Transport("resource busy".into()))
+            }
+            async fn version(&self) -> Result<String, DbError> {
+                Ok("test".into())
+            }
+        }
+        let auth_id = "user:ensureonce_failed_x9";
+        assert!(ensure_user_tables(&FailingDb, RefMode::Dedicated, auth_id).await.is_err());
+
+        // The conflict was transient; the next attempt must actually run the DDL.
+        let db = RecordingDb::default();
+        ensure_user_tables(&db, RefMode::Dedicated, auth_id).await.unwrap();
+        assert_eq!(ddl_count(&db, "DEFINE TABLE OVERWRITE _00_list_ref_user_ensureonce_failed_x9"), 1);
     }
 }

@@ -1130,7 +1130,9 @@ impl SspNode {
             crate::tables::ensure_user_tables(self.platform.db.as_ref(), self.ref_mode, &auth_id)
                 .await
         {
-            error!(error = %e, auth_id = %auth_id, "Failed to ensure per-user tables");
+            // `?` (Debug) prints the whole anyhow chain; `%` showed only the
+            // outer context and hid the database's actual reason.
+            error!(error = ?e, auth_id = %auth_id, "Failed to ensure per-user tables");
             return Some(err_json(500, "db_error", "Database error"));
         }
 
@@ -1422,12 +1424,12 @@ impl SspNode {
             if let Err(e) =
                 crate::tables::ensure_user_tables(db, self.ref_mode, &payload.id).await
             {
-                warn!(target: "ssp::ingest", error = %e, auth_id = %payload.id, "Pre-emptive ensure_user_tables failed");
+                warn!(target: "ssp::ingest", error = ?e, auth_id = %payload.id, "Pre-emptive ensure_user_tables failed");
             }
         }
         if payload.table == "user" && op == Operation::Delete {
             if let Err(e) = crate::tables::drop_user_tables(db, self.ref_mode, &payload.id).await {
-                warn!(target: "ssp::ingest", error = %e, auth_id = %payload.id, "drop_user_tables failed");
+                warn!(target: "ssp::ingest", error = ?e, auth_id = %payload.id, "drop_user_tables failed");
             }
         }
 
