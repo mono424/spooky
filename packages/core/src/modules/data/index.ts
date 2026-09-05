@@ -684,8 +684,25 @@ export class DataModule<S extends SchemaStructure> {
    * rolls the mutation back and never reports it settled, so it vanishes at
    * once. This deadline only bounds the case where the write succeeded and its
    * membership never arrived at all.
+   *
+   * 30 s, up from 10 s. At 10 s every server hiccup longer than a scheduler
+   * drain plus one slow database commit showed up as the user's own chat
+   * message vanishing and coming back a minute later. 30 s covers a drain and
+   * a stalled commit end to end; a membership that takes longer than that is
+   * a server fault the admin heartbeat reports, not something to paper over.
    */
-  private static readonly SETTLED_WRITE_GRACE_MS = 10_000;
+  private static readonly SETTLED_WRITE_GRACE_MS = 30_000;
+
+  /**
+   * Whether any settled write or delete is still waiting for membership to
+   * catch up. The sync poll keeps its fast cadence while this is true, so a
+   * missed LIVE notification for the edge is picked up on the next poll tick
+   * rather than after the idle backoff.
+   */
+  hasSettledWritesPending(): boolean {
+    this.pruneSettled(Date.now());
+    return this.settledWrites.size > 0 || this.settledDeletes.size > 0;
+  }
 
   /**
    * Report that a mutation was accepted by the server and its outbox row

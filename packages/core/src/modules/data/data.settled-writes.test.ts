@@ -169,9 +169,38 @@ describe('settled-write grace window', () => {
     });
     dm.noteWriteSettled('comment:new', 'create');
     expect(ids(await materialize(dm, state))).toContain('comment:new');
+    expect(dm.hasSettledWritesPending()).toBe(true);
 
+    // A scheduler drain plus one stalled database commit fit inside the
+    // window: at 11 s the row is still the user's own message, not a ghost.
     vi.advanceTimersByTime(11_000);
+    expect(ids(await materialize(dm, state))).toContain('comment:new');
+    expect(dm.hasSettledWritesPending()).toBe(true);
+
+    vi.advanceTimersByTime(20_000);
     expect(ids(await materialize(dm, state))).toEqual(['comment:old']);
+    expect(dm.hasSettledWritesPending()).toBe(false);
+  });
+
+  it('reports no pending settled write once membership has caught up', async () => {
+    const { dm, state } = setup({
+      remoteArray: [['comment:old', 1]],
+      localArray: [
+        ['comment:old', 1],
+        ['comment:new', 1],
+      ],
+    });
+    expect(dm.hasSettledWritesPending()).toBe(false);
+
+    dm.noteWriteSettled('comment:new', 'create');
+    expect(dm.hasSettledWritesPending()).toBe(true);
+
+    state.config.remoteArray = [
+      ['comment:old', 1],
+      ['comment:new', 1],
+    ];
+    await materialize(dm, state);
+    expect(dm.hasSettledWritesPending()).toBe(false);
   });
 
   it('keeps an accepted delete subtracted until membership drops the row', async () => {

@@ -877,8 +877,12 @@ export class Sp00kySync<S extends SchemaStructure> {
           // Reset the idle streak on any observed change so the poll snaps
           // back to the fast base cadence; otherwise grow it so a quiet page
           // backs off toward the cap. (`handleRemoteListRefChange` also resets
-          // it when a LIVE event lands.)
-          this.listRefIdleStreak = changed ? 0 : this.listRefIdleStreak + 1;
+          // it when a LIVE event lands.) A settled write still waiting for its
+          // membership also pins the fast cadence: the row is on borrowed time
+          // (the settled-write grace), so the edge must be found on the first
+          // poll after it lands, not after the backoff has grown to the cap.
+          const awaitingMembership = this.dataModule.hasSettledWritesPending();
+          this.listRefIdleStreak = changed || awaitingMembership ? 0 : this.listRefIdleStreak + 1;
           const next = listRefPollDelayMs({
             idleStreak: this.listRefIdleStreak,
             baseIntervalMs: this.refSyncIntervalMs,
