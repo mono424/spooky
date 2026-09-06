@@ -837,6 +837,50 @@ impl crate::drift::Recloner for SchedulerRecloner {
 /// forever. Since step 1 has already established there is no active
 /// bootstrap, latched `SnapshotFrozen`/`SnapshotUpdating` here is provably
 /// orphaned and safe to recover from.
+/// A drain that takes longer than this is worth a warning line of its own.
+const DRAIN_SLOW_WARN_SECS: u64 = 60;
+
+/// How often a caller still waiting for `drain_lock` says so.
+const DRAIN_LOCK_WAIT_WARN_SECS: u64 = 30;
+
+/// Take `drain_lock`, and say so in the log while the wait drags on.
+///
+/// Every holder of this lock is bounded in principle (a drain, a registration
+/// critical section, a rehash), but a holder that hangs — a stuck replica
+/// write, an SSP that never answers its bootstrap poll — turns every other
+/// caller into a silent wait, and the only visible symptom is a replica that
+/// stops advancing. Logging the wait, with who is waiting, is what turns that
+/// into a diagnosable incident.
+pub async fn acquire_drain_lock<'a>(
+    drain_lock: &'a Arc<tokio::sync::Mutex<()>>,
+    who: &str,
+) -> tokio::sync::MutexGuard<'a, ()> {
+    let started = std::time::Instant::now();
+    loop {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(DRAIN_LOCK_WAIT_WARN_SECS),
+            drain_lock.lock(),
+        )
+        .await
+        {
+            Ok(guard) => {
+                let waited = started.elapsed().as_secs();
+                if waited >= DRAIN_LOCK_WAIT_WARN_SECS {
+                    warn!(who, waited_secs = waited, "drain_lock acquired after a long wait");
+                }
+                return guard;
+            }
+            Err(_) => {
+                warn!(
+                    who,
+                    waited_secs = started.elapsed().as_secs(),
+                    "still waiting for drain_lock; another holder has not released it"
+                );
+            }
+        }
+    }
+}
+
 pub async fn snapshot_updater_tick(
     status: &Arc<RwLock<SchedulerStatus>>,
     event_buffer: &Arc<RwLock<VecDeque<BufferedEvent>>>,
@@ -867,7 +911,7 @@ pub async fn snapshot_updater_tick(
     // lock-holder here sees a consistent world: either the registration
     // completed (active bootstrap visible → skip) or it hasn't started its
     // critical section (safe to drain; it will capture post-drain hashes).
-    let _guard = drain_lock.lock().await;
+    let _guard = acquire_drain_lock(drain_lock, "snapshot updater").await;
 
     // Step 2: never drain while an SSP holds bootstrap hashes.
     if ssp_pool.read().await.has_active_bootstrap() {
@@ -914,6 +958,7 @@ pub async fn snapshot_updater_tick(
 
     // Step 4: drain, in a child task so a panic can't kill the updater loop
     // (or leave the status pinned at SnapshotUpdating).
+    let drain_started = std::time::Instant::now();
     let res = {
         let (buffer, rep, wal) = (
             Arc::clone(event_buffer),
@@ -922,9 +967,20 @@ pub async fn snapshot_updater_tick(
         );
         tokio::spawn(async move { drain_and_apply(&buffer, &rep, &wal).await }).await
     };
+    // The drain runs while `drain_lock` is held, so a drain that never
+    // returns silently stalls every later tick (they queue on the lock
+    // without logging) and the replica falls behind while `/health` still
+    // says ready. Observed 2026-09-06: no "Snapshot update" line for 30 min,
+    // pending events climbing past 3900, nothing in the log to say why. The
+    // wait for the lock is reported by `acquire_drain_lock`; the drain's own
+    // duration is reported here so the two can be told apart.
+    let drain_secs = drain_started.elapsed().as_secs();
+    if drain_secs >= DRAIN_SLOW_WARN_SECS {
+        warn!(drain_secs, "Snapshot drain took unusually long");
+    }
     match res {
         Ok(Ok(0)) => {}
-        Ok(Ok(event_count)) => info!(event_count, "Snapshot update complete"),
+        Ok(Ok(event_count)) => info!(event_count, drain_secs, "Snapshot update complete"),
         Ok(Err(e)) => error!(error = %e, "Snapshot update failed"),
         Err(join_err) => {
             error!(error = %join_err, "Snapshot update task panicked — status restored to Ready")

@@ -483,7 +483,20 @@ async fn handle_register(
         let ssp_info = ssp_info.clone();
         let ssp_id = request.ssp_id.clone();
         tokio::spawn(async move {
-            let _drain_guard = state.drain_lock.lock().await;
+            let _drain_guard =
+                crate::acquire_drain_lock(&state.drain_lock, "ssp registration").await;
+            // Dropped with the guard: reports a registration that held the
+            // lock long enough to have delayed the snapshot updater.
+            struct HoldReport(std::time::Instant);
+            impl Drop for HoldReport {
+                fn drop(&mut self) {
+                    let held_secs = self.0.elapsed().as_secs();
+                    if held_secs >= 60 {
+                        tracing::warn!(held_secs, "ssp registration held drain_lock for a long time");
+                    }
+                }
+            }
+            let _hold_report = HoldReport(std::time::Instant::now());
 
             *state.status.write().await = SchedulerStatus::SnapshotFrozen;
 
