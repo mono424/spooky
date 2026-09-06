@@ -266,7 +266,12 @@ impl SspNode {
     /// `Circuit::restore` carries configuration — so this must run after every
     /// circuit construction, before anything registers into it.
     pub async fn apply_circuit_policy(&self) {
-        self.processor.write().await.set_merge_views(self.merge_views);
+        let mut circuit = self.processor.write().await;
+        circuit.set_merge_views(self.merge_views);
+        // Server side only: an ingested body whose `_00_rv` is missing or does
+        // not advance gets one that does, so subscribers refetch. The browser
+        // circuit must keep versions exactly as its durable store has them.
+        circuit.set_monotonic_row_versions(true);
     }
 
     pub async fn reload(&self) -> anyhow::Result<()> {
@@ -1462,12 +1467,31 @@ impl SspNode {
             Operation::Delete => Change::delete(&payload.table, &payload.id),
         };
         let step_start = web_time::Instant::now();
-        let deltas = {
+        let (deltas, rv_made_up, rv_made_up_total) = {
             let mut circuit = self.processor.write().await;
-            circuit.step(ChangeSet { changes: vec![change] })
+            let before = circuit.synthesized_row_versions();
+            let deltas = circuit.step(ChangeSet { changes: vec![change] });
+            let total = circuit.synthesized_row_versions();
+            (deltas, total - before, total)
         };
         let materialization_time_ms = step_start.elapsed().as_secs_f64() * 1000.0;
         self.platform.telemetry.counter("ingest", 1);
+        if rv_made_up > 0 {
+            // Each of these is a row the DB-side version stamp failed on
+            // (`_00_version` lookup came back NONE or did not advance). Say so
+            // once, then every thousandth time, so a broken `_00_version`
+            // index shows in the log without flooding it.
+            self.platform.telemetry.counter("ingest_rv_synthesized", rv_made_up);
+            if rv_made_up_total == rv_made_up || rv_made_up_total % 1000 < rv_made_up {
+                warn!(
+                    target: "ssp::ingest",
+                    table = %payload.table,
+                    id = %payload.id,
+                    total = rv_made_up_total,
+                    "ingest carried no advancing _00_rv; version synthesized (is the _00_version index intact?)"
+                );
+            }
+        }
 
         // E2e heartbeat observation point: recorded AFTER the circuit step so
         // a reported seq means the full pipeline (DB event → scheduler ingest

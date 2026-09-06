@@ -1874,3 +1874,35 @@ async fn adoption_never_overwrites_a_concrete_identity() {
         Some("user:alice".to_string())
     );
 }
+
+/// A body whose `_00_rv` is missing or does not advance still has to reach
+/// subscribers: the circuit floors it above the stored version (server-side
+/// policy, applied by `apply_circuit_policy`). This is the measured failure
+/// mode of a partially built `_00_version.record_id` index, where the
+/// mutation event stamps NONE and peers never refetch.
+#[tokio::test]
+async fn ingest_floors_missing_or_stale_row_versions() {
+    let h = build(HarnessOpts::default()).await;
+    h.node.apply_circuit_policy().await;
+    let version = || async { h.node.processor.read().await.store.get_record_version_by_key("thread:1") };
+
+    let body = json!({ "table": "thread", "op": "CREATE", "id": "thread:1", "record": { "title": "a", "_00_rv": 5 } });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap().status, 200);
+    assert_eq!(version().await, Some(5));
+
+    // The event's `_00_version` lookup came back NONE: no version in the body.
+    let body = json!({ "table": "thread", "op": "UPDATE", "id": "thread:1", "record": { "title": "b" } });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap().status, 200);
+    assert_eq!(version().await, Some(6), "a missing version advances past the stored one");
+
+    // A version that did not move.
+    let body = json!({ "table": "thread", "op": "UPDATE", "id": "thread:1", "record": { "title": "c", "_00_rv": 6 } });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap().status, 200);
+    assert_eq!(version().await, Some(7));
+
+    // A real advance is kept as stamped.
+    let body = json!({ "table": "thread", "op": "UPDATE", "id": "thread:1", "record": { "title": "d", "_00_rv": 12 } });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", body)).await.unwrap().status, 200);
+    assert_eq!(version().await, Some(12));
+    assert_eq!(h.node.processor.read().await.synthesized_row_versions(), 2);
+}

@@ -127,6 +127,21 @@ pub struct Circuit {
     /// setting a snapshot happened to be written under. The shell re-applies it
     /// after every circuit construction.
     merge_views: bool,
+    /// Server-side row-version floor (`set_monotonic_row_versions`). When on,
+    /// a Create/Update of a row already in the store whose body carries no
+    /// `_00_rv`, or one not above the stored version, is stamped
+    /// `max(stored, floor) + 1` before it lands — see `floor_row_version`.
+    /// Configuration like `merge_views`: not snapshotted, re-applied by the
+    /// shell after every construction. Off in the browser circuit, whose rows
+    /// take their versions from the durable store and must round-trip as-is.
+    monotonic_row_versions: bool,
+    /// Highest `_00_rv` this circuit has seen or issued while the floor was
+    /// on. `0` means not seeded yet; the first synthesis seeds it from
+    /// `max_row_versions`, so rows restored from a snapshot count.
+    rv_floor: i64,
+    /// Versions the floor had to make up. Non-zero means the DB-side stamp
+    /// (`_00_version`) is not keeping up; the shell surfaces it as telemetry.
+    synthesized_row_versions: u64,
     /// Per-table raw `PERMISSIONS FOR select WHERE <expr>` text, loaded from
     /// SurrealDB at boot. The registration pipeline routes each scan's
     /// permission through the same converter that handles user queries and
@@ -349,6 +364,9 @@ impl Circuit {
             subscribers: HashMap::new(),
             detached_owners: std::collections::HashSet::new(),
             merge_views: false,
+            monotonic_row_versions: false,
+            rv_floor: 0,
+            synthesized_row_versions: 0,
             permissions: HashMap::new(),
             link_targets: HashMap::new(),
             opaque_fields: HashMap::new(),
@@ -568,6 +586,13 @@ impl Circuit {
             if op == Operation::Delete {
                 self.store.stage_deleted_row(&table, &id);
             }
+            let data = if self.monotonic_row_versions
+                && matches!(op, Operation::Create | Operation::Update)
+            {
+                self.floor_row_version(&table, &id, data)
+            } else {
+                data
+            };
             let applied = self.store.apply_owned(&table, op, &id, data);
             // A write whose digest matched what was stored did nothing: no
             // delta, no content update, and the table is not even "changed".
@@ -1424,6 +1449,9 @@ impl Circuit {
             subscribers: HashMap::new(),
             detached_owners: std::collections::HashSet::new(),
             merge_views: false,
+            monotonic_row_versions: false,
+            rv_floor: 0,
+            synthesized_row_versions: 0,
             permissions: HashMap::new(),
             // Re-seeded from INFO FOR DB / INFO FOR TABLE after restore, same as
             // `permissions` (none of the three is part of the serialized snapshot).
@@ -1523,6 +1551,77 @@ impl Circuit {
     /// configuration.
     pub fn set_merge_views(&mut self, enabled: bool) {
         self.merge_views = enabled;
+    }
+
+    /// Whether Create/Update bodies get a row-version floor (`floor_row_version`).
+    pub fn monotonic_row_versions(&self) -> bool {
+        self.monotonic_row_versions
+    }
+
+    /// Turn the row-version floor on or off. Configuration, like
+    /// `set_merge_views`: re-apply after every `Circuit::new` / `Circuit::restore`.
+    pub fn set_monotonic_row_versions(&mut self, enabled: bool) {
+        self.monotonic_row_versions = enabled;
+    }
+
+    /// How many `_00_rv` values the floor has synthesized so far. Monotonic
+    /// over the circuit's lifetime; the shell diffs it around a step.
+    pub fn synthesized_row_versions(&self) -> u64 {
+        self.synthesized_row_versions
+    }
+
+    /// Stamp `data` with a version subscribers will act on.
+    ///
+    /// `_00_rv` is the one thing a subscribed client compares against its local
+    /// copy (`local < remote` → refetch). The DB-side mutation event stamps it
+    /// from `_00_version`; when that lookup comes back NONE the body arrives
+    /// with no version, the row is published at 1, and every peer holding it at
+    /// >= 1 keeps its stale copy for good. Measured on whitepawn: a partially
+    /// built unique index on `_00_version.record_id` (interrupted `DEFINE INDEX
+    /// OVERWRITE` rebuilds, see
+    /// docs/surrealdb-bugs/unique-index-partial-after-overwrite-rebuild.md) did
+    /// that to a third of all rows, and two chat clients each kept rendering
+    /// their own last write. A version that does not advance past the stored
+    /// one has the same effect.
+    ///
+    /// So for a row already in the store, a missing or non-advancing version
+    /// becomes `max(stored, floor) + 1`, where the floor is the highest version
+    /// this circuit has seen or issued: above anything a peer can hold that
+    /// came from this server. A row not yet in the store keeps its body as-is
+    /// (nobody holds it), and `Merge` is left alone by the caller: it widens a
+    /// projected row with fields the store dropped, not a change anyone needs
+    /// to refetch. A body whose content matches what is stored still lands
+    /// nowhere (`Collection::apply` compares digests with `_00_rv` stripped),
+    /// so a replayed event never publishes a bump.
+    fn floor_row_version(&mut self, table: &str, id: &str, mut data: Sp00kyValue) -> Sp00kyValue {
+        let incoming = match data.get("_00_rv") {
+            Some(Sp00kyValue::Int(v)) if *v > 0 => Some(*v),
+            _ => None,
+        };
+        if let Some(v) = incoming {
+            self.rv_floor = self.rv_floor.max(v);
+        }
+        let raw = raw_id(id);
+        let stored = match self.store.collections.get(table) {
+            Some(coll) if coll.rows.contains_key(raw) => coll.rows.rv_of(raw),
+            _ => return data,
+        };
+        match (incoming, stored) {
+            (Some(v), Some(s)) if v > s => return data,
+            (Some(_), None) => return data,
+            _ => {}
+        }
+        if self.rv_floor == 0 {
+            let seen = self.max_row_versions().into_values().max().unwrap_or(0);
+            self.rv_floor = seen.max(0);
+        }
+        let next = self.rv_floor.max(stored.unwrap_or(0)) + 1;
+        self.rv_floor = next;
+        self.synthesized_row_versions += 1;
+        if let Sp00kyValue::Object(map) = &mut data {
+            map.insert("_00_rv".to_string(), Sp00kyValue::Int(next));
+        }
+        data
     }
 
     /// Claim `merge_key` for `query_id`, so later registrations of the same
@@ -3907,5 +4006,108 @@ mod snapshot_and_projection_tests {
             changes: vec![Change::create("thread", "t99", row(99))],
         });
         assert_eq!(records(&next[0]), vec!["thread:t8", "thread:t9", "thread:t99"]);
+    }
+}
+
+#[cfg(test)]
+mod row_version_floor_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn rv(circuit: &Circuit, key: &str) -> Option<i64> {
+        circuit.store.get_record_version_by_key(key)
+    }
+
+    fn step(circuit: &mut Circuit, change: Change) {
+        circuit.step(ChangeSet { changes: vec![change] });
+    }
+
+    #[test]
+    fn off_by_default_and_versions_pass_through_unchanged() {
+        let mut circuit = Circuit::new();
+        assert!(!circuit.monotonic_row_versions());
+        step(&mut circuit, Change::create("thread", "a", json!({ "title": "one", "_00_rv": 5 })));
+        step(&mut circuit, Change::update("thread", "a", json!({ "title": "two" })));
+        // The browser circuit must keep exactly what it was handed.
+        assert_eq!(rv(&circuit, "thread:a"), None);
+        assert_eq!(circuit.synthesized_row_versions(), 0);
+    }
+
+    #[test]
+    fn missing_or_stale_version_on_a_stored_row_advances_past_the_stored_one() {
+        let mut circuit = Circuit::new();
+        circuit.set_monotonic_row_versions(true);
+        step(&mut circuit, Change::create("thread", "a", json!({ "title": "one", "_00_rv": 5 })));
+        assert_eq!(rv(&circuit, "thread:a"), Some(5));
+
+        // No version at all (what a NONE `_00_version` lookup stamps).
+        step(&mut circuit, Change::update("thread", "a", json!({ "title": "two" })));
+        assert_eq!(rv(&circuit, "thread:a"), Some(6));
+
+        // A version that went backwards.
+        step(&mut circuit, Change::update("thread", "a", json!({ "title": "three", "_00_rv": 3 })));
+        assert_eq!(rv(&circuit, "thread:a"), Some(7));
+
+        // A version equal to the stored one.
+        step(&mut circuit, Change::update("thread", "a", json!({ "title": "four", "_00_rv": 7 })));
+        assert_eq!(rv(&circuit, "thread:a"), Some(8));
+
+        // A genuine advance is kept verbatim, even past the floor.
+        step(&mut circuit, Change::update("thread", "a", json!({ "title": "five", "_00_rv": 20 })));
+        assert_eq!(rv(&circuit, "thread:a"), Some(20));
+        assert_eq!(circuit.synthesized_row_versions(), 3);
+    }
+
+    #[test]
+    fn replayed_event_with_identical_content_publishes_nothing() {
+        let mut circuit = Circuit::new();
+        circuit.set_monotonic_row_versions(true);
+        step(&mut circuit, Change::create("thread", "a", json!({ "title": "one", "_00_rv": 5 })));
+        // Same body, no version: the digest matches, the store writes nothing.
+        step(&mut circuit, Change::update("thread", "a", json!({ "title": "one" })));
+        assert_eq!(rv(&circuit, "thread:a"), Some(5));
+    }
+
+    #[test]
+    fn floor_is_seeded_from_rows_the_circuit_already_holds() {
+        // Rows that predate the flag (a restored snapshot) still raise the
+        // floor, so a synthesized version beats every version ever published.
+        let mut circuit = Circuit::new();
+        step(&mut circuit, Change::create("thread", "old", json!({ "title": "x", "_00_rv": 40 })));
+        step(&mut circuit, Change::create("thread", "a", json!({ "title": "one", "_00_rv": 2 })));
+        circuit.set_monotonic_row_versions(true);
+        step(&mut circuit, Change::update("thread", "a", json!({ "title": "two" })));
+        assert_eq!(rv(&circuit, "thread:a"), Some(41));
+        // The floor keeps climbing: the next synthesis is above the last one.
+        step(&mut circuit, Change::update("thread", "old", json!({ "title": "y" })));
+        assert_eq!(rv(&circuit, "thread:old"), Some(42));
+    }
+
+    #[test]
+    fn rows_without_a_stored_version_keep_a_real_incoming_one() {
+        let mut circuit = Circuit::new();
+        circuit.set_monotonic_row_versions(true);
+        // Bootstrapped from `SELECT *`: no `_00_rv` on the row.
+        step(&mut circuit, Change::create("thread", "a", json!({ "title": "one" })));
+        assert_eq!(rv(&circuit, "thread:a"), None);
+        step(&mut circuit, Change::update("thread", "a", json!({ "title": "two", "_00_rv": 13 })));
+        assert_eq!(rv(&circuit, "thread:a"), Some(13));
+        // ...and get one made up when the event carries none.
+        step(&mut circuit, Change::create("thread", "b", json!({ "title": "one" })));
+        step(&mut circuit, Change::update("thread", "b", json!({ "title": "two" })));
+        assert_eq!(rv(&circuit, "thread:b"), Some(14));
+    }
+
+    #[test]
+    fn new_rows_and_merges_are_left_alone() {
+        let mut circuit = Circuit::new();
+        circuit.set_monotonic_row_versions(true);
+        step(&mut circuit, Change::create("thread", "a", json!({ "title": "one" })));
+        assert_eq!(rv(&circuit, "thread:a"), None, "a new row carries what it was given");
+        step(&mut circuit, Change::create("thread", "b", json!({ "title": "one", "_00_rv": 3 })));
+        // Merge widens a projected row; it is not a content change to refetch.
+        step(&mut circuit, Change::merge("thread", "b", json!({ "extra": "field" })));
+        assert_eq!(rv(&circuit, "thread:b"), Some(3));
+        assert_eq!(circuit.synthesized_row_versions(), 0);
     }
 }
