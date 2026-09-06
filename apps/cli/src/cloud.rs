@@ -1629,13 +1629,21 @@ pub(crate) fn write_app_release_row(
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
         .collect();
-    // DELETE + CREATE instead of UPSERT: the SSP circuit skips `_00_*` tables
-    // at bootstrap, so an UPDATE for a row the circuit has never seen carries
-    // weight 0 and no delta reaches subscribed clients. A CREATE always adds
-    // membership (+1), so the announcement is delivered even right after an
-    // SSP restart.
+    // UPSERT, deliberately not DELETE + CREATE. The old form was chosen when the
+    // SSP circuit skipped `_00_*` tables at bootstrap (an UPDATE to a row the
+    // circuit never saw carried no weight). The circuit has loaded
+    // `_00_app_release` at bootstrap for a long time now, and the DELETE was
+    // doing real damage: SurrealDB cascades a record delete over every graph
+    // edge pointing at it, i.e. every client's `_00_list_ref_*` membership edge
+    // to the release row, in the same transaction as the scheduler ingest
+    // callbacks, while the SSP is writing edges on those very tables. On
+    // 2026-09-06 that pattern coincided with a SurrealDB 3.0.5 wedge (accepts
+    // TCP, answers nothing, 0% CPU) that the control plane had to heal by
+    // recreating the database, and the delete-then-create pair also left the
+    // scheduler's replica without the row, which triggered a 15-minute full
+    // re-clone on its next start. One UPSERT is one UPDATE (or CREATE) event.
     let q = format!(
-        "DELETE _00_app_release:{app}; CREATE _00_app_release:{app} SET app = '{app}', \
+        "UPSERT _00_app_release:{app} SET app = '{app}', \
          version = '{version}', cache_bust = {cache_bust}, mandatory = {mandatory}, \
          released_at = time::now();",
         app = safe_app,
