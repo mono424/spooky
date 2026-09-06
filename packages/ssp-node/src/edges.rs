@@ -12,6 +12,7 @@
 //! RecordId. The `out`/`parent`/subquery record ids keep the existing literal
 //! interpolation (they arrive already-validated from the circuit).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -223,9 +224,17 @@ pub fn wrap_in_transaction(statements: &[String]) -> Option<String> {
     ))
 }
 
-/// Rounds a batch's leftovers are carried into the next window before they
-/// are given up on (see [`run_edge_update_service`]).
+/// Rounds a batch's leftovers ride at the front of the very next window
+/// before they are PARKED and retried on a slower cadence (see
+/// [`run_edge_update_service`]). Nothing is ever dropped.
 pub const MAX_EDGE_CARRY: u32 = 5;
+
+/// How many flush windows a parked set waits between retries. At the default
+/// `query_update_throttle_ms` window this is a few seconds: long enough that a
+/// schema apply or a stuck transaction on `_00_list_ref` has moved on, short
+/// enough that the clients waiting on those views notice nothing worse than a
+/// slow round trip.
+pub const PARKED_RETRY_WINDOWS: u32 = 20;
 
 /// Build + execute the aggregated edge transaction for a batch of deltas
 /// through the [`Db`] port, and NEVER silently drop them.
@@ -394,35 +403,19 @@ pub async fn run_edge_update_service<S>(
 ) where
     S: EdgeSink + 'static,
 {
-    // Leftovers of a flush ride at the front of the next batch. Bounded: after
-    // MAX_EDGE_CARRY consecutive rounds a delta still failing is dropped and
-    // counted, so a permanently broken statement cannot pin the queue.
-    let mut carry_rounds: u32 = 0;
-    let mut carry = |batcher: &mut Batcher, left: Vec<ViewDelta>| {
-        if left.is_empty() {
-            carry_rounds = 0;
-            return;
-        }
-        carry_rounds += 1;
-        if carry_rounds > MAX_EDGE_CARRY {
-            error!(target: "ssp::edges", views = left.len(), rounds = carry_rounds, "edge deltas dropped after carry rounds");
-            // Dropped for good: the next flush starts a fresh count.
-            carry_rounds = 0;
-            return;
-        }
-        debug!(target: "ssp::edges", views = left.len(), rounds = carry_rounds, "carrying unwritten edge deltas into the next window");
-        batcher.push_front(left);
-    };
+    let mut carry = CarryState::default();
 
     if window.is_zero() {
         let mut batcher = Batcher::new(0);
         while let Some(deltas) = rx.recv().await {
-            batcher.push(deltas);
+            carry.route(&mut batcher, deltas);
+            carry.before_flush(&mut batcher);
             if let Some(ready) = batcher.take() {
                 let left = sink.flush(ready).await;
-                carry(&mut batcher, left);
+                carry.absorb(&mut batcher, left);
             }
         }
+        carry.drain_parked(&mut batcher);
         if let Some(remainder) = batcher.take() {
             sink.flush(remainder).await;
         }
@@ -441,12 +434,17 @@ pub async fn run_edge_update_service<S>(
             tokio::select! {
                 maybe = rx.recv() => match maybe {
                     Some(deltas) => {
-                        if let Some(ready) = batcher.push(deltas) {
+                        if let Some(ready) = carry.route(&mut batcher, deltas) {
                             let left = sink.flush(ready).await;
-                            carry(&mut batcher, left);
+                            carry.absorb(&mut batcher, left);
                         }
                     }
                     None => {
+                        // Shutdown: one last attempt at everything, parked
+                        // included. Whatever still fails here is lost with
+                        // the process, and the clients' TTL re-register is
+                        // what heals that.
+                        carry.drain_parked(&mut batcher);
                         if let Some(remainder) = batcher.take() {
                             sink.flush(remainder).await;
                         }
@@ -454,9 +452,10 @@ pub async fn run_edge_update_service<S>(
                     }
                 },
                 _ = &mut sleep_fut => {
+                    carry.before_flush(&mut batcher);
                     if let Some(batch) = batcher.take() {
                         let left = sink.flush(batch).await;
-                        carry(&mut batcher, left);
+                        carry.absorb(&mut batcher, left);
                     }
                     continue 'windows;
                 }
@@ -465,6 +464,122 @@ pub async fn run_edge_update_service<S>(
     }
 
     debug!("edge-update service stopped");
+}
+
+/// What the flush loop does with deltas a flush could not write.
+///
+/// Leftovers ride at the front of the next batch for [`MAX_EDGE_CARRY`]
+/// consecutive rounds. A delta still failing after that is PARKED, not
+/// dropped: it waits [`PARKED_RETRY_WINDOWS`] windows and is then pushed back
+/// to the front of the batch, and so on until it lands. Before this, the sixth
+/// failure dropped the delta for good, and every client subscribed to that
+/// view waited on a membership edge that no longer existed anywhere: the
+/// whitepawn 1.0.26 deploy's schema apply held `_00_list_ref` in a failed
+/// transaction for a few windows, five views lost their edges, and their
+/// clients sat on a loading screen until the 10-minute TTL re-register.
+///
+/// Ordering while parked: a view's edges are a stream (a RELATE must land
+/// before the DELETE that follows it), so once a view has parked deltas, every
+/// NEWER delta for that view is parked behind them too, and the whole run is
+/// retried together, in order. Views that are not parked flow as normal, so
+/// one stuck view never delays the others.
+#[derive(Default)]
+struct CarryState {
+    /// Consecutive rounds the current leftovers have failed.
+    carry_rounds: u32,
+    /// Parked deltas, oldest first.
+    parked: Vec<ViewDelta>,
+    /// The views that own a parked delta (incoming deltas for these are
+    /// appended to `parked`, not batched).
+    parked_views: HashSet<String>,
+    /// Windows elapsed since the parked set was last retried.
+    windows_since_retry: u32,
+    /// How many times the parked set has been retried (log/telemetry only).
+    retries: u32,
+}
+
+impl CarryState {
+    /// Route incoming deltas: views with parked deltas queue behind them,
+    /// the rest go to the batcher. Returns a ready batch when the batcher's
+    /// size cap trips.
+    fn route(&mut self, batcher: &mut Batcher, deltas: Vec<ViewDelta>) -> Option<Vec<ViewDelta>> {
+        if self.parked_views.is_empty() {
+            return batcher.push(deltas);
+        }
+        let mut fresh = Vec::with_capacity(deltas.len());
+        for d in deltas {
+            if self.parked_views.contains(&d.query_id) {
+                self.parked.push(d);
+            } else {
+                fresh.push(d);
+            }
+        }
+        if fresh.is_empty() {
+            None
+        } else {
+            batcher.push(fresh)
+        }
+    }
+
+    /// Called once per window before the flush: when the parked set has waited
+    /// long enough, it goes back to the FRONT of this window's batch.
+    fn before_flush(&mut self, batcher: &mut Batcher) {
+        if self.parked.is_empty() {
+            return;
+        }
+        self.windows_since_retry += 1;
+        if self.windows_since_retry < PARKED_RETRY_WINDOWS {
+            return;
+        }
+        self.retries += 1;
+        warn!(target: "ssp::edges", views = self.parked_views.len(), deltas = self.parked.len(), retry = self.retries, "retrying parked edge deltas");
+        self.drain_parked(batcher);
+    }
+
+    /// Move every parked delta back to the front of the batch, unconditionally.
+    fn drain_parked(&mut self, batcher: &mut Batcher) {
+        if self.parked.is_empty() {
+            return;
+        }
+        self.windows_since_retry = 0;
+        self.parked_views.clear();
+        let parked = std::mem::take(&mut self.parked);
+        batcher.push_front(parked);
+    }
+
+    /// Take a flush's leftovers: carry them into the next round, or park them
+    /// once they have failed [`MAX_EDGE_CARRY`] rounds in a row.
+    fn absorb(&mut self, batcher: &mut Batcher, left: Vec<ViewDelta>) {
+        if left.is_empty() {
+            if self.carry_rounds > 0 && self.retries > 0 {
+                debug!(target: "ssp::edges", retries = self.retries, "previously parked edge deltas landed");
+            }
+            self.carry_rounds = 0;
+            return;
+        }
+        self.carry_rounds += 1;
+        if self.carry_rounds <= MAX_EDGE_CARRY {
+            debug!(target: "ssp::edges", views = left.len(), rounds = self.carry_rounds, "carrying unwritten edge deltas into the next window");
+            batcher.push_front(left);
+            return;
+        }
+        // Park: the next flushes proceed without these, and they come back at
+        // the front of a batch every PARKED_RETRY_WINDOWS windows.
+        self.carry_rounds = 0;
+        self.windows_since_retry = 0;
+        for d in &left {
+            self.parked_views.insert(d.query_id.clone());
+        }
+        error!(
+            target: "ssp::edges",
+            views = self.parked_views.len(),
+            deltas = left.len() + self.parked.len(),
+            every_windows = PARKED_RETRY_WINDOWS,
+            "edge deltas parked after carry rounds; they will be retried until they land"
+        );
+        // Oldest first: anything already parked stays ahead of this round's.
+        self.parked.extend(left);
+    }
 }
 
 /// Real [`EdgeSink`]: builds + writes the aggregated transaction via the
@@ -578,5 +693,131 @@ mod tests {
         assert!(q.starts_with("BEGIN TRANSACTION;"));
         assert!(q.contains("A;\nB"));
         assert!(q.trim_end().ends_with("COMMIT TRANSACTION;"));
+    }
+
+    // ---- carry / park policy -------------------------------------------
+
+    use crate::ports::TimerKind;
+    use std::sync::Mutex;
+
+    struct NoopScheduler;
+    #[async_trait::async_trait]
+    impl Scheduler for NoopScheduler {
+        async fn schedule(&self, _kind: TimerKind, _at_epoch_ms: u64) {}
+        async fn cancel(&self, _kind: &TimerKind) {}
+        async fn sleep(&self, dur: Duration) {
+            tokio::time::sleep(dur).await
+        }
+    }
+
+    /// A sink that fails its first `fail_flushes` flushes wholesale and then
+    /// writes everything, recording `(query_id, first addition)` per delta in
+    /// the order written.
+    struct FlakySink {
+        fail_flushes: u32,
+        calls: Arc<Mutex<u32>>,
+        written: Arc<Mutex<Vec<(String, String)>>>,
+    }
+    impl EdgeSink for FlakySink {
+        async fn flush(&self, deltas: Vec<ViewDelta>) -> Vec<ViewDelta> {
+            let call = {
+                let mut c = self.calls.lock().unwrap();
+                *c += 1;
+                *c
+            };
+            if call <= self.fail_flushes {
+                return deltas;
+            }
+            let mut w = self.written.lock().unwrap();
+            for d in &deltas {
+                w.push((d.query_id.clone(), d.additions.first().cloned().unwrap_or_default()));
+            }
+            Vec::new()
+        }
+    }
+
+    fn add_delta(query_id: &str, record: &str) -> ViewDelta {
+        let mut d = delta(query_id, "user:a");
+        d.additions = vec![record.to_string()];
+        d
+    }
+
+    #[tokio::test]
+    async fn a_delta_that_outlives_the_carry_budget_is_parked_and_still_lands() {
+        let calls = Arc::new(Mutex::new(0));
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = FlakySink {
+            // Carry budget is MAX_EDGE_CARRY rounds after the first failure;
+            // fail well past it so the delta is parked before the sink heals.
+            fail_flushes: MAX_EDGE_CARRY + 3,
+            calls: Arc::clone(&calls),
+            written: Arc::clone(&written),
+        };
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<ViewDelta>>();
+        let svc = tokio::spawn(run_edge_update_service(
+            rx,
+            sink,
+            Arc::new(NoopScheduler),
+            Duration::from_millis(1),
+            0,
+        ));
+
+        tx.send(vec![add_delta("view:stuck", "row:1")]).unwrap();
+        // A parked set retries after PARKED_RETRY_WINDOWS windows of 1ms; give
+        // it a few of those, then keep the loop alive with unrelated traffic
+        // so the windows actually tick.
+        for i in 0..(PARKED_RETRY_WINDOWS * 3) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            if i % 7 == 0 {
+                tx.send(vec![add_delta("view:other", &format!("row:{i}"))]).unwrap();
+            }
+        }
+        drop(tx);
+        svc.await.unwrap();
+
+        let w = written.lock().unwrap();
+        let stuck: Vec<_> = w.iter().filter(|(q, _)| q == "view:stuck").collect();
+        assert_eq!(stuck.len(), 1, "the parked delta must be written exactly once: {w:?}");
+        assert!(
+            *calls.lock().unwrap() > MAX_EDGE_CARRY + 3,
+            "the sink must have been retried past its failing flushes"
+        );
+    }
+
+    #[tokio::test]
+    async fn newer_deltas_for_a_parked_view_land_after_the_parked_ones_in_order() {
+        let calls = Arc::new(Mutex::new(0));
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = FlakySink {
+            fail_flushes: MAX_EDGE_CARRY + 1,
+            calls: Arc::clone(&calls),
+            written: Arc::clone(&written),
+        };
+        let (tx, rx) = mpsc::unbounded_channel::<Vec<ViewDelta>>();
+        let svc = tokio::spawn(run_edge_update_service(
+            rx,
+            sink,
+            Arc::new(NoopScheduler),
+            Duration::from_millis(1),
+            0,
+        ));
+
+        tx.send(vec![add_delta("view:v", "row:first")]).unwrap();
+        // Let it fail through the carry budget and get parked.
+        tokio::time::sleep(Duration::from_millis((MAX_EDGE_CARRY as u64 + 4) * 3)).await;
+        // While parked, a newer delta for the same view and one for another
+        // view arrive. The other view must not wait; the same view must queue
+        // behind the parked delta.
+        tx.send(vec![add_delta("view:v", "row:second"), add_delta("view:free", "row:x")]).unwrap();
+        tokio::time::sleep(Duration::from_millis((PARKED_RETRY_WINDOWS as u64 + 5) * 3)).await;
+        drop(tx);
+        svc.await.unwrap();
+
+        let w = written.lock().unwrap();
+        let v: Vec<&str> = w.iter().filter(|(q, _)| q == "view:v").map(|(_, r)| r.as_str()).collect();
+        assert_eq!(v, vec!["row:first", "row:second"], "parked view must land in order: {w:?}");
+        let free_pos = w.iter().position(|(q, _)| q == "view:free").expect("free view written");
+        let first_pos = w.iter().position(|(q, r)| q == "view:v" && r == "row:first").unwrap();
+        assert!(free_pos < first_pos, "an unparked view must not wait for the parked one: {w:?}");
     }
 }
