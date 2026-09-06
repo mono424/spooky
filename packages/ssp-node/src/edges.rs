@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::db_retry::query_retrying;
 
@@ -238,12 +238,23 @@ pub fn wrap_in_transaction(statements: &[String]) -> Option<String> {
 /// [`run_edge_update_service`]). Nothing is ever dropped.
 pub const MAX_EDGE_CARRY: u32 = 5;
 
-/// How many flush windows a parked set waits between retries. At the default
-/// `query_update_throttle_ms` window this is a few seconds: long enough that a
-/// schema apply or a stuck transaction on `_00_list_ref` has moved on, short
-/// enough that the clients waiting on those views notice nothing worse than a
-/// slow round trip.
-pub const PARKED_RETRY_WINDOWS: u32 = 20;
+/// How long a parked set waits between retries. Long enough that a schema
+/// apply or a stuck transaction on `_00_list_ref` has moved on, short enough
+/// that the clients waiting on those views notice nothing worse than a slow
+/// round trip. Expressed in flush windows at runtime (see
+/// [`parked_retry_every`]) so the loop stays free of wall-clock reads, which
+/// the Durable Object build does not have.
+pub const PARKED_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
+/// [`PARKED_RETRY_INTERVAL`] in flush windows of `window`. A zero window
+/// (flush on every push) counts flushes instead.
+pub fn parked_retry_every(window: Duration) -> u32 {
+    if window.is_zero() {
+        return 50;
+    }
+    let windows = PARKED_RETRY_INTERVAL.as_millis() / window.as_millis().max(1);
+    (windows as u32).max(1)
+}
 
 /// Build + execute the aggregated edge transaction for a batch of deltas
 /// through the [`Db`] port, and NEVER silently drop them.
@@ -318,8 +329,38 @@ pub async fn write_deltas_resilient(
             leftovers
         }
         Err(e) => {
+            // A view the client has since released (TTL sweep, unsubscribe,
+            // a boot-time re-registration of a row the sweep then removed)
+            // has no `_00_query` record to relate from, so its deltas can
+            // never land and nobody is waiting for them. Those are dropped
+            // here, deliberately, instead of being carried forever.
+            if view_is_gone(db, &deltas[0].query_id).await {
+                telemetry.counter("edge_deltas_orphaned", 1);
+                info!(target: "ssp::edges", view_id = %deltas[0].query_id, operations = op_count, "Edge delta dropped: its view is no longer registered");
+                return Vec::new();
+            }
             error!(target: "ssp::edges", error = %e, view_id = %deltas[0].query_id, operations = op_count, "Edge delta not written after retries");
             deltas
+        }
+    }
+}
+
+/// Whether the `_00_query` record behind a view id is gone. Only a definite
+/// "not there" answers true: a query error is no evidence either way, and the
+/// caller then keeps carrying the delta.
+async fn view_is_gone(db: &dyn Db, query_id: &str) -> bool {
+    let key = query_id.strip_prefix("_00_query:").unwrap_or(query_id);
+    match db
+        .query(
+            "SELECT VALUE id FROM ONLY type::record('_00_query', $key)",
+            &[("key", json!(key))],
+        )
+        .await
+    {
+        Ok(rows) => rows.first().map(|v| v.is_null()).unwrap_or(true),
+        Err(e) => {
+            debug!(target: "ssp::edges", error = %e, view_id = %query_id, "Could not check whether the view still exists; carrying its delta");
+            false
         }
     }
 }
@@ -416,7 +457,7 @@ pub trait EdgeSink {
 /// `max_batch` is hit). The window is timed through the [`Scheduler`] port —
 /// the loop is otherwise channel receives (`tokio::sync`), so it is portable.
 pub async fn run_edge_update_service<S>(
-    mut rx: mpsc::UnboundedReceiver<Vec<ViewDelta>>,
+    rx: mpsc::UnboundedReceiver<Vec<ViewDelta>>,
     sink: S,
     scheduler: Arc<dyn Scheduler>,
     window: Duration,
@@ -424,7 +465,24 @@ pub async fn run_edge_update_service<S>(
 ) where
     S: EdgeSink + 'static,
 {
-    let mut carry = CarryState::default();
+    let every = parked_retry_every(window);
+    run_edge_update_service_with(rx, sink, scheduler, window, max_batch, every).await
+}
+
+/// [`run_edge_update_service`] with an explicit parked-retry cadence (in
+/// flush windows). Public for tests, which want a short cadence at a short
+/// window without waiting out [`PARKED_RETRY_INTERVAL`].
+pub async fn run_edge_update_service_with<S>(
+    mut rx: mpsc::UnboundedReceiver<Vec<ViewDelta>>,
+    sink: S,
+    scheduler: Arc<dyn Scheduler>,
+    window: Duration,
+    max_batch: usize,
+    parked_retry_every: u32,
+) where
+    S: EdgeSink + 'static,
+{
+    let mut carry = CarryState::new(parked_retry_every);
 
     if window.is_zero() {
         let mut batcher = Batcher::new(0);
@@ -491,21 +549,25 @@ pub async fn run_edge_update_service<S>(
 ///
 /// Leftovers ride at the front of the next batch for [`MAX_EDGE_CARRY`]
 /// consecutive rounds. A delta still failing after that is PARKED, not
-/// dropped: it waits [`PARKED_RETRY_WINDOWS`] windows and is then pushed back
-/// to the front of the batch, and so on until it lands. Before this, the sixth
+/// dropped: it waits [`PARKED_RETRY_INTERVAL`] and is then pushed back to the
+/// front of the batch, and so on until it lands. Before this, the sixth
 /// failure dropped the delta for good, and every client subscribed to that
 /// view waited on a membership edge that no longer existed anywhere: the
 /// whitepawn 1.0.26 deploy's schema apply held `_00_list_ref` in a failed
 /// transaction for a few windows, five views lost their edges, and their
 /// clients sat on a loading screen until the 10-minute TTL re-register.
 ///
+/// The one legitimate drop is a view that no longer exists; the sink decides
+/// that (see `view_is_gone`), so it never reaches here as a leftover.
+///
 /// Ordering while parked: a view's edges are a stream (a RELATE must land
 /// before the DELETE that follows it), so once a view has parked deltas, every
 /// NEWER delta for that view is parked behind them too, and the whole run is
 /// retried together, in order. Views that are not parked flow as normal, so
 /// one stuck view never delays the others.
-#[derive(Default)]
 struct CarryState {
+    /// Flush windows between retries of the parked set.
+    retry_every: u32,
     /// Consecutive rounds the current leftovers have failed.
     carry_rounds: u32,
     /// Parked deltas, oldest first.
@@ -520,6 +582,17 @@ struct CarryState {
 }
 
 impl CarryState {
+    fn new(retry_every: u32) -> Self {
+        Self {
+            retry_every: retry_every.max(1),
+            carry_rounds: 0,
+            parked: Vec::new(),
+            parked_views: HashSet::new(),
+            windows_since_retry: 0,
+            retries: 0,
+        }
+    }
+
     /// Route incoming deltas: views with parked deltas queue behind them,
     /// the rest go to the batcher. Returns a ready batch when the batcher's
     /// size cap trips.
@@ -549,11 +622,17 @@ impl CarryState {
             return;
         }
         self.windows_since_retry += 1;
-        if self.windows_since_retry < PARKED_RETRY_WINDOWS {
+        if self.windows_since_retry < self.retry_every {
             return;
         }
         self.retries += 1;
-        warn!(target: "ssp::edges", views = self.parked_views.len(), deltas = self.parked.len(), retry = self.retries, "retrying parked edge deltas");
+        // Loud once a minute at the default cadence, quiet in between: a set
+        // stuck for a long time should be visible, not fill the log.
+        if self.retries % 12 == 1 {
+            warn!(target: "ssp::edges", views = self.parked_views.len(), deltas = self.parked.len(), retry = self.retries, "retrying parked edge deltas");
+        } else {
+            debug!(target: "ssp::edges", views = self.parked_views.len(), deltas = self.parked.len(), retry = self.retries, "retrying parked edge deltas");
+        }
         self.drain_parked(batcher);
     }
 
@@ -591,13 +670,23 @@ impl CarryState {
         for d in &left {
             self.parked_views.insert(d.query_id.clone());
         }
-        error!(
-            target: "ssp::edges",
-            views = self.parked_views.len(),
-            deltas = left.len() + self.parked.len(),
-            every_windows = PARKED_RETRY_WINDOWS,
-            "edge deltas parked after carry rounds; they will be retried until they land"
-        );
+        if self.retries == 0 {
+            error!(
+                target: "ssp::edges",
+                views = self.parked_views.len(),
+                deltas = left.len() + self.parked.len(),
+                every_windows = self.retry_every,
+                "edge deltas parked after carry rounds; they will be retried until they land"
+            );
+        } else {
+            debug!(
+                target: "ssp::edges",
+                views = self.parked_views.len(),
+                deltas = left.len() + self.parked.len(),
+                retries = self.retries,
+                "edge deltas parked again after a failed retry"
+            );
+        }
         // Oldest first: anything already parked stays ahead of this round's.
         self.parked.extend(left);
     }
@@ -734,8 +823,84 @@ mod tests {
 
     // ---- carry / park policy -------------------------------------------
 
-    use crate::ports::TimerKind;
+    use crate::ports::{DbError, TimerKind};
     use std::sync::Mutex;
+
+    /// Parked-retry cadence for the loop tests: short, so a 1ms window retries
+    /// within milliseconds instead of waiting out PARKED_RETRY_INTERVAL.
+    const TEST_RETRY_WINDOWS: u32 = 20;
+
+    #[test]
+    fn parked_retry_cadence_follows_the_window() {
+        assert_eq!(parked_retry_every(Duration::from_millis(100)), 50);
+        assert_eq!(parked_retry_every(Duration::from_millis(1000)), 5);
+        // Never zero, even for a window longer than the interval.
+        assert_eq!(parked_retry_every(Duration::from_secs(30)), 1);
+        assert_eq!(parked_retry_every(Duration::ZERO), 50);
+    }
+
+    /// A `Db` that answers the view-existence probe with a fixed value.
+    struct ViewProbeDb {
+        exists: bool,
+        fail: bool,
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+    #[async_trait::async_trait]
+    impl Db for ViewProbeDb {
+        async fn query(
+            &self,
+            surql: &str,
+            _binds: &[(&str, Value)],
+        ) -> Result<Vec<Value>, DbError> {
+            self.calls.lock().unwrap().push(surql.to_string());
+            if self.fail {
+                return Err(DbError::Transport("down".into()));
+            }
+            Ok(vec![if self.exists {
+                json!("_00_query:abc")
+            } else {
+                Value::Null
+            }])
+        }
+        async fn version(&self) -> Result<String, DbError> {
+            Ok("test".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn view_is_gone_only_on_a_definite_miss() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let gone = ViewProbeDb {
+            exists: false,
+            fail: false,
+            calls: Arc::clone(&calls),
+        };
+        assert!(view_is_gone(&gone, "_00_query:abc").await);
+        assert!(
+            view_is_gone(&gone, "abc").await,
+            "a bare key is accepted too"
+        );
+        let present = ViewProbeDb {
+            exists: true,
+            fail: false,
+            calls: Arc::clone(&calls),
+        };
+        assert!(!view_is_gone(&present, "abc").await);
+        let down = ViewProbeDb {
+            exists: false,
+            fail: true,
+            calls: Arc::clone(&calls),
+        };
+        assert!(
+            !view_is_gone(&down, "abc").await,
+            "a failed probe is not evidence the view is gone"
+        );
+        assert!(calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|q| q.contains("type::record('_00_query', $key)")));
+    }
 
     struct NoopScheduler;
     #[async_trait::async_trait]
@@ -794,19 +959,20 @@ mod tests {
             written: Arc::clone(&written),
         };
         let (tx, rx) = mpsc::unbounded_channel::<Vec<ViewDelta>>();
-        let svc = tokio::spawn(run_edge_update_service(
+        let svc = tokio::spawn(run_edge_update_service_with(
             rx,
             sink,
             Arc::new(NoopScheduler),
             Duration::from_millis(1),
             0,
+            TEST_RETRY_WINDOWS,
         ));
 
         tx.send(vec![add_delta("view:stuck", "row:1")]).unwrap();
         // A parked set retries after PARKED_RETRY_WINDOWS windows of 1ms; give
         // it a few of those, then keep the loop alive with unrelated traffic
         // so the windows actually tick.
-        for i in 0..(PARKED_RETRY_WINDOWS * 3) {
+        for i in 0..(TEST_RETRY_WINDOWS * 3) {
             tokio::time::sleep(Duration::from_millis(2)).await;
             if i % 7 == 0 {
                 tx.send(vec![add_delta("view:other", &format!("row:{i}"))])
@@ -839,12 +1005,13 @@ mod tests {
             written: Arc::clone(&written),
         };
         let (tx, rx) = mpsc::unbounded_channel::<Vec<ViewDelta>>();
-        let svc = tokio::spawn(run_edge_update_service(
+        let svc = tokio::spawn(run_edge_update_service_with(
             rx,
             sink,
             Arc::new(NoopScheduler),
             Duration::from_millis(1),
             0,
+            TEST_RETRY_WINDOWS,
         ));
 
         tx.send(vec![add_delta("view:v", "row:first")]).unwrap();
@@ -858,7 +1025,7 @@ mod tests {
             add_delta("view:free", "row:x"),
         ])
         .unwrap();
-        tokio::time::sleep(Duration::from_millis((PARKED_RETRY_WINDOWS as u64 + 5) * 3)).await;
+        tokio::time::sleep(Duration::from_millis((TEST_RETRY_WINDOWS as u64 + 5) * 3)).await;
         drop(tx);
         svc.await.unwrap();
 
