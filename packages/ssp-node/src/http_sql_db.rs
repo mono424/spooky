@@ -73,8 +73,10 @@ impl HttpSqlDb {
     }
 
     fn request(&self, surql: &str, binds: &[(&str, Value)]) -> OutboundRequest {
-        let vars: Map<String, Value> =
-            binds.iter().map(|(k, v)| ((*k).to_string(), v.clone())).collect();
+        let vars: Map<String, Value> = binds
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), v.clone()))
+            .collect();
         let envelope = json!({
             "id": 1,
             "method": "query",
@@ -123,37 +125,67 @@ fn parse_rpc_response(body: &str) -> Result<Vec<Value>, DbError> {
         .and_then(|r| r.as_array())
         .ok_or_else(|| DbError::Query("response missing `result` array".to_string()))?;
 
+    // Inside a transaction SurrealDB reports the statements BEFORE the one
+    // that failed as "The query was not executed due to a failed transaction"
+    // (they were rolled back) and puts the real error on the failing
+    // statement itself, which comes later in the array. Returning the first
+    // ERR therefore hid every real cause behind that generic line for as long
+    // as this parser existed. Prefer the first SPECIFIC error; fall back to
+    // the first ERR only when none of them says anything else.
+    let mut first_err: Option<String> = None;
+    let mut specific_err: Option<String> = None;
     let mut out = Vec::with_capacity(statements.len());
     for st in statements {
         let status = st.get("status").and_then(|s| s.as_str()).unwrap_or("OK");
         let result = st.get("result").cloned().unwrap_or(Value::Null);
         if status != "OK" {
-            let msg = result.as_str().map(str::to_string).unwrap_or_else(|| result.to_string());
-            return Err(DbError::Query(msg));
+            let msg = result
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| result.to_string());
+            if first_err.is_none() {
+                first_err = Some(msg.clone());
+            }
+            if specific_err.is_none() && !is_generic_tx_error(&msg) {
+                specific_err = Some(msg);
+            }
+            continue;
         }
         out.push(result);
     }
+    if let Some(msg) = specific_err.or(first_err) {
+        return Err(DbError::Query(msg));
+    }
     Ok(out)
+}
+
+/// The per-statement message SurrealDB gives every statement a transaction
+/// rolled back; it carries no information about what actually failed.
+fn is_generic_tx_error(msg: &str) -> bool {
+    msg.starts_with("The query was not executed due to a failed transaction")
+        || msg.starts_with("The query was not executed due to a cancelled transaction")
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 impl Db for HttpSqlDb {
-    async fn query(
-        &self,
-        surql: &str,
-        binds: &[(&str, Value)],
-    ) -> Result<Vec<Value>, DbError> {
+    async fn query(&self, surql: &str, binds: &[(&str, Value)]) -> Result<Vec<Value>, DbError> {
         let resp = self
             .http
             .send(self.request(surql, binds), None)
             .await
             .map_err(|e| DbError::Transport(e.to_string()))?;
         if resp.status == 401 || resp.status == 403 {
-            return Err(DbError::Auth(format!("HTTP {}: {}", resp.status, resp.body)));
+            return Err(DbError::Auth(format!(
+                "HTTP {}: {}",
+                resp.status, resp.body
+            )));
         }
         if resp.status >= 400 {
-            return Err(DbError::Transport(format!("HTTP {}: {}", resp.status, resp.body)));
+            return Err(DbError::Transport(format!(
+                "HTTP {}: {}",
+                resp.status, resp.body
+            )));
         }
         parse_rpc_response(&resp.body)
     }
@@ -192,6 +224,34 @@ mod tests {
         ]}"#;
         let err = parse_rpc_response(body).unwrap_err();
         assert!(matches!(err, DbError::Query(m) if m.contains("does not exist")));
+    }
+
+    #[test]
+    fn transaction_error_reports_the_failing_statement_not_the_rolled_back_ones() {
+        // Exactly what 3.0.5 returned for a 4-statement edge transaction whose
+        // DELETE was the broken one: the earlier statements are marked as not
+        // executed, the real message sits on the last entry.
+        let body = r#"{"id":1,"result":[
+            {"result":null,"status":"OK","time":"0ms"},
+            {"result":"The query was not executed due to a failed transaction","status":"ERR","time":"0ms"},
+            {"result":"The query was not executed due to a failed transaction","status":"ERR","time":"0ms"},
+            {"result":"Cannot execute DELETE statement using value: NONE","status":"ERR","time":"1ms"}
+        ]}"#;
+        let err = parse_rpc_response(body).unwrap_err();
+        assert!(
+            matches!(err, DbError::Query(ref m) if m.contains("Cannot execute DELETE")),
+            "{err:?}"
+        );
+
+        // Only generic entries: fall back to the first one rather than nothing.
+        let body = r#"{"id":1,"result":[
+            {"result":"The query was not executed due to a failed transaction","status":"ERR","time":"0ms"}
+        ]}"#;
+        let err = parse_rpc_response(body).unwrap_err();
+        assert!(
+            matches!(err, DbError::Query(ref m) if m.contains("failed transaction")),
+            "{err:?}"
+        );
     }
 
     #[test]

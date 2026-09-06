@@ -167,8 +167,17 @@ pub fn build_edge_batch(
                 continue;
             }
             batch.deleted += 1;
+            // Resolve the edge through the graph index, then delete by id.
+            // `DELETE $from->edge WHERE out = x` (a filtered graph-path
+            // delete) fails on SurrealDB 3.0.x with "Cannot execute DELETE
+            // statement using value: NONE": every eviction from a full
+            // window (`ORDER BY … LIMIT 30` with a 31st row) failed its whole
+            // edge transaction, so the client never saw its own new message in
+            // that view and dropped it after the settled-write grace. The
+            // unfiltered `DELETE $from->edge` still works and is used as-is
+            // by the unregister and TTL paths.
             batch.statements.push(format!(
-                "DELETE {from}->{list_ref} WHERE out = {out}",
+                "DELETE (SELECT VALUE id FROM {from}->{list_ref} WHERE out = {out})",
                 from = from,
                 list_ref = list_ref,
                 out = id,
@@ -207,8 +216,10 @@ pub fn build_edge_batch(
                 }
                 SubqueryOp::Remove => {
                     batch.deleted += 1;
+                    // Same subquery form as the primary removal above (see
+                    // the note there).
                     batch.statements.push(format!(
-                        "DELETE {from}->{list_ref} WHERE out = {id}",
+                        "DELETE (SELECT VALUE id FROM {from}->{list_ref} WHERE out = {id})",
                         from = from,
                         list_ref = list_ref,
                         id = item.id,
@@ -784,6 +795,39 @@ mod tests {
         assert_eq!(b.bindings[1], ("from1key".to_string(), "b".to_string()));
         assert_eq!(b.created, 1);
         assert_eq!(b.deleted, 1);
+    }
+
+    #[test]
+    fn removal_deletes_by_resolved_edge_id_not_by_filtered_graph_path() {
+        // `DELETE $from->edge WHERE out = x` is rejected by SurrealDB 3.0.x
+        // ("Cannot execute DELETE statement using value: NONE"); the removal
+        // must resolve the edge id through the graph first.
+        let mut d = delta("view:w", "user:a");
+        d.removals = vec!["message:old".to_string()];
+        d.subquery_items = vec![SubqueryDeltaItem {
+            id: "child:gone".to_string(),
+            parent_key: "parent:1".to_string(),
+            alias: "kids".to_string(),
+            op: SubqueryOp::Remove,
+        }];
+        let b = build_edge_batch(&[&d], RefMode::Single, &ConstV(1));
+        assert_eq!(b.deleted, 2);
+        let deletes: Vec<&String> = b
+            .statements
+            .iter()
+            .filter(|s| s.starts_with("DELETE"))
+            .collect();
+        assert_eq!(deletes.len(), 2);
+        for stmt in deletes {
+            assert!(
+                stmt.starts_with("DELETE (SELECT VALUE id FROM $from0->_00_list_ref WHERE out = "),
+                "{stmt}"
+            );
+            assert!(
+                !stmt.contains("DELETE $from0->"),
+                "filtered graph-path delete must not be emitted: {stmt}"
+            );
+        }
     }
 
     #[test]
