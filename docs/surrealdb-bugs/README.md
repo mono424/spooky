@@ -19,3 +19,4 @@ We currently target `surrealdb/surrealdb:v3.1.0-beta.3` for the server and `surr
 - [select-from-param-subquery-drops-star.md](./select-from-param-subquery-drops-star.md) — `SELECT *, (subquery) FROM $param` drops the `*` fields when `$param` is a bound RecordId.
 - [ws-row-cache-stale-after-update.md](./ws-row-cache-stale-after-update.md) — over the WebSocket SDK, `SELECT * FROM record:id` returns a stale row content after another connection UPDATEd it.
 - [live-deref-permission-rules.md](./live-deref-permission-rules.md) — LIVE feeds misfire when the permission rule dereferences a related record (upstream issues #3602 and #4026).
+- [unique-index-partial-after-overwrite-rebuild.md](./unique-index-partial-after-overwrite-rebuild.md) — a `DEFINE INDEX OVERWRITE` rebuild cut off by a request timeout leaves the unique index partially populated; `_00_version` lookups then stamp `_00_rv` NONE and peers never refetch.
