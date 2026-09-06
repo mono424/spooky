@@ -192,6 +192,28 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
   }
 
   /**
+   * Hold statements while a connect is in flight.
+   *
+   * `connect()` opens the socket, then selects the namespace/database, then
+   * authenticates - three round trips. The SDK considers the connection ready
+   * after the first, so a query queued during the other two ran on a socket
+   * with no namespace ("Specify a namespace to use") or, worse, no identity.
+   * Seen 2026-09-06 after the supervisor rebuilt a socket: a collection
+   * recount failed with exactly that error. Waiting on the in-flight connect
+   * costs nothing when no connect is running; a failed connect is not
+   * swallowed here - the query then fails on its own, as before.
+   */
+  protected override async beforeQuery(): Promise<void> {
+    const inflight = this.connecting;
+    if (!inflight) return;
+    try {
+      await inflight;
+    } catch {
+      // The query that follows reports the failure itself.
+    }
+  }
+
+  /**
    * Open (or re-open) the remote connection.
    *
    * Safe to call repeatedly: concurrent calls share the in-flight attempt, and

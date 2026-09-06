@@ -60,11 +60,20 @@ export abstract class AbstractDatabaseService {
    * each link: on expiry this promise rejects and the chain moves on, even
    * though the underlying RPC is still parked in the SDK's pending map.
    */
+  /**
+   * Hook run inside the query queue, right before a statement is sent. The
+   * remote service uses it to hold statements while a connect is in flight,
+   * so a query never runs on a socket that is open but has not had its
+   * namespace and token applied yet. The default does nothing.
+   */
+  protected async beforeQuery(): Promise<void> {}
+
   async query<T extends unknown[]>(query: string, vars?: Record<string, unknown>): Promise<T> {
     return new Promise((resolve, reject) => {
       this.queryQueue = this.queryQueue
         // oxlint-disable-next-line promise/always-return
         .then(async () => {
+          await this.beforeQuery();
           const startTime = performance.now();
           try {
             this.logger.debug(
