@@ -126,6 +126,9 @@ pub struct ReconnectingDb {
     /// Poked by [`ReconnectingDb::note_error`] so a dead session is replaced on
     /// the next data-path failure instead of waiting out the probe interval.
     wake: tokio::sync::Notify,
+    /// Consecutive probe failures that were NOT a dead session (transport
+    /// errors). See [`TRANSPORT_FAILURES_BEFORE_RECONNECT`].
+    transport_failures: std::sync::atomic::AtomicU32,
 }
 
 impl ReconnectingDb {
@@ -135,6 +138,7 @@ impl ReconnectingDb {
             current: std::sync::RwLock::new(std::sync::Arc::new(db)),
             config,
             wake: tokio::sync::Notify::new(),
+            transport_failures: std::sync::atomic::AtomicU32::new(0),
         })
     }
 
@@ -201,7 +205,11 @@ impl ReconnectingDb {
         )
         .await
         {
-            Ok(Ok(_)) => return true,
+            Ok(Ok(_)) => {
+                self.transport_failures
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                return true;
+            }
             Ok(Err(e)) => e.to_string(),
             Err(_) => {
                 tracing::warn!(
@@ -216,17 +224,41 @@ impl ReconnectingDb {
         };
 
         if !err.is_empty() && !is_dead_session_error(&err) {
-            // SurrealDB is unreachable or erroring for some other reason. A new
-            // connection would fail the same way, and the existing session may
-            // still be perfectly valid once the blip passes — leave it alone.
-            tracing::warn!(error = %err, "SurrealDB re-signin failed; retrying next tick");
-            return false;
+            // SurrealDB is unreachable or erroring for some other reason. For a
+            // blip the existing session may still be perfectly valid once it
+            // passes, so the first few failures leave it alone. But not
+            // forever: on 2026-09-06 the control plane recreated the database
+            // container at a new address, and this handle — pinned to the old
+            // one — failed every probe with a transport error for 35 minutes
+            // while a fresh connection to the same name worked instantly. A
+            // sustained transport failure is exactly the case where a new
+            // connection (and a fresh name resolution) is the only thing that
+            // can help, and if the server really is down the reconnect fails
+            // within its own deadline and we keep the old handle anyway.
+            let streak = self
+                .transport_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            if !transport_streak_exhausted(streak) {
+                tracing::warn!(
+                    error = %err,
+                    streak,
+                    limit = TRANSPORT_FAILURES_BEFORE_RECONNECT,
+                    "SurrealDB re-signin failed; retrying next tick"
+                );
+                return false;
+            }
+            tracing::warn!(
+                error = %err,
+                streak,
+                "SurrealDB unreachable through this handle for consecutive probes (server moved?); reconnecting"
+            );
+        } else {
+            tracing::warn!(
+                error = %err,
+                "SurrealDB session is gone (server restarted?); reconnecting"
+            );
         }
-
-        tracing::warn!(
-            error = %err,
-            "SurrealDB session is gone (server restarted?); reconnecting"
-        );
 
         // The reconnect gets a deadline for the same reason the probe does —
         // `connect_http` performs its own signin and can hang just as easily,
@@ -249,6 +281,8 @@ impl ReconnectingDb {
                     .current
                     .write()
                     .expect("ReconnectingDb lock poisoned") = std::sync::Arc::new(fresh);
+                self.transport_failures
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
                 tracing::info!("Reconnected to SurrealDB with a fresh session");
                 true
             }
@@ -320,6 +354,18 @@ pub const RESIGNIN_INTERVAL_SECS: u64 = 60;
 /// the recovery loop forever.
 const REFRESH_PROBE_TIMEOUT_SECS: u64 = 10;
 
+/// Consecutive transport-level probe failures after which [`ReconnectingDb::refresh`]
+/// replaces the handle instead of waiting for a dead-session error. Three
+/// ticks: long enough that a restarting server (a few seconds) never churns
+/// the connection, short enough that a database that moved to a new address
+/// is picked up within minutes rather than at the next process restart.
+const TRANSPORT_FAILURES_BEFORE_RECONNECT: u32 = 3;
+
+/// Whether `streak` consecutive transport failures justify a reconnect.
+fn transport_streak_exhausted(streak: u32) -> bool {
+    streak >= TRANSPORT_FAILURES_BEFORE_RECONNECT
+}
+
 /// Deadline for building the replacement handle. `connect_http` signs in too,
 /// so it can hang exactly like the probe it is replacing.
 const RECONNECT_TIMEOUT_SECS: u64 = 15;
@@ -329,6 +375,15 @@ mod tests {
     use super::normalize_url;
 
     use super::is_dead_session_error;
+    use super::{transport_streak_exhausted, TRANSPORT_FAILURES_BEFORE_RECONNECT};
+
+    #[test]
+    fn transport_failures_reconnect_only_after_the_streak() {
+        assert!(!transport_streak_exhausted(1), "a single blip keeps the session");
+        assert!(!transport_streak_exhausted(TRANSPORT_FAILURES_BEFORE_RECONNECT - 1));
+        assert!(transport_streak_exhausted(TRANSPORT_FAILURES_BEFORE_RECONNECT));
+        assert!(transport_streak_exhausted(TRANSPORT_FAILURES_BEFORE_RECONNECT + 5));
+    }
 
     /// The three strings below are copied verbatim out of a production incident
     /// where SurrealDB restarted at 19:58 and the SSP + scheduler stayed broken
