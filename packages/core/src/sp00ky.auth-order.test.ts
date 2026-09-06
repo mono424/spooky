@@ -63,6 +63,26 @@ describe('Sp00kyClient.auth.subscribe ordering invariant', () => {
     }
   });
 
+  it('persists the server-verified user row only after the bucket switch', () => {
+    // `persistVerifiedUser` writes `auth.currentUser` (the row `check()` got
+    // from `SELECT * FROM ONLY $auth.id`) into the local store so the app's
+    // `user` query stops rendering a stale, pre-verification body. It must run
+    // AFTER `ensureLocalBucket`, or the row lands in the previous user's
+    // bucket on a sign-in that switches accounts.
+    const match = source.match(
+      /this\.auth\.subscribe\(\s*async\s*\(\s*userId\s*[^)]*\)\s*=>\s*\{([\s\S]*?)\n {6}\}\s*\)/
+    );
+    expect(match).not.toBeNull();
+    const stripped = match![1]
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n');
+    const bucketIdx = stripped.indexOf('this.ensureLocalBucket(userId)');
+    const persistIdx = stripped.indexOf('this.persistVerifiedUser()');
+    expect(persistIdx, 'persistVerifiedUser() must be called from the auth subscriber').toBeGreaterThanOrEqual(0);
+    expect(persistIdx).toBeGreaterThan(bucketIdx);
+  });
+
   it('writes the boot-bucket hint synchronously and switches buckets before sync.setCurrentUserId', () => {
     const match = source.match(
       /this\.auth\.subscribe\(\s*async\s*\(\s*userId\s*[^)]*\)\s*=>\s*\{([\s\S]*?)\n {6}\}\s*\)/

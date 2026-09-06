@@ -53,6 +53,8 @@ import type { AppReleaseOptions } from './modules/app-release/index';
 import { LocalStoragePersistenceClient } from './services/persistence/localstorage';
 import { ANON_USER_ID, bucketIdForUser } from './modules/ref-tables';
 import { parseQueryParams, encodeRecordId, parseDuration } from './utils/index';
+import { cleanRecord } from './utils/parser';
+import { RecordId } from 'surrealdb';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
 import { detectSharedTabsSupport } from './services/tabs/support';
@@ -976,6 +978,8 @@ export class Sp00kyClient<S extends SchemaStructure> {
             'sync.setCurrentUserId failed'
           );
         }
+        // After the bucket switch, so the row lands in THIS user's store.
+        await this.persistVerifiedUser();
       });
 
       await this.sync.init();
@@ -1079,6 +1083,54 @@ export class Sp00kyClient<S extends SchemaStructure> {
       this.logger.warn(
         { err: e, Category: 'sp00ky-client::Sp00kyClient::initRemote' },
         'Auth verification failed; keeping the restored session'
+      );
+    }
+  }
+
+  /**
+   * Write the signed-in user's own row, as the SERVER just returned it, into
+   * the local store.
+   *
+   * `AuthService.check()` (boot verification, sign-in, an app-driven refresh)
+   * runs `SELECT * FROM ONLY $auth.id` and keeps the answer on
+   * `auth.currentUser`; nothing consumed it beyond the id. Meanwhile the app's
+   * own `user` query paints local-first from whatever body the store holds,
+   * and that body is only refreshed when the server's row version reaches
+   * this client through membership (`_00_list_ref`). While the SSP is down or
+   * bootstrapping that never happens, so a device that registered before the
+   * account was verified kept rendering a row without `email_verified` and
+   * the app parked the user on "Verify your email" over a server that said
+   * "already verified". The authoritative row was already in hand.
+   *
+   * MERGE semantics (`CacheModule.saveBatch`) keep local-only fields, and
+   * re-using the memoized version keeps the sync dedup honest: this is a
+   * field refresh, not a version claim. `notifyTableQueries` re-materializes
+   * the `user` queries so the gate flips without waiting for a stream update.
+   * Best-effort: a failure here leaves things exactly as they were.
+   */
+  private async persistVerifiedUser(): Promise<void> {
+    const row = this.auth.currentUser as Record<string, unknown> | null;
+    if (!row || !(row.id instanceof RecordId) || Object.keys(row).length <= 1) return;
+    const rid = row.id as RecordId;
+    const table = rid.table.toString();
+    const tableSchema = this.config.schema.tables.find((t) => t.name === table);
+    if (!tableSchema) return;
+    try {
+      const encoded = encodeRecordId(rid);
+      const version = this.cache.lookup(encoded) || 1;
+      await this.cache.saveBatch([
+        {
+          table,
+          op: 'UPDATE',
+          record: cleanRecord(tableSchema.columns, row) as RecordWithId,
+          version,
+        },
+      ]);
+      await this.dataModule.notifyTableQueries(table);
+    } catch (e) {
+      this.logger.warn(
+        { err: e, Category: 'sp00ky-client::Sp00kyClient::persistVerifiedUser' },
+        'Could not persist the verified user row locally'
       );
     }
   }

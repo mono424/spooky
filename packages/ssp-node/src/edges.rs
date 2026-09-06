@@ -125,7 +125,9 @@ pub fn build_edge_batch(
         batch
             .statements
             .push(format!("LET ${bn} = type::record('_00_query', ${bn}key)"));
-        batch.bindings.push((format!("{bn}key"), incantation_key(&delta.query_id)));
+        batch
+            .bindings
+            .push((format!("{bn}key"), incantation_key(&delta.query_id)));
 
         // Additions (Created)
         for id in &delta.additions {
@@ -151,7 +153,10 @@ pub fn build_edge_batch(
             batch.updated += 1;
             batch.statements.push(format!(
                 "UPDATE {list_ref} SET version = {version} WHERE in = {from} AND out = {out}",
-                list_ref = list_ref, version = version, from = from, out = id,
+                list_ref = list_ref,
+                version = version,
+                from = from,
+                out = id,
             ));
         }
 
@@ -164,7 +169,9 @@ pub fn build_edge_batch(
             batch.deleted += 1;
             batch.statements.push(format!(
                 "DELETE {from}->{list_ref} WHERE out = {out}",
-                from = from, list_ref = list_ref, out = id,
+                from = from,
+                list_ref = list_ref,
+                out = id,
             ));
         }
 
@@ -202,7 +209,9 @@ pub fn build_edge_batch(
                     batch.deleted += 1;
                     batch.statements.push(format!(
                         "DELETE {from}->{list_ref} WHERE out = {id}",
-                        from = from, list_ref = list_ref, id = item.id,
+                        from = from,
+                        list_ref = list_ref,
+                        id = item.id,
                     ));
                 }
             }
@@ -286,7 +295,10 @@ pub async fn write_deltas_resilient(
 
     match query_retrying(db, &full_query, &binds).await {
         Ok(_) => {
-            telemetry.counter("edge_operations", batch.created + batch.updated + batch.deleted);
+            telemetry.counter(
+                "edge_operations",
+                batch.created + batch.updated + batch.deleted,
+            );
             debug!(target: "ssp::edges", operations = op_count, "Edge update transaction completed");
             Vec::new()
         }
@@ -298,8 +310,11 @@ pub async fn write_deltas_resilient(
             warn!(target: "ssp::edges", error = %e, views = deltas.len(), operations = op_count, "Edge update transaction failed after retries; splitting the batch");
             let mut left = deltas;
             let right = left.split_off(left.len() / 2);
-            let mut leftovers = Box::pin(write_deltas_resilient(db, left, circuit, mode, telemetry)).await;
-            leftovers.extend(Box::pin(write_deltas_resilient(db, right, circuit, mode, telemetry)).await);
+            let mut leftovers =
+                Box::pin(write_deltas_resilient(db, left, circuit, mode, telemetry)).await;
+            leftovers.extend(
+                Box::pin(write_deltas_resilient(db, right, circuit, mode, telemetry)).await,
+            );
             leftovers
         }
         Err(e) => {
@@ -336,7 +351,10 @@ pub struct Batcher {
 
 impl Batcher {
     pub fn new(max_batch: usize) -> Self {
-        Self { buf: Vec::new(), max_batch }
+        Self {
+            buf: Vec::new(),
+            max_batch,
+        }
     }
 
     /// Buffer deltas. Returns `Some(batch)` to flush NOW if the buffer reached
@@ -383,7 +401,10 @@ impl Batcher {
 /// into the next window (see [`MAX_EDGE_CARRY`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub trait EdgeSink: Send + Sync {
-    fn flush(&self, deltas: Vec<ViewDelta>) -> impl std::future::Future<Output = Vec<ViewDelta>> + Send;
+    fn flush(
+        &self,
+        deltas: Vec<ViewDelta>,
+    ) -> impl std::future::Future<Output = Vec<ViewDelta>> + Send;
 }
 #[cfg(target_arch = "wasm32")]
 pub trait EdgeSink {
@@ -594,7 +615,14 @@ pub struct SurrealEdgeSink {
 impl EdgeSink for SurrealEdgeSink {
     async fn flush(&self, deltas: Vec<ViewDelta>) -> Vec<ViewDelta> {
         let circuit = self.processor.read().await;
-        write_deltas_resilient(self.db.as_ref(), deltas, &circuit, self.mode, self.telemetry.as_ref()).await
+        write_deltas_resilient(
+            self.db.as_ref(),
+            deltas,
+            &circuit,
+            self.mode,
+            self.telemetry.as_ref(),
+        )
+        .await
     }
 }
 
@@ -638,11 +666,20 @@ mod tests {
         let b = build_edge_batch(&[&d], RefMode::Single, &ConstV(7));
 
         assert_eq!(b.created, 1);
-        assert_eq!(b.bindings, vec![("from0key".to_string(), "abc".to_string())]);
+        assert_eq!(
+            b.bindings,
+            vec![("from0key".to_string(), "abc".to_string())]
+        );
         // statement[0] is the LET binding the incantation record.
-        assert_eq!(b.statements[0], "LET $from0 = type::record('_00_query', $from0key)");
+        assert_eq!(
+            b.statements[0],
+            "LET $from0 = type::record('_00_query', $from0key)"
+        );
         let stmt = &b.statements[1];
-        assert!(stmt.contains("RELATE $from0->_00_list_ref->user:x"), "{stmt}");
+        assert!(
+            stmt.contains("RELATE $from0->_00_list_ref->user:x"),
+            "{stmt}"
+        );
         assert!(stmt.contains("version = 7"), "{stmt}");
     }
 
@@ -730,7 +767,10 @@ mod tests {
             }
             let mut w = self.written.lock().unwrap();
             for d in &deltas {
-                w.push((d.query_id.clone(), d.additions.first().cloned().unwrap_or_default()));
+                w.push((
+                    d.query_id.clone(),
+                    d.additions.first().cloned().unwrap_or_default(),
+                ));
             }
             Vec::new()
         }
@@ -769,7 +809,8 @@ mod tests {
         for i in 0..(PARKED_RETRY_WINDOWS * 3) {
             tokio::time::sleep(Duration::from_millis(2)).await;
             if i % 7 == 0 {
-                tx.send(vec![add_delta("view:other", &format!("row:{i}"))]).unwrap();
+                tx.send(vec![add_delta("view:other", &format!("row:{i}"))])
+                    .unwrap();
             }
         }
         drop(tx);
@@ -777,7 +818,11 @@ mod tests {
 
         let w = written.lock().unwrap();
         let stuck: Vec<_> = w.iter().filter(|(q, _)| q == "view:stuck").collect();
-        assert_eq!(stuck.len(), 1, "the parked delta must be written exactly once: {w:?}");
+        assert_eq!(
+            stuck.len(),
+            1,
+            "the parked delta must be written exactly once: {w:?}"
+        );
         assert!(
             *calls.lock().unwrap() > MAX_EDGE_CARRY + 3,
             "the sink must have been retried past its failing flushes"
@@ -808,16 +853,37 @@ mod tests {
         // While parked, a newer delta for the same view and one for another
         // view arrive. The other view must not wait; the same view must queue
         // behind the parked delta.
-        tx.send(vec![add_delta("view:v", "row:second"), add_delta("view:free", "row:x")]).unwrap();
+        tx.send(vec![
+            add_delta("view:v", "row:second"),
+            add_delta("view:free", "row:x"),
+        ])
+        .unwrap();
         tokio::time::sleep(Duration::from_millis((PARKED_RETRY_WINDOWS as u64 + 5) * 3)).await;
         drop(tx);
         svc.await.unwrap();
 
         let w = written.lock().unwrap();
-        let v: Vec<&str> = w.iter().filter(|(q, _)| q == "view:v").map(|(_, r)| r.as_str()).collect();
-        assert_eq!(v, vec!["row:first", "row:second"], "parked view must land in order: {w:?}");
-        let free_pos = w.iter().position(|(q, _)| q == "view:free").expect("free view written");
-        let first_pos = w.iter().position(|(q, r)| q == "view:v" && r == "row:first").unwrap();
-        assert!(free_pos < first_pos, "an unparked view must not wait for the parked one: {w:?}");
+        let v: Vec<&str> = w
+            .iter()
+            .filter(|(q, _)| q == "view:v")
+            .map(|(_, r)| r.as_str())
+            .collect();
+        assert_eq!(
+            v,
+            vec!["row:first", "row:second"],
+            "parked view must land in order: {w:?}"
+        );
+        let free_pos = w
+            .iter()
+            .position(|(q, _)| q == "view:free")
+            .expect("free view written");
+        let first_pos = w
+            .iter()
+            .position(|(q, r)| q == "view:v" && r == "row:first")
+            .unwrap();
+        assert!(
+            free_pos < first_pos,
+            "an unparked view must not wait for the parked one: {w:?}"
+        );
     }
 }
