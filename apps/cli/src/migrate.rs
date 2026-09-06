@@ -632,6 +632,137 @@ fn make_defines_overwrite(sql: &str) -> String {
     result
 }
 
+/// Drop `DEFINE INDEX` statements whose definition already matches the live
+/// index (per `INFO FOR TABLE`), so re-applying the internal schema never
+/// rebuilds an index that has not changed. Returns the SQL and how many were
+/// dropped.
+///
+/// `DEFINE INDEX OVERWRITE` rebuilds the index from scratch inside the apply
+/// request, one entry per row. On `_00_version` that is one entry per synced
+/// row (737k on whitepawn staging): long enough to hit the CLI's HTTP timeout,
+/// and an interrupted rebuild leaves the unique index partially populated.
+/// `_00_version.record_id` is the lookup every `_00_<table>_mutation` event
+/// does to stamp `_00_rv`; a missing entry stamps NONE, the row is published
+/// at version 1, and every peer holding it at >= 1 keeps its stale copy for
+/// good (measured: 35% of rows, two chat clients each rendering their own
+/// last write). See
+/// docs/surrealdb-bugs/unique-index-partial-after-overwrite-rebuild.md.
+///
+/// A changed definition, a missing index, or an unreadable `INFO FOR TABLE`
+/// keeps the statement: a rebuild is then the right thing, or the safe one.
+fn prune_unchanged_index_defines(client: &dyn MigrationDB, sql: &str) -> (String, usize) {
+    use std::collections::HashMap;
+    // table -> its live indexes (name -> definition); None when INFO failed.
+    let mut live: HashMap<String, Option<HashMap<String, String>>> = HashMap::new();
+    let mut out = String::with_capacity(sql.len());
+    let mut pruned = 0;
+    let mut cursor = 0;
+    while let Some(rel) = sql[cursor..].find("DEFINE INDEX ") {
+        let start = cursor + rel;
+        out.push_str(&sql[cursor..start]);
+        let end = sql[start..].find(';').map(|i| start + i + 1).unwrap_or(sql.len());
+        let stmt = &sql[start..end];
+        cursor = end;
+        // A match on a `--` comment line is not a statement.
+        let line_start = sql[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        if sql[line_start..start].trim_start().starts_with("--") {
+            out.push_str(stmt);
+            continue;
+        }
+        let Some((name, table)) = index_define_target(stmt) else {
+            out.push_str(stmt);
+            continue;
+        };
+        let indexes = live
+            .entry(table.clone())
+            .or_insert_with(|| read_live_indexes(client, &table));
+        let unchanged = indexes
+            .as_ref()
+            .and_then(|m| m.get(&name))
+            .map(|def| normalize_index_define(def) == normalize_index_define(stmt))
+            .unwrap_or(false);
+        if unchanged {
+            pruned += 1;
+            out.push_str(&format!("-- index {name} on {table} unchanged; not rebuilt"));
+        } else {
+            out.push_str(stmt);
+        }
+    }
+    out.push_str(&sql[cursor..]);
+    (out, pruned)
+}
+
+/// `(index name, table)` of a `DEFINE INDEX [OVERWRITE|IF NOT EXISTS] <name> ON
+/// [TABLE] <table> ...` statement, or `None` if it does not parse as one.
+fn index_define_target(stmt: &str) -> Option<(String, String)> {
+    let mut toks = stmt.split_whitespace();
+    if !toks.next()?.eq_ignore_ascii_case("DEFINE") || !toks.next()?.eq_ignore_ascii_case("INDEX") {
+        return None;
+    }
+    let mut name = toks.next()?;
+    if name.eq_ignore_ascii_case("OVERWRITE") {
+        name = toks.next()?;
+    } else if name.eq_ignore_ascii_case("IF") {
+        toks.next()?; // NOT
+        toks.next()?; // EXISTS
+        name = toks.next()?;
+    }
+    if !toks.next()?.eq_ignore_ascii_case("ON") {
+        return None;
+    }
+    let mut table = toks.next()?;
+    if table.eq_ignore_ascii_case("TABLE") {
+        table = toks.next()?;
+    }
+    Some((name.to_string(), table.trim_end_matches(';').to_string()))
+}
+
+/// Canonical form of an index definition so ours (`OVERWRITE`, `ON TABLE`,
+/// `COLUMNS`, line breaks) compares equal to what `INFO FOR TABLE` prints
+/// (`ON`, `FIELDS`, one line). Anything else that differs is a real change.
+fn normalize_index_define(stmt: &str) -> String {
+    let body = stmt.trim().trim_end_matches(';');
+    let raw: Vec<&str> = body.split_whitespace().collect();
+    let mut toks: Vec<String> = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        let t = raw[i];
+        let is = |s: &str| t.eq_ignore_ascii_case(s);
+        let after_on = toks.last().map(|p| p.eq_ignore_ascii_case("ON")).unwrap_or(false);
+        if is("OVERWRITE") {
+        } else if is("IF")
+            && raw.get(i + 1).map(|x| x.eq_ignore_ascii_case("NOT")).unwrap_or(false)
+            && raw.get(i + 2).map(|x| x.eq_ignore_ascii_case("EXISTS")).unwrap_or(false)
+        {
+            i += 2;
+        } else if is("TABLE") && after_on {
+        } else if is("COLUMNS") {
+            toks.push("FIELDS".to_string());
+        } else {
+            toks.push(t.to_string());
+        }
+        i += 1;
+    }
+    toks.join(" ").replace(", ", ",").replace(',', ", ")
+}
+
+/// The live `indexes` map of `INFO FOR TABLE <table>`, or `None` when the
+/// table does not exist or the query failed.
+fn read_live_indexes(
+    client: &dyn MigrationDB,
+    table: &str,
+) -> Option<std::collections::HashMap<String, String>> {
+    let responses = client.execute(&format!("INFO FOR TABLE {table};")).ok()?;
+    let ok = responses.into_iter().find(|r| r.status == "OK")?;
+    let indexes = ok.result?.get("indexes")?.as_object()?.clone();
+    Some(
+        indexes
+            .into_iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k, s.to_string())))
+            .collect(),
+    )
+}
+
 /// True when a full schema re-apply is forced (bypass the hash-skip). Set by the
 /// `--force-schema` flag (which exports this env) or by exporting it directly.
 /// Read from the env so every apply path — deploy phase 1 & 2, `migrate prod`,
@@ -829,7 +960,18 @@ pub fn apply_internal_schema(
         return Ok(());
     }
 
-    // 5. Execute against DB
+    // 5. Never rebuild an index that has not changed. The hash above covers the
+    // assembled SQL; what runs is that SQL minus the index statements whose
+    // live definition already matches (see prune_unchanged_index_defines).
+    let (internal_sql, unchanged_indexes) = prune_unchanged_index_defines(client, &internal_sql);
+    if unchanged_indexes > 0 {
+        ui::detail(format!(
+            "{} unchanged index(es) kept as-is (no rebuild)",
+            unchanged_indexes
+        ));
+    }
+
+    // 6. Execute against DB
     ui::detail(format!("executing {} KB of DDL", internal_sql.len() / 1024));
     step.set_message(format!(
         "applying · {} tables · {} events",
@@ -945,6 +1087,10 @@ mod tests {
         // Hash returned for a `SELECT hash FROM _00_schema_state:<id>` query, to
         // exercise the schema-hash skip path. None => the row doesn't exist yet.
         stored_hash: RefCell<Option<String>>,
+        // Live indexes per table, answered to `INFO FOR TABLE <t>;` as the
+        // `indexes` map. A table not listed here answers with an ERR (as a
+        // missing table does).
+        live_indexes: RefCell<std::collections::HashMap<String, Vec<(String, String)>>>,
     }
 
     impl MockDB {
@@ -955,7 +1101,18 @@ mod tests {
                 recorded: RefCell::new(vec![]),
                 fail_execute: RefCell::new(false),
                 stored_hash: RefCell::new(None),
+                live_indexes: RefCell::new(Default::default()),
             }
+        }
+
+        fn set_live_indexes(&self, table: &str, indexes: &[(&str, &str)]) {
+            self.live_indexes.borrow_mut().insert(
+                table.to_string(),
+                indexes
+                    .iter()
+                    .map(|(n, d)| (n.to_string(), d.to_string()))
+                    .collect(),
+            );
         }
 
         fn with_applied(migrations: Vec<AppliedMigration>) -> Self {
@@ -1010,6 +1167,26 @@ mod tests {
                 return Ok(vec![SurrealResponse {
                     status: "OK".to_string(),
                     result: Some(result),
+                }]);
+            }
+            if let Some(table) = query
+                .strip_prefix("INFO FOR TABLE ")
+                .and_then(|q| q.strip_suffix(';'))
+            {
+                return Ok(vec![match self.live_indexes.borrow().get(table) {
+                    Some(indexes) => SurrealResponse {
+                        status: "OK".to_string(),
+                        result: Some(serde_json::json!({
+                            "indexes": indexes
+                                .iter()
+                                .map(|(n, d)| (n.clone(), serde_json::Value::String(d.clone())))
+                                .collect::<serde_json::Map<String, serde_json::Value>>()
+                        })),
+                    },
+                    None => SurrealResponse {
+                        status: "ERR".to_string(),
+                        result: None,
+                    },
                 }]);
             }
             Ok(vec![SurrealResponse {
@@ -1693,5 +1870,95 @@ mod tests {
         let warnings = validate_applied_checksums(&applied, &filesystem).unwrap();
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("not found on disk"));
+    }
+
+    // ── Unchanged-index pruning ─────────────────────────────────────────
+
+    #[test]
+    fn normalize_index_define_matches_info_for_table_output() {
+        let ours = "DEFINE INDEX OVERWRITE idx_srun_active ON TABLE _00_schedule_run\n    COLUMNS schedule_name, key, status;";
+        let live = "DEFINE INDEX idx_srun_active ON _00_schedule_run FIELDS schedule_name, key, status";
+        assert_eq!(normalize_index_define(ours), normalize_index_define(live));
+
+        let unique_ours =
+            "DEFINE INDEX OVERWRITE idx_record_id ON TABLE _00_version COLUMNS record_id UNIQUE;";
+        let unique_live = "DEFINE INDEX idx_record_id ON _00_version FIELDS record_id UNIQUE";
+        assert_eq!(normalize_index_define(unique_ours), normalize_index_define(unique_live));
+        assert_eq!(
+            normalize_index_define("DEFINE INDEX IF NOT EXISTS a ON TABLE t COLUMNS x,y;"),
+            normalize_index_define("DEFINE INDEX a ON t FIELDS x, y")
+        );
+        // A real definition change still reads as a change.
+        assert_ne!(
+            normalize_index_define(unique_ours),
+            normalize_index_define("DEFINE INDEX idx_record_id ON _00_version FIELDS record_id")
+        );
+    }
+
+    #[test]
+    fn index_define_target_parses_the_forms_we_emit() {
+        assert_eq!(
+            index_define_target("DEFINE INDEX OVERWRITE idx ON TABLE t COLUMNS a;"),
+            Some(("idx".to_string(), "t".to_string()))
+        );
+        assert_eq!(
+            index_define_target("DEFINE INDEX IF NOT EXISTS idx ON t FIELDS a;"),
+            Some(("idx".to_string(), "t".to_string()))
+        );
+        assert_eq!(index_define_target("DEFINE TABLE t;"), None);
+    }
+
+    #[test]
+    fn prune_drops_only_indexes_whose_live_definition_matches() {
+        let db = MockDB::new();
+        db.set_live_indexes(
+            "_00_version",
+            &[("idx_record_id", "DEFINE INDEX idx_record_id ON _00_version FIELDS record_id UNIQUE")],
+        );
+        // Live definition differs (no UNIQUE): must be re-defined.
+        db.set_live_indexes(
+            "_00_admin",
+            &[("idx_admin_user", "DEFINE INDEX idx_admin_user ON _00_admin FIELDS user")],
+        );
+        let sql = "DEFINE TABLE OVERWRITE _00_version SCHEMALESS;\n\
+                   -- DEFINE INDEX OVERWRITE commented ON TABLE _00_version COLUMNS x;\n\
+                   DEFINE INDEX OVERWRITE idx_record_id ON TABLE _00_version COLUMNS record_id UNIQUE;\n\
+                   DEFINE INDEX OVERWRITE idx_admin_user ON TABLE _00_admin COLUMNS user UNIQUE;\n\
+                   DEFINE INDEX OVERWRITE idx_new ON TABLE _00_feature_flag COLUMNS key UNIQUE;\n\
+                   DEFINE EVENT OVERWRITE e ON TABLE _00_version WHEN true THEN { RETURN 1; };";
+
+        let (out, pruned) = prune_unchanged_index_defines(&db, sql);
+        assert_eq!(pruned, 1);
+        assert!(
+            !out.contains("DEFINE INDEX OVERWRITE idx_record_id"),
+            "an unchanged index must not be re-defined (that rebuilds it):\n{out}"
+        );
+        assert!(out.contains("-- index idx_record_id on _00_version unchanged; not rebuilt"));
+        assert!(
+            out.contains("DEFINE INDEX OVERWRITE idx_admin_user ON TABLE _00_admin COLUMNS user UNIQUE;"),
+            "a changed definition keeps its OVERWRITE:\n{out}"
+        );
+        assert!(
+            out.contains("DEFINE INDEX OVERWRITE idx_new ON TABLE _00_feature_flag COLUMNS key UNIQUE;"),
+            "an index missing from a live table (or a missing table) keeps its OVERWRITE:\n{out}"
+        );
+        assert!(out.contains("-- DEFINE INDEX OVERWRITE commented ON TABLE _00_version COLUMNS x;"));
+        assert!(out.contains("DEFINE TABLE OVERWRITE _00_version SCHEMALESS;"));
+        assert!(out.contains("DEFINE EVENT OVERWRITE e ON TABLE _00_version WHEN true THEN { RETURN 1; };"));
+        // One INFO per table, not per statement.
+        let infos = db
+            .executed_queries
+            .borrow()
+            .iter()
+            .filter(|q| q.starts_with("INFO FOR TABLE _00_version"))
+            .count();
+        assert_eq!(infos, 1);
+
+        // Nothing readable about the live schema: every statement stays.
+        let (out2, pruned2) = prune_unchanged_index_defines(&MockDB::new(), sql);
+        assert_eq!(pruned2, 0);
+        assert!(out2.contains(
+            "DEFINE INDEX OVERWRITE idx_record_id ON TABLE _00_version COLUMNS record_id UNIQUE;"
+        ));
     }
 }
