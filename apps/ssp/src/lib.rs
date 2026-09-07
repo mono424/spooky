@@ -779,7 +779,19 @@ pub async fn run_server() -> anyhow::Result<()> {
     // from the circuit, and this shell's cluster path bootstraps the circuit
     // directly rather than through `Runtime::bootstrap`.
     let processor_arc = Arc::new(RwLock::new(Circuit::new()));
-    processor_arc.write().await.set_merge_views(config.merge_views);
+    {
+        let mut circuit = processor_arc.write().await;
+        circuit.set_merge_views(config.merge_views);
+        // Server-side row-version floor: an ingested body whose `_00_rv` is
+        // missing or does not advance gets one that does, so subscribers
+        // refetch. `SspNode::apply_circuit_policy` turns this on for the
+        // `Runtime::bootstrap` path; this shell configures the cluster circuit
+        // itself and used to leave it off, so a partial `_00_version` index
+        // (whitepawn, 2026-09-07: a callee's `accepted` UPDATE reached the DB
+        // and the scheduler, and the caller's edges stayed at version 1) went
+        // straight through to every peer as "nothing changed".
+        circuit.set_monotonic_row_versions(true);
+    }
     let status = Arc::new(RwLock::new(SspStatus::Bootstrapping));
 
     // VM platform adapters (ssp-node ports) — constructed early because the
@@ -1346,6 +1358,7 @@ pub async fn run_server() -> anyhow::Result<()> {
                                             let merge_views = guard.merge_views();
                                             *guard = Circuit::new();
                                             guard.set_merge_views(merge_views);
+                                            guard.set_monotonic_row_versions(true);
                                         }
                                         expected_hashes = v.table_hashes;
                                         continue;
@@ -1376,6 +1389,7 @@ pub async fn run_server() -> anyhow::Result<()> {
                                         let merge_views = guard.merge_views();
                                         *guard = Circuit::new();
                                         guard.set_merge_views(merge_views);
+                                        guard.set_monotonic_row_versions(true);
                                     }
                                     if let Some(sched_url) = scheduler_url.as_deref() {
                                         let client = reqwest::Client::new();
