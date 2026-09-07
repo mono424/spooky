@@ -34,7 +34,7 @@ Provider props are identical to client-solid: `config`, `fallback`, `preload` (a
 
 ## Key API
 
-- **`useDb<typeof schema>()`** — the `SyncedDb<S>` instance. Same surface as client-solid: `create`, `update`, `delete`, `query`, `preload`, `run`, `bucket`, `useRemote`, `auth`/`signOut`, `pendingMutationCount`, `subscribeToPendingMutations`, `syncHealth`/`storageHealth` + their subscribe methods.
+- **`useDb<typeof schema>()`** — the `SyncedDb<S>` instance. Same surface as client-solid: `create`, `update`, `delete`, `query`, `preload`, `run`, `bucket`, `remoteQuery`, `useRemote`, `auth`/`signOut`, `pendingMutationCount`, `subscribeToPendingMutations`, `syncHealth`/`storageHealth` + their subscribe methods.
 - **`createQuery(query, options?)`** (or `createQuery(db, query, options?)`) — reactive query. `useQuery` is a deprecated alias. Pass a thunk when the query depends on signals; read the signals inside it.
   - `data()` — non-suspending. `[]` / `null` before the first result, keyed-reconciled live rows after.
   - `ready()` — suspending read for `<Loading fallback={...}>` (Solid 2's renamed `<Suspense>`).

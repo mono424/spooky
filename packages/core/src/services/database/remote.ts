@@ -30,6 +30,13 @@ export function resolveReconnectConfig(
 /** Transport events the SDK publishes, mapped 1:1 to {@link ConnectionState}. */
 export type RemoteConnectionEvent = ConnectionState | 'error';
 
+/**
+ * Statements the remote service keeps in flight at once. Enough for the sync
+ * scheduler's `MAX_CONCURRENT_DOWN` registrations plus the list_ref poll and
+ * an app's own one-shot reads, small enough to stay polite to the server.
+ */
+const REMOTE_MAX_CONCURRENT_QUERIES = 6;
+
 export class RemoteDatabaseService extends AbstractDatabaseService {
   private config: Sp00kyConfig<any>['database'];
   protected eventType = DatabaseEventTypes.RemoteQuery;
@@ -90,6 +97,7 @@ export class RemoteDatabaseService extends AbstractDatabaseService {
     this.config = config;
     this.reconnectConfig = resolveReconnectConfig(config.reconnect);
     this.queryTimeoutMs = Math.max(0, config.queryTimeoutMs ?? 60_000);
+    this.maxConcurrentQueries = REMOTE_MAX_CONCURRENT_QUERIES;
   }
 
   getConfig(): Sp00kyConfig<any>['database'] {

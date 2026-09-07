@@ -21,7 +21,7 @@ function makeSync(hashes: string[]) {
     trace: () => {},
   };
   const remote: any = { query: vi.fn().mockResolvedValue([true]) };
-  const dataModule: any = { getActiveQueryHashes: () => hashes };
+  const dataModule: any = { getActiveQueryHashes: () => hashes, getQueryByHash: () => undefined };
 
   const sync = new Sp00kySync(
     {} as any,
@@ -33,21 +33,28 @@ function makeSync(hashes: string[]) {
     { degradeAfterConsecutiveFailures: 3 }
   );
 
-  // `refetchListRefForQuery` is what the poll calls per active hash; stub it so
-  // the test controls per-cycle reachability. `poll` invokes the private method.
-  const refetch = vi.fn();
-  (sync as any).refetchListRefForQuery = refetch;
+  // The poll reads every chunk of active hashes in one round trip
+  // (`fetchListRefSnapshots`) and lands each query's snapshot separately
+  // (`applyListRefSnapshot`). Stub both so the test controls per-cycle
+  // reachability. `poll` invokes the private method.
+  const fetch = vi.fn();
+  const apply = vi.fn().mockResolvedValue(false);
+  (sync as any).fetchListRefSnapshots = fetch;
+  (sync as any).applyListRefSnapshot = apply;
+  const snapshotsFor = (hs: string[]) =>
+    new Map(hs.map((h) => [h, { primary: [], subquery: [], rowCount: null }]));
+  fetch.mockImplementation(async (hs: string[]) => snapshotsFor(hs));
   const poll = () => (sync as any).pollListRefForActiveQueries() as Promise<boolean>;
 
-  return { sync, remote, refetch, poll };
+  return { sync, remote, fetch, apply, snapshotsFor, poll };
 }
 
 describe('sync health via idle poll', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('degrades after N consecutive network-failed poll cycles', async () => {
-    const { sync, refetch, poll } = makeSync(['h1']);
-    refetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
+    const { sync, fetch, poll } = makeSync(['h1']);
+    fetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
 
     await poll();
     expect(sync.syncHealth.status).toBe('healthy');
@@ -59,22 +66,22 @@ describe('sync health via idle poll', () => {
   });
 
   it('recovers on the next clean poll cycle — no mutation needed', async () => {
-    const { sync, refetch, poll } = makeSync(['h1']);
-    refetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
+    const { sync, fetch, snapshotsFor, poll } = makeSync(['h1']);
+    fetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
     await poll();
     await poll();
     await poll();
     expect(sync.syncHealth.status).toBe('degraded');
 
     // Connectivity returns; a plain idle poll (no user action) clears it.
-    refetch.mockResolvedValue(true);
+    fetch.mockImplementation(async (hs: string[]) => snapshotsFor(hs));
     await poll();
     expect(sync.syncHealth.status).toBe('healthy');
   });
 
   it('does not degrade on application errors (server was reached)', async () => {
-    const { sync, refetch, poll } = makeSync(['h1']);
-    refetch.mockRejectedValue(new Error('Permission denied'));
+    const { sync, fetch, poll } = makeSync(['h1']);
+    fetch.mockRejectedValue(new Error('Permission denied'));
     await poll();
     await poll();
     await poll();
@@ -82,22 +89,24 @@ describe('sync health via idle poll', () => {
     expect(sync.syncHealth.status).toBe('healthy');
   });
 
-  it('counts a mixed cycle (one reachable hash) as reached', async () => {
-    const { sync, refetch, poll } = makeSync(['h1', 'h2']);
+  it('counts a cycle whose round trip answered as reached even when a per-query apply fails', async () => {
+    const { sync, fetch, apply, snapshotsFor, poll } = makeSync(['h1', 'h2']);
     // First degrade via all-network cycles.
-    refetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
+    fetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
     await poll();
     await poll();
     await poll();
     expect(sync.syncHealth.status).toBe('degraded');
 
-    // Now one hash succeeds, the other still network-fails → reached → healthy.
-    refetch.mockReset();
-    refetch
+    // The batched read answers (server reached); landing one of the two
+    // snapshots then fails on its own network error → still a reached cycle.
+    fetch.mockImplementation(async (hs: string[]) => snapshotsFor(hs));
+    apply
       .mockResolvedValueOnce(true)
       .mockRejectedValueOnce(new Error(CONNECTION_UNAVAILABLE));
-    await poll();
+    await expect(poll()).resolves.toBe(true);
     expect(sync.syncHealth.status).toBe('healthy');
+    expect(fetch).toHaveBeenLastCalledWith(['h1', 'h2']);
   });
 
   it('probes RETURN true when there are no active queries', async () => {
@@ -115,12 +124,12 @@ describe('sync health via idle poll', () => {
   });
 
   it('leaves everConnected false through a cold-start failure run', async () => {
-    const { sync, refetch, poll } = makeSync(['h1']);
+    const { sync, fetch, poll } = makeSync(['h1']);
     expect(sync.syncHealth.everConnected).toBe(false);
 
     // Server never reached: 3 failed cycles degrade, but this is the initial
     // "connecting" phase, not a lost connection — everConnected stays false.
-    refetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
+    fetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
     await poll();
     await poll();
     await poll();
@@ -129,17 +138,16 @@ describe('sync health via idle poll', () => {
   });
 
   it('latches everConnected on the first success and keeps it through a later degrade', async () => {
-    const { sync, refetch, poll } = makeSync(['h1']);
+    const { sync, fetch, poll } = makeSync(['h1']);
 
     // First successful round reaches the server: connecting phase is over.
-    refetch.mockResolvedValue(true);
     await poll();
     expect(sync.syncHealth.status).toBe('healthy');
     expect(sync.syncHealth.everConnected).toBe(true);
 
     // Connection later drops: degraded now reflects a REAL lost connection.
-    refetch.mockReset();
-    refetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
+    fetch.mockReset();
+    fetch.mockRejectedValue(new Error(CONNECTION_UNAVAILABLE));
     await poll();
     await poll();
     await poll();

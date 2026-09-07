@@ -50,88 +50,118 @@ export abstract class AbstractDatabaseService {
     return this.client.beginTransaction();
   }
 
-  private queryQueue: Promise<void> = Promise.resolve();
+  /**
+   * How many statements may be in flight at once.
+   *
+   * `1` serializes every statement behind the previous one. The local engines
+   * need that: overlapping ops trip the WASM / SQLite transaction layer. The
+   * remote service raises it (`RemoteDatabaseService`): a SurrealDB socket
+   * multiplexes requests by id, and serializing them capped the client at one
+   * statement per round trip (~5/s at 170ms RTT), so the `_00_list_ref` poll
+   * alone could hold every registration behind it and one slow one-shot read
+   * stalled the whole client. The scheduler's `MAX_CONCURRENT_DOWN` only means
+   * something when this is above 1.
+   */
+  protected maxConcurrentQueries = 1;
+  private inFlightQueries = 0;
+  private queryWaiters: Array<() => void> = [];
+
+  /** FIFO slot acquisition, so `maxConcurrentQueries = 1` keeps strict order. */
+  private acquireQuerySlot(): Promise<void> {
+    if (this.inFlightQueries < this.maxConcurrentQueries) {
+      this.inFlightQueries++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.queryWaiters.push(() => {
+        this.inFlightQueries++;
+        resolve();
+      });
+    });
+  }
+
+  private releaseQuerySlot(): void {
+    this.inFlightQueries--;
+    const next = this.queryWaiters.shift();
+    if (next) next();
+  }
 
   /**
-   * Execute a query with serialized execution to prevent WASM transaction issues.
-   *
-   * Serialization means every query waits on the previous one, so a call that
-   * never settles blocks the whole chain forever. {@link queryTimeoutMs} bounds
-   * each link: on expiry this promise rejects and the chain moves on, even
-   * though the underlying RPC is still parked in the SDK's pending map.
-   */
-  /**
-   * Hook run inside the query queue, right before a statement is sent. The
-   * remote service uses it to hold statements while a connect is in flight,
-   * so a query never runs on a socket that is open but has not had its
-   * namespace and token applied yet. The default does nothing.
+   * Hook run right before a statement is sent, inside its slot. The remote
+   * service uses it to hold statements while a connect is in flight, so a
+   * query never runs on a socket that is open but has not had its namespace
+   * and token applied yet. The default does nothing.
    */
   protected async beforeQuery(): Promise<void> {}
 
+  /**
+   * Execute a statement under {@link maxConcurrentQueries}.
+   *
+   * A statement that never settles would hold its slot forever, and with a
+   * limit of 1 that blocks every later statement behind it. {@link
+   * queryTimeoutMs} bounds each one: on expiry this promise rejects and the
+   * slot is released, even though the underlying RPC is still parked in the
+   * SDK's pending map.
+   */
   async query<T extends unknown[]>(query: string, vars?: Record<string, unknown>): Promise<T> {
-    return new Promise((resolve, reject) => {
-      this.queryQueue = this.queryQueue
-        // oxlint-disable-next-line promise/always-return
-        .then(async () => {
-          await this.beforeQuery();
-          const startTime = performance.now();
-          try {
-            this.logger.debug(
-              { query, vars, Category: 'sp00ky-client::Database::query' },
-              'Executing query'
-            );
-            const pending = this.client.query(query, vars);
-            // In SurrealDB 2.0, .query() collects results by default.
-            // We cast to T directly as proper typing depends on the caller knowing the return structure.
-            // "timed out" in the message is load-bearing: `classifySyncError`
-            // keys off it to classify this as `network` so the sync queues
-            // retry rather than rolling the mutation back.
-            const result = (await withTimeout(
-              pending as unknown as Promise<T>,
-              this.queryTimeoutMs,
-              () => this.timeoutError(query)
-            )) as T;
-            const duration = performance.now() - startTime;
+    await this.acquireQuerySlot();
+    try {
+      await this.beforeQuery();
+      const startTime = performance.now();
+      try {
+        this.logger.debug(
+          { query, vars, Category: 'sp00ky-client::Database::query' },
+          'Executing query'
+        );
+        const pending = this.client.query(query, vars);
+        // In SurrealDB 2.0, .query() collects results by default.
+        // We cast to T directly as proper typing depends on the caller knowing the return structure.
+        // "timed out" in the message is load-bearing: `classifySyncError`
+        // keys off it to classify this as `network` so the sync queues
+        // retry rather than rolling the mutation back.
+        const result = (await withTimeout(
+          pending as unknown as Promise<T>,
+          this.queryTimeoutMs,
+          () => this.timeoutError(query)
+        )) as T;
+        const duration = performance.now() - startTime;
 
-            // Emit query event
-            this.events.emit(this.eventType, {
-              query,
-              vars,
-              duration,
-              success: true,
-              timestamp: Date.now(),
-            });
-
-            resolve(result);
-            this.logger.trace(
-              { query, result, Category: 'sp00ky-client::Database::query' },
-              'Query executed successfully'
-            );
-          } catch (err) {
-            const duration = performance.now() - startTime;
-
-            // Emit query event with error
-            this.events.emit(this.eventType, {
-              query,
-              vars,
-              duration,
-              success: false,
-              error: err instanceof Error ? err.message : String(err),
-              timestamp: Date.now(),
-            });
-
-            this.logger.error(
-              { query, vars, err, Category: 'sp00ky-client::Database::query' },
-              'Query execution failed'
-            );
-            // oxlint-disable-next-line no-multiple-resolved -- resolve/reject are in try/catch, mutually exclusive
-            reject(err);
-          }
-        })
-        .catch(() => {
-          // Ignore queue errors to keep the chain alive; the specific promise was rejected above.
+        // Emit query event
+        this.events.emit(this.eventType, {
+          query,
+          vars,
+          duration,
+          success: true,
+          timestamp: Date.now(),
         });
-    });
+
+        this.logger.trace(
+          { query, result, Category: 'sp00ky-client::Database::query' },
+          'Query executed successfully'
+        );
+        return result;
+      } catch (err) {
+        const duration = performance.now() - startTime;
+
+        // Emit query event with error
+        this.events.emit(this.eventType, {
+          query,
+          vars,
+          duration,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          timestamp: Date.now(),
+        });
+
+        this.logger.error(
+          { query, vars, err, Category: 'sp00ky-client::Database::query' },
+          'Query execution failed'
+        );
+        throw err;
+      }
+    } finally {
+      this.releaseQuerySlot();
+    }
   }
 
   async execute<T>(query: SealedQuery<T>, vars?: Record<string, unknown>): Promise<T> {

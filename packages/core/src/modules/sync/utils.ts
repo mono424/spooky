@@ -224,6 +224,83 @@ export function buildSubqueryListRefSelect(table: string): string {
 }
 
 /**
+ * One round trip for the edges of MANY queries: primary and subquery rows
+ * together, split client-side on `parent`. Replaces two selects per query per
+ * poll tick, which on a page with 20+ live queries was ~50 serialized round
+ * trips per cycle and kept the remote busy full-time.
+ */
+export function buildListRefBatchSelect(table: string): string {
+  return `SELECT in, out, version, parent FROM ${table} WHERE in IN $ins`;
+}
+
+/**
+ * `rowCount` for many `_00_query` rows at once, keyed by id so the caller does
+ * not depend on the array order. Same semantics as
+ * {@link buildQueryRowCountSelect}: a row the session cannot read comes back
+ * without an id and must be treated as "unknown".
+ */
+export function buildQueryRowCountBatchSelect(): string {
+  return 'SELECT VALUE { id: id, rowCount: rowCount } FROM $ins';
+}
+
+/** Known edges one poll round trip may carry before the cycle is split. */
+export const LIST_REF_POLL_ROW_BUDGET = 1_500;
+/** A view at or past this many edges is "large": it rides on LIVE and is only
+ *  re-polled every {@link LIST_REF_POLL_LARGE_VIEW_MIN_AGE_MS}. */
+export const LIST_REF_POLL_LARGE_VIEW_ROWS = 1_000;
+export const LIST_REF_POLL_LARGE_VIEW_MIN_AGE_MS = 15_000;
+
+export interface ListRefPollCandidate {
+  hash: string;
+  /** Edges the client currently holds for the query (`remoteArray.length`). */
+  rows: number;
+  /** When the query was last refreshed by the poll; `0` = never. */
+  lastPolledAt: number;
+}
+
+/**
+ * Split the active queries into the round trips of one poll cycle.
+ *
+ * Every query that is due is refreshed once per cycle, oldest refresh first,
+ * packed greedily into chunks of at most `rowBudget` known edges so one
+ * response never carries a whole page's worth of ids at once. A view with
+ * `largeViewRows` or more edges is only due once `largeViewMinAgeMs` has
+ * passed since its last refresh (LIVE remains its primary path); a chunk
+ * always holds at least one query, so a single huge view still refreshes.
+ */
+export function planListRefPollChunks(
+  candidates: ListRefPollCandidate[],
+  opts: { now: number; rowBudget?: number; largeViewRows?: number; largeViewMinAgeMs?: number }
+): string[][] {
+  const {
+    now,
+    rowBudget = LIST_REF_POLL_ROW_BUDGET,
+    largeViewRows = LIST_REF_POLL_LARGE_VIEW_ROWS,
+    largeViewMinAgeMs = LIST_REF_POLL_LARGE_VIEW_MIN_AGE_MS,
+  } = opts;
+  const due = candidates
+    .filter((c) => c.rows < largeViewRows || now - c.lastPolledAt >= largeViewMinAgeMs)
+    .sort(
+      (a, b) => a.lastPolledAt - b.lastPolledAt || (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0)
+    );
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let currentRows = 0;
+  for (const c of due) {
+    const cost = Math.max(1, c.rows);
+    if (current.length > 0 && currentRows + cost > rowBudget) {
+      chunks.push(current);
+      current = [];
+      currentRows = 0;
+    }
+    current.push(c.hash);
+    currentRows += cost;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/**
  * Resolve the effective list-ref poll interval. Negative or zero
  * values fall back to the default — accepting them would either
  * disable polling silently or busy-loop the event loop.

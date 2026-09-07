@@ -52,7 +52,7 @@ db.query('thread')                              // QueryBuilder<Schema, 'thread'
 
 - **`select()` is exclusive.** Either select specific fields or omit the call for `*` — don't chain `.select(...)` more than once.
 - **Relationships must exist in the schema.** `related('foo')` is a type error if `foo` isn't a relationship column. Run `spky generate` after editing the `.surql` to refresh the type.
-- **`where` is equality-only.** For `>`, `<`, `IN`, free-form predicates, use `db.useRemote(s => s.query(...))` and write SurQL directly.
+- **`where` is equality-only.** For `>`, `<`, `IN`, free-form predicates, use `db.remoteQuery(sql, vars)` (one-shot, through the client's remote path) or `db.queryRaw(sql, params, ttl)` and write SurQL directly.
 - **Record-ID strings are auto-parsed.** Passing `"thread:abc"` into a `where` matches a `RecordId('thread', 'abc')`. Don't double-wrap.
 - **The serialized SurQL is hashable.** `cyrb53` over the query string drives cache keys — two builders that produce identical SurQL share a cache entry.
 

@@ -43,16 +43,16 @@ describe('Sp00kyClient.initQuery structural invariants', () => {
     );
   });
 
-  it('finishQueryInit hydrates strictly before enqueuing register', () => {
+  it('finishQueryInit enqueues register before the hydrate fetch', () => {
     const body = methodBody('finishQueryInit');
     const fetchIdx = body.indexOf('this.remote.query');
     const enqueueIdx = body.indexOf('this.sync.enqueueDownEvent');
     expect(fetchIdx).toBeGreaterThanOrEqual(0);
     expect(enqueueIdx).toBeGreaterThanOrEqual(0);
     expect(
-      fetchIdx,
-      'hydrate must settle before the register enqueue so a stale one-shot snapshot can never land after the authoritative _00_list_ref overwrite'
-    ).toBeLessThan(enqueueIdx);
+      enqueueIdx,
+      'the authoritative register must never wait on the one-shot hydrate read (a windowed list paid a full-table scan per window before its own registration could start); applyHydration drops a hydrate that lands after the registration'
+    ).toBeLessThan(fetchIdx);
   });
 
   it('finishQueryInit captures the bucket epoch before the remote fetch', () => {
@@ -119,16 +119,16 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
     });
   });
 
-  it('cold path with hydrate enabled: fetch → hydrate → enqueue, in order', async () => {
+  it('cold path with hydrate enabled: enqueue → fetch → hydrate, in order', async () => {
     await client.finishQueryInit(hash, q, {});
-    expect(calls).toEqual(['fetch', 'hydrate', 'enqueue']);
+    expect(calls).toEqual(['enqueue', 'fetch', 'hydrate']);
     expect(enqueued).toEqual([{ type: 'register', payload: { hash } }]);
   });
 
   it('a preloaded query still hydrates when enabled — cache-first never depends on WHY rows are cached', async () => {
     client.preloadedHashes.add(q.hash);
     await client.finishQueryInit(hash, q, {});
-    expect(calls).toEqual(['fetch', 'hydrate', 'enqueue']);
+    expect(calls).toEqual(['enqueue', 'fetch', 'hydrate']);
   });
 
   it('warm query (not cold) goes straight to enqueue', async () => {
@@ -143,7 +143,7 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
       throw new Error('offline');
     };
     await expect(client.finishQueryInit(hash, q, {})).resolves.toBeUndefined();
-    expect(calls).toEqual(['fetch', 'enqueue']);
+    expect(calls).toEqual(['enqueue', 'fetch']);
   });
 
   it('a bucket switch during the fetch skips applyHydration', async () => {
@@ -153,7 +153,7 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
       return [[{ id: 'user:a' }]];
     };
     await client.finishQueryInit(hash, q, {});
-    expect(calls).toEqual(['fetch', 'enqueue']);
+    expect(calls).toEqual(['enqueue', 'fetch']);
   });
 
   it('default (instantHydrate unset) does not hydrate — register lifecycle is the only freshness path', async () => {
@@ -177,7 +177,7 @@ describe('Sp00kyClient.finishQueryInit behavior', () => {
     expect(h2).toBe(hash);
     // Let the shared chain drain.
     await Promise.all([...client.pendingQueryInits.values()]);
-    expect(calls).toEqual(['fetch', 'hydrate', 'enqueue']);
+    expect(calls).toEqual(['enqueue', 'fetch', 'hydrate']);
     expect(client.pendingQueryInits.size).toBe(0);
   });
 });

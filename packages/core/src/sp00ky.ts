@@ -1449,12 +1449,13 @@ export class Sp00kyClient<S extends SchemaStructure> {
     // Local-first paint: the hash is returned as soon as the LOCAL registration
     // above completes — `queryState.records` is already seeded from the local
     // cache/SSP snapshot, so `useQuery` subscribes and paints from memory with
-    // zero network on the paint path. Instant-hydrate and the `register`
-    // down-event continue in a background chain (hydrate strictly before
-    // enqueue, so a stale one-shot snapshot can never land after the sync's
-    // authoritative `_00_list_ref` overwrite). Concurrent mounts of the same
-    // query share one chain; a sequential re-mount starts a fresh one so its
-    // `register` re-enqueue keeps freshening warm data on use.
+    // zero network on the paint path. The `register` down-event and the
+    // instant-hydrate continue in a background chain: register is enqueued
+    // first (the authoritative path never waits on a one-shot read), and a
+    // hydrate that lands after the registration is dropped by
+    // `applyHydration`. Concurrent mounts of the same query share one chain; a
+    // sequential re-mount starts a fresh one so its `register` re-enqueue
+    // keeps freshening warm data on use.
     if (!this.pendingQueryInits.has(hash)) {
       const chain = this.finishQueryInit(hash, q, params).finally(() => {
         this.pendingQueryInits.delete(hash);
@@ -1466,20 +1467,40 @@ export class Sp00kyClient<S extends SchemaStructure> {
   }
 
   /**
-   * Background tail of {@link initQuery}: instant-hydrate (opt-in via
-   * `config.instantHydrate`, and only when the query is cold) followed by
-   * enqueuing the `register` down-event. Never rejects — both halves catch and
-   * log, so `void`-ing the returned promise can't produce an unhandled
-   * rejection. By default (hydrate off) the register lifecycle is the single
-   * freshness path; the one-shot fetch is an optimization apps enable
-   * explicitly, and it runs regardless of preload state — cache-first delivery
-   * never depends on WHY rows are cached.
+   * Background tail of {@link initQuery}: enqueue the `register` down-event,
+   * then instant-hydrate (opt-in via `config.instantHydrate`, and only when
+   * the query is cold). Never rejects — both halves catch and log, so
+   * `void`-ing the returned promise can't produce an unhandled rejection. By
+   * default (hydrate off) the register lifecycle is the single freshness path;
+   * the one-shot fetch is an optimization apps enable explicitly, and it runs
+   * regardless of preload state — cache-first delivery never depends on WHY
+   * rows are cached.
+   *
+   * Register goes first on purpose. The hydrate used to run strictly before
+   * the enqueue, so a windowed list's one-shot read (a full-table scan when
+   * the app has no matching index) held its own registration back by seconds
+   * per window. Now whichever answer lands first paints; a hydrate that
+   * arrives after the registration is dropped (`applyHydration`).
    */
   private async finishQueryInit(
     hash: string,
     q: InnerQuery<any, any, any>,
     params: Record<string, any>
   ): Promise<void> {
+    try {
+      await this.sync.enqueueDownEvent({
+        type: 'register',
+        payload: {
+          hash,
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        { err, hash, Category: 'sp00ky-client::Sp00kyClient::initQuery' },
+        'Failed to enqueue register down-event'
+      );
+    }
+
     if (this.config.instantHydrate === true && this.dataModule.isCold(hash)) {
       try {
         // Fence against bucket switches: rows fetched under the previous
@@ -1503,20 +1524,6 @@ export class Sp00kyClient<S extends SchemaStructure> {
           );
         }
       }
-    }
-
-    try {
-      await this.sync.enqueueDownEvent({
-        type: 'register',
-        payload: {
-          hash,
-        },
-      });
-    } catch (err) {
-      this.logger.error(
-        { err, hash, Category: 'sp00ky-client::Sp00kyClient::initQuery' },
-        'Failed to enqueue register down-event'
-      );
     }
   }
 
@@ -1702,6 +1709,18 @@ export class Sp00kyClient<S extends SchemaStructure> {
 
   async useRemote<T>(fn: (client: Surreal) => Promise<T> | T): Promise<T> {
     return fn(this.remote.getClient());
+  }
+
+  /**
+   * Run one raw SurrealQL statement on the remote through the client's own
+   * query path: the connect gate (it never runs on a socket whose namespace
+   * and token are not applied yet), the per-statement timeout and the
+   * concurrency limit. Prefer this over {@link useRemote} for one-shot reads
+   * such as counts; `useRemote` hands out the bare SDK client and raced a
+   * reconnect with "Specify a namespace to use".
+   */
+  async remoteQuery<T extends unknown[]>(sql: string, vars?: Record<string, unknown>): Promise<T> {
+    return this.remote.query<T>(sql, vars);
   }
 
   /**

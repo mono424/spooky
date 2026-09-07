@@ -103,6 +103,12 @@ built query and await it.
 For SurrealQL the builder can't express, `db.queryRaw(sql, params, ttl)` is the escape hatch. Raw
 queries are **not** reactive.
 
+For a one-shot read straight from the server, a `count()` for a virtualized list say, use
+`db.remoteQuery(sql, params)`. It runs the statement through the client's own remote path (the
+connect gate, the per-statement timeout and the concurrency limit) and resolves with the SurrealDB
+result array. Prefer it over `db.useRemote(s => s.query(...))`, which hands out the bare SDK
+client and can race a reconnect.
+
 ## Next
 
 <CardGrid>

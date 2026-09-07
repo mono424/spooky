@@ -18,16 +18,34 @@ import type { RecordId, Uuid } from 'surrealdb';
 import {
   applyRecordVersionDiff,
   ArraySyncer,
+  buildListRefBatchSelect,
   buildListRefSelect,
+  buildQueryRowCountBatchSelect,
   buildQueryRowCountSelect,
   buildSubqueryListRefSelect,
   createDiffFromDbOp,
   diffRecordVersionArray,
   listRefPollDelayMs,
+  planListRefPollChunks,
   recordVersionArraysEqual,
   resolveListRefPollInterval,
 } from './utils';
 import { SyncEngine } from './engine';
+
+/** One query's server-side `_00_list_ref` state as read by the poll. */
+interface ListRefSnapshot {
+  primary: RecordVersionArray;
+  subquery: RecordVersionArray;
+  /** `_00_query.rowCount`; `null` when the row was not readable. */
+  rowCount: number | null;
+}
+
+interface ListRefEdgeRow {
+  in: RecordId<string>;
+  out: RecordId<string>;
+  version: number;
+  parent?: unknown;
+}
 import { SyncScheduler } from './scheduler';
 import type { SchemaStructure } from '@spooky-sync/query-builder';
 import type { CacheModule } from '../cache/index';
@@ -186,6 +204,10 @@ export class Sp00kySync<S extends SchemaStructure> {
   // poll pinned at 500ms forever whenever LIVE wasn't firing (the common case
   // on a quiet page, thanks to the cross-session LIVE-permission gap).
   private listRefIdleStreak: number = 0;
+
+  // `queryHash` -> wall-clock ms of its last poll refresh. Drives the per-cycle
+  // plan (`planListRefPollChunks`): oldest first, large views less often.
+  private listRefPolledAt: Map<string, number> = new Map();
 
   // `${queryHash}:${recordId}` -> consecutive rounds the id has been "still
   // remote" (left the query's list_ref but still exists upstream). Used to
@@ -865,6 +887,7 @@ export class Sp00kySync<S extends SchemaStructure> {
       this.listRefPollTimer = setTimeout(async () => {
         if (!this.listRefPollRunning) return;
         let changed = false;
+        const startedAt = Date.now();
         const tick = (async () => {
           changed = await this.pollListRefForActiveQueries();
         })();
@@ -883,10 +906,18 @@ export class Sp00kySync<S extends SchemaStructure> {
           // poll after it lands, not after the backoff has grown to the cap.
           const awaitingMembership = this.dataModule.hasSettledWritesPending();
           this.listRefIdleStreak = changed || awaitingMembership ? 0 : this.listRefIdleStreak + 1;
-          const next = listRefPollDelayMs({
-            idleStreak: this.listRefIdleStreak,
-            baseIntervalMs: this.refSyncIntervalMs,
-          });
+          // Never let the poll take more than half the wall clock: a cycle that
+          // took longer than the cadence (many queries, slow link) waits at
+          // least its own duration before the next one, so it cannot occupy
+          // the remote back-to-back the way the old per-query poll did.
+          const cycleMs = Date.now() - startedAt;
+          const next = Math.max(
+            listRefPollDelayMs({
+              idleStreak: this.listRefIdleStreak,
+              baseIntervalMs: this.refSyncIntervalMs,
+            }),
+            cycleMs
+          );
           schedule(next);
         }
       }, delayMs);
@@ -903,9 +934,10 @@ export class Sp00kySync<S extends SchemaStructure> {
   }
 
   /**
-   * One poll cycle: refetch `_00_list_ref` for every active query. Returns
-   * whether ANY query's remoteArray actually changed — the scheduler uses this
-   * to drive the adaptive idle backoff.
+   * One poll cycle: refetch `_00_list_ref` for the active queries that are due,
+   * one round trip per chunk (see `planListRefPollChunks`). Returns whether ANY
+   * query's remoteArray actually changed — the scheduler uses this to drive the
+   * adaptive idle backoff.
    *
    * Also the ONLY health signal that runs while the page is idle. Sync health is
    * otherwise activity-driven (mutations/registrations via the scheduler,
@@ -930,6 +962,20 @@ export class Sp00kySync<S extends SchemaStructure> {
       }
       return false;
     }
+    const now = Date.now();
+    // Forget queries that went away so the map cannot grow with the session.
+    const active = new Set(hashes);
+    for (const hash of this.listRefPolledAt.keys()) {
+      if (!active.has(hash)) this.listRefPolledAt.delete(hash);
+    }
+    const chunks = planListRefPollChunks(
+      hashes.map((hash) => ({
+        hash,
+        rows: this.dataModule.getQueryByHash(hash)?.config.remoteArray?.length ?? 0,
+        lastPolledAt: this.listRefPolledAt.get(hash) ?? 0,
+      })),
+      { now }
+    );
     let anyChanged = false;
     // `reached` = the server answered at least once this cycle (a success, or an
     // *application* error, which still proves reachability). `firstNetworkErr`
@@ -939,9 +985,10 @@ export class Sp00kySync<S extends SchemaStructure> {
     // fault owned by the registration path, not a reachability signal).
     let reached = false;
     let firstNetworkErr: unknown;
-    for (const hash of hashes) {
+    for (const chunk of chunks) {
+      let snapshots: Map<string, ListRefSnapshot>;
       try {
-        if (await this.refetchListRefForQuery(hash)) anyChanged = true;
+        snapshots = await this.fetchListRefSnapshots(chunk);
         reached = true;
       } catch (err) {
         if (classifySyncError(err) === 'network') {
@@ -952,11 +999,29 @@ export class Sp00kySync<S extends SchemaStructure> {
         this.logger.debug(
           {
             err: (err as Error)?.message ?? err,
-            hash,
+            hashes: chunk,
             Category: 'sp00ky-client::Sp00kySync::pollListRefForActiveQueries',
           },
-          'Per-query list_ref poll failed'
+          'list_ref poll round trip failed'
         );
+        continue;
+      }
+      for (const hash of chunk) {
+        const snapshot = snapshots.get(hash);
+        if (!snapshot) continue;
+        this.listRefPolledAt.set(hash, now);
+        try {
+          if (await this.applyListRefSnapshot(hash, snapshot)) anyChanged = true;
+        } catch (err) {
+          this.logger.debug(
+            {
+              err: (err as Error)?.message ?? err,
+              hash,
+              Category: 'sp00ky-client::Sp00kySync::pollListRefForActiveQueries',
+            },
+            'Per-query list_ref poll apply failed'
+          );
+        }
       }
     }
     // Call the private outcome recorder directly rather than routing through the
@@ -971,24 +1036,128 @@ export class Sp00kySync<S extends SchemaStructure> {
   }
 
   /**
-   * Pull the upstream list_ref entries for `queryHash`, diff them
-   * against the local `remoteArray` cache, sync any added/updated rows
-   * through the SyncEngine, then persist the new remoteArray. This is
-   * the same shape `createRemoteQuery` does for its initial fetch and
-   * what `handleRemoteListRefChange` does per-LIVE-event — we reuse
-   * it on a timer as a fallback for missed LIVE notifications.
+   * The server's current `_00_list_ref` state for a chunk of queries in ONE
+   * round trip: primary edges, subquery-child edges and `_00_query.rowCount`.
+   * Every hash whose query still exists gets an entry (empty arrays and
+   * `rowCount: null` when nothing was readable), so a caller can tell "no
+   * edges" from "not asked". A hash is left out only when the select did not
+   * come back as an array at all — the old per-query code skipped the apply in
+   * that case too, since a non-array is not a membership set.
+   *
+   * Guarded against a batch that silently matches nothing: if the select
+   * returned no edge at all while the client holds edges for a query the
+   * server still reports rows for, the batch is not trusted and the chunk is
+   * re-read one query at a time with the single-query select. An empty set
+   * taken at face value would be recorded as the removal of every row.
    */
-  private async refetchListRefForQuery(queryHash: string): Promise<boolean> {
+  private async fetchListRefSnapshots(hashes: string[]): Promise<Map<string, ListRefSnapshot>> {
+    const listRefTbl = this.listRefTable();
+    const ids: RecordId<string>[] = [];
+    const hashById = new Map<string, string>();
+    const out = new Map<string, ListRefSnapshot>();
+    for (const hash of hashes) {
+      const queryState = this.dataModule.getQueryByHash(hash);
+      if (!queryState) continue;
+      ids.push(queryState.config.id);
+      hashById.set(encodeRecordId(queryState.config.id), hash);
+    }
+    if (ids.length === 0) return out;
+    if (ids.length === 1) {
+      const hash = hashById.get(encodeRecordId(ids[0]))!;
+      const single = await this.fetchListRefSnapshot(ids[0]);
+      if (single) out.set(hash, single);
+      return out;
+    }
+    const [edges, counts] = await this.remote.query<
+      [ListRefEdgeRow[] | null, ({ id?: RecordId<string>; rowCount?: number | null } | null)[] | null]
+    >(`${buildListRefBatchSelect(listRefTbl)};\n${buildQueryRowCountBatchSelect()}`, { ins: ids });
+    if (!Array.isArray(edges)) return out;
+    for (const hash of hashById.values()) {
+      out.set(hash, { primary: [], subquery: [], rowCount: null });
+    }
+    for (const row of edges) {
+      const hash = hashById.get(encodeRecordId(row.in));
+      if (!hash) continue;
+      const snapshot = out.get(hash)!;
+      const pair: [string, number] = [encodeRecordId(row.out), row.version];
+      if (row.parent == null) snapshot.primary.push(pair);
+      else snapshot.subquery.push(pair);
+    }
+    for (const count of Array.isArray(counts) ? counts : []) {
+      if (!count || !count.id) continue;
+      const hash = hashById.get(encodeRecordId(count.id));
+      if (!hash) continue;
+      out.get(hash)!.rowCount = typeof count.rowCount === 'number' ? count.rowCount : null;
+    }
+    const suspect =
+      edges.length === 0 &&
+      Array.from(out.entries()).some(([hash, snapshot]) => {
+        const held = this.dataModule.getQueryByHash(hash)?.config.remoteArray?.length ?? 0;
+        return held > 0 && (snapshot.rowCount ?? 0) > 0;
+      });
+    if (suspect) {
+      this.logger.warn(
+        { hashes, Category: 'sp00ky-client::Sp00kySync::fetchListRefSnapshots' },
+        'Batched list_ref select returned no edges for queries that hold rows; re-reading one query at a time'
+      );
+      for (const hash of Array.from(out.keys())) {
+        const queryState = this.dataModule.getQueryByHash(hash);
+        if (!queryState) {
+          out.delete(hash);
+          continue;
+        }
+        const single = await this.fetchListRefSnapshot(queryState.config.id);
+        if (single) out.set(hash, single);
+        else out.delete(hash);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Single-query form of {@link fetchListRefSnapshots}: the selects the
+   * registration path has always used, in one statement batch. `null` when
+   * the primary select did not come back as an array.
+   */
+  private async fetchListRefSnapshot(id: RecordId<string>): Promise<ListRefSnapshot | null> {
+    const listRefTbl = this.listRefTable();
+    const [items, serverRowCount, children] = await this.remote.query<
+      [
+        { out: RecordId<string>; version: number }[] | null,
+        number | null,
+        { out: RecordId<string>; version: number }[] | null,
+      ]
+    >(
+      `${buildListRefSelect(listRefTbl)};\n${buildQueryRowCountSelect()};\n${buildSubqueryListRefSelect(listRefTbl)}`,
+      { in: id }
+    );
+    if (!Array.isArray(items)) return null;
+    const toPairs = (rows: { out: RecordId<string>; version: number }[] | null): RecordVersionArray =>
+      Array.isArray(rows) ? rows.map((item) => [encodeRecordId(item.out), item.version]) : [];
+    return {
+      primary: toPairs(items),
+      subquery: toPairs(children),
+      rowCount: typeof serverRowCount === 'number' ? serverRowCount : null,
+    };
+  }
+
+  /**
+   * Land one poll snapshot for `queryHash`: diff the server's edges against the
+   * cached `remoteArray`, sync any added/updated rows through the SyncEngine,
+   * persist the new remoteArray and converge the subquery children. This is
+   * the same shape `createRemoteQuery` does for its initial fetch and what
+   * `handleRemoteListRefChange` does per-LIVE-event — we reuse it on a timer
+   * as a fallback for missed LIVE notifications. Returns whether membership
+   * changed.
+   */
+  private async applyListRefSnapshot(
+    queryHash: string,
+    snapshot: ListRefSnapshot
+  ): Promise<boolean> {
     const queryState = this.dataModule.getQueryByHash(queryHash);
     if (!queryState) return false;
-    const listRefTbl = this.listRefTable();
-    const [items, serverRowCount] = await this.remote.query<
-      [{ out: RecordId<string>; version: number }[], number | null]
-    >(`${buildListRefSelect(listRefTbl)};\n${buildQueryRowCountSelect()}`, {
-      in: queryState.config.id,
-    });
-    if (!Array.isArray(items)) return false;
-    const fresh: RecordVersionArray = items.map((item) => [encodeRecordId(item.out), item.version]);
+    const fresh = snapshot.primary;
+    const serverRowCount = snapshot.rowCount;
     // Capture which ids LEFT the query's window (present in the cached
     // remoteArray, absent from `fresh`) BEFORE we overwrite remoteArray — these
     // are cross-window deletes (or rows that scrolled out). They drive the
@@ -1026,7 +1195,7 @@ export class Sp00kySync<S extends SchemaStructure> {
         {
           err: (err as Error)?.message ?? err,
           queryHash,
-          Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery',
+          Category: 'sp00ky-client::Sp00kySync::applyListRefSnapshot',
         },
         'syncQuery failed during poll'
       );
@@ -1039,12 +1208,12 @@ export class Sp00kySync<S extends SchemaStructure> {
     // Cross-session fallback for `.related()` child rows: the LIVE-permission
     // gap can drop child-edge notifications, so converge their bodies on the
     // poll too (idempotent — no-op when nothing changed).
-    await this.syncSubqueryChildren(queryHash).catch((err) => {
+    await this.applySubqueryChildren(queryHash, snapshot.subquery).catch((err) => {
       this.logger.info(
         {
           err: (err as Error)?.message ?? err,
           queryHash,
-          Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery',
+          Category: 'sp00ky-client::Sp00kySync::applyListRefSnapshot',
         },
         'Subquery child sync failed during poll'
       );
@@ -1062,7 +1231,7 @@ export class Sp00kySync<S extends SchemaStructure> {
           {
             err: (err as Error)?.message ?? err,
             queryHash,
-            Category: 'sp00ky-client::Sp00kySync::refetchListRefForQuery',
+            Category: 'sp00ky-client::Sp00kySync::applyListRefSnapshot',
           },
           'notifyQuerySynced failed during poll-removal re-render'
         );
@@ -2054,6 +2223,18 @@ export class Sp00kySync<S extends SchemaStructure> {
     if (!Array.isArray(items)) return;
 
     const fresh: RecordVersionArray = items.map((item) => [encodeRecordId(item.out), item.version]);
+    await this.applySubqueryChildren(queryHash, fresh);
+  }
+
+  /**
+   * Converge a `.related()` query's child bodies onto `fresh` (the server's
+   * current child edges). Shared by the registration path above and the poll,
+   * which reads the child edges in its batched round trip. See
+   * {@link syncSubqueryChildren} for the deletion-safety rules.
+   */
+  private async applySubqueryChildren(queryHash: string, fresh: RecordVersionArray): Promise<void> {
+    const queryState = this.dataModule.getQueryByHash(queryHash);
+    if (!queryState) return;
     const prev = queryState.config.subqueryRemoteArray ?? [];
     if (recordVersionArraysEqual(fresh, prev)) return; // idempotent: nothing new
 

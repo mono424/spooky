@@ -596,6 +596,11 @@ export interface QueryState {
   /** Set once `applyHydration` has run for this query, so the cold instant-hydrate
    * path fires at most once per query (see DataModule.isCold/applyHydration). */
   hydrated?: boolean;
+  /** Set once a server-side membership set has been accepted this session
+   * (`updateQueryRemoteArray`). The `register` down-event is enqueued before
+   * the instant-hydrate, so a hydrate that finishes later must not prime
+   * membership over the authoritative set. Ephemeral. */
+  serverMembership?: boolean;
   /** Set once `notifyQuerySynced` has emitted for this registration lifetime.
    * Ephemeral (unlike the persisted `updateCount`), so a re-registered query
    * always emits at least once even when its records are unchanged — otherwise

@@ -86,11 +86,15 @@ debounced. Defaults to `500`.
 
 #### `refSyncIntervalMs`
 
-Cadence (ms) for the `_00_list_ref` poll that catches cross-session
+Base cadence (ms) for the `_00_list_ref` poll that catches cross-session
 UPDATEs that the SurrealDB v3 LIVE-permission gap drops. Defaults
-to `500`; non-positive values fall back to the default. The poll
-self-throttles to a longer interval when LIVE is delivering events
-healthily (see [Architecture](/docs/reference/architecture)).
+to `500`; non-positive values fall back to the default. One cycle reads
+every active query's edges in a handful of round trips (batched by a
+row budget, views past 1,000 rows only every 15s), backs off toward 5s
+while nothing changes, and never runs back-to-back: the next tick waits
+at least as long as the previous cycle took. Statements on the remote
+connection run concurrently (up to 6 in flight), so the poll does not
+hold registrations or one-shot reads behind it.
 
 #### `persistCircuit`
 

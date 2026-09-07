@@ -9,6 +9,9 @@ import {
   DEFAULT_LIST_REF_POLL_INTERVAL_MS,
   buildListRefSelect,
   buildSubqueryListRefSelect,
+  buildListRefBatchSelect,
+  buildQueryRowCountBatchSelect,
+  planListRefPollChunks,
   nextPollDelayMs,
   listRefPollDelayMs,
   LIST_REF_POLL_MAX_INTERVAL_MS,
@@ -574,5 +577,55 @@ describe('recordVersionArraysEqual', () => {
 
   it('treats two empty arrays as equal', () => {
     expect(recordVersionArraysEqual([], [])).toBe(true);
+  });
+});
+
+describe('list_ref poll batching', () => {
+  it('reads many queries in one statement and their rowCounts keyed by id', () => {
+    expect(buildListRefBatchSelect('_00_list_ref_user_abc')).toBe(
+      'SELECT in, out, version, parent FROM _00_list_ref_user_abc WHERE in IN $ins'
+    );
+    expect(buildQueryRowCountBatchSelect()).toBe(
+      'SELECT VALUE { id: id, rowCount: rowCount } FROM $ins'
+    );
+  });
+
+  it('packs due queries oldest-first under the row budget', () => {
+    const chunks = planListRefPollChunks(
+      [
+        { hash: 'a', rows: 600, lastPolledAt: 300 },
+        { hash: 'b', rows: 600, lastPolledAt: 100 },
+        { hash: 'c', rows: 0, lastPolledAt: 0 },
+        { hash: 'd', rows: 900, lastPolledAt: 200 },
+      ],
+      { now: 1_000, rowBudget: 1_400 }
+    );
+    // c (never polled) first, then b, d, a by age; d does not fit next to b.
+    expect(chunks).toEqual([['c', 'b'], ['d'], ['a']]);
+  });
+
+  it('never splits below one query and always refreshes a lone huge view', () => {
+    expect(
+      planListRefPollChunks([{ hash: 'big', rows: 10_000, lastPolledAt: 0 }], {
+        now: 100_000,
+        rowBudget: 100,
+      })
+    ).toEqual([['big']]);
+  });
+
+  it('defers large views until their minimum age has passed', () => {
+    const large = { hash: 'large', rows: 5_000, lastPolledAt: 990_000 };
+    const small = { hash: 'small', rows: 10, lastPolledAt: 990_000 };
+    expect(
+      planListRefPollChunks([large, small], { now: 1_000_000, largeViewRows: 1_000, largeViewMinAgeMs: 15_000 })
+    ).toEqual([['small']]);
+    expect(
+      planListRefPollChunks([large, small], { now: 1_006_000, largeViewRows: 1_000, largeViewMinAgeMs: 15_000 })
+    // Same age: hash order breaks the tie, and the large view fills its own chunk.
+    ).toEqual([['large'], ['small']]);
+  });
+
+  it('returns no chunks when nothing is due', () => {
+    expect(planListRefPollChunks([], { now: 1 })).toEqual([]);
   });
 });

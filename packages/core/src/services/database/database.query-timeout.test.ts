@@ -23,11 +23,18 @@ const silentLogger: any = (() => {
 
 class TestService extends AbstractDatabaseService {
   protected eventType = DatabaseEventTypes.RemoteQuery;
-  constructor(client: any, timeoutMs: number) {
+  constructor(client: any, timeoutMs: number, maxConcurrent = 1) {
     super(client, silentLogger, createDatabaseEventSystem());
     this.queryTimeoutMs = timeoutMs;
+    this.maxConcurrentQueries = maxConcurrent;
   }
   async connect(): Promise<void> {}
+}
+
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
 }
 
 describe('AbstractDatabaseService query timeout', () => {
@@ -79,5 +86,55 @@ describe('AbstractDatabaseService query timeout', () => {
     await expect(svc.query('SELECT 1')).resolves.toEqual([['ok']]);
     // No timer was armed, so a slow-but-alive query is never cut off.
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps statements strictly ordered at the default limit of 1', async () => {
+    const first = deferred<unknown[]>();
+    const client = { query: vi.fn().mockImplementationOnce(() => first.promise).mockResolvedValue([['second']]) };
+    const svc = new TestService(client, 0);
+
+    const a = svc.query('SELECT 1');
+    const b = svc.query('SELECT 2');
+    await vi.advanceTimersByTimeAsync(0);
+    // The second statement has not been handed to the SDK while the first is in flight.
+    expect(client.query).toHaveBeenCalledTimes(1);
+    first.resolve([['first']]);
+    await expect(a).resolves.toEqual([['first']]);
+    await expect(b).resolves.toEqual([['second']]);
+    expect(client.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs statements concurrently up to maxConcurrentQueries and queues the rest', async () => {
+    const d1 = deferred<unknown[]>();
+    const d2 = deferred<unknown[]>();
+    const client = {
+      query: vi
+        .fn()
+        .mockImplementationOnce(() => d1.promise)
+        .mockImplementationOnce(() => d2.promise)
+        .mockResolvedValue([['third']]),
+    };
+    const svc = new TestService(client, 0, 2);
+
+    const a = svc.query('SELECT 1');
+    const b = svc.query('SELECT 2');
+    const c = svc.query('SELECT 3');
+    await vi.advanceTimersByTimeAsync(0);
+    // Two in flight at once; the third waits for a slot.
+    expect(client.query).toHaveBeenCalledTimes(2);
+    d2.resolve([['second']]);
+    await expect(b).resolves.toEqual([['second']]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.query).toHaveBeenCalledTimes(3);
+    d1.resolve([['first']]);
+    await expect(a).resolves.toEqual([['first']]);
+    await expect(c).resolves.toEqual([['third']]);
+  });
+
+  it('releases the slot when a statement fails', async () => {
+    const client = { query: vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue([['ok']]) };
+    const svc = new TestService(client, 0);
+    await expect(svc.query('SELECT 1')).rejects.toThrow('boom');
+    await expect(svc.query('SELECT 2')).resolves.toEqual([['ok']]);
   });
 });

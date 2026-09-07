@@ -1121,6 +1121,10 @@ export class DataModule<S extends SchemaStructure> {
     const queryState = this.activeQueries.get(hash);
     if (!queryState) return;
     queryState.hydrated = true; // run-once, even when the remote returns nothing
+    // The registration is enqueued BEFORE the hydrate and can land first; its
+    // `_00_list_ref` set is authoritative and this one-shot must not replace
+    // it. Checked again after the await below for the same reason.
+    if (queryState.serverMembership) return;
     if (rows.length === 0) return;
 
     const epoch = this.local.epoch;
@@ -1131,6 +1135,7 @@ export class DataModule<S extends SchemaStructure> {
     // state; the rebind's re-registration refills it. (saveBatch's own epoch
     // fence usually catches this, but the switch can land between it and here.)
     if (epoch !== this.local.epoch) return;
+    if (queryState.serverMembership) return;
 
     // Prime remoteArray from the hydrated id+version pairs: `materializeRecords`
     // renders from it and it feeds the version dedup. Registration later
@@ -1550,6 +1555,7 @@ export class DataModule<S extends SchemaStructure> {
     // the `_00_list_ref` poll both land here), so it is where "we now know the
     // membership" is latched and where the durable mirror is written.
     queryState.config.membershipKnown = true;
+    queryState.serverMembership = true;
     if (remoteArray.length > 0) {
       // Earns the right to believe a later empty set — that transition is a
       // genuine removal and must be honoured, or removed rows resurrect.
@@ -1635,6 +1641,7 @@ export class DataModule<S extends SchemaStructure> {
         }
       }
       queryState.hydrated = false;
+      queryState.serverMembership = false;
       queryState.syncNotified = false;
       queryState.records = [];
       // Via setQueryStatus (not a bare assignment) so status observers see the
