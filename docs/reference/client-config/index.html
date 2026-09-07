@@ -205,11 +205,15 @@ writes are applied to the LoroDoc immediately on every keystroke
 (so reload and offline work), but the remote <code>_00_crdt</code> UPSERT is
 debounced. Defaults to <code>500</code>.</p>
 <h4 id="refsyncintervalms"><code>refSyncIntervalMs</code></h4>
-<p>Cadence (ms) for the <code>_00_list_ref</code> poll that catches cross-session
+<p>Base cadence (ms) for the <code>_00_list_ref</code> poll that catches cross-session
 UPDATEs that the SurrealDB v3 LIVE-permission gap drops. Defaults
-to <code>500</code>; non-positive values fall back to the default. The poll
-self-throttles to a longer interval when LIVE is delivering events
-healthily (see <a href="/docs/reference/architecture">Architecture</a>).</p>
+to <code>500</code>; non-positive values fall back to the default. One cycle reads
+every active query’s edges in a handful of round trips (batched by a
+row budget, views past 1,000 rows only every 15s), backs off toward 5s
+while nothing changes, and never runs back-to-back: the next tick waits
+at least as long as the previous cycle took. Statements on the remote
+connection run concurrently (up to 6 in flight), so the poll does not
+hold registrations or one-shot reads behind it.</p>
 <h4 id="persistcircuit"><code>persistCircuit</code></h4>
 <p>Persist the in-browser stream processor’s store as a snapshot in the local
 store, so a reload restores it and only steps in what changed since instead
