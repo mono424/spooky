@@ -601,6 +601,28 @@ impl Scheduler {
             );
             info!("Snapshot clone complete");
         } else {
+            // A table the upstream stopped syncing since this snapshot was
+            // written (`-- @nosync` added, or dropped) must not reach the
+            // SSPs: they leave it out of their own load and dispute its hash
+            // on every bootstrap, so the cluster never comes up until the
+            // volume is wiped. Trim to what a fresh clone would load. A failed
+            // discovery keeps the persisted set: the drift check below needs
+            // the upstream anyway and reports it properly.
+            match Replica::discover_sync_tables(&db).await {
+                Ok(tables) => {
+                    let current: BTreeSet<String> = tables.into_iter().collect();
+                    let mut replica = self.replica.write().await;
+                    match replica.forget_tables_not_in(&current).await {
+                        Ok(gone) if !gone.is_empty() => warn!(
+                            tables = ?gone,
+                            "Dropped persisted tables the upstream no longer syncs (@nosync or removed)"
+                        ),
+                        Ok(_) => {}
+                        Err(e) => warn!(error = %e, "Could not trim persisted tables; SSP bootstraps may dispute them"),
+                    }
+                }
+                Err(e) => warn!(error = %e, "Could not discover upstream tables at boot; keeping the persisted set"),
+            }
             let replica = self.replica.read().await;
             info!(
                 snapshot_seq = replica.snapshot_seq(),

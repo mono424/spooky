@@ -357,6 +357,42 @@ impl Replica {
         &self.known_tables
     }
 
+    /// Forget tables the upstream no longer syncs: marked `-- @nosync` since
+    /// this snapshot was persisted, or dropped outright. `current` is what a
+    /// fresh clone would load ([`Self::discover_sync_tables`]).
+    ///
+    /// Their hashes used to be handed to every bootstrapping SSP, which leaves
+    /// such a table out of its own load and so disputed it on every attempt:
+    /// whitepawn after `analysis` went @nosync logged "Bootstrap integrity
+    /// mismatch table=analysis expected=x3:f731… actual=x3:000…" per bootstrap
+    /// until a clean restart threw the snapshot away. The rows stay in the
+    /// store as dead weight; a clone never pages them again. Persists the
+    /// trimmed lists. Returns the tables dropped, sorted.
+    pub async fn forget_tables_not_in(&mut self, current: &BTreeSet<String>) -> Result<Vec<String>> {
+        let gone: Vec<String> = self
+            .known_tables
+            .iter()
+            .chain(self.snapshot_hashes.keys())
+            .filter(|t| !current.contains(*t))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if gone.is_empty() {
+            return Ok(gone);
+        }
+        for t in &gone {
+            self.known_tables.remove(t);
+            self.snapshot_hashes.remove(t);
+            self.dirty_hashes.remove(t);
+        }
+        let seq = self.snapshot_seq;
+        self.commit_snapshot_state(seq, BTreeMap::new(), BTreeSet::new())
+            .await
+            .context("Persist snapshot state after forgetting unsynced tables")?;
+        Ok(gone)
+    }
+
     /// Set snapshot sequence number AND advance the per-table hashes for the
     /// supplied tables. Pass `None` for `touched_tables` after a full clone
     /// to recompute every known table; pass `Some(set)` from the drain loop
@@ -1825,6 +1861,47 @@ mod tests {
         replica.reset().await?;
         assert_eq!(count_threads(&replica.db).await?, 0);
 
+        Ok(())
+    }
+
+    /// A table that turned `@nosync` (or was dropped) after the snapshot was
+    /// persisted must lose its hash and its known-table entry: the SSP leaves
+    /// it out of its bootstrap and would dispute the hash forever.
+    #[tokio::test]
+    async fn forget_tables_not_in_drops_hashes_and_persists() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mut replica = Replica::new(tmp.path().join("replica")).await?;
+        replica
+            .apply("user", RecordOp::Create, "user:u1", Some(serde_json::json!({"name": "a", "_00_rv": 1})))
+            .await?;
+        replica
+            .apply("analysis", RecordOp::Create, "analysis:a1", Some(serde_json::json!({"fen": "x", "_00_rv": 1})))
+            .await?;
+        replica.set_snapshot_state(7, None).await?;
+        assert!(replica.snapshot_hashes().contains_key("analysis"));
+        assert!(replica.known_tables().contains("analysis"));
+
+        let current: BTreeSet<String> = ["user".to_string()].into_iter().collect();
+        let gone = replica.forget_tables_not_in(&current).await?;
+        assert_eq!(gone, vec!["analysis".to_string()]);
+        assert!(!replica.snapshot_hashes().contains_key("analysis"));
+        assert!(!replica.known_tables().contains("analysis"));
+        assert!(replica.snapshot_hashes().contains_key("user"), "synced tables keep their hash");
+        assert_eq!(replica.snapshot_seq(), 7, "the sequence is untouched");
+
+        // Persisted, so the next boot does not resurrect it from metadata.
+        let mut resp = replica
+            .db
+            .query("SELECT seq, hashes, tables, applying FROM _00_metadata:snapshot")
+            .await?;
+        let rows: Vec<Value> = resp.take(0)?;
+        let tables: Vec<String> = serde_json::from_value(rows[0]["tables"].clone())?;
+        assert_eq!(tables, vec!["user".to_string()]);
+        let hashes: BTreeMap<String, String> = serde_json::from_value(rows[0]["hashes"].clone())?;
+        assert!(!hashes.contains_key("analysis"));
+
+        // Idempotent.
+        assert!(replica.forget_tables_not_in(&current).await?.is_empty());
         Ok(())
     }
 
