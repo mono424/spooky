@@ -30,6 +30,16 @@ describe('classifySyncError', () => {
   });
 
   it.each([
+    // SurrealDB optimistic-concurrency conflict: retryable by definition.
+    'Transaction conflict: Resource busy: . This transaction can be retried',
+    // Session state not re-applied yet after the SDK's reconnect handshake.
+    'Specify a namespace to use',
+    'Specify a database to use',
+  ])('classifies transient server state %j as network (retry, never rollback)', (message) => {
+    expect(classifySyncError(new Error(message))).toBe('network');
+  });
+
+  it.each([
     'Permission denied',
     'There was a problem with the database: record already exists',
     'Parse error: unexpected token',
