@@ -37,6 +37,23 @@ Tune the threshold in your client config:
 
 Pass `syncHealth: false` to never report degraded at all.
 
+## Traffic indicator
+
+`useSyncActivity` answers a different question again: is data moving right now? It is the hook
+behind an app-chrome mark that switches to "downloading" or "uploading".
+
+| Accessor | Meaning |
+| --- | --- |
+| `fetchingQueries()` | Queries inside a fetch cycle right now. One subscription on the engine's aggregate count, not one per query. |
+| `pendingMutations()` | Locally committed writes the server has not acknowledged yet. |
+| `isDownloading()` | Fetching for longer than `downloadDelayMs` (200 ms). Off the instant fetching stops. The delay filters the sub-frame fetches a warm cache produces. |
+| `isUploading()` | More than `uploadThreshold` (1) writes queued. |
+
+<CodeBlock code={activityCode} lang="tsx" />
+
+While `isOffline()` is true, `pendingMutations()` is the number of changes that are saved locally
+and not yet on the server. Show it: a count is more reassuring than a sentence.
+
 ## Connection vs. health
 
 These answer different questions and it's worth keeping them apart:
@@ -174,6 +191,23 @@ function ConnectionBanner() {
     <Show when={sync.isOffline()}>
       <div class="banner">Can't reach the server, changes are saved locally.</div>
     </Show>
+  );
+}`;
+
+export const activityCode = `import { useSyncActivity, useSyncStatus } from '@spooky-sync/client-solid2';
+import { Show } from 'solid-js';
+
+function SyncMark() {
+  const { isDownloading, isUploading, pendingMutations } = useSyncActivity({ downloadDelayMs: 200 });
+  const { isOffline } = useSyncStatus();
+
+  return (
+    <span class="mark">
+      <Show when={isUploading()} fallback={<Show when={isDownloading()}>⬇</Show>}>⬆</Show>
+      <Show when={isOffline() && pendingMutations() > 0}>
+        <span class="badge">{pendingMutations()} unsaved</span>
+      </Show>
+    </span>
   );
 }`;
 

@@ -128,7 +128,7 @@ To track a backend job, query its outbox row: `db.run()` writes one with `status
 ## Status hooks
 
 Same shapes as client-solid, rebuilt on async-iterable-backed memos: `useDb`,
-`usePendingMutations`, [`useSyncStatus`](/docs/client/offline-sync),
+`usePendingMutations`, [`useSyncStatus`](/docs/client/offline-sync), [`useSyncActivity`](/docs/client/offline-sync#traffic-indicator),
 [`useStorageStatus`](/docs/client/offline-sync), [`useFeatureFlag`](/docs/client/feature-flags),
 `useAppRelease`, [`useCrdtField`](/docs/client/crdt),
 [`useFileUpload` / `useDownloadFile`](/docs/client/buckets), and `createPreload`.

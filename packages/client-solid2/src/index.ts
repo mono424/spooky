@@ -47,6 +47,11 @@ export { createQuery, useQuery, type CreateQueryResult, type QueryOptions } from
 export { createPreload } from './lib/create-preload';
 export type { PreloadOptions, PreloadRefresh } from '@spooky-sync/core';
 export { useSyncStatus, type UseSyncStatus } from './lib/use-sync-status';
+export {
+  useSyncActivity,
+  type UseSyncActivity,
+  type UseSyncActivityOptions,
+} from './lib/use-sync-activity';
 export type {
   SyncHealth,
   SyncHealthStatus,
@@ -343,6 +348,21 @@ export class SyncedDb<S extends SchemaStructure> {
   subscribeToPendingMutations(cb: (count: number) => void): () => void {
     if (!this.sp00ky) throw new Error('SyncedDb not initialized');
     return this.sp00ky.subscribeToPendingMutations(cb);
+  }
+
+  /** Queries mid-fetch right now. See {@link useSyncActivity}. */
+  get fetchingQueryCount(): number {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.fetchingQueryCount;
+  }
+
+  /**
+   * Observe how many queries are fetching from the server. Fires immediately
+   * and on every change. Prefer the `useSyncActivity` hook in components.
+   */
+  subscribeToFetchActivity(cb: (fetching: number) => void): () => void {
+    if (!this.sp00ky) throw new Error('SyncedDb not initialized');
+    return this.sp00ky.subscribeToFetchActivity(cb);
   }
 
   /** Current sync-health snapshot. See {@link useSyncStatus}. */

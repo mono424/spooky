@@ -23,7 +23,7 @@ Local mutations are applied optimistically, ingested into a DBSP layer that driv
 
 ## Key exports (`src/index.ts`)
 
-- `Sp00kyClient<S>` — main class. Methods: `init()`, `create(id, payload)`, `update(table, id, payload, options?)`, `delete(table, idOrSelector)`, `query(table, opts?)`, `run(backend, route, payload)`, `bucket(name)`, `remoteQuery(sql, vars?)`, `useRemote(fn)`, `authenticate(token)`, `signOut()`. Plus `pendingMutationCount` and `subscribeToPendingMutations(cb)`.
+- `Sp00kyClient<S>` — main class. Methods: `init()`, `create(id, payload)`, `update(table, id, payload, options?)`, `delete(table, idOrSelector)`, `query(table, opts?)`, `run(backend, route, payload)`, `bucket(name)`, `remoteQuery(sql, vars?)`, `useRemote(fn)`, `authenticate(token)`, `signOut()`. Plus `pendingMutationCount` / `subscribeToPendingMutations(cb)` (outbox depth) and `fetchingQueryCount` / `subscribeToFetchActivity(cb)` (queries mid-fetch, aggregate) for traffic indicators.
 - `BucketHandle` — file storage handle (`put`, `get`, `delete`, `exists`), plus the cache-aware `read`, `url`, `pin`/`unpin`, `evict`, `prefetch`. `get` is always remote; `read`/`url` go through the blob cache.
 - `services/blobs/` — durable cache for bucket bytes: OPFS holds the files, `_00_blob` holds a manifest that reconcile rebuilds from disk (so a wiped local store costs metadata, not the offline cache). Nothing expires on a timer; eviction is LRU under a byte budget only, skipping pinned and on-screen entries. Config: `blobCache` in `types.ts`.
 - `AuthService` — token management, sign-in/sign-out events.

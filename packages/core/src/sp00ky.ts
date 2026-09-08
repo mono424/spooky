@@ -401,6 +401,21 @@ export class Sp00kyClient<S extends SchemaStructure> {
     return this.sync.subscribeToPendingMutations(cb);
   }
 
+  /** Number of queries mid-fetch right now. See {@link subscribeToFetchActivity}. */
+  get fetchingQueryCount(): number {
+    return this.dataModule.fetchingQueryCount;
+  }
+
+  /**
+   * Observe how many queries are fetching from the server. Fires immediately
+   * with the current count and again on every change, so one subscription can
+   * drive a "downloading" indicator for the whole app. Pair with
+   * {@link subscribeToPendingMutations} for the "uploading" half.
+   */
+  subscribeToFetchActivity(cb: (fetching: number) => void): () => void {
+    return this.dataModule.subscribeActivity(cb, { immediate: true });
+  }
+
   /** Current sync-health snapshot. See {@link Sp00kyConfig.syncHealth}. */
   get syncHealth(): SyncHealth {
     return this.sync.syncHealth;

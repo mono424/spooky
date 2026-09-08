@@ -119,6 +119,12 @@ export class DataModule<S extends SchemaStructure> {
   // back to `idle` only on 1→0, so an inner cycle finishing can't emit a
   // premature idle mid-registration.
   private fetchDepth: Map<QueryHash, number> = new Map();
+  /**
+   * Observers of the AGGREGATE fetch activity: how many queries are mid-fetch
+   * right now. What a "downloading" indicator in the app chrome hangs off,
+   * instead of subscribing to every query's status one by one.
+   */
+  private activitySubscriptions: Set<(fetching: number) => void> = new Set();
   private logger: Logger;
   /**
    * Optional observer notified whenever a query's fetch status changes.
@@ -446,6 +452,7 @@ export class DataModule<S extends SchemaStructure> {
     this.fetchDepth.set(queryHash, depth + 1);
     if (depth === 0) {
       this.setQueryStatus(queryHash, 'fetching');
+      this.notifyActivity();
     }
   }
 
@@ -455,9 +462,47 @@ export class DataModule<S extends SchemaStructure> {
     if (depth <= 1) {
       this.fetchDepth.delete(queryHash);
       this.setQueryStatus(queryHash, 'idle');
+      this.notifyActivity();
       return;
     }
     this.fetchDepth.set(queryHash, depth - 1);
+  }
+
+  /** How many queries are mid-fetch right now (see {@link subscribeActivity}). */
+  get fetchingQueryCount(): number {
+    return this.fetchDepth.size;
+  }
+
+  /**
+   * Observe the number of queries currently fetching. Fires on every change of
+   * that number (a query entering or leaving its outermost fetch cycle), and
+   * synchronously with the current value when `immediate` is set. One
+   * subscription per indicator, however many queries the page holds.
+   */
+  subscribeActivity(
+    callback: (fetching: number) => void,
+    options: { immediate?: boolean } = {}
+  ): () => void {
+    this.activitySubscriptions.add(callback);
+    if (options.immediate) callback(this.fetchDepth.size);
+    return () => {
+      this.activitySubscriptions.delete(callback);
+    };
+  }
+
+  private notifyActivity(): void {
+    if (this.activitySubscriptions.size === 0) return;
+    const n = this.fetchDepth.size;
+    for (const cb of this.activitySubscriptions) {
+      try {
+        cb(n);
+      } catch (err) {
+        this.logger.warn(
+          { err, Category: 'sp00ky-client::DataModule::notifyActivity' },
+          'Activity subscriber threw'
+        );
+      }
+    }
   }
 
   /**
@@ -1664,7 +1709,9 @@ export class DataModule<S extends SchemaStructure> {
     }
     this.debounceTimers.clear();
     this.pendingStreamUpdates.clear();
+    const wasFetching = this.fetchDepth.size > 0;
     this.fetchDepth.clear();
+    if (wasFetching) this.notifyActivity();
     for (const queryState of this.activeQueries.values()) {
       if (queryState.ttlTimer) {
         clearTimeout(queryState.ttlTimer);
