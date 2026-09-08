@@ -84,6 +84,29 @@ fn incantation_key(id: &str) -> String {
 /// Build the `_00_list_ref` edge-write statements for a batch of deltas. PURE.
 /// Each delta binds its `_00_query` key as `$from{idx}` (unique across the
 /// batch); the SQL references `type::record('_00_query', $from{idx})`.
+/// Whether a delta carries anything the edge writer would put in a
+/// transaction. Mirrors the skip at the top of [`build_edge_batch`].
+pub fn delta_has_edges(delta: &ViewDelta) -> bool {
+    !(delta.additions.is_empty()
+        && delta.updates.is_empty()
+        && delta.removals.is_empty()
+        && delta.subquery_items.is_empty())
+}
+
+/// The `_00_query.state` a registration should write for its initial delta.
+///
+/// `materializing` when the delta will reach the flusher (which flips the row
+/// to `ready` in the same transaction as the edges); `ready` when there is
+/// nothing to publish, because a skipped delta would otherwise leave the row
+/// saying `materializing` forever and the client would never trust its empty
+/// result.
+pub fn publish_state_for(delta: Option<&ViewDelta>) -> &'static str {
+    match delta {
+        Some(d) if delta_has_edges(d) => "materializing",
+        _ => "ready",
+    }
+}
+
 pub fn build_edge_batch(
     deltas: &[&ViewDelta],
     mode: RefMode,
@@ -99,11 +122,7 @@ pub fn build_edge_batch(
         // it (the old behavior) is why reverse-link children like comments never
         // synced while forward links, whose delta also carried a parent
         // addition/content-update, worked.
-        if delta.additions.is_empty()
-            && delta.updates.is_empty()
-            && delta.removals.is_empty()
-            && delta.subquery_items.is_empty()
-        {
+        if !delta_has_edges(delta) {
             continue;
         }
 
@@ -128,6 +147,19 @@ pub fn build_edge_batch(
         batch
             .bindings
             .push((format!("{bn}key"), incantation_key(&delta.query_id)));
+
+        // A full publish REPLACES the row's edges. Registration, repair and
+        // subscriber-attach all snapshot the whole membership, and the
+        // `RELATE`s below are bare (no unique index on `in, out`), so
+        // publishing over edges that already exist - orphans left by a
+        // scheduler restart, a view the sweep half-reclaimed, a stranded
+        // repair - used to duplicate every row. The unfiltered graph delete is
+        // the form the unregister and TTL paths already rely on.
+        if delta.initial {
+            batch
+                .statements
+                .push(format!("DELETE {from}->{list_ref}", from = from, list_ref = list_ref));
+        }
 
         // Additions (Created)
         for id in &delta.additions {
@@ -226,6 +258,16 @@ pub fn build_edge_batch(
                     ));
                 }
             }
+        }
+
+        // The edges of a full publish are now in this transaction; say so on
+        // the row in the SAME transaction, so a client can never read `ready`
+        // with the edges still in flight (or the edges with the row still
+        // `materializing`). Incremental deltas leave `state` alone.
+        if delta.initial {
+            batch
+                .statements
+                .push(format!("UPDATE {from} SET state = 'ready'", from = from));
         }
     }
 
@@ -748,6 +790,7 @@ mod tests {
             result_hash: String::new(),
             subquery_items: vec![],
             auth_id: auth_id.to_string(),
+            initial: false,
         }
     }
 
@@ -757,6 +800,84 @@ mod tests {
         let b = build_edge_batch(&[&d], RefMode::Single, &ConstV(1));
         assert!(b.is_empty());
         assert!(b.bindings.is_empty());
+    }
+
+    #[test]
+    fn initial_publish_replaces_existing_edges_and_marks_the_row_ready() {
+        // A full publish (registration snapshot, repair, subscriber attach)
+        // must be idempotent over whatever edges the row already has, and the
+        // `ready` flip must ride in the same transaction as the edges.
+        let mut d = delta("view:abc", "user:a");
+        d.initial = true;
+        d.additions = vec!["thread:1".to_string(), "thread:2".to_string()];
+        let b = build_edge_batch(&[&d], RefMode::Single, &ConstV(3));
+
+        assert_eq!(b.created, 2);
+        assert_eq!(
+            b.statements[0],
+            "LET $from0 = type::record('_00_query', $from0key)"
+        );
+        assert_eq!(b.statements[1], "DELETE $from0->_00_list_ref", "delete-all precedes the RELATEs");
+        assert!(b.statements[2].starts_with("RELATE $from0->_00_list_ref->thread:1"), "{}", b.statements[2]);
+        assert!(b.statements[3].starts_with("RELATE $from0->_00_list_ref->thread:2"), "{}", b.statements[3]);
+        assert_eq!(
+            b.statements.last().unwrap(),
+            "UPDATE $from0 SET state = 'ready'",
+            "the row flips to ready after its edges, inside the same batch"
+        );
+        assert_eq!(b.statements.len(), 5);
+    }
+
+    #[test]
+    fn initial_publish_uses_the_per_user_table_in_dedicated_mode() {
+        let mut d = delta("view:abc", "user:a");
+        d.initial = true;
+        d.additions = vec!["thread:1".to_string()];
+        let b = build_edge_batch(&[&d], RefMode::Dedicated, &ConstV(1));
+        assert_eq!(b.statements[1], "DELETE $from0->_00_list_ref_user_a");
+        assert_eq!(b.statements.last().unwrap(), "UPDATE $from0 SET state = 'ready'");
+    }
+
+    #[test]
+    fn incremental_delta_neither_wipes_edges_nor_touches_state() {
+        let mut d = delta("view:abc", "user:a");
+        d.additions = vec!["thread:3".to_string()];
+        d.removals = vec!["thread:1".to_string()];
+        let b = build_edge_batch(&[&d], RefMode::Single, &ConstV(1));
+        assert!(
+            b.statements.iter().all(|s| !s.starts_with("DELETE $from0->_00_list_ref")),
+            "an increment must not delete the row's other edges: {:?}",
+            b.statements
+        );
+        assert!(
+            b.statements.iter().all(|s| !s.contains("state")),
+            "an increment must not rewrite state: {:?}",
+            b.statements
+        );
+    }
+
+    #[test]
+    fn publish_state_reflects_whether_the_flusher_will_see_the_delta() {
+        // Nothing to publish: the row must be born `ready`, because the
+        // flusher skips such a delta and would never flip it.
+        assert_eq!(publish_state_for(None), "ready");
+        let mut empty = delta("view:abc", "user:a");
+        empty.initial = true;
+        assert_eq!(publish_state_for(Some(&empty)), "ready");
+        // Something to publish: `materializing` until the batch commits.
+        let mut full = delta("view:abc", "user:a");
+        full.initial = true;
+        full.additions = vec!["thread:1".to_string()];
+        assert_eq!(publish_state_for(Some(&full)), "materializing");
+        // Subquery-only deltas reach the flusher too.
+        let mut sub = delta("view:abc", "user:a");
+        sub.subquery_items = vec![SubqueryDeltaItem {
+            id: "comment:1".to_string(),
+            parent_key: "thread:1".to_string(),
+            alias: "comments".to_string(),
+            op: SubqueryOp::Add,
+        }];
+        assert_eq!(publish_state_for(Some(&sub)), "materializing");
     }
 
     #[test]

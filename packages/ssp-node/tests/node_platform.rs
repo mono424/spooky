@@ -1728,6 +1728,82 @@ async fn row_count_of(h: &Harness, key: &str) -> i64 {
     v.unwrap_or(-1)
 }
 
+async fn state_of(h: &Harness, key: &str) -> String {
+    let v: Option<String> = h
+        .raw_db
+        .query(format!("SELECT VALUE state FROM ONLY _00_query:{key}"))
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap_or(None);
+    v.unwrap_or_else(|| "<none>".to_string())
+}
+
+async fn edge_count_of(h: &Harness, key: &str) -> i64 {
+    let n: Option<i64> = h
+        .raw_db
+        .query(format!("SELECT VALUE count() FROM _00_list_ref WHERE in = _00_query:{key} GROUP ALL"))
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap_or(None);
+    n.unwrap_or(0)
+}
+
+// `_00_query.state` is how a client tells "the SSP is still publishing this
+// view" from "the SSP says this view is empty". The test node has no flusher
+// task (its receiver is dropped), so registration edges take the direct write
+// path and both the edges and the `ready` flip are in the DB by the time
+// `/view/register` answers.
+
+#[tokio::test]
+async fn cold_register_of_a_populated_view_ends_ready_with_one_edge_per_row() {
+    let h = thread_harness().await;
+    let ingest = json!({ "table": "thread", "op": "CREATE", "id": "thread:1", "record": { "title": "t" } });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", ingest)).await.unwrap().status, 200);
+
+    assert_eq!(
+        h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap().status,
+        200
+    );
+    assert_eq!(row_count_of(&h, "v1").await, 1);
+    assert_eq!(edge_count_of(&h, "v1").await, 1);
+    assert_eq!(
+        state_of(&h, "v1").await,
+        "ready",
+        "the initial publish flips the row to ready in the same transaction as its edges"
+    );
+}
+
+#[tokio::test]
+async fn cold_register_of_an_empty_view_is_ready_at_once() {
+    let h = thread_harness().await;
+    assert_eq!(
+        h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap().status,
+        200
+    );
+    assert_eq!(row_count_of(&h, "v1").await, 0);
+    assert_eq!(edge_count_of(&h, "v1").await, 0);
+    // An empty initial delta never reaches the edge writer, so nothing would
+    // ever flip this row; it has to be born ready or the client could never
+    // trust "0 edges, rowCount 0" as a real empty result.
+    assert_eq!(state_of(&h, "v1").await, "ready");
+}
+
+#[tokio::test]
+async fn incremental_ingest_leaves_state_ready() {
+    let h = thread_harness().await;
+    assert_eq!(
+        h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap().status,
+        200
+    );
+    let ingest = json!({ "table": "thread", "op": "CREATE", "id": "thread:1", "record": { "title": "t" } });
+    assert_eq!(h.node.route(authed(Method::Post, "/ingest", ingest)).await.unwrap().status, 200);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(edge_count_of(&h, "v1").await, 1);
+    assert_eq!(state_of(&h, "v1").await, "ready", "an increment must not rewrite state");
+}
+
 #[tokio::test]
 async fn re_registration_republishes_a_view_whose_rows_went_missing() {
     let h = thread_harness().await;
@@ -1740,10 +1816,24 @@ async fn re_registration_republishes_a_view_whose_rows_went_missing() {
     let ingest = json!({ "table": "thread", "op": "CREATE", "id": "thread:1", "record": { "title": "t" } });
     assert_eq!(h.node.route(authed(Method::Post, "/ingest", ingest)).await.unwrap().status, 200);
     assert_eq!(h.node.processor.read().await.get_view("v1").map(|v| v.cache.len()), Some(1));
+    // The ingest delta's edge write is spawned; let it land before wiping, or
+    // it lands after and skews the edge counts below.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Wipe the DB side the way a TTL sweep would, but leave the circuit view
     // in place — that mismatch is the whole bug.
     h.raw_db.query("DELETE _00_query:v1->_00_list_ref; DELETE _00_query:v1;").await.unwrap();
+    // ...and leave two orphaned edges behind, the way a scheduler restart does
+    // (its `_00_query` wipe cannot reach the edges). A republish must replace
+    // them, not pile a third copy on top.
+    h.raw_db
+        .query(
+            "RELATE _00_query:v1->_00_list_ref->thread:1 SET version = 1, clientId = 'x', auth_id = ''; \
+             RELATE _00_query:v1->_00_list_ref->thread:1 SET version = 1, clientId = 'x', auth_id = '';",
+        )
+        .await
+        .unwrap();
+    assert_eq!(edge_count_of(&h, "v1").await, 2, "precondition: orphan duplicates seeded");
 
     // The re-registration now takes the warm path against an empty DB.
     let r = h.node.route(authed(Method::Post, "/view/register", thread_register("_00_query:v1"))).await.unwrap();
@@ -1754,6 +1844,12 @@ async fn re_registration_republishes_a_view_whose_rows_went_missing() {
         1,
         "rowCount must be restored from the live view, not left at its DEFAULT 0 — \
          a client reads 0-with-no-edges as 'confirmed empty' and stops loading forever"
+    );
+    assert_eq!(state_of(&h, "v1").await, "ready", "the republish must end in ready");
+    assert_eq!(
+        edge_count_of(&h, "v1").await,
+        1,
+        "a full publish replaces the row's edges: no duplicates over the orphans"
     );
 
     // The regression the early return exists to prevent: a repair must publish

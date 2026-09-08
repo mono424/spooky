@@ -1017,7 +1017,7 @@ impl SspNode {
         let stmt = "UPSERT type::record($id) SET clientId = <string>$clientId, \
                     auth_id = <string>$authId, surql = <string>$surql, params = $params, \
                     ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt, \
-                    rowCount = <int>$rowCount, \
+                    rowCount = <int>$rowCount, state = <string>$state, \
                     subscribers = array::append( \
                         array::filter(subscribers ?? [], |$s| \
                             <string>$s.id != $sid \
@@ -1038,6 +1038,10 @@ impl SspNode {
                     ("ttl", json!(meta_str("ttl"))),
                     ("lastActiveAt", json!(meta_str("lastActiveAt"))),
                     ("rowCount", json!(expected_rows)),
+                    // The republished snapshot below is a full publish, so the
+                    // flusher flips this to `ready` once the edges are in.
+                    // Nothing to republish for an empty view: ready now.
+                    ("state", json!(if expected_rows == 0 { "ready" } else { "materializing" })),
                 ],
             )
             .await
@@ -1340,6 +1344,12 @@ impl SspNode {
 
         let params = data.metadata.get("safe_params").cloned().unwrap_or(Value::Null);
         let initial_row_count = update.as_ref().map(|d| d.records.len() as i64).unwrap_or(0);
+        // Publish state for the client. A delta with anything to write goes to
+        // the flusher, which flips the row to `ready` in the same transaction
+        // as the edges; a delta with nothing to write is skipped by
+        // `build_edge_batch`, so the row has to be born `ready` here or it
+        // would say `materializing` forever.
+        let initial_state = crate::edges::publish_state_for(update.as_ref());
 
         // createdAt is DEFAULT time::now() READONLY (set only on insert);
         // counters default to 0 if absent.
@@ -1350,6 +1360,7 @@ impl SspNode {
                     auth_id = <string>$authId, surql = <string>$surql, params = $params, \
                     ttl = <duration>$ttl, lastActiveAt = <datetime>$lastActiveAt, \
                     registrationTime = <float>$registrationTime, rowCount = <int>$rowCount, \
+                    state = <string>$state, \
                     subscribers = array::append( \
                         array::filter(subscribers ?? [], |$s| \
                             <string>$s.id != $sid \
@@ -1371,6 +1382,7 @@ impl SspNode {
                     ("lastActiveAt", json!(meta_str("lastActiveAt"))),
                     ("registrationTime", json!(registration_time_ms)),
                     ("rowCount", json!(initial_row_count)),
+                    ("state", json!(initial_state)),
                 ],
             )
             .await

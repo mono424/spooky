@@ -339,6 +339,7 @@ async fn subquery_only_delta_still_writes_edges() {
             op: SubqueryOp::Add,
         }],
         auth_id: "user:a".to_string(),
+        initial: false,
     };
     run_edge_writes(&db, &[&d], &circuit, RefMode::Single, &NoopTelemetry).await;
 

@@ -90,6 +90,16 @@ DEFINE FIELD OVERWRITE materializationP99 ON TABLE _00_query TYPE option<float>;
 DEFINE FIELD OVERWRITE lastIngestLatency ON TABLE _00_query TYPE option<float>;
 DEFINE FIELD OVERWRITE updateCount ON TABLE _00_query TYPE int DEFAULT 0;
 DEFINE FIELD OVERWRITE rowCount ON TABLE _00_query TYPE int DEFAULT 0;
+-- Publish state of the view behind this row, written by the SSP:
+--   'materializing'  the SSP has (re)computed the set and its edges are in
+--                    flight to `_00_list_ref*`;
+--   'ready'          the edges are committed (flipped inside the same
+--                    transaction that writes them), so "no edges" now really
+--                    means "no rows".
+-- NONE = written by a server that predates the marker; clients then fall
+-- back to `rowCount` alone. No DEFAULT on purpose.
+DEFINE FIELD OVERWRITE state ON TABLE _00_query TYPE option<string>
+    ASSERT $value == NONE OR $value IN ['materializing', 'ready'];
 DEFINE FIELD OVERWRITE errorCount ON TABLE _00_query TYPE int DEFAULT 0;
 
 -- ==================================================

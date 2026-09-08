@@ -151,6 +151,19 @@ Register a new view (live query) with the SSP.
 - `401 Unauthorized` - Missing or invalid authentication
 - `503 Service Unavailable` - SSP is not in Ready state (`SSP_NOT_READY`)
 
+**What the SSP writes:** the `_00_query` row for the view (`UPSERT`) with
+`rowCount` (the size of the initial set) and `state`. A view with rows is
+written `state = 'materializing'` and its edges go to the edge flusher; the
+batch that commits those `_00_list_ref` edges also sets `state = 'ready'`, in
+the same transaction, and first deletes any edges the row already had (a full
+publish replaces, never duplicates). A view with no rows is written
+`state = 'ready'` at once. Clients read `state` next to the edges: `ready` with
+`rowCount 0` is a real empty result, `materializing` is a publish in flight,
+and a missing row means the SSP no longer has the view (they keep their rows
+and re-register). Re-registering a view the SSP already holds only refreshes
+`clientId`, `lastActiveAt`, `ttl` and `subscribers`; it re-publishes only when
+the row or its edges are found missing.
+
 **Example:**
 
 ```bash

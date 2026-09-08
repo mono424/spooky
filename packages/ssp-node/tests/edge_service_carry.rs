@@ -21,6 +21,7 @@ fn delta(query_id: &str) -> ViewDelta {
         result_hash: String::new(),
         subquery_items: vec![],
         auth_id: "user:a".to_string(),
+        initial: false,
     }
 }
 

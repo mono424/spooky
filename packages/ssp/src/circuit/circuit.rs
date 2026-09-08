@@ -77,6 +77,12 @@ pub struct ViewDelta {
     /// DB round-trip per delta. Empty when no `$auth.id` was present at
     /// registration time.
     pub auth_id: String,
+    /// `true` when this delta is a FULL publish of the view's current
+    /// membership (registration snapshot, `snapshot_delta`, subscriber
+    /// attach) rather than an increment. The edge writer treats a full
+    /// publish as authoritative: it replaces the row's existing edges and
+    /// flips `_00_query.state` to `ready` in the same transaction.
+    pub initial: bool,
 }
 
 /// The DBSP incremental computation circuit.
@@ -743,6 +749,7 @@ impl Circuit {
             result_hash: view.last_hash.clone(),
             subquery_items,
             auth_id: view.auth_id.clone(),
+            initial: true,
         })
     }
 
@@ -970,6 +977,7 @@ impl Circuit {
             result_hash: view.last_hash.clone(),
             subquery_items,
             auth_id: view.auth_id.clone(),
+            initial: false,
         })
     }
 }
@@ -1264,6 +1272,9 @@ impl Circuit {
                         result_hash: view.last_hash.clone(),
                         subquery_items: vec![],
                         auth_id: view.auth_id.clone(),
+                        // The store was replaced and the view came back
+                        // empty: this IS the view's whole membership now.
+                        initial: true,
                     };
                     out.extend(self.fan_out(delta));
                 }
@@ -1714,6 +1725,7 @@ impl Circuit {
             result_hash: view.last_hash.clone(),
             subquery_items,
             auth_id,
+            initial: true,
         })
     }
 

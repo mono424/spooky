@@ -76,6 +76,7 @@ fn delta(query_id: &str, additions: Vec<&str>, removals: Vec<&str>) -> ViewDelta
         result_hash: String::new(),
         subquery_items: vec![],
         auth_id: "user:a".to_string(),
+        initial: false,
     }
 }
 
@@ -153,6 +154,7 @@ async fn subquery_child_edge_gets_non_none_parent() {
             op: SubqueryOp::Add,
         }],
         auth_id: "user:a".to_string(),
+        initial: false,
     };
     run_edge_writes(&db, &[&d], &circuit, RefMode::Single, &NoopTelemetry).await;
 
