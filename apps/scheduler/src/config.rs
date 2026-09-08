@@ -26,6 +26,19 @@ pub struct SchedulerConfig {
     pub wal_path: PathBuf,
     pub health_check_interval_secs: u64,
     pub feature_flag_sweep_interval_secs: u64,
+    /// Wipe every `_00_query` row at startup (the historical behaviour).
+    ///
+    /// `true`: a restart forgets every registered view; clients notice their
+    /// row is gone and re-register (one cold registration per query, per
+    /// client). `false`: rows survive, the replica clones them and the SSPs
+    /// re-register them at bootstrap, so clients keep their views across a
+    /// scheduler restart; the SSP TTL sweep retires rows nobody heartbeats
+    /// any more, edges included. Keep `true` for tenants running more than
+    /// one SSP until scheduler-owned view assignment lands: every SSP
+    /// re-registers every surviving row, and `/ingest` is broadcast, so k
+    /// SSPs would publish each edge delta k times. Env
+    /// `SPKY_CLEAR_VIEWS_ON_START`.
+    pub clear_views_on_start: bool,
     #[serde(skip)]
     pub scheduler_id: String,
     #[serde(skip)]
@@ -78,6 +91,7 @@ impl Default for SchedulerConfig {
             wal_path: PathBuf::from("./data/event_wal.log"),
             health_check_interval_secs: 15,
             feature_flag_sweep_interval_secs: 30,
+            clear_views_on_start: true,
             scheduler_id: String::new(),
             backends: vec![],
         }
@@ -139,6 +153,13 @@ impl SchedulerConfig {
             }
         }
 
+        // Whether a restart forgets every registered view (see the field doc).
+        if let Ok(v) = std::env::var("SPKY_CLEAR_VIEWS_ON_START") {
+            if let Some(b) = parse_env_bool(&v) {
+                scheduler_config.clear_views_on_start = b;
+            }
+        }
+
         // SSP bootstrap budget. Default 120s fits small datasets; a replica
         // with large tables (registration drain + rehash + paged /proxy load)
         // can legitimately need more — the 2026-08-08 whitepawn outage
@@ -165,5 +186,37 @@ impl SchedulerConfig {
         scheduler_config.backends = maintenance::backend_health::backends_from_env();
 
         Ok(scheduler_config)
+    }
+}
+
+/// `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`, case-insensitive; anything
+/// else is `None` so a typo keeps the default instead of silently flipping it.
+pub fn parse_env_bool(v: &str) -> Option<bool> {
+    match v.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod env_bool_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_the_usual_spellings_and_rejects_the_rest() {
+        for v in ["true", "TRUE", " 1 ", "yes", "on"] {
+            assert_eq!(parse_env_bool(v), Some(true), "{v}");
+        }
+        for v in ["false", "0", "No", "off"] {
+            assert_eq!(parse_env_bool(v), Some(false), "{v}");
+        }
+        assert_eq!(parse_env_bool(""), None);
+        assert_eq!(parse_env_bool("maybe"), None);
+    }
+
+    #[test]
+    fn the_wipe_is_on_by_default() {
+        assert!(SchedulerConfig::default().clear_views_on_start);
     }
 }

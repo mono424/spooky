@@ -329,6 +329,7 @@ staleness flag are built on.
 | `SPKY_HEALTH_MAX_LAG` | Ingest lag above which `/health` reports `degraded`. Unset means lag never degrades health. | *(unset)* |
 | `SPKY_CLONE_TIMEOUT_SECS` | Ceiling on the initial replica clone. Overrunning it fails startup and exits, rather than leaving the scheduler wedged in `cloning` and answering 503 to every SSP for the life of the container. | `900` |
 | `SPKY_BOOTSTRAP_TIMEOUT_SECS` | How long an SSP may take to bootstrap before the scheduler reaps it. Also half of what the dashboard waits on before calling a restart failed. | `300` |
+| `SPKY_CLEAR_VIEWS_ON_START` | Wipe every registered view (`_00_query`) when the scheduler starts. `false` keeps them: the replica clones them, the SSPs re-register them at bootstrap, and clients keep their views across a scheduler restart with no re-registration; the SSP TTL sweep retires rows nobody heartbeats. Leave `true` on tenants with more than one SSP for now (every SSP would compute every view). | `true` |
 | `SPKY_BOOTSTRAP_RECLONE_AFTER` | Consecutive bootstrap integrity failures before the replica is re-cloned from upstream | `3` |
 | `SPKY_BOOTSTRAP_ADMIT_AFTER` | Consecutive bootstrap integrity failures before the SSP is admitted to broadcast anyway, restoring sync. Floored at the re-clone threshold, so admit never precedes a re-clone attempt. | `5` |
 | `SPKY_CATCHUP_RECLONE_AFTER` | Same escalation for the catch-up gate | `3` |

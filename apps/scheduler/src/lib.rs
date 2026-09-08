@@ -500,20 +500,35 @@ impl Scheduler {
             Err(e) => info!(error = %e, "Could not read SurrealDB server version"),
         }
 
-        // Step 2: Clear stale registered views from the remote DB. Views are
-        // tied to live SSPs/clients, so leftover `_00_query` rows from a prior
-        // scheduler run point at SSPs that no longer exist. Wipe them before
-        // cloning so the replica starts with a clean view registry; clients
-        // will re-register against the fresh scheduler.
-        info!("Clearing registered view data from remote SurrealDB...");
-        trace!(ns = %self.config.db.namespace, db = %self.config.db.database, "remote query: DELETE _00_query");
-        match db.query("DELETE _00_query").await {
-            Ok(_) => {}
-            Err(e) if crate::replica::is_missing_error(&e) => {
-                debug!("_00_query missing on remote — nothing to clear");
+        // Step 2: Clear stale registered views from the remote DB (default).
+        // Views are tied to live SSPs/clients, so leftover `_00_query` rows
+        // from a prior scheduler run point at SSPs that no longer exist. Wiping
+        // them before cloning starts the replica with a clean view registry;
+        // clients notice their row is gone and re-register against the fresh
+        // scheduler. Note the cost: the `_00_dbsp_cleanup` event on each row
+        // reaches `/view/unregister` on THIS scheduler, whose tracker is empty
+        // after a restart, so the edges are orphaned rather than deleted (the
+        // SSP's next full publish of the same id replaces them).
+        //
+        // `clear_views_on_start = false` keeps the rows: the replica clones
+        // them, the SSPs re-register them at bootstrap, and clients keep their
+        // views across the restart with no re-registration at all. Rows nobody
+        // heartbeats any more are retired by the SSP's TTL sweep once it is
+        // ready, edges included. Single-SSP tenants only for now, see the
+        // config field doc.
+        if self.config.clear_views_on_start {
+            info!("Clearing registered view data from remote SurrealDB...");
+            trace!(ns = %self.config.db.namespace, db = %self.config.db.database, "remote query: DELETE _00_query");
+            match db.query("DELETE _00_query").await {
+                Ok(_) => {}
+                Err(e) if crate::replica::is_missing_error(&e) => {
+                    debug!("_00_query missing on remote — nothing to clear");
+                }
+                Err(e) => return Err(anyhow::Error::from(e)
+                    .context("Failed to clear _00_query on remote")),
             }
-            Err(e) => return Err(anyhow::Error::from(e)
-                .context("Failed to clear _00_query on remote")),
+        } else {
+            info!("Keeping registered views across the restart (SPKY_CLEAR_VIEWS_ON_START=false); the SSP TTL sweep retires expired ones");
         }
 
         // Step 3: Clone remote DB into local snapshot replica — only when
