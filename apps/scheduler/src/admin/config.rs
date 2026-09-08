@@ -39,6 +39,12 @@ pub struct AdminConfig {
     /// A registered view whose materialization p99 reaches this is counted as
     /// slow. Only a default — `GET /views?slow_ms=` overrides it per request.
     pub presence_slow_ms: f64,
+    /// A registered view holding at least this many rows is counted as large
+    /// and flagged on the Views tab. Every row of an unwindowed live view is a
+    /// `_00_list_ref` edge republished on each cold registration, and a few
+    /// thousand of those in one transaction is what stalled a tenant's
+    /// SurrealDB 3.0.5. Env `SPKY_ADMIN_LARGE_VIEW_ROWS`, default 1000.
+    pub presence_large_view_rows: u64,
     /// Ceiling on rows any one presence/views query may pull back, so a tenant
     /// with a runaway number of registrations cannot make the sampler the
     /// expensive thing on the box.
@@ -79,6 +85,12 @@ impl AdminConfig {
             .filter(|n| n.is_finite() && *n > 0.0)
             .unwrap_or(250.0);
 
+        let presence_large_view_rows = std::env::var("SPKY_ADMIN_LARGE_VIEW_ROWS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(1000);
+
         let presence_max_rows = std::env::var("SPKY_ADMIN_PRESENCE_MAX_ROWS")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
@@ -104,6 +116,7 @@ impl AdminConfig {
             session_ttl: std::time::Duration::from_secs(session_ttl_secs),
             presence_interval: std::time::Duration::from_secs(presence_interval_secs),
             presence_slow_ms,
+            presence_large_view_rows,
             presence_max_rows,
         }
     }

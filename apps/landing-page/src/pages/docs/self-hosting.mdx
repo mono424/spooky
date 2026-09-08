@@ -285,6 +285,7 @@ The dashboard and its MCP server, on their own port. See
 | `SPKY_ADMIN_SESSION_TTL_SECS` | How long a signed-in session lasts | `28800` (8h) |
 | `SPKY_ADMIN_PRESENCE_INTERVAL_SECS` | How often the presence sampler reads `_00_query`, which feeds the Overview charts and the Views tab. One sampler serves every open dashboard, so this is the total cost however many people are watching. | `15` |
 | `SPKY_ADMIN_SLOW_VIEW_MS` | Materialization p99 at which a registered view is counted as slow. Only the default; `GET /admin/api/views?slow_ms=` overrides it per request. | `250` |
+| `SPKY_ADMIN_LARGE_VIEW_ROWS` | Row count from which a registered view is flagged as large. The Views tab and the Overview warn on these because an unwindowed live view republishes every row as a `_00_list_ref` edge on each cold registration, in one transaction, and a few thousand of those at once has stalled a tenant's SurrealDB. Window such queries (`LIMIT`/`START`) or resolve rows by id. `GET /admin/api/views?large=true` lists them. | `1000` |
 | `SPKY_ADMIN_PRESENCE_MAX_ROWS` | Ceiling on the rows one presence or views query pulls back, so a tenant with a runaway number of registrations cannot make the sampler the expensive thing on the box. Above it the figures are reported as a floor. | `20000` |
 
 #### Backup storage

@@ -388,6 +388,7 @@ already makes rather than a request of their own.
 | `SPKY_ADMIN_SESSION_TTL_SECS` | `28800` | Session lifetime (8 hours) |
 | `SPKY_ADMIN_PRESENCE_INTERVAL_SECS` | `15` | How often the presence sampler reads `_00_query`. One sampler serves every open dashboard |
 | `SPKY_ADMIN_SLOW_VIEW_MS` | `250` | Materialization p99 at which a view counts as slow. `?slow_ms=` overrides it per request |
+| `SPKY_ADMIN_LARGE_VIEW_ROWS` | `1000` | Row count from which a view is flagged **large** on the Views tab and the Overview. Every row of an unwindowed live view is republished as an edge on each cold registration, so a few thousand at once can stall the database; `?large=true` filters the list to them |
 | `SPKY_ADMIN_PRESENCE_MAX_ROWS` | `20000` | Ceiling on rows one presence or views query may pull back |
 | `SPKY_CLOUD_API_URL` | unset | Sp00ky Cloud API base URL. Injected into the scheduler container by the control plane |
 | `SPKY_CLOUD_PROJECT` | unset | The project slug, injected alongside it |

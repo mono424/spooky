@@ -2629,6 +2629,7 @@ mod admin_plane {
             // add a race for nothing.
             presence_interval: std::time::Duration::from_secs(3600),
             presence_slow_ms: 250.0,
+            presence_large_view_rows: 1000,
             presence_max_rows: 20_000,
         };
         let (_state, router) = admin::build(config, h.admin_deps(None, None));
@@ -2656,6 +2657,7 @@ mod admin_plane {
             // add a race for nothing.
             presence_interval: std::time::Duration::from_secs(3600),
             presence_slow_ms: 250.0,
+            presence_large_view_rows: 1000,
             presence_max_rows: 20_000,
         };
         let (_state, router) = admin::build(config, h.admin_deps(cloud_api_url, auth_secret));

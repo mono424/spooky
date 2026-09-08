@@ -79,6 +79,7 @@ export function Views() {
   const [search, setSearch] = createSignal('');
   const [sharedOnly, setSharedOnly] = createSignal(false);
   const [slowOnly, setSlowOnly] = createSignal(false);
+  const [largeOnly, setLargeOnly] = createSignal(false);
 
   // `/presence` is served from the scheduler's sampler memory, so this is a
   // cheap request: it carries the ranking, the per-SSP split and the slow
@@ -99,6 +100,7 @@ export function Views() {
     if (search()) params.set('q', search());
     if (sharedOnly()) params.set('shared', 'true');
     if (slowOnly() && extra()) params.set('slow_ms', String(extra()!.slow_ms));
+    if (largeOnly()) params.set('large', 'true');
     return `/views?${params.toString()}`;
   });
 
@@ -150,6 +152,52 @@ export function Views() {
               on the way out.
             </div>
           </Panel>
+
+          {/* The one thing on this page that is a warning rather than a
+              reading. A view this size is republished row by row as
+              `_00_list_ref` edges on every cold registration, in one
+              transaction; a few thousand of them at once stalled a tenant's
+              SurrealDB (3.0.5) for minutes and took every other registration
+              down with it. The fix is on the app side: window the query
+              (LIMIT/START) or resolve rows by id. */}
+          <Show when={(extra()?.totals.large_views ?? 0) > 0}>
+            <Panel>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '12px',
+                  'align-items': 'flex-start',
+                  'justify-content': 'space-between',
+                }}
+              >
+                <div>
+                  <div>
+                    <Pill tone="warn" dot>
+                      {formatCount(extra()!.totals.large_views)}{' '}
+                      {extra()!.totals.large_views === 1 ? 'view holds' : 'views hold'}{' '}
+                      {formatCount(extra()!.large_view_rows)}+ rows
+                    </Pill>
+                  </div>
+                  <div class="dim" style={{ 'margin-top': '6px' }}>
+                    Every row of an unwindowed live view is an edge the SSP
+                    republishes on each cold registration, in a single
+                    transaction. At this size that write stalls the database
+                    and every other client's registration behind it. Window
+                    the query with <span class="ghost">LIMIT</span>/
+                    <span class="ghost">START</span>, or resolve rows by id,
+                    instead of syncing the whole table.
+                  </div>
+                </div>
+                <button
+                  class="btn btn-sm"
+                  onClick={() => setLargeOnly(true)}
+                  title="Filter the table to the large views"
+                >
+                  Show them
+                </button>
+              </div>
+            </Panel>
+          </Show>
 
           <Show when={extra()?.top_users?.length}>
             <div class="grid grid-2">
@@ -255,7 +303,7 @@ export function Views() {
               </Show>
             }
             actions={
-              <Show when={user() || ssp() || search() || sharedOnly() || slowOnly()}>
+              <Show when={user() || ssp() || search() || sharedOnly() || slowOnly() || largeOnly()}>
                 <button
                   class="btn btn-sm"
                   onClick={() => {
@@ -264,6 +312,7 @@ export function Views() {
                     setSearch('');
                     setSharedOnly(false);
                     setSlowOnly(false);
+                    setLargeOnly(false);
                   }}
                 >
                   Clear filters
@@ -313,6 +362,14 @@ export function Views() {
                 />
                 Slow only
               </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={largeOnly()}
+                  onChange={(e) => setLargeOnly(e.currentTarget.checked)}
+                />
+                Large only
+              </label>
             </div>
           </Panel>
 
@@ -360,6 +417,8 @@ export function Views() {
                             const exp = () => expiry(v, now());
                             const slow = () =>
                               v.p99 !== null && v.p99 >= d().slow_ms;
+                            const large = () =>
+                              v.row_count >= d().large_view_rows;
                             return (
                               <tr>
                                 <td>
@@ -375,8 +434,23 @@ export function Views() {
                                 <td class="ghost" data-label="SSP">
                                   {v.ssp_id ?? '—'}
                                 </td>
-                                <td class="dim" data-label="Rows">
+                                <td
+                                  classList={{
+                                    dim: !large(),
+                                    'tone-warn': large(),
+                                  }}
+                                  data-label="Rows"
+                                  title={
+                                    large()
+                                      ? `At least ${formatCount(d().large_view_rows)} rows: republished as edges on every cold registration. Window this query.`
+                                      : undefined
+                                  }
+                                >
                                   {formatCount(v.row_count)}
+                                  <Show when={large()}>
+                                    {' '}
+                                    <Pill tone="warn">large</Pill>
+                                  </Show>
                                 </td>
                                 <td data-label="Subs">
                                   <Show

@@ -140,6 +140,12 @@ pub struct Totals {
     /// Views whose materialization p99 has reached the slow threshold.
     pub slow_views: u64,
     pub errored_views: u64,
+    /// Views holding at least `large_view_rows` rows. An unwindowed live view
+    /// this size republishes every row as a `_00_list_ref` edge on each cold
+    /// registration; on whitepawn a 3861-row registry did that on every boot
+    /// and SurrealDB 3.0.5 stalled under it (2026-09-08). Surfaced so the
+    /// tenant sees the query to window before the database tells them.
+    pub large_views: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -171,6 +177,7 @@ struct LiveRow {
     subscribers: i64,
     p99: Option<f64>,
     errors: i64,
+    row_count: i64,
 }
 
 fn str_field(v: &Value, key: &str) -> String {
@@ -196,6 +203,8 @@ pub struct PresenceTracker {
     samples: Mutex<VecDeque<PresenceSample>>,
     interval: Duration,
     slow_ms: f64,
+    /// Row count from which a view counts as large. See `Totals::large_views`.
+    large_view_rows: u64,
     max_rows: usize,
 }
 
@@ -206,12 +215,17 @@ impl PresenceTracker {
             samples: Mutex::new(VecDeque::with_capacity(SAMPLE_WINDOW)),
             interval: config.presence_interval,
             slow_ms: config.presence_slow_ms,
+            large_view_rows: config.presence_large_view_rows,
             max_rows: config.presence_max_rows,
         })
     }
 
     pub fn slow_ms(&self) -> f64 {
         self.slow_ms
+    }
+
+    pub fn large_view_rows(&self) -> u64 {
+        self.large_view_rows
     }
 
     pub fn max_rows(&self) -> usize {
@@ -250,7 +264,8 @@ impl PresenceTracker {
         let surql = format!(
             "SELECT type::string(id) AS id, auth_id, clientId AS client_id, \
              array::len(subscribers ?? []) AS subscribers, \
-             materializationP99 AS p99, errorCount AS errors \
+             materializationP99 AS p99, errorCount AS errors, \
+             rowCount AS row_count \
              FROM _00_query WHERE lastActiveAt + ttl > time::now() LIMIT {};",
             self.max_rows.saturating_add(1)
         );
@@ -315,6 +330,7 @@ impl PresenceTracker {
                 subscribers: int_field(&v, "subscribers"),
                 p99: f64_field(&v, "p99"),
                 errors: int_field(&v, "errors"),
+                row_count: int_field(&v, "row_count"),
             })
             .collect();
 
@@ -364,6 +380,7 @@ impl PresenceTracker {
         let mut shared = 0u64;
         let mut slow = 0u64;
         let mut errored = 0u64;
+        let mut large = 0u64;
 
         for row in &rows {
             let authed = is_real_user(&row.auth_id);
@@ -395,6 +412,9 @@ impl PresenceTracker {
             if row.errors > 0 {
                 errored += 1;
             }
+            if row.row_count >= 0 && row.row_count as u64 >= self.large_view_rows {
+                large += 1;
+            }
         }
 
         let mut top_users: Vec<TopUser> = per_user
@@ -420,6 +440,7 @@ impl PresenceTracker {
                 shared_views: shared,
                 slow_views: slow,
                 errored_views: errored,
+                large_views: large,
             },
             top_users,
             by_ssp: per_ssp
@@ -474,6 +495,7 @@ impl PresenceTracker {
         let mut out = self.overview_block();
         let snap = self.snapshot.read().ok().and_then(|g| g.clone());
         out["slow_ms"] = json!(self.slow_ms);
+        out["large_view_rows"] = json!(self.large_view_rows);
         out["top_users"] = json!(snap.as_ref().map(|s| s.top_users.clone()).unwrap_or_default());
         out["by_ssp"] = json!(snap.as_ref().map(|s| s.by_ssp.clone()).unwrap_or_default());
         out
@@ -518,6 +540,8 @@ pub struct ViewsQuery {
     /// Substring of the registered SurrealQL.
     q: Option<String>,
     shared: Option<bool>,
+    /// Only views holding at least the large-view row threshold.
+    large: Option<bool>,
     include_expired: Option<bool>,
 }
 
@@ -545,7 +569,7 @@ fn order_by(sort: Option<&str>) -> Result<&'static str, ApiError> {
     })
 }
 
-fn where_clause(params: &ViewsQuery) -> String {
+fn where_clause(params: &ViewsQuery, large_view_rows: u64) -> String {
     let mut conds: Vec<String> = Vec::new();
     if !params.include_expired.unwrap_or(false) {
         conds.push("lastActiveAt + ttl > time::now()".to_string());
@@ -561,6 +585,9 @@ fn where_clause(params: &ViewsQuery) -> String {
     }
     if let Some(slow) = params.slow_ms.filter(|v| v.is_finite() && *v > 0.0) {
         conds.push(format!("materializationP99 >= {}", slow));
+    }
+    if params.large.unwrap_or(false) {
+        conds.push(format!("rowCount >= {}", large_view_rows));
     }
     if conds.is_empty() {
         // `WHERE true` rather than branching the format strings below on
@@ -579,7 +606,7 @@ pub async fn list_views(
     // whether or not the scheduler has finished cloning, and answering 503 to
     // it would send the caller looking in the wrong place.
     let order = order_by(params.sort.as_deref())?;
-    let filter = where_clause(&params);
+    let filter = where_clause(&params, state.presence.large_view_rows());
 
     let Some(db) = state.db() else {
         return Err(db_unavailable());
@@ -664,6 +691,7 @@ pub async fn list_views(
         "limit": limit,
         "sort": params.sort.clone().unwrap_or_else(|| "slowest".to_string()),
         "slow_ms": params.slow_ms.unwrap_or_else(|| state.presence.slow_ms()),
+        "large_view_rows": state.presence.large_view_rows(),
         "server_time_ms": now,
     })))
 }
@@ -807,6 +835,7 @@ pub async fn view_detail(
         "ssp": ssp,
         "siblings": siblings,
         "slow_ms": state.presence.slow_ms(),
+        "large_view_rows": state.presence.large_view_rows(),
         "server_time_ms": now,
     })))
 }
@@ -935,6 +964,7 @@ mod tests {
             samples: Mutex::new(VecDeque::new()),
             interval: Duration::from_secs(15),
             slow_ms,
+            large_view_rows: 1000,
             max_rows: 100,
         })
     }
@@ -947,7 +977,30 @@ mod tests {
             subscribers: subs,
             p99,
             errors: errs,
+            row_count: 0,
         }
+    }
+
+    #[test]
+    fn large_views_are_counted_off_the_row_threshold() {
+        let t = tracker(250.0);
+        let mut big = row("_00_query:a", "user:x", "s1", 1, None, 0);
+        big.row_count = 3861;
+        let mut edge = row("_00_query:b", "user:x", "s1", 1, None, 0);
+        edge.row_count = 1000;
+        let small = row("_00_query:c", "user:y", "s2", 1, None, 0);
+        let snap = t.fold(vec![big, edge, small], false, &HashMap::new());
+        assert_eq!(snap.totals.large_views, 2, "the threshold is inclusive");
+        assert_eq!(snap.totals.views, 3);
+    }
+
+    #[test]
+    fn the_large_filter_lowers_to_a_row_count_predicate() {
+        let mut params = ViewsQuery::default();
+        params.large = Some(true);
+        let clause = where_clause(&params, 1000);
+        assert!(clause.contains("rowCount >= 1000"), "{clause}");
+        assert!(!where_clause(&ViewsQuery::default(), 1000).contains("rowCount"));
     }
 
     #[test]
@@ -1051,14 +1104,14 @@ mod tests {
     fn the_liveness_filter_is_in_every_default_listing() {
         // Eager unsubscribe is off by default, so a listing without this reports
         // every tab ever opened.
-        let clause = where_clause(&ViewsQuery::default());
+        let clause = where_clause(&ViewsQuery::default(), 1000);
         assert!(clause.contains("lastActiveAt + ttl > time::now()"), "{clause}");
 
         let with_expired = ViewsQuery {
             include_expired: Some(true),
             ..Default::default()
         };
-        assert!(!where_clause(&with_expired).contains("lastActiveAt + ttl"));
+        assert!(!where_clause(&with_expired, 1000).contains("lastActiveAt + ttl"));
     }
 
     #[test]
@@ -1068,7 +1121,7 @@ mod tests {
             q: Some("it's".to_string()),
             ..Default::default()
         };
-        let clause = where_clause(&params);
+        let clause = where_clause(&params, 1000);
         assert!(clause.contains("auth_id = 'user:o\\'brien'"), "{clause}");
         assert!(clause.contains("string::contains(surql ?? '', 'it\\'s')"), "{clause}");
     }

@@ -208,6 +208,8 @@ export interface PresenceTotals {
   shared_views: number;
   slow_views: number;
   errored_views: number;
+  /** Views holding at least `large_view_rows` rows (see Presence). */
+  large_views: number;
 }
 
 export interface PresenceSample {
@@ -233,6 +235,8 @@ export interface PresenceBlock {
 
 export interface Presence extends PresenceBlock {
   slow_ms: number;
+  /** Row count from which a view is flagged large. */
+  large_view_rows: number;
   top_users: { auth_id: string; views: number; sessions: number }[];
   by_ssp: { ssp_id: string; views: number }[];
 }
@@ -275,6 +279,7 @@ export interface ViewsList {
   limit: number;
   sort: string;
   slow_ms: number;
+  large_view_rows: number;
   server_time_ms: number;
 }
 

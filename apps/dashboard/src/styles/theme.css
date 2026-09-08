@@ -2664,6 +2664,10 @@ tr:hover .row-actions,
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
+/* Four readouts in the same rail (Shared / Large / Slow / Errored). */
+.stat4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 
 .stat3 > div {
   min-width: 0;

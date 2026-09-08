@@ -149,6 +149,7 @@ pub const TOOLS: &[ToolDef] = &[
             p("slow_ms", "number", "Only views whose materialization p99 reaches this"),
             p("q", "string", "Substring of the registered SurrealQL"),
             p("shared", "boolean", "Only views more than one session subscribes to"),
+            p("large", "boolean", "Only views holding at least the large-view row threshold (SPKY_ADMIN_LARGE_VIEW_ROWS, default 1000); these republish every row on each cold registration"),
             p("include_expired", "boolean", "Include rows past lastActiveAt + ttl that the sweep has not reclaimed yet"),
         ], read_only = true),
     tool!("view_get", "One registered view in full: its SurrealQL and params, every subscribing session with its age, materialization percentiles, the SSP serving it with that view's memory footprint, and the other live sessions running the identical query.", "GET", "/views/{key}",
