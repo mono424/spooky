@@ -546,6 +546,7 @@ operator (a row the replica schema rejects, typically). <code>drift.upstream</co
 <li><code>SPKY_DRIFT_RECLONE_COOLDOWN_SECS</code> - Minimum spacing between automatic re-clones (default: <code>3600</code>)</li>
 <li><code>SPKY_BACKENDS</code> - JSON-encoded backend health-check list (<code>SPKY_SCHEDULER_BACKENDS</code> accepted as legacy fallback)</li>
 <li><code>SPKY_BOOTSTRAP_PAGE_SIZE</code> - Rows read per bootstrap page from the replica (default: <code>500</code>)</li>
+<li><code>SPKY_CLEAR_VIEWS_ON_START</code> - Wipe <code>_00_query</code> at startup (default: <code>true</code>). <code>false</code> keeps registered views across a scheduler restart: the replica clones them, SSPs re-register them at bootstrap, clients never notice; the SSP TTL sweep retires expired ones. Single-SSP tenants only until scheduler-owned view assignment lands.</li>
 <li><code>SPKY_AUTH_SECRET</code> - Optional shared secret; when set, SSP clients are required to send <code>Authorization: Bearer &lt;secret&gt;</code> on <code>/proxy/*</code></li>
 </ul>
 <p>Every other field (<code>ingest_host</code>, <code>ingest_port</code>, <code>load_balance</code>,

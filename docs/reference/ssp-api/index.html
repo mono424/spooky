@@ -113,6 +113,18 @@ pre-emptively defines that user’s dedicated
 <li><code>401 Unauthorized</code> - Missing or invalid authentication</li>
 <li><code>503 Service Unavailable</code> - SSP is not in Ready state (<code>SSP_NOT_READY</code>)</li>
 </ul>
+<p><strong>What the SSP writes:</strong> the <code>_00_query</code> row for the view (<code>UPSERT</code>) with
+<code>rowCount</code> (the size of the initial set) and <code>state</code>. A view with rows is
+written <code>state = &#39;materializing&#39;</code> and its edges go to the edge flusher; the
+batch that commits those <code>_00_list_ref</code> edges also sets <code>state = &#39;ready&#39;</code>, in
+the same transaction, and first deletes any edges the row already had (a full
+publish replaces, never duplicates). A view with no rows is written
+<code>state = &#39;ready&#39;</code> at once. Clients read <code>state</code> next to the edges: <code>ready</code> with
+<code>rowCount 0</code> is a real empty result, <code>materializing</code> is a publish in flight,
+and a missing row means the SSP no longer has the view (they keep their rows
+and re-register). Re-registering a view the SSP already holds only refreshes
+<code>clientId</code>, <code>lastActiveAt</code>, <code>ttl</code> and <code>subscribers</code>; it re-publishes only when
+the row or its edges are found missing.</p>
 <p><strong>Example:</strong></p>
 <pre class="astro-code astro-code-themes github-light github-dark" style="background-color:#fff;--shiki-dark-bg:#24292e;color:#24292e;--shiki-dark:#e1e4e8;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#6F42C1;--shiki-dark:#B392F0">curl</span><span style="color:#005CC5;--shiki-dark:#79B8FF"> -X</span><span style="color:#032F62;--shiki-dark:#9ECBFF"> POST</span><span style="color:#032F62;--shiki-dark:#9ECBFF"> http://localhost:8667/view/register</span><span style="color:#005CC5;--shiki-dark:#79B8FF"> \</span></span>
 <span class="line"><span style="color:#005CC5;--shiki-dark:#79B8FF">  -H</span><span style="color:#032F62;--shiki-dark:#9ECBFF"> &quot;Content-Type: application/json&quot;</span><span style="color:#005CC5;--shiki-dark:#79B8FF"> \</span></span>

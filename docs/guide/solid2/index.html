@@ -12,8 +12,8 @@ drift. On Solid 1.x apps use the <a href="/docs/guide/solid">SolidJS guide</a> i
 subscription: keyed reconcile by <code>id</code>, row identity preserved across updates, <code>&lt;For&gt;</code> notified on
 add / remove / reorder. No manual reconcile or version-signal plumbing.</li>
 <li><code>createQuery</code> exposes both worlds: non-suspending accessors (<code>data</code>, <code>isLoading</code>, <code>isFetching</code>,
-<code>isSettled</code>, <code>error</code>) <strong>and</strong> a suspending <code>ready()</code> for <code>&lt;Loading&gt;</code> boundaries. Queries are born
-committed, so a local-first cache paint never suspends.</li>
+<code>isAuthoritative</code>, <code>hasData</code>, <code>isEmpty</code>, <code>isSettled</code>, <code>error</code>) <strong>and</strong> a suspending <code>ready()</code> for
+<code>&lt;Loading&gt;</code> boundaries. Queries are born committed, so a local-first cache paint never suspends.</li>
 <li>Status hooks are async-iterable-backed memos with a <code>loadingValue</code>.</li>
 <li>Mutations stay plain async calls — the engine is already optimistic local-first end to end
 (local commit → live re-emit → outbox sync). <code>createSubmission</code> only adds button pending/error state.</li>
@@ -194,7 +194,22 @@ first real result lands. <code>&lt;Loading&gt;</code> is Solid 2’s renamed <co
 
 
 
-<table><thead><tr><th>Accessor</th><th>Meaning</th></tr></thead><tbody><tr><td><code>data()</code></td><td>Rows, or the row / <code>null</code> for <code>.one()</code>. Never suspends, never throws. Keyed-reconciled in place.</td></tr><tr><td><code>ready()</code></td><td>Same data, suspends into the nearest <code>&lt;Loading&gt;</code> until the first result or an error.</td></tr><tr><td><code>error()</code></td><td>Registration or sync error (e.g. SSP 503 during bootstrap). Never thrown into the render tree; the sync scheduler retries underneath.</td></tr><tr><td><code>isLoading()</code></td><td>No result yet and no error.</td></tr><tr><td><code>isFetching()</code></td><td>The sync engine is pulling records for this query.</td></tr><tr><td><code>isSettled()</code></td><td>Delivered <strong>and</strong> idle — the gate a windowed list needs before trusting a short result as the end of the list.</td></tr></tbody></table>
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>Accessor</th><th>Meaning</th></tr></thead><tbody><tr><td><code>data()</code></td><td>Rows, or the row / <code>null</code> for <code>.one()</code>. Never suspends, never throws. Keyed-reconciled in place.</td></tr><tr><td><code>ready()</code></td><td>Same data, suspends into the nearest <code>&lt;Loading&gt;</code> until the first result or an error.</td></tr><tr><td><code>error()</code></td><td>Registration or sync error (e.g. SSP 503 during bootstrap). Never thrown into the render tree; the sync scheduler retries underneath.</td></tr><tr><td><code>isLoading()</code></td><td>Cold first load only: nothing has painted for this identity, the server has not answered, and registration has not failed. A paint from the local cache ends it without the server; the server answering with zero rows ends it without rows. Re-arms only when the query identity changes.</td></tr><tr><td><code>isFetching()</code></td><td>The sync engine is pulling records for this query (registration, a sync round). Re-enters on later rounds.</td></tr><tr><td><code>isAuthoritative()</code></td><td>Server membership is known for this identity: a registration or poll landed, or a previous session’s membership was read on boot. From here <code>data()</code> is the server’s answer, not a cache guess. Latched until the identity changes.</td></tr><tr><td><code>hasData()</code></td><td><code>data()</code> holds something: rows for a list, a row for <code>.one()</code>.</td></tr><tr><td><code>isEmpty()</code></td><td>Authoritative <strong>and</strong> no data: the server said “no rows”. Render empty states on this, never on a bare <code>!hasData()</code>.</td></tr><tr><td><code>isSettled()</code></td><td>Authoritative <strong>and</strong> idle — the gate a windowed list needs before trusting a short result as the end of the list. Not monotonic (a later sync round re-enters <code>isFetching</code>); latch it when a verdict must stick.</td></tr></tbody></table>
+<p>A query that painted cached rows is therefore <strong>not loading</strong> while the server is still catching
+up, and a list that is merely waiting for the server is <strong>not empty</strong>. Gates built on
+<code>isLoading()</code> / <code>isEmpty()</code> stop guessing with timeouts.</p>
 <p>Options: <code>{ enabled?: () =&gt; boolean, deregisterOnCleanup?: boolean }</code>, as in client-solid.</p>
 <div class="relative overflow-hidden rounded-glass border p-4 my-6 flex items-start gap-3 shadow-glass-inset border-amber-500/20 bg-amber-500/[0.07]"> <div class="shrink-0 mt-0.5 text-amber-500"> <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5"> <path fill-rule="evenodd" d="M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.599 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003ZM12 8.25a.75.75 0 0 1 .75.75v3.75a.75.75 0 0 1-1.5 0V9a.75.75 0 0 1 .75-.75Zm0 8.25a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clip-rule="evenodd"></path> </svg> </div> <div class="text-sm leading-relaxed [&#38;>p]:my-2 [&#38;>:first-child]:mt-0 [&#38;>:last-child]:mb-0 text-amber-200/70"> <strong class="block mb-1 text-sm font-medium text-amber-500">Rows are store proxies</strong> <p>Solid 2 stores wrap class instances too and serve their methods bound. A <code>RecordId</code> read out of a
 row renders fine and <code>db.delete(&#39;post&#39;, row.id)</code> works, but if you hand a whole row back to a
