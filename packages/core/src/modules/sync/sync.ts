@@ -9,6 +9,8 @@ import type {
   RecordVersionDiff,
   SyncHealth,
   SyncHealthStatus,
+  ServerViewMeta,
+  MembershipOutcome,
 } from '../../types';
 import { createSyncEventSystem, SyncEventTypes, SyncQueueEventTypes } from './events/index';
 import type { Logger } from '../../services/logger/index';
@@ -38,6 +40,60 @@ interface ListRefSnapshot {
   subquery: RecordVersionArray;
   /** `_00_query.rowCount`; `null` when the row was not readable. */
   rowCount: number | null;
+  /** The `_00_query` row's presence, `rowCount` and publish `state`. */
+  meta: ServerViewMeta;
+}
+
+/** The `{ rowCount, state }` object the row-count selects return per row. */
+interface QueryMetaRow {
+  id?: RecordId<string>;
+  rowCount?: number | null;
+  state?: string | null;
+}
+
+/** Fold a row-count select result into {@link ServerViewMeta}. */
+function metaFromRow(row: QueryMetaRow | null | undefined): ServerViewMeta {
+  if (!row || typeof row !== 'object') return { present: false, rowCount: null, state: null };
+  const state = row.state === 'materializing' || row.state === 'ready' ? row.state : null;
+  return {
+    present: true,
+    rowCount: typeof row.rowCount === 'number' ? row.rowCount : null,
+    state,
+  };
+}
+
+/**
+ * Re-read ladder for a registration that answered while the SSP was still
+ * publishing (`state = 'materializing'`): the flusher window is ~100ms, so the
+ * first rung usually lands it; the rest cover a slow write without waiting
+ * for a backed-off poll tick.
+ */
+const MATERIALIZING_REFETCH_LADDER_MS: readonly number[] = [150, 400, 1000];
+
+/**
+ * How long LIVE `_00_list_ref` DELETEs for one query are held before they are
+ * verified upstream as a batch. A view teardown (sweep, reset, republish)
+ * arrives as one DELETE per edge within a few ms; a single peer delete costs
+ * this plus one round trip.
+ */
+const LIVE_REMOVAL_COALESCE_MS = 100;
+
+/**
+ * Collapse duplicate `(id, version)` pairs to one per id, keeping the highest
+ * version. `_00_list_ref` has no unique index on `(in, out)`, and a full
+ * republish over edges that were never cleaned up (a scheduler restart
+ * orphans them) used to leave two rows per record; the client must render
+ * each record once regardless.
+ */
+function dedupeRecordVersions(pairs: RecordVersionArray): RecordVersionArray {
+  if (pairs.length < 2) return pairs;
+  const best = new Map<string, number>();
+  for (const [id, version] of pairs) {
+    const prev = best.get(id);
+    if (prev === undefined || version > prev) best.set(id, version);
+  }
+  if (best.size === pairs.length) return pairs;
+  return Array.from(best.entries());
 }
 
 interface ListRefEdgeRow {
@@ -788,6 +844,8 @@ export class Sp00kySync<S extends SchemaStructure> {
   public async prepareBucketSwitch(): Promise<void> {
     this.stopSelfHeal();
     this.stopListRefPoll();
+    this.clearListRefRefetches();
+    this.clearLiveRemovals();
     if (this.listRefPollInFlight) await this.listRefPollInFlight;
     await this.killRefLiveQuery();
     this.upQueue.clearDebounceTimers();
@@ -1011,7 +1069,7 @@ export class Sp00kySync<S extends SchemaStructure> {
         if (!snapshot) continue;
         this.listRefPolledAt.set(hash, now);
         try {
-          if (await this.applyListRefSnapshot(hash, snapshot)) anyChanged = true;
+          if ((await this.applyListRefSnapshot(hash, snapshot)).changed) anyChanged = true;
         } catch (err) {
           this.logger.debug(
             {
@@ -1069,11 +1127,16 @@ export class Sp00kySync<S extends SchemaStructure> {
       return out;
     }
     const [edges, counts] = await this.remote.query<
-      [ListRefEdgeRow[] | null, ({ id?: RecordId<string>; rowCount?: number | null } | null)[] | null]
+      [ListRefEdgeRow[] | null, (QueryMetaRow | null)[] | null]
     >(`${buildListRefBatchSelect(listRefTbl)};\n${buildQueryRowCountBatchSelect()}`, { ins: ids });
     if (!Array.isArray(edges)) return out;
     for (const hash of hashById.values()) {
-      out.set(hash, { primary: [], subquery: [], rowCount: null });
+      out.set(hash, {
+        primary: [],
+        subquery: [],
+        rowCount: null,
+        meta: { present: false, rowCount: null, state: null },
+      });
     }
     for (const row of edges) {
       const hash = hashById.get(encodeRecordId(row.in));
@@ -1083,22 +1146,35 @@ export class Sp00kySync<S extends SchemaStructure> {
       if (row.parent == null) snapshot.primary.push(pair);
       else snapshot.subquery.push(pair);
     }
+    for (const snapshot of out.values()) {
+      snapshot.primary = dedupeRecordVersions(snapshot.primary);
+      snapshot.subquery = dedupeRecordVersions(snapshot.subquery);
+    }
     for (const count of Array.isArray(counts) ? counts : []) {
       if (!count || !count.id) continue;
       const hash = hashById.get(encodeRecordId(count.id));
       if (!hash) continue;
-      out.get(hash)!.rowCount = typeof count.rowCount === 'number' ? count.rowCount : null;
+      const snapshot = out.get(hash)!;
+      snapshot.meta = metaFromRow(count);
+      snapshot.rowCount = snapshot.meta.rowCount;
     }
-    const suspect =
-      edges.length === 0 &&
-      Array.from(out.entries()).some(([hash, snapshot]) => {
-        const held = this.dataModule.getQueryByHash(hash)?.config.remoteArray?.length ?? 0;
-        return held > 0 && (snapshot.rowCount ?? 0) > 0;
-      });
+    // Two shapes of a batch that must not be believed at face value: no edge
+    // at all while the server still reports rows for a query we hold (a
+    // silently empty batch), and a query we hold whose `_00_query` row did
+    // not come back (a lost view, or a batch that missed it). Both are
+    // re-read one query at a time before anything is applied, because an
+    // empty set taken at face value is the removal of every row, and a
+    // missing row taken at face value would re-register a healthy view.
+    const suspect = Array.from(out.entries()).some(([hash, snapshot]) => {
+      const held = this.dataModule.getQueryByHash(hash)?.config.remoteArray?.length ?? 0;
+      if (held === 0) return false;
+      if (!snapshot.meta.present) return true;
+      return edges.length === 0 && (snapshot.rowCount ?? 0) > 0;
+    });
     if (suspect) {
       this.logger.warn(
         { hashes, Category: 'sp00ky-client::Sp00kySync::fetchListRefSnapshots' },
-        'Batched list_ref select returned no edges for queries that hold rows; re-reading one query at a time'
+        'Batched list_ref select is not trusted for queries that hold rows (no edges, or a missing _00_query row); re-reading one query at a time'
       );
       for (const hash of Array.from(out.keys())) {
         const queryState = this.dataModule.getQueryByHash(hash);
@@ -1121,10 +1197,10 @@ export class Sp00kySync<S extends SchemaStructure> {
    */
   private async fetchListRefSnapshot(id: RecordId<string>): Promise<ListRefSnapshot | null> {
     const listRefTbl = this.listRefTable();
-    const [items, serverRowCount, children] = await this.remote.query<
+    const [items, metaRow, children] = await this.remote.query<
       [
         { out: RecordId<string>; version: number }[] | null,
-        number | null,
+        QueryMetaRow | null,
         { out: RecordId<string>; version: number }[] | null,
       ]
     >(
@@ -1133,11 +1209,15 @@ export class Sp00kySync<S extends SchemaStructure> {
     );
     if (!Array.isArray(items)) return null;
     const toPairs = (rows: { out: RecordId<string>; version: number }[] | null): RecordVersionArray =>
-      Array.isArray(rows) ? rows.map((item) => [encodeRecordId(item.out), item.version]) : [];
+      dedupeRecordVersions(
+        Array.isArray(rows) ? rows.map((item) => [encodeRecordId(item.out), item.version]) : []
+      );
+    const meta = metaFromRow(metaRow);
     return {
       primary: toPairs(items),
       subquery: toPairs(children),
-      rowCount: typeof serverRowCount === 'number' ? serverRowCount : null,
+      rowCount: meta.rowCount,
+      meta,
     };
   }
 
@@ -1153,26 +1233,24 @@ export class Sp00kySync<S extends SchemaStructure> {
   private async applyListRefSnapshot(
     queryHash: string,
     snapshot: ListRefSnapshot
-  ): Promise<boolean> {
+  ): Promise<{ changed: boolean; outcome: MembershipOutcome | 'unchanged' }> {
     const queryState = this.dataModule.getQueryByHash(queryHash);
-    if (!queryState) return false;
+    if (!queryState) return { changed: false, outcome: 'unchanged' };
     const fresh = snapshot.primary;
-    const serverRowCount = snapshot.rowCount;
     // Capture which ids LEFT the query's window (present in the cached
     // remoteArray, absent from `fresh`) BEFORE we overwrite remoteArray — these
     // are cross-window deletes (or rows that scrolled out). They drive the
-    // forced re-render below.
+    // forced re-render below. Only meaningful once the set is actually applied.
     const prevRemote = queryState.config.remoteArray ?? [];
-    const freshIds = new Set(fresh.map(([id]) => id));
-    const removedIds = prevRemote.filter(([id]) => !freshIds.has(id)).map(([id]) => id);
     // Idempotent poll: only persist the remoteArray when it actually changed.
     // The poll runs continuously as a LIVE fallback, so on a quiet page `fresh`
     // equals the cached array every tick — re-writing it (an `UPDATE _00_query`
     // each cycle, per active query) was pure churn and the bulk of the idle
     // traffic. `recordVersionArraysEqual` is order-insensitive because the
     // list_ref SELECT has no `ORDER BY`.
-    const changed = !recordVersionArraysEqual(fresh, queryState.config.remoteArray);
-    if (changed) {
+    const differs = !recordVersionArraysEqual(fresh, queryState.config.remoteArray);
+    let outcome: MembershipOutcome | 'unchanged' = 'unchanged';
+    if (differs) {
       // Update the cached remoteArray so the next diff/sync sees the new state.
       // `syncQuery` (below) then writes through `cache.saveBatch`, which UPSERTs
       // the local DB row and ingests it into the in-browser SSP — the SSP's
@@ -1180,14 +1258,27 @@ export class Sp00kySync<S extends SchemaStructure> {
       // and notifies subscribers. We skip an explicit `notifyQuerySynced`
       // because that path races the stream-update path (can notify with stale
       // records).
-      await this.dataModule.updateQueryRemoteArray(queryHash, fresh, { serverRowCount });
+      //
+      // The DataModule arbitrates an EMPTY set against the `_00_query` row it
+      // was read with (`snapshot.meta`): a missing row is a lost view (kept +
+      // re-registered), a `materializing` row is a publish in flight, and only
+      // a `ready` row with `rowCount 0` empties the query.
+      outcome = await this.dataModule.updateQueryRemoteArray(queryHash, fresh, {
+        meta: snapshot.meta,
+      });
     }
+    const applied = differs && outcome === 'applied';
+    const freshIds = new Set(fresh.map(([id]) => id));
+    const removedIds = applied
+      ? prevRemote.filter(([id]) => !freshIds.has(id)).map(([id]) => id)
+      : [];
     // Run `syncQuery` every tick regardless: it's a no-op when localArray has
     // caught up to remoteArray (`if (!diff) return`, issues no query), but it
     // covers the rare case where remoteArray is stable yet localArray is behind
     // (a prior record fetch failed) — so a missed row still gets retried.
     // For REMOVALS it runs the ids through `handleRemovedRecords`, which deletes
-    // confirmed-gone records from the local DB.
+    // confirmed-gone records from the local DB. A rejected snapshot left
+    // `remoteArray` alone, so this cannot act on it.
     try {
       await this.syncQuery(queryHash);
     } catch (err) {
@@ -1204,20 +1295,23 @@ export class Sp00kySync<S extends SchemaStructure> {
     // it, so the engine already holds it at the published version): nothing
     // then re-materializes the query. Ask for one; it is a no-op behind a
     // stream update that a fetch above already queued.
-    if (changed) this.dataModule.scheduleRematerialize(queryHash);
+    if (applied) this.dataModule.scheduleRematerialize(queryHash);
     // Cross-session fallback for `.related()` child rows: the LIVE-permission
     // gap can drop child-edge notifications, so converge their bodies on the
-    // poll too (idempotent — no-op when nothing changed).
-    await this.applySubqueryChildren(queryHash, snapshot.subquery).catch((err) => {
-      this.logger.info(
-        {
-          err: (err as Error)?.message ?? err,
-          queryHash,
-          Category: 'sp00ky-client::Sp00kySync::applyListRefSnapshot',
-        },
-        'Subquery child sync failed during poll'
-      );
-    });
+    // poll too (idempotent — no-op when nothing changed). Not for a snapshot
+    // that was rejected: its child set is as untrustworthy as its primary set.
+    if (outcome === 'applied' || outcome === 'unchanged') {
+      await this.applySubqueryChildren(queryHash, snapshot.subquery).catch((err) => {
+        this.logger.info(
+          {
+            err: (err as Error)?.message ?? err,
+            queryHash,
+            Category: 'sp00ky-client::Sp00kySync::applyListRefSnapshot',
+          },
+          'Subquery child sync failed during poll'
+        );
+      });
+    }
     // A REMOVAL needs no record fetch, so unlike the added-row path it doesn't
     // get a re-render from the SSP stream on this code path reliably (and the
     // non-windowed window-0 query re-queries the local DB rather than the id-set).
@@ -1237,7 +1331,76 @@ export class Sp00kySync<S extends SchemaStructure> {
         );
       }
     }
-    return changed;
+    return { changed: applied, outcome };
+  }
+
+  /**
+   * Re-read ONE query's server state now (edges + `_00_query` row) and land
+   * it through {@link applyListRefSnapshot}. The targeted form of the poll,
+   * for the moments that cannot wait for the next tick: a registration that
+   * answered `materializing`, and a LIVE removal that has to be checked
+   * against the row before it may empty a painted list.
+   */
+  private async refetchListRefForQuery(
+    queryHash: string
+  ): Promise<{ changed: boolean; outcome: MembershipOutcome | 'unchanged' } | null> {
+    const queryState = this.dataModule.getQueryByHash(queryHash);
+    if (!queryState) return null;
+    const snapshot = await this.fetchListRefSnapshot(queryState.config.id);
+    if (!snapshot) return null;
+    return this.applyListRefSnapshot(queryHash, snapshot);
+  }
+
+  /** Per-query pending targeted re-reads: one timer and the ladder still to walk. */
+  private listRefRefetches = new Map<string, { timer: ReturnType<typeof setTimeout>; ladder: number[] }>();
+
+  /**
+   * Schedule a targeted re-read of `queryHash` after `delays[0]` ms. If the
+   * read still says the server is publishing (`materializing`), the next rung
+   * of the ladder is armed; any other outcome ends it. Re-scheduling a hash
+   * that already has a timer replaces it (latest wins), so bursts coalesce.
+   */
+  private scheduleListRefRefetch(queryHash: string, delays: number | readonly number[]): void {
+    const ladder = typeof delays === 'number' ? [delays] : [...delays];
+    if (ladder.length === 0) return;
+    this.clearListRefRefetch(queryHash);
+    const [first, ...rest] = ladder;
+    const timer = setTimeout(() => {
+      this.listRefRefetches.delete(queryHash);
+      void this.refetchListRefForQuery(queryHash)
+        .then((result) => {
+          const queryState = this.dataModule.getQueryByHash(queryHash);
+          const stillMaterializing =
+            result?.outcome === 'ignored' && queryState?.serverState === 'materializing';
+          if (stillMaterializing && rest.length > 0) {
+            this.scheduleListRefRefetch(queryHash, rest);
+          }
+        })
+        .catch((err) => {
+          this.logger.info(
+            {
+              err: (err as Error)?.message ?? err,
+              queryHash,
+              Category: 'sp00ky-client::Sp00kySync::scheduleListRefRefetch',
+            },
+            'Targeted list_ref re-read failed; the poll will retry'
+          );
+        });
+    }, first);
+    this.listRefRefetches.set(queryHash, { timer, ladder: rest });
+  }
+
+  private clearListRefRefetch(queryHash: string): void {
+    const pending = this.listRefRefetches.get(queryHash);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.listRefRefetches.delete(queryHash);
+    }
+  }
+
+  private clearListRefRefetches(): void {
+    for (const { timer } of this.listRefRefetches.values()) clearTimeout(timer);
+    this.listRefRefetches.clear();
   }
 
   /**
@@ -1580,11 +1743,25 @@ export class Sp00kySync<S extends SchemaStructure> {
     // relayed from another tab). The fetch is rightly skipped then, but the
     // membership still has to be recorded, or the row lives on the
     // settled-write grace alone until the poll catches it.
+    // A DELETE is not applied on arrival. Every teardown of a view - the TTL
+    // sweep, an SSP reset, a scheduler wipe, a full republish - reaches the
+    // client as one DELETE per edge, indistinguishable from a peer deleting
+    // rows, and obeying them blanked painted lists n-1 rows at a time. Removals
+    // are coalesced briefly and VERIFIED upstream before membership moves: an
+    // id that no longer exists is dropped (and its body deleted); anything
+    // else is settled by re-reading the server's whole set for the query, where
+    // a missing `_00_query` row means "view lost, keep everything".
+    if (action === 'DELETE') {
+      this.queueLiveRemoval(hash, recordId);
+      return;
+    }
+
     if (existing.config.membershipKnown) {
-      const membershipDiff: RecordVersionDiff =
-        action === 'DELETE'
-          ? { added: [], updated: [], removed: [recordId] }
-          : { added: [{ id: recordId, version }], updated: [], removed: [] };
+      const membershipDiff: RecordVersionDiff = {
+        added: [{ id: recordId, version }],
+        updated: [],
+        removed: [],
+      };
       const next = applyRecordVersionDiff(existing.config.remoteArray ?? [], membershipDiff);
       if (!recordVersionArraysEqual(next, existing.config.remoteArray ?? [])) {
         await this.dataModule.updateQueryRemoteArray(hash, next);
@@ -1593,18 +1770,85 @@ export class Sp00kySync<S extends SchemaStructure> {
 
     await this.runSyncForQuery(hash, diff);
 
-    // A removal-only diff sets `fetching` false in `runSyncForQuery`, so it gets
-    // no `flushPendingStreamUpdate`/`endFetching` re-render — and a removal needs
-    // no record fetch to trigger one either. Force it, mirroring what the poll
-    // path already does for its own removals (`refetchListRefForQuery`).
-    if (diff.removed.length > 0 && diff.added.length === 0 && diff.updated.length === 0) {
-      await this.dataModule.notifyQuerySynced(hash);
-    } else if (diff.added.length === 0 && diff.updated.length === 0) {
+    if (diff.added.length === 0 && diff.updated.length === 0) {
       // Empty diff: the circuit already holds the row at this version (this
       // tab wrote it), so no fetch and no stream update - but the membership
       // recorded above is new, and the subscribers have to hear about it.
       this.dataModule.scheduleRematerialize(hash);
     }
+  }
+
+  /** LIVE removals awaiting verification, per query, with their coalescing timer. */
+  private pendingLiveRemovals = new Map<string, { ids: Map<string, RecordId>; timer: ReturnType<typeof setTimeout> }>();
+
+  /**
+   * Hold a LIVE `_00_list_ref` DELETE for {@link LIVE_REMOVAL_COALESCE_MS},
+   * then verify the batch (see {@link flushLiveRemovals}). A sweep or a
+   * republish delivers a view's whole set as one burst, so one verification
+   * round covers it.
+   */
+  private queueLiveRemoval(hash: string, recordId: RecordId): void {
+    const key = encodeRecordId(recordId);
+    const pending = this.pendingLiveRemovals.get(hash);
+    if (pending) {
+      pending.ids.set(key, recordId);
+      return;
+    }
+    const ids = new Map<string, RecordId>([[key, recordId]]);
+    const timer = setTimeout(() => {
+      this.pendingLiveRemovals.delete(hash);
+      void this.flushLiveRemovals(hash, Array.from(ids.values())).catch((err) => {
+        this.logger.info(
+          {
+            err: (err as Error)?.message ?? err,
+            hash,
+            Category: 'sp00ky-client::Sp00kySync::flushLiveRemovals',
+          },
+          'LIVE removal verification failed; the poll will converge'
+        );
+      });
+    }, LIVE_REMOVAL_COALESCE_MS);
+    this.pendingLiveRemovals.set(hash, { ids, timer });
+  }
+
+  /**
+   * Verify a coalesced batch of LIVE removals against the upstream records.
+   * Ids that no longer exist upstream are dropped from membership (the body
+   * delete already happened inside `syncRecords`) and the query re-renders.
+   * Anything still present upstream - or a verification that could not run -
+   * is settled by a targeted re-read of the server's set for this query,
+   * where the `_00_query` row decides: gone = view lost (keep rows,
+   * re-register), `materializing` = wait, `ready` = adopt the smaller set.
+   */
+  private async flushLiveRemovals(hash: string, ids: RecordId[]): Promise<void> {
+    const existing = this.dataModule.getQueryByHash(hash);
+    if (!existing || ids.length === 0) return;
+    const { confirmedRemovedIds, stillRemoteIds } = await this.runSyncForQuery(hash, {
+      added: [],
+      updated: [],
+      removed: ids,
+    });
+    if (confirmedRemovedIds.length > 0 && existing.config.membershipKnown) {
+      const gone = new Set(confirmedRemovedIds);
+      const held = existing.config.remoteArray ?? [];
+      const next = held.filter(([id]) => !gone.has(id));
+      if (next.length !== held.length) {
+        await this.dataModule.updateQueryRemoteArray(hash, next, { verifiedRemoval: true });
+      }
+      // A removal-only diff sets `fetching` false in `runSyncForQuery`, so it
+      // gets no `flushPendingStreamUpdate`/`endFetching` re-render - and a
+      // removal needs no record fetch to trigger one either. Force it.
+      await this.dataModule.notifyQuerySynced(hash);
+    }
+    const unverified = confirmedRemovedIds.length + stillRemoteIds.length < ids.length;
+    if (stillRemoteIds.length > 0 || unverified) {
+      this.scheduleListRefRefetch(hash, 0);
+    }
+  }
+
+  private clearLiveRemovals(): void {
+    for (const { timer } of this.pendingLiveRemovals.values()) clearTimeout(timer);
+    this.pendingLiveRemovals.clear();
   }
 
   /**
@@ -1882,7 +2126,7 @@ export class Sp00kySync<S extends SchemaStructure> {
     if (!diff) {
       return;
     }
-    return this.runSyncForQuery(hash, diff);
+    await this.runSyncForQuery(hash, diff);
   }
 
   /**
@@ -1892,7 +2136,11 @@ export class Sp00kySync<S extends SchemaStructure> {
    * never leaves a query stuck `fetching`. Part A's notification coalescing
    * means the single resulting UI update lands after this completes.
    */
-  private async runSyncForQuery(hash: string, diff: RecordVersionDiff): Promise<void> {
+  private async runSyncForQuery(
+    hash: string,
+    diff: RecordVersionDiff
+  ): Promise<{ confirmedRemovedIds: string[]; stillRemoteIds: string[] }> {
+    const nothing = { confirmedRemovedIds: [] as string[], stillRemoteIds: [] as string[] };
     // The diff was computed against whatever the circuit held at call time; if
     // the boot prime is still filling it, wait and recompute from the primed
     // `localArray` so the delta is real rather than "everything".
@@ -1901,9 +2149,9 @@ export class Sp00kySync<S extends SchemaStructure> {
       await prime;
       this.settledPrime = prime;
       const fresh = this.dataModule.getQueryByHash(hash);
-      if (!fresh) return;
+      if (!fresh) return nothing;
       const recomputed = new ArraySyncer(fresh.config.localArray, fresh.config.remoteArray).nextSet();
-      if (!recomputed) return;
+      if (!recomputed) return nothing;
       diff = recomputed;
     }
     // Don't let sync re-add a record the user just deleted locally. The remote
@@ -1929,8 +2177,11 @@ export class Sp00kySync<S extends SchemaStructure> {
     if (fetching) {
       this.dataModule.beginFetching(hash);
     }
+    let summary = nothing;
     try {
-      const { remoteFetchMs, stillRemoteIds } = await this.syncEngine.syncRecords(diff);
+      const { remoteFetchMs, stillRemoteIds, confirmedRemovedIds } =
+        await this.syncEngine.syncRecords(diff);
+      summary = { confirmedRemovedIds, stillRemoteIds };
       if (fetching) {
         this.dataModule.recordRemoteFetch(hash, remoteFetchMs);
       }
@@ -1996,6 +2247,7 @@ export class Sp00kySync<S extends SchemaStructure> {
         this.dataModule.endFetching(hash);
       }
     }
+    return summary;
   }
 
   /**
@@ -2144,11 +2396,12 @@ export class Sp00kySync<S extends SchemaStructure> {
     // `rowCount` rides along: it is written by the SSP in the same statement
     // that registers the view, BEFORE the edges are flushed, so it is the only
     // way to tell "this query is empty" from "its edges have not landed yet".
-    const [items, serverRowCount] = await this.remote.query<
-      [{ out: RecordId<string>; version: number }[], number | null]
+    const [items, metaRow] = await this.remote.query<
+      [{ out: RecordId<string>; version: number }[], QueryMetaRow | null]
     >(`${buildListRefSelect(listRefTbl)};\n${buildQueryRowCountSelect()}`, {
       in: queryState.config.id,
     });
+    const meta = metaFromRow(metaRow);
 
     this.logger.trace(
       {
@@ -2159,7 +2412,9 @@ export class Sp00kySync<S extends SchemaStructure> {
       'Got query record version array from remote'
     );
 
-    const array: RecordVersionArray = items.map((item) => [encodeRecordId(item.out), item.version]);
+    const array: RecordVersionArray = dedupeRecordVersions(
+      items.map((item) => [encodeRecordId(item.out), item.version])
+    );
 
     this.logger.debug(
       {
@@ -2170,9 +2425,14 @@ export class Sp00kySync<S extends SchemaStructure> {
       'createdRemoteQuery'
     );
 
-    if (array) {
-      /// Incantation existed already
-      await this.dataModule.updateQueryRemoteArray(queryHash, array, { serverRowCount });
+    const outcome = await this.dataModule.updateQueryRemoteArray(queryHash, array, { meta });
+    // A registration that answered before its edges landed: the SSP wrote
+    // `materializing` and handed the publish to its flusher (100ms window).
+    // Do not leave the fresh query waiting for a backed-off poll tick; re-read
+    // it a few times on a short ladder. LIVE CREATEs are ignored for a query
+    // whose membership is still unknown, so this is the only fast path.
+    if (outcome === 'ignored' && meta.present && meta.state === 'materializing') {
+      this.scheduleListRefRefetch(queryHash, MATERIALIZING_REFETCH_LADDER_MS);
     }
 
     // Pull the bodies of any `.related()` subquery children into the local
@@ -2355,6 +2615,12 @@ export class Sp00kySync<S extends SchemaStructure> {
     }
 
     // No subscribers throughout → safe to free the local view + state.
+    this.clearListRefRefetch(queryHash);
+    const pendingRemoval = this.pendingLiveRemovals.get(queryHash);
+    if (pendingRemoval) {
+      clearTimeout(pendingRemoval.timer);
+      this.pendingLiveRemovals.delete(queryHash);
+    }
     this.dataModule.finalizeDeregister(queryHash);
   }
 }

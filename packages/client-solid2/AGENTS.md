@@ -39,7 +39,10 @@ Provider props are identical to client-solid: `config`, `fallback`, `preload` (a
   - `data()` — non-suspending. `[]` / `null` before the first result, keyed-reconciled live rows after.
   - `ready()` — suspending read for `<Loading fallback={...}>` (Solid 2's renamed `<Suspense>`).
   - `error()` — registration/sync failure (e.g. SSP 503 NOT_READY). Never thrown into the render tree; the sync scheduler retries underneath.
-  - `isLoading()` / `isFetching()` / `isSettled()` — `isSettled()` means delivered AND idle; gate windowed-list end detection on it.
+  - `isLoading()` — cold first load only (nothing painted for this identity, server not heard, no error). A cached paint ends it; an authoritative empty answer ends it. Never true again for the same identity.
+  - `isFetching()` — a fetch cycle is in flight (registration, a sync round).
+  - `isAuthoritative()` — server membership is known for this identity (latched until it changes). `hasData()` — `data()` holds something. `isEmpty()` — authoritative AND no data: the server said "no rows"; render empty states on this, not on `!hasData()`.
+  - `isSettled()` — authoritative AND idle; gate windowed-list end detection on it. Not monotonic; latch it (a `createMemo(prev => prev || q.isSettled())`) for a verdict that must stick.
   - Options: `enabled?: () => boolean`, `deregisterOnCleanup?: boolean`.
 - **`createSubmission(fn)`** — button pending/error state around a mutation: `submit()`, `pending()`, `error()`, `result()`, `clearError()`. There is deliberately no `action()` / `createOptimisticStore` layer (see `src/lib/create-submission.ts`).
 - **`createPreload`**, **`usePendingMutations`**, **`useSyncStatus`**, **`useStorageStatus`**, **`useFeatureFlag`**, **`useAppRelease`**, **`useCrdtField`**, **`useFileUpload`**, **`useDownloadFile`** — same shapes as client-solid.

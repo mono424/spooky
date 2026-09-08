@@ -59,13 +59,35 @@ export type CreateQueryResult<TData> = {
    */
   ready: Accessor<TData>;
   error: Accessor<Error | undefined>;
+  /**
+   * True only on a COLD first load: nothing has painted for this identity,
+   * the server has not answered yet, and registration has not failed. A query
+   * that painted from the local cache is not loading, however long the server
+   * takes; a query the server answered with zero rows is not loading either
+   * (see `isEmpty`). Resets when the query identity changes.
+   */
   isLoading: Accessor<boolean>;
+  /** True while a fetch cycle is in flight (registration, a sync round). */
   isFetching: Accessor<boolean>;
   /**
-   * True once the query has delivered a result AND no fetch cycle is in
-   * flight (registration + initial sync included). While settled, results are
-   * authoritative: a windowed query returning fewer rows than its LIMIT
-   * really is the end of the list. Resets when the query identity changes.
+   * True once server membership is known for this identity: a registration or
+   * poll landed, or the durable membership of a previous session was read on
+   * boot. From then on `data()` is the server's answer, not a cache guess.
+   * Latched until the identity changes (or a bucket switch resets it).
+   */
+  isAuthoritative: Accessor<boolean>;
+  /** Whether `data()` currently holds anything: rows for a list, a row for `one()`. */
+  hasData: Accessor<boolean>;
+  /**
+   * The server answered and the answer is "no rows". The signal to render an
+   * empty state on; a bare `!hasData()` cannot tell empty from not-yet-loaded.
+   */
+  isEmpty: Accessor<boolean>;
+  /**
+   * True once server membership is known AND no fetch cycle is in flight.
+   * While settled, results are authoritative: a windowed query returning fewer
+   * rows than its LIMIT really is the end of the list. Not monotonic: a later
+   * sync round re-enters `isFetching`; latch it if a verdict must stick.
    */
   isSettled: Accessor<boolean>;
 };
@@ -132,7 +154,12 @@ export function createQuery<
   // continuations, which run outside any tracking scope — `ownedWrite` opts
   // these signals out of Solid 2's owned-scope write guard.
   const [error, setError] = createSignal<Error | undefined>(undefined, { ownedWrite: true });
-  const [isFetched, setIsFetched] = createSignal(false, { ownedWrite: true });
+  // Server membership known for the current identity (core `membershipKnown`).
+  const [isAuthoritative, setIsAuthoritative] = createSignal(false, { ownedWrite: true });
+  // An emission WITH data has been applied for the current identity. Together
+  // with `isAuthoritative` this is what ends the cold-load state: a cached
+  // paint ends it without the server, a server answer ends it without rows.
+  const [hasPainted, setHasPainted] = createSignal(false, { ownedWrite: true });
   const [isFetching, setIsFetching] = createSignal(false, { ownedWrite: true });
 
   // The hash of the currently-installed subscription, for opt-in deregister on
@@ -180,7 +207,8 @@ export function createQuery<
       const myRun = ++runId;
       // A new identity starts clean: a previous identity's failure must not
       // keep this one out of its loading state.
-      setIsFetched(false);
+      setIsAuthoritative(false);
+      setHasPainted(false);
       setError(undefined);
       if (!enabled || !query) return;
 
@@ -224,24 +252,43 @@ export function createQuery<
             })
           );
 
-          let isFirstCall = true;
+          // Mirror whether the server's membership is known. This is the
+          // channel that ends a cold load for a query whose honest answer is
+          // zero rows: the core emits no second `[]` for it, but it does flip
+          // authority once the registration (or a poll) has landed. A flip
+          // back to false is a bucket switch (a different principal), whose
+          // rebind also empties the rows, so the paint latch goes with it.
+          addCleanup(
+            sp00ky.subscribeQueryAuthority(
+              hash,
+              (known) => {
+                if (disposed || myRun !== runId) return;
+                setIsAuthoritative(known);
+                if (known) wakeReady();
+                else setHasPainted(false);
+              },
+              { immediate: true }
+            )
+          );
+
           addCleanup(
             sp00ky.subscribe(
               hash,
               (rows: Record<string, any>[]) => {
                 if (disposed || myRun !== runId) return;
                 const queryData = (query.isOne ? (rows[0] ?? null) : rows) as TData;
-                // The first (immediate) callback with no data likely means the
-                // local DB has not synced yet — don't mark as fetched, so the
-                // UI keeps showing its loading state.
-                const hasData = query.isOne
+                // Every emission is applied as-is: the core only emits what
+                // it has decided the query holds (cached rows on mount, the
+                // server's set once membership is known), and it never emits
+                // a wrongful `[]` for a lost or still-publishing view. An
+                // emission WITH data ends the cold-load state on its own.
+                const hasRows = query.isOne
                   ? queryData !== null && queryData !== undefined
                   : rows.length > 0;
-                if (!isFirstCall || hasData) {
-                  setIsFetched(true);
+                if (hasRows) {
+                  setHasPainted(true);
                   wakeReady();
                 }
-                isFirstCall = false;
 
                 const t0 = performance.now();
                 setStore((s) => {
@@ -290,10 +337,10 @@ export function createQuery<
   // async node stays PENDING, every queue flush carries pending nodes forward,
   // and a navigation transition waits on them. Lazy means only a query whose
   // `ready()` is read creates the node at all, and the deferred below is
-  // settled by the same emission that flips `isFetched`.
+  // settled by the same emission (or authority flip) that ends `isLoading`.
   const readyGate = createMemo(
     async (): Promise<true> => {
-      if (isFetched() || error()) return true;
+      if (isAuthoritative() || hasPainted() || error()) return true;
       await new Promise<void>((resolve) => readyWaiters.push(resolve));
       return true;
     },
@@ -316,8 +363,13 @@ export function createQuery<
     }
   });
 
-  const isLoading = () => !isFetched() && error() === undefined;
-  const isSettled = () => isFetched() && !isFetching();
+  const hasData = () => {
+    const v = store.value as unknown;
+    return Array.isArray(v) ? v.length > 0 : v !== null && v !== undefined;
+  };
+  const isLoading = () => !isAuthoritative() && !hasPainted() && error() === undefined;
+  const isEmpty = () => isAuthoritative() && !hasData();
+  const isSettled = () => isAuthoritative() && !isFetching();
 
   return {
     data,
@@ -325,6 +377,9 @@ export function createQuery<
     error,
     isLoading,
     isFetching,
+    isAuthoritative,
+    hasData,
+    isEmpty,
     isSettled,
   };
 }

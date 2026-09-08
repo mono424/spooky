@@ -28,8 +28,8 @@ coexist until Solid 2.0 is stable, and you pick one per app.
   subscription: keyed reconcile by `id`, row identity preserved across updates, `<For>` notified on
   add / remove / reorder. No manual reconcile or version-signal plumbing.
 - `createQuery` exposes both worlds: non-suspending accessors (`data`, `isLoading`, `isFetching`,
-  `isSettled`, `error`) **and** a suspending `ready()` for `<Loading>` boundaries. Queries are born
-  committed, so a local-first cache paint never suspends.
+  `isAuthoritative`, `hasData`, `isEmpty`, `isSettled`, `error`) **and** a suspending `ready()` for
+  `<Loading>` boundaries. Queries are born committed, so a local-first cache paint never suspends.
 - Status hooks are async-iterable-backed memos with a `loadingValue`.
 - Mutations stay plain async calls — the engine is already optimistic local-first end to end
   (local commit → live re-emit → outbox sync). `createSubmission` only adds button pending/error state.
@@ -92,9 +92,16 @@ first real result lands. `<Loading>` is Solid 2's renamed `<Suspense>`.
 | `data()` | Rows, or the row / `null` for `.one()`. Never suspends, never throws. Keyed-reconciled in place. |
 | `ready()` | Same data, suspends into the nearest `<Loading>` until the first result or an error. |
 | `error()` | Registration or sync error (e.g. SSP 503 during bootstrap). Never thrown into the render tree; the sync scheduler retries underneath. |
-| `isLoading()` | No result yet and no error. |
-| `isFetching()` | The sync engine is pulling records for this query. |
-| `isSettled()` | Delivered **and** idle — the gate a windowed list needs before trusting a short result as the end of the list. |
+| `isLoading()` | Cold first load only: nothing has painted for this identity, the server has not answered, and registration has not failed. A paint from the local cache ends it without the server; the server answering with zero rows ends it without rows. Re-arms only when the query identity changes. |
+| `isFetching()` | The sync engine is pulling records for this query (registration, a sync round). Re-enters on later rounds. |
+| `isAuthoritative()` | Server membership is known for this identity: a registration or poll landed, or a previous session's membership was read on boot. From here `data()` is the server's answer, not a cache guess. Latched until the identity changes. |
+| `hasData()` | `data()` holds something: rows for a list, a row for `.one()`. |
+| `isEmpty()` | Authoritative **and** no data: the server said "no rows". Render empty states on this, never on a bare `!hasData()`. |
+| `isSettled()` | Authoritative **and** idle — the gate a windowed list needs before trusting a short result as the end of the list. Not monotonic (a later sync round re-enters `isFetching`); latch it when a verdict must stick. |
+
+A query that painted cached rows is therefore **not loading** while the server is still catching
+up, and a list that is merely waiting for the server is **not empty**. Gates built on
+`isLoading()` / `isEmpty()` stop guessing with timeouts.
 
 Options: `{ enabled?: () => boolean, deregisterOnCleanup?: boolean }`, as in client-solid.
 

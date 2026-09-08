@@ -15,9 +15,17 @@ type Emission = Record<string, any>[];
 function mockEngine() {
   const subs = new Map<string, (e: Emission) => void>();
   const statusSubs = new Map<string, (s: string) => void>();
+  const authoritySubs = new Map<string, (known: boolean) => void>();
   const unsubscribed: string[] = [];
   const deregistered: string[] = [];
   const sp00ky = {
+    subscribeQueryAuthority: vi.fn(
+      (hash: string, cb: (known: boolean) => void, o?: { immediate?: boolean }) => {
+        authoritySubs.set(hash, cb);
+        if (o?.immediate) cb(false);
+        return () => authoritySubs.delete(hash);
+      }
+    ),
     subscribe: vi.fn(async (hash: string, cb: (e: Emission) => void, _o?: unknown) => {
       subs.set(hash, cb);
       return () => {
@@ -42,6 +50,7 @@ function mockEngine() {
     sp00ky,
     emit: (hash: string, e: Emission) => subs.get(hash)?.(e),
     setStatus: (hash: string, s: string) => statusSubs.get(hash)?.(s),
+    setAuthority: (hash: string, known: boolean) => authoritySubs.get(hash)?.(known),
     unsubscribed,
     deregistered,
     hasSub: (hash: string) => subs.has(hash),
@@ -79,6 +88,10 @@ describe('createQuery', () => {
 
       expect(q.data().map((r: any) => r.id)).toEqual(['a', 'b']);
       expect(q.isLoading()).toBe(false);
+      // Rows alone do not settle a query; the server's membership does.
+      expect(q.isSettled()).toBe(false);
+      eng.setAuthority('h1', true);
+      await settle();
       expect(q.isSettled()).toBe(true);
 
       const rowA = q.data()[0];
@@ -96,7 +109,9 @@ describe('createQuery', () => {
     });
   });
 
-  it('first empty emission does not mark fetched; second does', async () => {
+  it('an empty emission before the server answers keeps loading', async () => {
+    // Nothing cached and nothing heard from the server: the only honest state
+    // is "loading". A second `[]` does not change that; only authority does.
     const eng = mockEngine();
     await createRoot(async (dispose) => {
       const q = createQuery<any, any, any, any, false, any>(eng.db, mockQuery('h1'));
@@ -108,12 +123,109 @@ describe('createQuery', () => {
       await settle();
 
       eng.emit('h1', []);
-      await settle();
-      expect(q.isLoading()).toBe(true); // still loading: local DB likely not synced
-
       eng.emit('h1', []);
       await settle();
-      expect(q.isLoading()).toBe(false); // a later empty emission is authoritative
+      expect(q.isLoading()).toBe(true);
+      expect(q.hasData()).toBe(false);
+      expect(q.isEmpty()).toBe(false);
+      expect(q.isAuthoritative()).toBe(false);
+      dispose();
+    });
+  });
+
+  it('the server answering with no rows ends loading as empty', async () => {
+    const eng = mockEngine();
+    await createRoot(async (dispose) => {
+      const q = createQuery<any, any, any, any, false, any>(eng.db, mockQuery('h1'));
+      createEffect(
+        () => q.data(),
+        () => {}
+      );
+      flush();
+      await settle();
+
+      eng.emit('h1', []);
+      eng.setAuthority('h1', true);
+      await settle();
+      expect(q.isLoading()).toBe(false);
+      expect(q.isEmpty()).toBe(true);
+      expect(q.isAuthoritative()).toBe(true);
+      expect(q.data()).toEqual([]);
+      dispose();
+    });
+  });
+
+  it('cached rows end loading before the server answers, without settling', async () => {
+    // Local-first paint: rows from the store are shown at once. They are not
+    // authoritative yet, so a windowed list must not read them as the end.
+    const eng = mockEngine();
+    await createRoot(async (dispose) => {
+      const q = createQuery<any, any, any, any, false, any>(eng.db, mockQuery('h1'));
+      createEffect(
+        () => q.data(),
+        () => {}
+      );
+      flush();
+      await settle();
+
+      eng.emit('h1', [{ id: 'a' }]);
+      await settle();
+      expect(q.isLoading()).toBe(false);
+      expect(q.hasData()).toBe(true);
+      expect(q.isAuthoritative()).toBe(false);
+      expect(q.isSettled()).toBe(false);
+      expect(q.isEmpty()).toBe(false);
+
+      eng.setAuthority('h1', true);
+      await settle();
+      expect(q.isSettled()).toBe(true);
+      dispose();
+    });
+  });
+
+  it('a one() query the server answered as absent is empty, not loading', async () => {
+    const eng = mockEngine();
+    await createRoot(async (dispose) => {
+      const q = createQuery<any, any, any, any, true, any>(eng.db, mockQuery('h1', true));
+      createEffect(
+        () => q.data(),
+        () => {}
+      );
+      flush();
+      await settle();
+
+      eng.emit('h1', []);
+      eng.setAuthority('h1', true);
+      await settle();
+      expect(q.isLoading()).toBe(false);
+      expect(q.isEmpty()).toBe(true);
+      expect(q.data()).toBeNull();
+      dispose();
+    });
+  });
+
+  it('losing authority with no rows (a bucket switch) returns to loading', async () => {
+    const eng = mockEngine();
+    await createRoot(async (dispose) => {
+      const q = createQuery<any, any, any, any, false, any>(eng.db, mockQuery('h1'));
+      createEffect(
+        () => q.data(),
+        () => {}
+      );
+      flush();
+      await settle();
+
+      eng.emit('h1', [{ id: 'a' }]);
+      eng.setAuthority('h1', true);
+      await settle();
+      expect(q.isLoading()).toBe(false);
+
+      // The rebind empties the rows and resets authority for the new principal.
+      eng.emit('h1', []);
+      eng.setAuthority('h1', false);
+      await settle();
+      expect(q.isLoading()).toBe(true);
+      expect(q.isEmpty()).toBe(false);
       dispose();
     });
   });
@@ -154,8 +266,9 @@ describe('createQuery', () => {
       expect(q.isFetching()).toBe(true);
 
       eng.emit('h1', [{ id: 'a' }]);
+      eng.setAuthority('h1', true);
       await settle();
-      expect(q.isSettled()).toBe(false); // fetched but still fetching
+      expect(q.isSettled()).toBe(false); // authoritative but still fetching
 
       eng.setStatus('h1', 'idle');
       flush();

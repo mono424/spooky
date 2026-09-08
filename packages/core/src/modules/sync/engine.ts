@@ -37,7 +37,7 @@ export class SyncEngine {
    */
   async syncRecords(
     diff: RecordVersionDiff
-  ): Promise<{ remoteFetchMs: number; stillRemoteIds: string[] }> {
+  ): Promise<{ remoteFetchMs: number; stillRemoteIds: string[]; confirmedRemovedIds: string[] }> {
     const { added, updated, removed } = diff;
 
     this.logger.debug(
@@ -54,8 +54,9 @@ export class SyncEngine {
     // locally. Returns ids that LEFT the view's list_ref but still exist upstream
     // (so they weren't deleted) — the caller converges localArray to drop them.
     let stillRemoteIds: string[] = [];
+    let confirmedRemovedIds: string[] = [];
     if (removed.length > 0) {
-      stillRemoteIds = await this.handleRemovedRecords(removed);
+      ({ stillRemoteIds, confirmedRemovedIds } = await this.handleRemovedRecords(removed));
     }
 
     // Fetch added/updated records from remote. Skip ids whose body the local
@@ -68,7 +69,7 @@ export class SyncEngine {
       return !(localVersion && item.version <= localVersion);
     });
     if (toFetch.length === 0) {
-      return { remoteFetchMs: 0, stillRemoteIds };
+      return { remoteFetchMs: 0, stillRemoteIds, confirmedRemovedIds };
     }
 
     // Build a version map from the diff (versions come from _00_list_ref)
@@ -151,7 +152,7 @@ export class SyncEngine {
       records: remoteResults,
     });
 
-    return { remoteFetchMs, stillRemoteIds };
+    return { remoteFetchMs, stillRemoteIds, confirmedRemovedIds };
   }
 
   /**
@@ -168,7 +169,9 @@ export class SyncEngine {
    * row to a later sync round is recoverable; deleting a fresh row that
    * upstream still has is not.
    */
-  private async handleRemovedRecords(removed: RecordId[]): Promise<string[]> {
+  private async handleRemovedRecords(
+    removed: RecordId[]
+  ): Promise<{ stillRemoteIds: string[]; confirmedRemovedIds: string[] }> {
     this.logger.debug(
       {
         removed: removed.map((r) => r.toString()),
@@ -216,7 +219,7 @@ export class SyncEngine {
         },
         'Remote existence check failed, skipping deletion to avoid clobbering fresh data'
       );
-      return [];
+      return { stillRemoteIds: [], confirmedRemovedIds: [] };
     }
 
     // Ids that left the view's list_ref but STILL exist upstream — not deletions,
@@ -224,6 +227,7 @@ export class SyncEngine {
     // longer matches the query). The caller drops these from `localArray` so the
     // poll's diff stops re-flagging them every tick (the `job:` churn).
     const stillRemoteIds: string[] = [];
+    const confirmedRemovedIds: string[] = [];
     for (const recordId of removed) {
       const recordIdStr = encodeRecordId(recordId);
       if (!existingRemoteIds.has(recordIdStr)) {
@@ -236,10 +240,11 @@ export class SyncEngine {
         );
         // Use CacheModule to handle both local DB and DBSP deletion
         await this.cache.delete(recordId.table.name, recordIdStr);
+        confirmedRemovedIds.push(recordIdStr);
       } else {
         stillRemoteIds.push(recordIdStr);
       }
     }
-    return stillRemoteIds;
+    return { stillRemoteIds, confirmedRemovedIds };
   }
 }

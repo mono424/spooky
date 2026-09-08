@@ -531,32 +531,6 @@ export interface QueryConfig {
    */
   membershipKnown?: boolean;
   /**
-   * Whether a NON-EMPTY id-set has arrived from the server for this query in
-   * this session. Gates whether an empty read may be believed.
-   *
-   * The server publishes `_00_list_ref` asynchronously — the SSP queues a
-   * view's initial edges to a coalescing flusher and returns from
-   * `fn::query::register` before they land — so an empty read right after
-   * registration says nothing about the query being empty. Believing it (and
-   * mirroring it to the durable `_00_window` row) blanked lists and kept them
-   * blank across reloads. Once a real set has been seen, a later empty one is a
-   * genuine transition and must be honoured, or removed rows resurrect.
-   *
-   * In-memory only: a fresh session must re-earn the right to believe empties.
-   * What does persist is the `confirmed` marker on the `_00_window` row, which
-   * an empty set earns when it arrives with a server row count of zero or after
-   * a non-empty set in the same session.
-   */
-  remoteSeen?: boolean;
-  /**
-   * Consecutive empty id-sets read from the server while `remoteSeen` is still
-   * false. Bounds how long an unconfirmed empty may be ignored, so a window
-   * that genuinely emptied while this device was away is believed on the second
-   * read instead of rendering stale rows forever. Reset by any non-empty set.
-   * In-memory only.
-   */
-  emptyReads?: number;
-  /**
    * Key of this query's durable `_00_window` membership row: a hash of
    * `{surql, params}` WITHOUT the `session::id()` salt that `id` carries, so it
    * survives a reload (which mints a new session id) and a bucket switch.
@@ -586,6 +560,30 @@ export type QueryConfigRecord = QueryConfig & { id: string };
 export type QueryStatus = 'idle' | 'fetching';
 
 /**
+ * What the server's `_00_query` row says about a view, read alongside its
+ * `_00_list_ref` edges (registration, the poll, a targeted re-read).
+ *
+ * - `present: false`: the row is not there (or not readable). The SSP no
+ *   longer has this view: a TTL sweep, an SSP reset, a scheduler wipe. An
+ *   empty edge set read at the same time is NOT "no rows", it is "no view".
+ * - `state: 'materializing'`: the SSP has (re)computed the set and its edges
+ *   are in flight; an empty read is "not landed yet".
+ * - `state: 'ready'`: the edges are committed (flipped in the same
+ *   transaction), so `rowCount === 0` with no edges is a real empty result.
+ * - `state: null`: a server that predates the marker; only `rowCount` can be
+ *   used, with its `> 0` = flush window / `0` = empty ambiguity.
+ */
+export interface ServerViewMeta {
+  present: boolean;
+  /** `_00_query.rowCount`; `null` when unreadable. */
+  rowCount: number | null;
+  state: 'materializing' | 'ready' | null;
+}
+
+/** Outcome of handing a server id-set to `DataModule.updateQueryRemoteArray`. */
+export type MembershipOutcome = 'applied' | 'ignored' | 'view-lost';
+
+/**
  * Internal state of a live query.
  */
 export interface QueryState {
@@ -601,6 +599,15 @@ export interface QueryState {
    * the instant-hydrate, so a hydrate that finishes later must not prime
    * membership over the authoritative set. Ephemeral. */
   serverMembership?: boolean;
+  /**
+   * Set when the server's `_00_query` row for this query went missing while
+   * we held membership (TTL sweep, SSP reset, scheduler wipe). The view is
+   * being re-registered; until a readable row comes back, empty reads are
+   * NOT the server's answer and nothing is dropped. Ephemeral.
+   */
+  viewLost?: boolean;
+  /** Last `_00_query.state` read from the server, for DevTools. Ephemeral. */
+  serverState?: 'materializing' | 'ready' | null;
   /** Set once `notifyQuerySynced` has emitted for this registration lifetime.
    * Ephemeral (unlike the persisted `updateCount`), so a re-registered query
    * always emits at least once even when its records are unchanged — otherwise
@@ -610,6 +617,8 @@ export interface QueryState {
   ttlTimer: NodeJS.Timeout | null;
   /** TTL duration in milliseconds. */
   ttlDurationMs: number;
+  /** When the last TTL heartbeat for this query was sent (ms epoch); `undefined` before the first. */
+  lastHeartbeatAt?: number;
   /** Number of times the query has been updated. */
   updateCount: number;
   /** Timestamp (ms) of the last user-visible update, or null before the first
@@ -695,6 +704,12 @@ export interface QueryTimings {
 // Callback types
 export type QueryUpdateCallback = (records: Record<string, any>[]) => void;
 export type QueryStatusCallback = (status: QueryStatus) => void;
+/**
+ * Observer for a query's authority flips: `true` once server membership is
+ * known for it (registration, poll, durable seed), `false` when it is reset
+ * (bucket switch). What the bindings' `isAuthoritative()` mirrors.
+ */
+export type QueryAuthorityCallback = (known: boolean) => void;
 export type MutationCallback = (mutations: UpEvent[]) => void;
 
 export type MutationEventType = 'create' | 'update' | 'delete';

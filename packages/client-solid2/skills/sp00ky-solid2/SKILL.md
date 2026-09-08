@@ -37,12 +37,15 @@ const posts = createQuery(db.query('post').orderBy('createdAt', 'desc').limit(20
 // or reactive: createQuery(() => id() ? db.query('post').where({ id: id() }).one().build() : null)
 ```
 
-Returns `{ data, ready, error, isLoading, isFetching, isSettled }`:
+Returns `{ data, ready, error, isLoading, isFetching, isAuthoritative, hasData, isEmpty, isSettled }`:
 
 - `data()` — non-suspending; `[]`/`null` before first result, keyed-reconciled live rows after.
 - `ready()` — suspending read for `<Loading fallback={...}>` (Solid 2's renamed Suspense).
 - `error()` — registration failure (SSP 503 NOT_READY etc.); never thrown into the tree, sync retries underneath.
-- `isSettled()` — fetched AND not fetching; gate windowed-list end detection on this.
+- `isAuthoritative()` — server membership known for this identity (latched until it changes).
+- `hasData()` — `data()` holds rows / the `.one()` row.
+- `isEmpty()` — authoritative AND no data: the server said "no rows". Empty states go on this, never on `!hasData()`.
+- `isSettled()` — authoritative AND not fetching; gate windowed-list end detection on this. Latch it for a sticky verdict.
 - Options: `enabled?: () => boolean`, `deregisterOnCleanup?: boolean`.
 - `useQuery` is a deprecated alias of `createQuery`.
 

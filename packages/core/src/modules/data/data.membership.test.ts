@@ -327,58 +327,42 @@ describe('membership-authoritative rendering', () => {
       expect(ids(fresh.records)).toEqual(['thread:a', 'thread:b', 'thread:c']);
     });
 
-    it('ignores an empty id-set until a real one has been seen', async () => {
-      // The registration race: the SSP queues a view's initial edges to a
-      // coalescing flusher and returns from `fn::query::register` before they
-      // land, so this read says nothing about the query being empty. Believing
-      // it rendered a blank list AND persisted the blankness.
+    // The `_00_query` row as read alongside the edges. `present: true` with
+    // `state: null` is a server that predates the marker.
+    const meta = (
+      over: Partial<{
+        present: boolean;
+        rowCount: number | null;
+        state: 'materializing' | 'ready' | null;
+      }> = {}
+    ) => ({ present: true, rowCount: null, state: null, ...over });
+
+    it('ignores an empty id-set while the server is still publishing', async () => {
+      // The registration race: the SSP writes `state = materializing`, hands
+      // the view's initial edges to a coalescing flusher and answers
+      // `fn::query::register` before they land, so the read that follows says
+      // nothing about the query being empty. Believing it rendered a blank
+      // list AND persisted the blankness.
       const { dm, state, local, hash } = setup({
         membershipKey: 'stable-key',
         remoteArray: [['thread:a', 1]],
         membershipKnown: true,
       });
 
-      await dm.updateQueryRemoteArray(hash, []);
-
-      expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
-      expect(local.windowRows.has('stable-key')).toBe(false);
-    });
-
-    it('believes an empty id-set once a non-empty one has arrived', async () => {
-      // The genuine transition — the last row left the window. Honouring it is
-      // what stops a removed row resurrecting from the local body cache.
-      const { dm, state, local, hash } = setup({ membershipKey: 'stable-key' });
-
-      await dm.updateQueryRemoteArray(hash, [['thread:a', 1]]);
-      await dm.updateQueryRemoteArray(hash, []);
-
-      expect(state.config.membershipKnown).toBe(true);
-      expect(state.config.remoteArray).toEqual([]);
-      expect(local.windowRows.get('stable-key')).toMatchObject({ ids: [] });
-    });
-
-    it('believes a repeated empty id-set even with nothing seen this session', async () => {
-      // A window that really did empty while this device was away: the durable
-      // seed must not render forever, so the second read is taken at face value.
-      const { dm, state, hash } = setup({
-        membershipKey: 'stable-key',
-        remoteArray: [['thread:a', 1]],
-        membershipKnown: true,
+      const outcome = await dm.updateQueryRemoteArray(hash, [], {
+        meta: meta({ rowCount: 26, state: 'materializing' }),
       });
 
-      await dm.updateQueryRemoteArray(hash, []);
+      expect(outcome).toBe('ignored');
       expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
-
-      await dm.updateQueryRemoteArray(hash, []);
-      expect(state.config.remoteArray).toEqual([]);
+      expect(local.windowRows.has('stable-key')).toBe(false);
+      expect(state.serverState).toBe('materializing');
     });
 
     it('ignores an empty id-set while the server still reports rows', async () => {
-      // The reported failure: registration returns before the SSP flushes the
-      // view's edges, and the poll 500ms later is still inside that window. A
-      // retry counter believes the second read and blanks the list ~2s after
-      // load; `rowCount` says the query has 26 rows, so no number of empty
-      // reads should ever be taken as "empty".
+      // `ready` but `rowCount 26` with no edges: the row and the edges
+      // disagree (a stranded view, metrics lag). No number of such reads may
+      // be taken as "empty".
       const { dm, state, local, hash } = setup({
         membershipKey: 'stable-key',
         remoteArray: [['thread:a', 1]],
@@ -386,81 +370,197 @@ describe('membership-authoritative rendering', () => {
       });
 
       for (let i = 0; i < 5; i++) {
-        await dm.updateQueryRemoteArray(hash, [], { serverRowCount: 26 });
+        expect(
+          await dm.updateQueryRemoteArray(hash, [], { meta: meta({ rowCount: 26, state: 'ready' }) })
+        ).toBe('ignored');
       }
 
       expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
       expect(local.windowRows.has('stable-key')).toBe(false);
     });
 
-    it('believes an empty id-set the moment the server reports zero rows', async () => {
-      // The other half: a genuinely empty query must not sit on a stale seed
-      // waiting for a retry budget to run out.
-      const { dm, state, hash } = setup({
+    it('believes an empty id-set the moment the server says ready with zero rows', async () => {
+      // The genuine transition — the last row left the window. The SSP flips
+      // `ready` inside the transaction that writes the edges, so this cannot
+      // be observed mid-publish. Honouring it is what stops a removed row
+      // resurrecting from the local body cache.
+      const { dm, state, local, hash } = setup({
         membershipKey: 'stable-key',
         remoteArray: [['thread:a', 1]],
         membershipKnown: true,
       });
 
-      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: 0 });
+      const outcome = await dm.updateQueryRemoteArray(hash, [], {
+        meta: meta({ rowCount: 0, state: 'ready' }),
+      });
 
+      expect(outcome).toBe('applied');
       expect(state.config.membershipKnown).toBe(true);
       expect(state.config.remoteArray).toEqual([]);
+      expect(local.windowRows.get('stable-key')).toEqual(
+        expect.objectContaining({ ids: [], confirmed: true })
+      );
     });
 
-    it('falls back to the retry budget when the row count is unreadable', async () => {
-      // Older servers, or a row the client cannot select: unknown must not
-      // strand the device on its durable seed forever.
+    it('believes ready + zero rows with nothing held yet, too', async () => {
+      // A genuinely empty query on a cold device must not sit on a spinner
+      // waiting for rows that are never coming.
+      const { dm, state, hash } = setup({ membershipKey: 'stable-key' });
+
+      const outcome = await dm.updateQueryRemoteArray(hash, [], {
+        meta: meta({ rowCount: 0, state: 'ready' }),
+      });
+
+      expect(outcome).toBe('applied');
+      expect(state.config.membershipKnown).toBe(true);
+    });
+
+    it('treats a missing _00_query row as a lost view, never as an empty one', async () => {
+      // A TTL sweep, an SSP reset or a scheduler wipe took the row (and, with
+      // it, every edge). The client keeps what it renders, says so once, and
+      // asks for a re-registration. Believing the empty here is what blanked
+      // lists after every sweep and kept them blank across reloads.
+      const { dm, state, local, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+      const onViewLost = vi.fn();
+      dm.onViewLost = onViewLost;
+
+      expect(await dm.updateQueryRemoteArray(hash, [], { meta: meta({ present: false }) })).toBe(
+        'view-lost'
+      );
+      expect(await dm.updateQueryRemoteArray(hash, [], { meta: meta({ present: false }) })).toBe(
+        'view-lost'
+      );
+
+      expect(onViewLost).toHaveBeenCalledTimes(1);
+      expect(onViewLost).toHaveBeenCalledWith(hash);
+      expect(state.viewLost).toBe(true);
+      expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
+      expect(state.config.membershipKnown).toBe(true);
+      expect(local.windowRows.has('stable-key')).toBe(false);
+    });
+
+    it('clears the lost-view mark once a readable row is back', async () => {
+      const { dm, state, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+      dm.onViewLost = vi.fn();
+      await dm.updateQueryRemoteArray(hash, [], { meta: meta({ present: false }) });
+      expect(state.viewLost).toBe(true);
+
+      // The re-registration republished the view.
+      const outcome = await dm.updateQueryRemoteArray(
+        hash,
+        [
+          ['thread:a', 1],
+          ['thread:b', 1],
+        ],
+        { meta: meta({ rowCount: 2, state: 'ready' }) }
+      );
+
+      expect(outcome).toBe('applied');
+      expect(state.viewLost).toBe(false);
+      expect(state.serverState).toBe('ready');
+    });
+
+    it('stays non-authoritative when nothing is held and the row is missing', async () => {
+      // A cold query whose row is not readable yet: nothing to lose, nothing
+      // to believe. The register lifecycle retries; no re-registration storm.
+      const { dm, state, hash } = setup({ membershipKey: 'stable-key' });
+      const onViewLost = vi.fn();
+      dm.onViewLost = onViewLost;
+
+      expect(await dm.updateQueryRemoteArray(hash, [], { meta: meta({ present: false }) })).toBe(
+        'ignored'
+      );
+
+      expect(onViewLost).not.toHaveBeenCalled();
+      expect(state.config.membershipKnown).toBeFalsy();
+      expect(state.viewLost).toBeFalsy();
+    });
+
+    it('treats an empty set that comes with no row information as a lost view', async () => {
+      const { dm, state, hash } = setup({
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+      dm.onViewLost = vi.fn();
+      expect(await dm.updateQueryRemoteArray(hash, [])).toBe('view-lost');
+      expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
+    });
+
+    it('judges a server that predates `state` on rowCount alone', async () => {
       const { dm, state, hash } = setup({
         membershipKey: 'stable-key',
         remoteArray: [['thread:a', 1]],
         membershipKnown: true,
       });
 
-      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
+      expect(await dm.updateQueryRemoteArray(hash, [], { meta: meta({ rowCount: 3 }) })).toBe(
+        'ignored'
+      );
+      expect(await dm.updateQueryRemoteArray(hash, [], { meta: meta({ rowCount: null }) })).toBe(
+        'ignored'
+      );
       expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
 
-      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
+      expect(await dm.updateQueryRemoteArray(hash, [], { meta: meta({ rowCount: 0 }) })).toBe(
+        'applied'
+      );
       expect(state.config.remoteArray).toEqual([]);
     });
 
-    it('marks a non-empty set and a server-confirmed empty set as confirmed', async () => {
+    it('never grows to believe an unexplained empty on repeated reads', async () => {
+      // There is no retry budget any more: a server that cannot explain an
+      // empty must not be able to erase a device's data by repeating itself.
+      const { dm, state, local, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+
+      for (let i = 0; i < 6; i++) {
+        await dm.updateQueryRemoteArray(hash, [], { meta: meta({ rowCount: null, state: 'ready' }) });
+      }
+
+      expect(state.config.remoteArray).toEqual([['thread:a', 1]]);
+      expect(local.windowRows.has('stable-key')).toBe(false);
+    });
+
+    it('applies an empty set the caller verified upstream', async () => {
+      // The LIVE removal path checked that every held id is gone from the
+      // server before asking: that is a real answer even without a row.
+      const { dm, state, local, hash } = setup({
+        membershipKey: 'stable-key',
+        remoteArray: [['thread:a', 1]],
+        membershipKnown: true,
+      });
+
+      const outcome = await dm.updateQueryRemoteArray(hash, [], { verifiedRemoval: true });
+
+      expect(outcome).toBe('applied');
+      expect(state.config.remoteArray).toEqual([]);
+      expect(local.windowRows.get('stable-key')).toEqual(
+        expect.objectContaining({ ids: [], confirmed: true })
+      );
+    });
+
+    it('marks every applied set as confirmed', async () => {
+      // Every set that lands is server-backed now, so the durable mirror may
+      // always be trusted on the next boot, empty or not.
       const { dm, local, hash } = setup({ membershipKey: 'stable-key' });
 
       await dm.updateQueryRemoteArray(hash, [['thread:a', 1]]);
       expect(local.windowRows.get('stable-key')).toMatchObject({ confirmed: true });
 
-      // The server reports zero rows: a real answer, durable.
-      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: 0 });
+      await dm.updateQueryRemoteArray(hash, [], { meta: meta({ rowCount: 0, state: 'ready' }) });
       expect(local.windowRows.get('stable-key')).toEqual(
         expect.objectContaining({ ids: [], confirmed: true })
-      );
-    });
-
-    it('marks an empty set that follows a seen set as confirmed', async () => {
-      // Everything the query matched was deleted while this session watched: the
-      // transition is genuine, so the next boot must not resurrect the rows.
-      const { dm, local, hash } = setup({ membershipKey: 'stable-key' });
-      await dm.updateQueryRemoteArray(hash, [['thread:a', 1]]);
-      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
-      expect(local.windowRows.get('stable-key')).toEqual(
-        expect.objectContaining({ ids: [], confirmed: true })
-      );
-    });
-
-    it('leaves the retry-budget empty unconfirmed', async () => {
-      // Two unreadable-row-count empties are believed for this session, but they
-      // are a guess: the durable row must not turn that guess into a permanent
-      // empty list on the next boot.
-      const { dm, local, hash } = setup({
-        membershipKey: 'stable-key',
-        remoteArray: [['thread:a', 1]],
-        membershipKnown: true,
-      });
-      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
-      await dm.updateQueryRemoteArray(hash, [], { serverRowCount: null });
-      expect(local.windowRows.get('stable-key')).toEqual(
-        expect.objectContaining({ ids: [], confirmed: false })
       );
     });
 

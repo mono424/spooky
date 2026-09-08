@@ -586,7 +586,7 @@ describe('list_ref poll batching', () => {
       'SELECT in, out, version, parent FROM _00_list_ref_user_abc WHERE in IN $ins'
     );
     expect(buildQueryRowCountBatchSelect()).toBe(
-      'SELECT VALUE { id: id, rowCount: rowCount } FROM $ins'
+      'SELECT VALUE { id: id, rowCount: rowCount, state: state } FROM $ins'
     );
   });
 

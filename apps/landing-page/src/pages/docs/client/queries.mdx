@@ -71,6 +71,13 @@ component.
 | `isFetching()` | `true` while a fetch is in flight, including refreshes. |
 | `isSettled()` | `true` once the query has a server-confirmed result. Use this, not `isLoading`, to decide "the list really is empty". |
 
+<Note>
+  The Solid 2 binding (`@spooky-sync/client-solid2`) sharpens these: `isLoading()` is true only on a
+  cold first load (nothing cached, server not heard yet), `isAuthoritative()` says the server's
+  membership is known, and `isEmpty()` is the server saying "no rows". See the
+  [Solid 2 guide](/docs/guide/solid2#result-surface).
+</Note>
+
 Two options are worth knowing:
 
 | Option | Effect |

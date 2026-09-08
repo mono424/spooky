@@ -229,8 +229,9 @@ export class DevToolsService implements StreamUpdateReceiver {
         // the panel: is the server's set known, has a non-empty one been seen
         // this session, how many empty reads were ignored.
         membershipKnown: q.config.membershipKnown === true,
-        remoteSeen: q.config.remoteSeen === true,
-        emptyReads: q.config.emptyReads ?? 0,
+        authoritative: q.config.membershipKnown === true,
+        viewLost: q.viewLost === true,
+        serverState: q.serverState ?? null,
         // Detailed per-phase processing-time breakdown (SSP sub-phases, local/
         // remote record fetch, frontend reconcile, registration). Flows to both
         // the DevTools panel and the MCP (which returns activeQueries verbatim).

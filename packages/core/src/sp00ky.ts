@@ -10,6 +10,7 @@ import type {
   RunOptions,
   SyncHealth,
   StorageHealth,
+  QueryAuthorityCallback,
 } from './types';
 import {
   ConnectionSupervisor,
@@ -737,6 +738,20 @@ export class Sp00kyClient<S extends SchemaStructure> {
       });
     };
 
+    // The server no longer has the `_00_query` row of a query we hold
+    // membership for (TTL sweep, SSP reset, scheduler wipe). Rebuild the view
+    // through the ordinary register path; `register` events coalesce in the
+    // down queue, so a lost view costs one registration however many reads
+    // noticed it. Local state is untouched until the new set lands.
+    this.dataModule.onViewLost = (queryHash) => {
+      this.devTools.logEvent('QUERY_VIEW_LOST', { queryHash });
+      this.sync.enqueueDownEvent({ type: 'register', payload: { hash: queryHash } });
+    };
+
+    this.dataModule.onQueryAuthorityChange = (queryHash, known) => {
+      this.devTools.logEvent('QUERY_AUTHORITY_CHANGED', { queryHash, known });
+    };
+
     // Eager teardown of an opt-in deregistered query: enqueue a `cleanup`
     // down-event so it's serialized after any in-flight register/sync for the
     // same query (avoids out-of-order delete-before-create).
@@ -1000,7 +1015,25 @@ export class Sp00kyClient<S extends SchemaStructure> {
           this.sync.releaseViewsOnUnload();
         };
         window.addEventListener('pagehide', onPageHide);
-        this.detachUnloadRelease = () => window.removeEventListener('pagehide', onPageHide);
+        // Re-assert liveness the moment a throttled tab is back in front, or
+        // the network is back: the sweep may have taken views while the TTL
+        // timers were frozen, and `heartbeatQuery` rebuilds a swept view. Only
+        // watched queries beat, and never twice within 30s.
+        const onWake = () => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+          this.dataModule.heartbeatOnWake();
+        };
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+          document.addEventListener('visibilitychange', onWake);
+        }
+        window.addEventListener('online', onWake);
+        this.detachUnloadRelease = () => {
+          window.removeEventListener('pagehide', onPageHide);
+          window.removeEventListener('online', onWake);
+          if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+            document.removeEventListener('visibilitychange', onWake);
+          }
+        };
       }
 
       this.featureFlags.init();
@@ -1646,6 +1679,21 @@ export class Sp00kyClient<S extends SchemaStructure> {
     options?: { immediate?: boolean }
   ): () => void {
     return this.dataModule.subscribeStatus(queryHash, callback, options);
+  }
+
+  /**
+   * Subscribe to a query's authority flips: `true` once server membership is
+   * known for it (a registration or poll landed, or a durable `_00_window`
+   * seed was read on boot), `false` when it is reset (bucket switch). With
+   * `{ immediate: true }` the callback fires synchronously with the current
+   * value. Powers the bindings' `isAuthoritative()` / cold-only `isLoading()`.
+   */
+  subscribeQueryAuthority(
+    queryHash: string,
+    callback: QueryAuthorityCallback,
+    options?: { immediate?: boolean }
+  ): () => void {
+    return this.dataModule.subscribeAuthority(queryHash, callback, options);
   }
 
   /**

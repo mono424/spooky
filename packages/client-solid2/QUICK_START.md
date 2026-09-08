@@ -81,9 +81,12 @@ import { Loading } from 'solid-js';
 | `data()` | Rows (or row/`null` for `.one()`). Never suspends, never throws. Keyed-reconciled in place: unchanged rows keep identity, `<For>` is notified on add/remove/reorder. |
 | `ready()` | Same data, suspends into the nearest `<Loading>` until first result or error. |
 | `error()` | Registration/sync error (e.g. SSP 503 during bootstrap). Never thrown into the render tree; the sync scheduler retries underneath. |
-| `isLoading()` | No result yet and no error. |
+| `isLoading()` | Cold first load only: nothing painted for this identity yet, server not heard, no error. A cached paint ends it; so does the server answering with zero rows. |
 | `isFetching()` | Sync engine is pulling records for this query. |
-| `isSettled()` | Delivered AND idle — windowed lists may trust a short result as the true end of the list. |
+| `isAuthoritative()` | Server membership is known for this identity (registration/poll landed, or a previous session's membership was read on boot). Latched until the identity changes. |
+| `hasData()` | `data()` holds rows (or the `.one()` row). |
+| `isEmpty()` | Authoritative AND no data — the server said "no rows". Render empty states on this. |
+| `isSettled()` | Authoritative AND idle — windowed lists may trust a short result as the true end of the list. Re-enters on later sync rounds; latch it for a sticky verdict. |
 
 Options: `{ enabled?: () => boolean, deregisterOnCleanup?: boolean }` — both as in client-solid.
 

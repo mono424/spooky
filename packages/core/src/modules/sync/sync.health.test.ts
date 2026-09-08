@@ -38,11 +38,21 @@ function makeSync(hashes: string[]) {
   // (`applyListRefSnapshot`). Stub both so the test controls per-cycle
   // reachability. `poll` invokes the private method.
   const fetch = vi.fn();
-  const apply = vi.fn().mockResolvedValue(false);
+  const apply = vi.fn().mockResolvedValue({ changed: false, outcome: 'unchanged' });
   (sync as any).fetchListRefSnapshots = fetch;
   (sync as any).applyListRefSnapshot = apply;
   const snapshotsFor = (hs: string[]) =>
-    new Map(hs.map((h) => [h, { primary: [], subquery: [], rowCount: null }]));
+    new Map(
+      hs.map((h) => [
+        h,
+        {
+          primary: [],
+          subquery: [],
+          rowCount: null,
+          meta: { present: true, rowCount: null, state: null },
+        },
+      ])
+    );
   fetch.mockImplementation(async (hs: string[]) => snapshotsFor(hs));
   const poll = () => (sync as any).pollListRefForActiveQueries() as Promise<boolean>;
 
@@ -102,7 +112,7 @@ describe('sync health via idle poll', () => {
     // snapshots then fails on its own network error → still a reached cycle.
     fetch.mockImplementation(async (hs: string[]) => snapshotsFor(hs));
     apply
-      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce({ changed: true, outcome: 'applied' })
       .mockRejectedValueOnce(new Error(CONNECTION_UNAVAILABLE));
     await expect(poll()).resolves.toBe(true);
     expect(sync.syncHealth.status).toBe('healthy');

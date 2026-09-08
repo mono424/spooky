@@ -200,11 +200,19 @@ export function buildListRefSelect(table: string): string {
  * no matter how long it waits, which is why this is read alongside them rather
  * than a retry counter.
  *
+ * `state` rides along: the SSP writes `materializing` when it hands a full
+ * publish to its edge flusher and flips it to `ready` INSIDE the transaction
+ * that writes the edges. So `ready` + no edges + `rowCount 0` is a real empty
+ * result, `materializing` + no edges is "still publishing", and a missing row
+ * (the whole object is `NONE`) is "the server no longer has this view". A
+ * server that predates the marker returns `state: NONE` and callers fall back
+ * to `rowCount` alone.
+ *
  * Returns `NONE` (→ null) when the row is not readable or does not exist yet;
  * callers must treat that as "unknown", not as zero.
  */
 export function buildQueryRowCountSelect(): string {
-  return 'SELECT VALUE rowCount FROM ONLY $in';
+  return 'SELECT VALUE { rowCount: rowCount, state: state } FROM ONLY $in';
 }
 
 /**
@@ -240,7 +248,7 @@ export function buildListRefBatchSelect(table: string): string {
  * without an id and must be treated as "unknown".
  */
 export function buildQueryRowCountBatchSelect(): string {
-  return 'SELECT VALUE { id: id, rowCount: rowCount } FROM $ins';
+  return 'SELECT VALUE { id: id, rowCount: rowCount, state: state } FROM $ins';
 }
 
 /** Known edges one poll round trip may carry before the cycle is split. */

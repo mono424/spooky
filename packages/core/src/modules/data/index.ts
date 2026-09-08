@@ -28,6 +28,9 @@ import type {
   PhaseStat,
   RegistrationTimings,
   RunOptions,
+  ServerViewMeta,
+  MembershipOutcome,
+  QueryAuthorityCallback,
 } from '../../types';
 import { MATERIALIZATION_SAMPLE_WINDOW } from '../../types';
 import {
@@ -53,13 +56,6 @@ import {
 } from './window-query';
 import { mintMutationId } from './mutation-id';
 
-/**
- * How many consecutive empty `_00_list_ref` reads it takes to believe a query
- * really is empty, before any non-empty set has been seen this session. One
- * read is the registration race (the SSP flushes a view's initial edges
- * asynchronously); the second comes from the poll a cycle later.
- */
-const EMPTY_MEMBERSHIP_CONFIRMATIONS = 2;
 
 /** Push a timing sample (ms) into a rolling window, capped at the sample window. */
 function pushSample(samples: number[], ms: number): void {
@@ -98,6 +94,8 @@ export interface DurableMembership {
  * is LIVE on those edges, so a swept-but-still-watched view empties the UI.
  */
 const TTL_HEARTBEAT_FRACTION = 0.5;
+/** A query beaten this recently is skipped by `heartbeatOnWake`. */
+const WAKE_HEARTBEAT_MIN_GAP_MS = 30_000;
 
 export class DataModule<S extends SchemaStructure> {
   /** Tab identity baked into mutation ids (shared-tabs rollback routing);
@@ -107,6 +105,8 @@ export class DataModule<S extends SchemaStructure> {
   private pendingQueries: Map<QueryHash, Promise<QueryHash>> = new Map();
   private subscriptions: Map<QueryHash, Set<QueryUpdateCallback>> = new Map();
   private statusSubscriptions: Map<QueryHash, Set<QueryStatusCallback>> = new Map();
+  /** Observers of a query's authority (`membershipKnown`) flips, keyed like `statusSubscriptions`. */
+  private authoritySubscriptions: Map<QueryHash, Set<QueryAuthorityCallback>> = new Map();
   private mutationCallbacks: Set<MutationCallback> = new Set();
   private debounceTimers: Map<QueryHash, NodeJS.Timeout> = new Map();
   // The update each debounce timer would process on its trailing edge. Kept in a
@@ -136,6 +136,15 @@ export class DataModule<S extends SchemaStructure> {
    * DataModule is constructed — mirrors `onQueryStatusChange`.
    */
   public onHeartbeat?: (hash: QueryHash) => void;
+  /**
+   * Fired once per episode when the server's `_00_query` row for a query we
+   * hold membership for is found missing (see `updateQueryRemoteArray`). Wired
+   * by Sp00kyClient to enqueue a `register` down-event so the SSP rebuilds the
+   * view; the client keeps rendering what it has meanwhile.
+   */
+  public onViewLost?: (hash: QueryHash) => void;
+  /** DevTools observer for authority flips; mirrors `onQueryStatusChange`. */
+  public onQueryAuthorityChange?: (hash: QueryHash, known: boolean) => void;
   /**
    * Optional hook fired by {@link deregisterQuery} when an opt-in query (e.g. a
    * viewport-windowed list cancelling an off-screen window) loses its last
@@ -347,6 +356,61 @@ export class DataModule<S extends SchemaStructure> {
         }
       }
     };
+  }
+
+  /**
+   * Subscribe to a query's authority flips: whether server membership is known
+   * for it. With `{ immediate: true }` the callback fires synchronously with
+   * the current value (`false` for an unknown query).
+   */
+  subscribeAuthority(
+    queryHash: string,
+    callback: QueryAuthorityCallback,
+    options: { immediate?: boolean } = {}
+  ): () => void {
+    if (!this.authoritySubscriptions.has(queryHash)) {
+      this.authoritySubscriptions.set(queryHash, new Set());
+    }
+    this.authoritySubscriptions.get(queryHash)?.add(callback);
+
+    if (options.immediate) {
+      callback(this.activeQueries.get(queryHash)?.config.membershipKnown === true);
+    }
+
+    return () => {
+      const subs = this.authoritySubscriptions.get(queryHash);
+      if (subs) {
+        subs.delete(callback);
+        if (subs.size === 0) {
+          this.authoritySubscriptions.delete(queryHash);
+        }
+      }
+    };
+  }
+
+  /** Whether server membership is known for `queryHash` (see `QueryConfig.membershipKnown`). */
+  isAuthoritative(queryHash: string): boolean {
+    return this.activeQueries.get(queryHash)?.config.membershipKnown === true;
+  }
+
+  /**
+   * The single writer of `config.membershipKnown` for a live query. Fans out
+   * to `subscribeAuthority` listeners and DevTools on a change; no-op when
+   * unchanged or the query is unknown.
+   */
+  private setMembershipKnown(queryHash: string, known: boolean): void {
+    const queryState = this.activeQueries.get(queryHash);
+    if (!queryState) return;
+    const was = queryState.config.membershipKnown === true;
+    queryState.config.membershipKnown = known;
+    if (was === known) return;
+    this.onQueryAuthorityChange?.(queryHash, known);
+    const subs = this.authoritySubscriptions.get(queryHash);
+    if (subs) {
+      for (const callback of subs) {
+        callback(known);
+      }
+    }
   }
 
   /**
@@ -1147,7 +1211,7 @@ export class DataModule<S extends SchemaStructure> {
     // known and rendering can stop falling back to a predicate scan. The durable
     // `_00_window` mirror is deliberately left to `updateQueryRemoteArray` (the
     // single write point) — the registration that follows lands there anyway.
-    queryState.config.membershipKnown = true;
+    this.setMembershipKnown(hash, true);
 
     queryState.records = await this.materializeRecords(queryState);
     const subscribers = this.subscriptions.get(hash);
@@ -1429,6 +1493,7 @@ export class DataModule<S extends SchemaStructure> {
     this.cache.unregisterQuery(hash);
     this.activeQueries.delete(hash);
     this.subscriptions.delete(hash);
+    this.authoritySubscriptions.delete(hash);
   }
 
   /**
@@ -1479,91 +1544,97 @@ export class DataModule<S extends SchemaStructure> {
     hash: string,
     remoteArray: RecordVersionArray,
     opts?: {
-      /** `_00_query.rowCount` read in the same round trip; `null` = unknown. */
-      serverRowCount?: number | null;
+      /** The `_00_query` row as read in the same round trip as the edges. */
+      meta?: ServerViewMeta;
+      /**
+       * The caller verified upstream that the ids missing from `remoteArray`
+       * no longer exist (see `Sp00kySync` LIVE removal handling); an empty set
+       * is then a real answer even without a readable row.
+       */
+      verifiedRemoval?: boolean;
     }
-  ): Promise<void> {
+  ): Promise<MembershipOutcome> {
     const queryState = this.getQueryByHash(hash);
     if (!queryState) {
       this.logger.warn(
         { hash, Category: 'sp00ky-client::DataModule::updateQueryRemoteArray' },
         'Query to update remote array not found'
       );
-      return;
+      return 'ignored';
     }
-    // An empty id-set is only believable once a real one has arrived in this
-    // session. `_00_list_ref` is published asynchronously — the SSP queues a
-    // view's initial edges to a coalescing flusher and returns from
-    // `fn::query::register` before they land — so an empty read right after
-    // registration is routinely just "not flushed yet", for a query that has
-    // rows. Taking it at face value latched `membershipKnown` on an empty set,
-    // which renders nothing (no scan fallback), and mirrored `[]` into the
-    // durable `_00_window` row, which kept the list blank across reloads.
+    const meta = opts?.meta;
+    if (meta) queryState.serverState = meta.present ? meta.state : null;
+    const held = queryState.config.remoteArray ?? [];
+
+    // A NON-EMPTY set is always the server's answer. An EMPTY set is only
+    // believed when the server stands behind it, because "no edges" has four
+    // causes and only one of them is "no rows":
     //
-    // Ignoring it entirely (rather than storing `[]` with the latch withheld)
-    // is deliberate: on a cold start `remoteArray` is seeded from the durable
-    // row, and overwriting that with `[]` would blank the very rows the seed
-    // exists to paint. The `_00_list_ref` poll re-reads within ~500ms and
-    // delivers the real set.
-    // `serverRowCount` is what makes the two cases separable. The SSP writes it
-    // onto the `_00_query` row in the same statement that registers the view,
-    // before it queues the view's initial edges — so `> 0` with no edges is the
-    // flush window and `=== 0` is a genuinely empty query. `null`/undefined
-    // means we could not read it (older server, row not visible yet).
+    //   - the `_00_query` row is gone (`meta.present === false`): a TTL sweep,
+    //     an SSP reset or a scheduler wipe took the view. The client keeps what
+    //     it renders and asks for a re-registration ("view lost"). Believing
+    //     the empty here is what blanked lists after every sweep and, via the
+    //     durable `_00_window` mirror, kept them blank across reloads.
+    //   - `state === 'materializing'`: the SSP has computed the set and its
+    //     edges are in flight (the flusher window). Not an answer yet.
+    //   - `state === 'ready'` with `rowCount > 0` (or unreadable): the row and
+    //     the edges disagree (metrics lag, a stranded view). Not trusted.
+    //   - `state === 'ready'` with `rowCount === 0`: a real empty result. The
+    //     SSP flips `ready` inside the transaction that writes the edges, so
+    //     this cannot be observed mid-publish.
     //
-    // Retry counting cannot substitute for this: the poll runs 500ms after
-    // registration, well inside the flush window for a real collection, so
-    // "believe it the second time" blanked exactly the lists this guard exists
-    // to protect — reported as rows vanishing ~2s after a page load.
-    // Whether this write may be trusted by the NEXT session. Non-empty sets
-    // always; an empty set only when the server stood behind it (a zero row
-    // count, or a real set was seen this session and it is now gone). The
-    // retry-budget path below accepts an empty without that backing and must
-    // stay non-durable, or the poisoned-device self-heal is lost.
-    let confirmed = remoteArray.length > 0 || queryState.config.remoteSeen === true;
-    if (remoteArray.length === 0 && !queryState.config.remoteSeen) {
-      const serverRowCount = opts?.serverRowCount;
-      const knownEmpty = serverRowCount === 0;
-      confirmed = knownEmpty;
-      if (!knownEmpty) {
-        // Unknown row count still gets a bounded escape hatch, so a server that
-        // cannot report one never strands a device on a durable seed forever.
-        const emptyReads = (queryState.config.emptyReads ?? 0) + 1;
-        queryState.config.emptyReads = emptyReads;
-        const exhausted =
-          serverRowCount === null || serverRowCount === undefined
-            ? emptyReads >= EMPTY_MEMBERSHIP_CONFIRMATIONS
-            : false; // a positive row count is never "confirmed empty"
-        if (!exhausted) {
-          this.logger.debug(
-            {
-              hash,
-              emptyReads,
-              serverRowCount,
-              Category: 'sp00ky-client::DataModule::updateQueryRemoteArray',
-            },
-            'Ignoring empty membership: the server still reports rows for this query'
-          );
-          return;
+    // A server that predates `state` (`state === null`) can only be judged on
+    // `rowCount`: `0` is empty, anything else is the flush-window ambiguity and
+    // is left alone. There is deliberately NO retry budget that eventually
+    // accepts an unexplained empty: the register lifecycle, the poll and the
+    // heartbeat all retry, and a server that cannot explain an empty must not
+    // be able to erase a device's data.
+    if (remoteArray.length === 0 && !opts?.verifiedRemoval) {
+      if (!meta || !meta.present) {
+        if (held.length > 0 || queryState.config.membershipKnown) {
+          if (!queryState.viewLost) {
+            queryState.viewLost = true;
+            this.logger.warn(
+              { hash, held: held.length, Category: 'sp00ky-client::DataModule::updateQueryRemoteArray' },
+              'Server has no _00_query row for a query we hold membership for; keeping local state and re-registering'
+            );
+            this.onViewLost?.(hash);
+          }
+          return 'view-lost';
         }
+        this.logger.debug(
+          { hash, Category: 'sp00ky-client::DataModule::updateQueryRemoteArray' },
+          'Ignoring empty membership: the _00_query row is not readable yet'
+        );
+        return 'ignored';
+      }
+      const knownEmpty = meta.rowCount === 0 && meta.state !== 'materializing';
+      if (!knownEmpty) {
+        this.logger.debug(
+          {
+            hash,
+            state: meta.state,
+            rowCount: meta.rowCount,
+            Category: 'sp00ky-client::DataModule::updateQueryRemoteArray',
+          },
+          'Ignoring empty membership: the server has not confirmed this query empty'
+        );
+        return 'ignored';
       }
     }
+    if (meta?.present) queryState.viewLost = false;
 
     const epoch = this.local.epoch;
     queryState.config.remoteArray = remoteArray;
-    // The single point where authoritative membership arrives (registration and
-    // the `_00_list_ref` poll both land here), so it is where "we now know the
-    // membership" is latched and where the durable mirror is written.
-    queryState.config.membershipKnown = true;
+    // The single point where authoritative membership arrives (registration,
+    // the `_00_list_ref` poll and verified LIVE removals all land here), so it
+    // is where "we now know the membership" is latched and where the durable
+    // mirror is written. Every set that reaches this line is server-backed, so
+    // the mirror is always `confirmed`: a reload may trust it even when empty.
+    this.setMembershipKnown(hash, true);
     queryState.serverMembership = true;
-    if (remoteArray.length > 0) {
-      // Earns the right to believe a later empty set — that transition is a
-      // genuine removal and must be honoured, or removed rows resurrect.
-      queryState.config.remoteSeen = true;
-      queryState.config.emptyReads = 0;
-    }
     if (queryState.config.membershipKey) {
-      await this.writeWindowMembership(queryState.config.membershipKey, remoteArray, confirmed);
+      await this.writeWindowMembership(queryState.config.membershipKey, remoteArray, true);
     }
     try {
       await this.local.query(
@@ -1575,9 +1646,10 @@ export class DataModule<S extends SchemaStructure> {
         { epoch }
       );
     } catch (err) {
-      if (err instanceof StaleEpochError) return;
+      if (err instanceof StaleEpochError) return 'applied';
       throw err;
     }
+    return 'applied';
   }
 
   /**
@@ -1626,18 +1698,18 @@ export class DataModule<S extends SchemaStructure> {
       // bucket's durable row if it has one (a returning user), otherwise mark it
       // unknown so the first paint falls back to a scan instead of rendering an
       // empty list until the server answers.
-      config.membershipKnown = false;
-      // The new bucket's server sets have not been seen yet — an empty read
-      // must be re-confirmed there too.
-      config.remoteSeen = false;
-      config.emptyReads = 0;
+      // Via the single writer so `subscribeAuthority` observers see the reset
+      // BEFORE the `[]` records notify below, and the re-latch after it.
+      this.setMembershipKnown(hash, false);
+      queryState.viewLost = false;
+      queryState.serverState = null;
       if (config.membershipKey) {
         const durable = await this.getWindowMembership(config.membershipKey);
         // Same rule as the cold-start read: a non-empty row, or an empty one
         // the server confirmed, is membership; an unmarked empty row is not.
         if (durable && (durable.ids.length > 0 || durable.confirmed)) {
           config.remoteArray = durable.ids;
-          config.membershipKnown = true;
+          this.setMembershipKnown(hash, true);
         }
       }
       queryState.hydrated = false;
@@ -2522,6 +2594,7 @@ export class DataModule<S extends SchemaStructure> {
         );
         return;
       }
+      queryState.lastHeartbeatAt = Date.now();
       this.onHeartbeat?.(hash);
       this.logger.debug(
         {
@@ -2533,6 +2606,51 @@ export class DataModule<S extends SchemaStructure> {
       );
       this.startTTLHeartbeat(queryState, hash);
     }, heartbeatTime);
+  }
+
+  /**
+   * Heartbeat every watched query NOW and re-anchor its timer.
+   *
+   * The TTL timer is the only thing keeping a view alive on the server, and
+   * browsers throttle timers in hidden tabs (Chrome aligns them to one-minute
+   * ticks after five minutes hidden, and suspends them outright on some
+   * mobile platforms). A tab that comes back after a long stretch may have
+   * missed its beat by more than the server's slack, and the sweep will have
+   * taken the row and its edges. The client does not blank on that any more
+   * (`updateQueryRemoteArray` treats a missing row as "view lost"), but the
+   * sooner it finds out, the sooner the view is rebuilt: `heartbeatQuery`
+   * re-registers a query whose row is gone. Called on `visibilitychange` (to
+   * visible) and `online`.
+   *
+   * Queries beaten within the last `minGapMs` are skipped, so a flurry of
+   * wake events costs one beat per query. There is deliberately no local
+   * expiry anywhere in this module: the TTL is the server's, and the client's
+   * only duty is to keep asserting liveness while something is watching.
+   */
+  heartbeatOnWake(minGapMs: number = WAKE_HEARTBEAT_MIN_GAP_MS): number {
+    const now = Date.now();
+    let beaten = 0;
+    for (const [hash, queryState] of this.activeQueries.entries()) {
+      if ((this.subscriptions.get(hash)?.size ?? 0) === 0) continue;
+      if (queryState.lastHeartbeatAt !== undefined && now - queryState.lastHeartbeatAt < minGapMs) {
+        continue;
+      }
+      if (queryState.ttlTimer) {
+        clearTimeout(queryState.ttlTimer);
+        queryState.ttlTimer = null;
+      }
+      queryState.lastHeartbeatAt = now;
+      this.onHeartbeat?.(hash);
+      this.startTTLHeartbeat(queryState, hash);
+      beaten++;
+    }
+    if (beaten > 0) {
+      this.logger.debug(
+        { beaten, Category: 'sp00ky-client::DataModule::heartbeatOnWake' },
+        'Wake heartbeat sent for watched queries'
+      );
+    }
+    return beaten;
   }
 
   private async replaceRecordInQueries(record: Record<string, any>): Promise<void> {
