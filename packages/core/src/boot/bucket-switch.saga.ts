@@ -74,6 +74,11 @@ export function* bucketSwitch(env: SagaEnv, target: string, release: (() => void
   yield* loadOutbox(env);
   yield fx.dispatch({ type: 'EnsureRegistered' });
   yield fx.dispatch({ type: 'LiveStart' });
+  // The switch cleared the poll timer, and only the tick itself re-arms it: a
+  // sign-in (auth flip -> bucket switch) otherwise left the client running on
+  // LIVE alone for the rest of the session, so any membership change LIVE did
+  // not deliver was never noticed.
+  yield fx.dispatch({ type: 'PollTick' });
   yield fx.dispatch({ type: 'Drain' });
 }
 

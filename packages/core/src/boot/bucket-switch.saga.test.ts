@@ -69,7 +69,9 @@ describe('bucketSwitch', () => {
     expect(e.remoteArray).toEqual([['t:9', 1]]);
     expect(e.localArray).toEqual([['t:9', 1]]);
     expect(String(e.def.id.table)).toBe('_00_query');
-    expect(out.dispatched.map((d) => d.type)).toEqual(['PrimeCircuit', 'EnsureRegistered', 'LiveStart', 'Drain']);
+    // PollTick is load-bearing: the switch cleared the poll timer, and only the
+    // tick re-arms it, so a sign-in without it leaves the client on LIVE alone.
+    expect(out.dispatched.map((d) => d.type)).toEqual(['PrimeCircuit', 'EnsureRegistered', 'LiveStart', 'PollTick', 'Drain']);
   });
   it('shared tabs: moves namespaces, falls back to solo on failure; blob clear on sign-out; failures are logged and the gate always reopens', async () => {
     let gateReleased = false;
