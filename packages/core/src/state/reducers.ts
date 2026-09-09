@@ -208,6 +208,14 @@ export const setMembershipReread =
     return { ...s, membershipReread };
   };
 
+export const stampPolled =
+  (hashes: Iterable<QueryHash>, now: number): Reducer =>
+  (s) => {
+    let next = s;
+    for (const hash of hashes) next = withEntry(next, hash, (e) => ({ ...e, lastPolledAt: now }));
+    return next;
+  };
+
 // ---- subscribers -----------------------------------------------------------
 
 export const subscribe =

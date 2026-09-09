@@ -36,6 +36,7 @@ export function buildEntry(over: DeepPartial<QueryEntry> & { def?: Partial<Query
     subscribers: over.subscribers ?? 0,
     lastSubscriberLeftAt: over.lastSubscriberLeftAt ?? null,
     lastHeartbeatAt: over.lastHeartbeatAt ?? null,
+    lastPolledAt: over.lastPolledAt ?? null,
     registerAttempts: over.registerAttempts ?? 0,
     telemetry: { ...emptyTelemetry(), ...(over.telemetry as object) },
   };

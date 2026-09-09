@@ -41,6 +41,8 @@ export type Effect =
   | { kind: 'local.upsert'; table: string; id: unknown; data: Record<string, unknown>; mode: 'replace' | 'merge' }
   | { kind: 'local.delete'; table: string; id: unknown }
   | { kind: 'remote.query'; sql: string; vars?: Vars; timeoutMs?: number }
+  | { kind: 'remote.live'; table: string }
+  | { kind: 'remote.kill'; uuid: string }
   | { kind: 'ssp.register'; plan: RegisterPlan }
   | { kind: 'ssp.unregister'; hash: string }
   | { kind: 'ssp.ingest'; records: IngestRecord[] }
@@ -81,6 +83,9 @@ export const fx = {
   },
   remote: {
     query: (sql: string, vars?: Vars, timeoutMs?: number): Effect => ({ kind: 'remote.query', sql, vars, timeoutMs }),
+    /** Subscribe to `LIVE SELECT * FROM <table>`; resolves to the live uuid. */
+    live: (table: string): Effect => ({ kind: 'remote.live', table }),
+    kill: (uuid: string): Effect => ({ kind: 'remote.kill', uuid }),
   },
   ssp: {
     register: (plan: RegisterPlan): Effect => ({ kind: 'ssp.register', plan }),

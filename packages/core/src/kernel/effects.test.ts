@@ -13,6 +13,8 @@ describe('effect constructors', () => {
       [fx.local.upsert('t', 'x', { a: 1 }, 'merge'), 'local.upsert'],
       [fx.local.delete('t', 'x'), 'local.delete'],
       [fx.remote.query('RETURN true', undefined, 10), 'remote.query'],
+      [fx.remote.live('_00_list_ref'), 'remote.live'],
+      [fx.remote.kill('u'), 'remote.kill'],
       [fx.ssp.register({ queryHash: 'h', surql: 's', params: {}, ttl: '10m', tableName: 't' }), 'ssp.register'],
       [fx.ssp.unregister('h'), 'ssp.unregister'],
       [fx.ssp.ingest([]), 'ssp.ingest'],

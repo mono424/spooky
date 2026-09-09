@@ -56,6 +56,7 @@ export interface QueryEntry {
   readonly subscribers: number;
   readonly lastSubscriberLeftAt: number | null;
   readonly lastHeartbeatAt: number | null;
+  readonly lastPolledAt: number | null;
   readonly registerAttempts: number;
   readonly telemetry: QueryTelemetry;
 }
@@ -94,6 +95,8 @@ export interface SyncSlice {
   readonly lastReconnectRefetchAt: number | null;
   readonly needsResubscribe: boolean;
   readonly fetchAttempts: number;
+  readonly liveUuid: string | null;
+  readonly liveTable: string | null;
   readonly lanes: LaneState;
 }
 
@@ -169,6 +172,8 @@ export function emptyState(init: { tabId: string }): ClientState {
       lastReconnectRefetchAt: null,
       needsResubscribe: false,
       fetchAttempts: 0,
+      liveUuid: null,
+      liveTable: null,
       lanes: emptyLanes(),
     },
   };

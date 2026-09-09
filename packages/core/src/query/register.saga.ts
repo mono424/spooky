@@ -84,6 +84,7 @@ export function* registerLocal(env: SagaEnv, input: RegisterInput): Saga<QueryHa
       subscribers: 0,
       lastSubscriberLeftAt: now,
       lastHeartbeatAt: null,
+      lastPolledAt: null,
       registerAttempts: 0,
       telemetry: { ...emptyTelemetry(), registrationTimings: reg.timings },
     };

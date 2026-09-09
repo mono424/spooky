@@ -96,12 +96,14 @@ describe('query reducers', () => {
     s = R.bumpRegisterAttempts('a')(s);
     s = R.bumpRegisterAttempts('a')(s);
     s = R.stampHeartbeat(['a', 'missing'], 9)(s);
+    s = R.stampPolled(['a'], 11)(s);
     const en = s.queries.get('a')!;
     expect(en.telemetry.lastUpdatedAt).toBe(5);
     expect(en.telemetry.errorCount).toBe(1);
     expect(en.telemetry.registrationTimings.wallMs).toBe(4);
     expect(en.registerAttempts).toBe(2);
     expect(en.lastHeartbeatAt).toBe(9);
+    expect(en.lastPolledAt).toBe(11);
     const reset = R.resetRegisterAttempts('a')(s);
     expect(reset.queries.get('a')!.registerAttempts).toBe(0);
     expect(R.resetRegisterAttempts('a')(reset)).toBe(reset);

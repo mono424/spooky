@@ -28,7 +28,9 @@ export type RuntimeEvent =
   | { type: 'WarmBlobs' }
   | { type: 'ConnectionChanged'; state: ConnectionState }
   | { type: 'StreamUpdate'; update: StreamUpdate }
-  | { type: 'LiveChange'; hash: QueryHash }
+  | { type: 'LiveStart' }
+  | { type: 'LiveChange'; hashes: QueryHash[] }
+  | { type: 'TabRole'; role: 'solo' | 'leader' | 'follower' }
   | { type: 'TabMessage'; message: unknown };
 
 export type OutEvent =

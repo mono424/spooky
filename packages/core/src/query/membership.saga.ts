@@ -87,14 +87,18 @@ const stmt = (results: unknown, i: number): unknown => {
  * server id-set enters state: registration, the poll, LIVE dirt and view-lost
  * recovery all come through here.
  */
-export function* readMembership(env: SagaEnv, hashes: QueryHash[]): Saga<{ changed: boolean; failed: boolean }> {
+export function* readMembership(
+  env: SagaEnv,
+  hashes: QueryHash[],
+  opts: { force?: boolean } = {}
+): Saga<{ changed: boolean; failed: boolean }> {
   const state = (yield fx.state.read((s) => s)) as ClientState;
   const entries = hashes.map((h) => state.queries.get(h)).filter((e): e is QueryEntry => !!e);
   if (entries.length === 0) return { changed: false, failed: false };
   const table = listRefTable(env, state);
   const now = (yield fx.now()) as number;
   const chunks = planListRefPollChunks(
-    entries.map((e) => ({ hash: e.def.hash, rows: e.remoteArray.length, lastPolledAt: 0 })),
+    entries.map((e) => ({ hash: e.def.hash, rows: e.remoteArray.length, lastPolledAt: opts.force ? 0 : (e.lastPolledAt ?? 0) })),
     { now }
   );
   const byHash = new Map(entries.map((e) => [e.def.hash, e]));
@@ -156,7 +160,7 @@ export function* readMembership(env: SagaEnv, hashes: QueryHash[]): Saga<{ chang
     }
     yield* applySubqueryChildren(hash, snap.subquery);
   }
-  yield fx.state.update(R.clearMembershipDirty([...snapshots.keys()]));
+  yield fx.state.update(R.compose(R.clearMembershipDirty([...snapshots.keys()]), R.stampPolled(snapshots.keys(), now)));
 
   // A view whose edges are still in flight: re-read on a short ladder rather
   // than waiting for a backed-off poll tick.
@@ -185,5 +189,5 @@ export function* markMembershipDirty(hashes: QueryHash[]): Saga<void> {
 export function* readDirtyMembership(env: SagaEnv): Saga<void> {
   const dirty = (yield fx.state.read((s) => [...s.membershipDirty])) as QueryHash[];
   if (dirty.length === 0) return;
-  yield* readMembership(env, dirty);
+  yield* readMembership(env, dirty, { force: true });
 }
