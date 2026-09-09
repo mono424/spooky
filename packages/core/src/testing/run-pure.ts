@@ -89,6 +89,8 @@ export async function runPure<R>(saga: Saga<R>, opts: RunPureOptions = {}): Prom
       case 'dispatch':
         ctx.dispatched.push(effect.event);
         return undefined;
+      case 'service':
+        throw new UnhandledEffectError(effect);
       case 'all': {
         const results: Settled[] = [];
         for (const inner of effect.effects) {

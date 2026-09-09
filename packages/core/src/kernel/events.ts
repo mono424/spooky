@@ -25,7 +25,11 @@ export type RuntimeEvent =
   | { type: 'HeartbeatNow' }
   | { type: 'StartRemote' }
   | { type: 'PrimeCircuit' }
+  | { type: 'VersionsPrimed'; entries: Array<readonly [string, number]> }
   | { type: 'WarmBlobs' }
+  | { type: 'AuthFlip'; userId: string | null }
+  | { type: 'BucketSwitch'; target: string }
+  | { type: 'PageHide' }
   | { type: 'ConnectionChanged'; state: ConnectionState }
   | { type: 'StreamUpdate'; update: StreamUpdate }
   | { type: 'LiveStart' }

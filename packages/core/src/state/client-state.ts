@@ -103,6 +103,10 @@ export interface SyncSlice {
 export interface ClientState {
   readonly sessionId: string | null;
   readonly userId: string | null;
+  /** The principal the current session salt was minted for. */
+  readonly saltUserId: string | null;
+  /** Latest bucket-switch target; an older switch that wakes up to a newer target skips. */
+  readonly pendingBucket: string | null;
   readonly tabId: string;
   readonly tabRole: TabRole;
   readonly bucketId: string | null;
@@ -148,6 +152,8 @@ export function emptyState(init: { tabId: string }): ClientState {
   return {
     sessionId: null,
     userId: null,
+    saltUserId: null,
+    pendingBucket: null,
     tabId: init.tabId,
     tabRole: 'solo',
     bucketId: null,

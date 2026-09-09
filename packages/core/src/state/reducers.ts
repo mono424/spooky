@@ -381,8 +381,47 @@ export const setFailedCount =
 // ---- identity / connection --------------------------------------------------
 
 export const setIdentity =
-  (patch: Partial<Pick<ClientState, 'sessionId' | 'userId' | 'bucketId' | 'tabRole' | 'epoch' | 'localReady' | 'primed'>>): Reducer =>
+  (
+    patch: Partial<
+      Pick<ClientState, 'sessionId' | 'userId' | 'saltUserId' | 'pendingBucket' | 'bucketId' | 'tabRole' | 'epoch' | 'localReady' | 'primed'>
+    >
+  ): Reducer =>
   (s) => ({ ...s, ...patch });
+
+/** Re-home a query after a bucket switch: new store, same hash, fresh sync state. */
+export const rebindQuery =
+  (
+    hash: QueryHash,
+    next: { id: QueryEntry['def']['id']; lifecycle: QueryEntry['lifecycle']; remoteArray: RecordVersionArray; localArray: RecordVersionArray }
+  ): Reducer =>
+  (s) => {
+    const rebound = withEntry(s, hash, (e) => ({
+      ...e,
+      def: { ...e.def, id: next.id },
+      lifecycle: next.lifecycle,
+      remoteArray: next.remoteArray,
+      localArray: next.localArray,
+      subqueryRemoteArray: [],
+      records: [],
+      serverState: null,
+      lastHeartbeatAt: null,
+      lastPolledAt: null,
+      registerAttempts: 0,
+    }));
+    return rebound === s ? s : { ...rebound, dirty: addAll(rebound.dirty, [hash]) };
+  };
+
+/** Everything a bucket switch invalidates in one go. */
+export const clearBucketState = (): Reducer => (s) => ({
+  ...s,
+  versions: new Map(),
+  outbox: [],
+  pendingWrites: new Map(),
+  dirty: new Set(),
+  membershipDirty: new Set(),
+  membershipReread: new Map(),
+  primed: false,
+});
 
 export const setTabRole =
   (tabRole: TabRole): Reducer =>

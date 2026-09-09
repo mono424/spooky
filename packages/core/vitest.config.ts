@@ -32,6 +32,7 @@ export default defineConfig({
         'src/query/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/mutation/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/sync/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/boot/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
       },
     },
   },

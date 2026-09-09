@@ -230,6 +230,32 @@ describe('outbox', () => {
   });
 });
 
+describe('bucket switch reducers', () => {
+  it('rebindQuery keeps the hash, swaps the id and sync state, dirties; clearBucketState wipes per-bucket slices', () => {
+    const s0 = buildState(
+      [e('a', { lifecycle: { phase: 'live', remote: 'registered', notified: true }, remoteArray: [['t:1', 1]], records: [{ id: 't:1' }], serverState: 'ready', registerAttempts: 2 })],
+      R.setVersions([['t:1', 1]]),
+      R.outboxReplace([buildOutboxItem()])
+    );
+    const id = { table: '_00_query', id: 'new' } as any;
+    const s1 = R.rebindQuery('a', { id, lifecycle: { phase: 'cached', remote: 'unregistered', fetchDepth: 0, notified: false }, remoteArray: [['t:2', 1]], localArray: [] })({ ...s0, dirty: new Set() });
+    const en = s1.queries.get('a')!;
+    expect(en.def.id).toBe(id);
+    expect(en.lifecycle.phase).toBe('cached');
+    expect(en.remoteArray).toEqual([['t:2', 1]]);
+    expect(en.records).toEqual([]);
+    expect(en.serverState).toBeNull();
+    expect(en.registerAttempts).toBe(0);
+    expect(s1.dirty.has('a')).toBe(true);
+    expect(R.rebindQuery('zz', { id, lifecycle: en.lifecycle, remoteArray: [], localArray: [] })(s1)).toBe(s1);
+    const s2 = R.clearBucketState()(s1);
+    expect(s2.versions.size).toBe(0);
+    expect(s2.outbox).toEqual([]);
+    expect(s2.dirty.size).toBe(0);
+    expect(s2.primed).toBe(false);
+  });
+});
+
 describe('identity / connection / compose', () => {
   it('sets fields and short-circuits on no change', () => {
     const s0 = buildState();

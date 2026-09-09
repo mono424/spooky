@@ -56,9 +56,53 @@ export type Effect =
   | { kind: 'hash'; input: string }
   | { kind: 'emit'; event: OutEvent }
   | { kind: 'dispatch'; event: RuntimeEvent }
-  | { kind: 'all'; effects: Effect[] };
+  | { kind: 'all'; effects: Effect[] }
+  | { kind: 'service'; name: ServiceName; args: unknown[] };
 
 export type EffectKind = Effect['kind'];
+
+/**
+ * Calls into the legacy services that are adapters, not state: auth, tabs,
+ * blobs, migrator, crdt, persistence, the SSP lifecycle, the remote socket.
+ * A saga names the call; the runtime binds it to the real service.
+ */
+export interface ServiceCalls {
+  'hint.read': () => string | null;
+  'hint.write': (bucketId: string) => void;
+  'local.connect': (bucketId: string) => Promise<void>;
+  'local.switchStore': (bucketId: string) => Promise<void>;
+  'local.beginSwitch': () => () => void;
+  'local.currentBucketId': () => string;
+  'local.usesSurqlSchema': () => boolean;
+  'migrator.provision': () => Promise<void>;
+  'blobs.start': (bucketId: string) => Promise<void>;
+  'blobs.setNamespace': (bucketId: string) => Promise<void>;
+  'blobs.clear': () => Promise<void>;
+  'ssp.init': () => Promise<void>;
+  'ssp.setPermissions': () => void;
+  'ssp.setSessionAuth': (authId: string | null, access: string | null) => void;
+  'ssp.prime': (pendingIds: string[]) => Promise<void>;
+  'ssp.reset': () => Promise<void>;
+  'ssp.setPersistence': (enabled: boolean) => void;
+  'auth.restoreSession': () => Promise<string | null>;
+  'auth.init': () => Promise<void>;
+  'auth.sessionAuthId': () => string | null;
+  'auth.access': () => string | null;
+  'auth.token': () => string | null;
+  'auth.currentUser': () => Record<string, unknown> | null;
+  'remote.connect': () => Promise<void>;
+  'remote.releaseViews': (ids: unknown[]) => void;
+  'supervisor.start': () => void;
+  'tabs.start': (bucketId: string) => Promise<'solo' | 'leader' | 'follower'>;
+  'tabs.moveToBucket': (bucketId: string) => Promise<'solo' | 'leader' | 'follower'>;
+  'crdt.setSessionId': (sessionId: string) => void;
+  'crdt.closeAll': (flush: boolean) => void;
+  'persistence.set': (key: string, value: unknown) => Promise<void>;
+  'features.init': () => void;
+  'releases.init': () => void;
+  'window.attach': () => void;
+}
+export type ServiceName = keyof ServiceCalls;
 
 /** Typed constructors. Each is one line so the saga reads like the plan. */
 export const fx = {
@@ -108,4 +152,5 @@ export const fx = {
   emit: (event: OutEvent): Effect => ({ kind: 'emit', event }),
   dispatch: (event: RuntimeEvent): Effect => ({ kind: 'dispatch', event }),
   all: (effects: Effect[]): Effect => ({ kind: 'all', effects }),
+  service: <N extends ServiceName>(name: N, ...args: Parameters<ServiceCalls[N]>): Effect => ({ kind: 'service', name, args }),
 } as const;
