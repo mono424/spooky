@@ -224,4 +224,23 @@ describe('dirty helpers', () => {
     });
     expect(dirty.log.filter((e) => e.kind === 'remote.query')).toHaveLength(1);
   });
+
+  it('arms the window once per burst, and again for dirt the read left behind', async () => {
+    const s = buildState([buildEntry({ def: { hash: 'a' } }), buildEntry({ def: { hash: 'b' } })]);
+    const first = await runPure(markMembershipDirty(['a']), { state: s });
+    // A second event inside the same window must NOT push the read out: with
+    // `timer.set` replacing the pending timer, re-arming on every LIVE event
+    // starved the read on a busy table.
+    const second = await runPure(markMembershipDirty(['b']), { state: first.state });
+    expect(second.timers.has('membership')).toBe(false);
+    expect([...second.state.membershipDirty]).toEqual(['a', 'b']);
+
+    // A read that cannot answer a hash leaves it dirty, and re-arms for it.
+    const stuck = await runPure(readDirtyMembership(env), {
+      state: second.state,
+      handlers: { 'remote.query': () => { throw new Error('offline'); } },
+    });
+    expect(stuck.state.membershipDirty.size).toBe(2);
+    expect(stuck.timers.get('membership')).toEqual({ ms: 50, event: { type: 'ReadDirtyMembership' } });
+  });
 });

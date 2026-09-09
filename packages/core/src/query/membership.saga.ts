@@ -180,14 +180,29 @@ export function* readMembership(
   return { changed, failed };
 }
 
-/** LIVE handler: mark dirty and coalesce into one batched re-read. */
+/**
+ * LIVE handler: mark dirty and coalesce into one batched re-read.
+ *
+ * The window is armed ONCE per burst, when the dirty set goes from empty to
+ * non-empty. `timer.set` replaces a pending timer, so re-arming on every event
+ * would push the read out for as long as events keep arriving: on a busy
+ * `_00_list_ref` table (registrations, an import, another tab syncing) the
+ * events never stop for a whole 50 ms and the read simply never ran, leaving
+ * membership frozen until a poll tick happened to cover it.
+ */
 export function* markMembershipDirty(hashes: QueryHash[]): Saga<void> {
+  const armed = (yield fx.state.read((s) => s.membershipDirty.size > 0)) as boolean;
   yield fx.state.update(R.markMembershipDirty(hashes));
-  yield fx.timer.set('membership', MEMBERSHIP_COALESCE_MS, { type: 'ReadDirtyMembership' });
+  if (!armed) yield fx.timer.set('membership', MEMBERSHIP_COALESCE_MS, { type: 'ReadDirtyMembership' });
 }
 
 export function* readDirtyMembership(env: SagaEnv): Saga<void> {
   const dirty = (yield fx.state.read((s) => [...s.membershipDirty])) as QueryHash[];
   if (dirty.length === 0) return;
   yield* readMembership(env, dirty, { force: true });
+  // Dirt that arrived while the read was in flight, or a hash the read could
+  // not answer, holds the set non-empty - and with the window armed only on the
+  // empty -> non-empty edge, nothing else would arm it again.
+  const left = (yield fx.state.read((s) => s.membershipDirty.size)) as number;
+  if (left > 0) yield fx.timer.set('membership', MEMBERSHIP_COALESCE_MS, { type: 'ReadDirtyMembership' });
 }
