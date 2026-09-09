@@ -191,3 +191,51 @@ describe('Sp00kyClient facade', () => {
     expect(client.state.localReady).toBe(true);
   });
 });
+
+describe('Sp00kyClient facade (builder, devtools source, event fan-out)', () => {
+  it('query() builds through the QueryBuilder and registers locally; dispatch feeds the engine; DevTools reads state', async () => {
+    const { client, runtime } = makeClient();
+    await client.init();
+    const { hash } = await (client.query('thing', {} as any) as any).build().run();
+    expect(client.state.queries.has(hash)).toBe(true);
+    const source = (client as any).devTools.dataManager;
+    expect(source.getActiveQueries().map((q: any) => q.config.surql)).toEqual(['SELECT * FROM thing;']);
+    const entry = client.state.queries.get(hash)!;
+    expect(source.getQueryById(entry.def.id)!.config.membershipKey).toBe(entry.def.viewKey);
+    expect(source.getQueryById({ id: 'nope', table: '_00_query' } as any)).toBeUndefined();
+    expect(source.phaseTimings(source.getActiveQueries()[0]).updateCount).toBe(0);
+    expect(source.phaseTimings({ config: { id: { id: 'nope' } } } as any)).toEqual({});
+    await client.dispatch({ type: 'PollTick' });
+    await expect((client.query('nope' as any, {} as any) as any).build().run()).rejects.toThrow('Table nope not found');
+    const tray: number[] = [];
+    const fetching: number[] = [];
+    const health: string[] = [];
+    client.subscribeToFailedMutations((n) => tray.push(n));
+    client.subscribeToFetchActivity((n) => fetching.push(n));
+    client.subscribeToSyncHealth((h) => health.push(h.status));
+    runtime.emit({ type: 'tray:changed', count: 2 });
+    runtime.emit({ type: 'activity:changed', fetching: 3, pending: 0 });
+    runtime.emit({ type: 'health:changed', health: { ...client.syncHealth, status: 'degraded' } });
+    runtime.emit({ type: 'query:evicted', hash });
+    expect(tray).toEqual([0, 2]);
+    expect(fetching).toEqual([0, 3]);
+    expect(health).toEqual(['healthy', 'degraded']);
+    const pending: number[] = [];
+    client.subscribeToPendingMutations((n) => pending.push(n));
+    runtime.emit({ type: 'activity:changed', fetching: 0, pending: 4 });
+    expect(pending).toEqual([0, 4]);
+  });
+  it('honours config knobs when building the saga env', () => {
+    const services = fakeServiceBundle<any>();
+    const a = fakeAdapters();
+    const runtime = new Runtime({ env: defaultEnv(schema), adapters: a.adapters, logger: services.logger, tabId: 't' });
+    const tuned = new Sp00kyClient<any>(
+      { ...config, database: { ...config.database, queryTimeoutMs: 5 }, syncHealth: false, pushTimeoutMs: 7, refSyncIntervalMs: 9, streamDebounceTime: 11, enableAnonymousLiveQueries: true, sharedTabs: true } as any,
+      { services, runtime, env: { defaultTtlMs: 1 } }
+    );
+    expect((tuned as any).env).toMatchObject({ remoteTimeoutMs: 5, degradeAfter: 0, pushTimeoutMs: 7, pollBaseMs: 9, materializeDebounceMs: 11, anonLive: true, defaultTtlMs: 1 });
+    const degraded = new Sp00kyClient<any>({ ...config, syncHealth: { degradeAfterConsecutiveFailures: 2 } } as any, { services, runtime });
+    expect((degraded as any).env.degradeAfter).toBe(2);
+    expect(tuned.tabRole).toBeNull();
+  });
+});
