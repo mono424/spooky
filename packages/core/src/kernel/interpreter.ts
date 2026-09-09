@@ -67,6 +67,8 @@ export function createInterpreter(adapters: Adapters, host: InterpreterHost): In
         return adapters.local.upsert(effect.table, effect.id, effect.data, effect.mode);
       case 'local.delete':
         return adapters.local.delete(effect.table, effect.id);
+      case 'local.epoch':
+        return adapters.local.epoch;
       case 'remote.query': {
         const pending = adapters.remote.queryResponses(effect.sql, effect.vars);
         return effect.timeoutMs

@@ -40,6 +40,7 @@ export type Effect =
   | { kind: 'local.getById'; table: string; id: unknown }
   | { kind: 'local.upsert'; table: string; id: unknown; data: Record<string, unknown>; mode: 'replace' | 'merge' }
   | { kind: 'local.delete'; table: string; id: unknown }
+  | { kind: 'local.epoch' }
   | { kind: 'remote.query'; sql: string; vars?: Vars; timeoutMs?: number }
   | { kind: 'remote.live'; table: string }
   | { kind: 'remote.kill'; uuid: string }
@@ -124,6 +125,8 @@ export const fx = {
       mode,
     }),
     delete: (table: string, id: unknown): Effect => ({ kind: 'local.delete', table, id }),
+    /** The store's current epoch; a write fenced with it is dropped after a bucket switch or transport failover. */
+    epoch: (): Effect => ({ kind: 'local.epoch' }),
   },
   remote: {
     query: (sql: string, vars?: Vars, timeoutMs?: number): Effect => ({ kind: 'remote.query', sql, vars, timeoutMs }),

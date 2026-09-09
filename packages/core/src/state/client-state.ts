@@ -110,7 +110,6 @@ export interface ClientState {
   readonly tabId: string;
   readonly tabRole: TabRole;
   readonly bucketId: string | null;
-  readonly epoch: number;
   readonly localReady: boolean;
   readonly primed: boolean;
   readonly queries: ReadonlyMap<QueryHash, QueryEntry>;
@@ -157,7 +156,6 @@ export function emptyState(init: { tabId: string }): ClientState {
     tabId: init.tabId,
     tabRole: 'solo',
     bucketId: null,
-    epoch: 0,
     localReady: false,
     primed: false,
     queries: new Map(),

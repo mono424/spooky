@@ -32,7 +32,7 @@ describe('authFlip', () => {
     expect(names).toContain('local.switchStore');
     expect(names).toContain('crdt.setSessionId');
     expect(released).toEqual(['gate']);
-    expect(out.state).toMatchObject({ userId: 'user:abc', saltUserId: 'user:abc', sessionId: 'salt-1', bucketId: 'abc', epoch: 1 });
+    expect(out.state).toMatchObject({ userId: 'user:abc', saltUserId: 'user:abc', sessionId: 'salt-1', bucketId: 'abc' });
     expect(out.state.versions.get('user:abc')).toBe(1);
   });
   it('same principal on the same bucket: no switch, no salt rotation', async () => {

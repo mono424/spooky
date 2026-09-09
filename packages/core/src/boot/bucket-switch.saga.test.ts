@@ -61,7 +61,7 @@ describe('bucketSwitch', () => {
       'persistence.set',
     ]);
     expect(out.log.filter((e) => e.kind === 'timer.clear').map((e) => (e as any).key)).toEqual(['poll', 'outbox', 'membership', 'fetch', 'ack-prune']);
-    expect(out.state).toMatchObject({ bucketId: 'u2', epoch: 1, primed: false, outbox: [] });
+    expect(out.state).toMatchObject({ bucketId: 'u2', primed: false, outbox: [] });
     expect(out.state.versions.size).toBe(0);
     expect(out.state.membershipDirty.size).toBe(0);
     const e = out.state.queries.get('a')!;

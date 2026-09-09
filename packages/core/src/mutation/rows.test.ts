@@ -183,3 +183,19 @@ describe('rollback plans', () => {
     expect(rows.parseFailedRow({ mutationType: 'delete', recordId: 1 })).toBeNull();
   });
 });
+
+describe('hydrateRowData', () => {
+  const columns = { owner: { recordId: true }, at: { dateTime: true }, n: {} } as any;
+  const base: rows.PendingMutationRow = { id: 'm', mutationType: 'create', recordId: 'thing:1', tableName: 'thing', createdAt: 0, v: 2 };
+  it('re-types record and datetime fields from the schema, keeps unknown keys, leaves rows without data or schema alone', () => {
+    const out = rows.hydrateRowData({ ...base, data: { owner: 'user:u1', at: '2026-01-02T00:00:00.000Z', n: 1, extra: 'x' } }, columns);
+    expect(out.data).toEqual({ owner: rid('user', 'u1'), at: new Date('2026-01-02T00:00:00.000Z'), n: 1, extra: 'x' });
+    expect(rows.hydrateRowData(base, columns)).toBe(base);
+    const noSchema = { ...base, data: { owner: 'user:u1' } };
+    expect(rows.hydrateRowData(noSchema, null)).toBe(noSchema);
+  });
+  it('sends a payload the schema rejects as it is', () => {
+    const bad = { ...base, data: { owner: 42 } };
+    expect(rows.hydrateRowData(bad, columns)).toBe(bad);
+  });
+});

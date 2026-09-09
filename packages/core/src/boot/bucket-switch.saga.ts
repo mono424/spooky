@@ -57,7 +57,7 @@ export function* bucketSwitch(env: SagaEnv, target: string, release: (() => void
     yield fx.service('ssp.reset');
     yield fx.service('ssp.setPermissions');
     yield fx.service('ssp.setSessionAuth', (yield fx.service('auth.sessionAuthId')) as string | null, (yield fx.service('auth.access')) as string | null);
-    yield fx.state.update(R.setIdentity({ bucketId: target, epoch: state.epoch + 1 }));
+    yield fx.state.update(R.setIdentity({ bucketId: target }));
     yield fx.dispatch({ type: 'PrimeCircuit' });
   } finally {
     gate();

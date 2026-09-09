@@ -263,8 +263,8 @@ describe('bucket switch reducers', () => {
 describe('identity / connection / compose', () => {
   it('sets fields and short-circuits on no change', () => {
     const s0 = buildState();
-    const s1 = R.setIdentity({ sessionId: 's', userId: 'u', epoch: 2 })(s0);
-    expect(s1).toMatchObject({ sessionId: 's', userId: 'u', epoch: 2 });
+    const s1 = R.setIdentity({ sessionId: 's', userId: 'u', bucketId: 'b' })(s0);
+    expect(s1).toMatchObject({ sessionId: 's', userId: 'u', bucketId: 'b' });
     const s2 = R.setTabRole('leader')(s1);
     expect(R.setTabRole('leader')(s2)).toBe(s2);
     const s3 = R.setConnection('connected')(s2);

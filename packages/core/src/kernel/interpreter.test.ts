@@ -24,6 +24,7 @@ describe('interpreter', () => {
     await run(fx.local.getById('t', 'x'));
     await run(fx.local.upsert('t', 'x', { a: 1 }, 'merge'));
     await run(fx.local.delete('t', 'x'));
+    expect(await run(fx.local.epoch())).toBe(0);
     expect(await run(fx.remote.query('RETURN 1'))).toEqual([{ status: 'OK', result: 1 }]);
     expect(await run(fx.remote.live('_00_list_ref'))).toBe('live-uuid');
     await run(fx.remote.kill('live-uuid'));

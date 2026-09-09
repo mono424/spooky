@@ -6,10 +6,12 @@ import type { ClientState, OutboxItem } from '../state/client-state';
 import * as R from '../state/reducers';
 import { classifySyncError } from '../utils/error-classification';
 import type { SagaEnv } from '../query/env';
+import { columnsFor } from '../query/env';
 import { mutationOwnerTabId } from './mutation-id';
 import {
   buildFailedRow,
   deletePendingRow,
+  hydrateRowData,
   loadPendingRows,
   moveToFailedTx,
   parsePendingRow,
@@ -85,7 +87,7 @@ export function* drain(env: SagaEnv): Saga<void> {
     const rows: PendingMutationRow[] = [];
     for (const item of batch) {
       const row = byId.get(item.id);
-      if (row) rows.push(row);
+      if (row) rows.push(hydrateRowData(row, columnsFor(env, row.tableName)));
       else yield fx.state.update(R.outboxRemove(item.id)); // row already gone from the store
     }
     if (rows.length === 0) continue;

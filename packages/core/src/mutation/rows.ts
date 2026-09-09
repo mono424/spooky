@@ -6,6 +6,7 @@ import type { OutboxItem } from '../state/client-state';
 import { surql } from '../utils/surql';
 import type { SealedQuery } from '../utils/surql';
 import { extractTablePart, parseRecordIdString } from '../utils/index';
+import { parseQueryParams } from '../utils/parser';
 
 export const PENDING_TABLE = '_00_pending_mutations';
 export const FAILED_TABLE = '_00_failed_mutations';
@@ -88,6 +89,22 @@ export function parsePendingRow(row: unknown): PendingMutationRow | null {
     createdAt: typeof r.createdAt === 'number' ? r.createdAt : (createdAtFromId(id) ?? 0),
     v: typeof r.v === 'number' ? r.v : 1,
   };
+}
+
+/**
+ * Re-type a stored row's payload from the schema before it is pushed. The
+ * store keeps JSON, so a `record<user>` field comes back as `'user:x'` and a
+ * datetime as a string; the server coerces neither. Unknown keys stay as they
+ * are, and a payload the schema rejects is sent raw so the server's answer,
+ * not a local throw, decides its fate.
+ */
+export function hydrateRowData(row: PendingMutationRow, columns: Record<string, unknown> | null): PendingMutationRow {
+  if (!row.data || !columns) return row;
+  try {
+    return { ...row, data: parseQueryParams(columns as never, row.data) };
+  } catch {
+    return row;
+  }
 }
 
 export const toOutboxItem = (row: PendingMutationRow): OutboxItem => ({

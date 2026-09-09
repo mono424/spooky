@@ -33,6 +33,7 @@ describe('effect constructors', () => {
     ];
     for (const [effect, kind] of cases) expect(effect.kind).toBe(kind);
     expect(fx.local.query('SELECT 1', { a: 1 }, 3)).toEqual({ kind: 'local.query', sql: 'SELECT 1', vars: { a: 1 }, epoch: 3 });
+    expect(fx.local.epoch()).toEqual({ kind: 'local.epoch' });
     expect(fx.timer.set('k', 5, { type: 'Drain' })).toEqual({ kind: 'timer.set', key: 'k', ms: 5, event: { type: 'Drain' } });
     expect(fx.service('hint.write', 'u1')).toEqual({ kind: 'service', name: 'hint.write', args: ['u1'] });
   });

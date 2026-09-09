@@ -397,7 +397,7 @@ export const setFailedCount =
 export const setIdentity =
   (
     patch: Partial<
-      Pick<ClientState, 'sessionId' | 'userId' | 'saltUserId' | 'pendingBucket' | 'bucketId' | 'tabRole' | 'epoch' | 'localReady' | 'primed'>
+      Pick<ClientState, 'sessionId' | 'userId' | 'saltUserId' | 'pendingBucket' | 'bucketId' | 'tabRole' | 'localReady' | 'primed'>
     >
   ): Reducer =>
   (s) => ({ ...s, ...patch });

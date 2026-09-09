@@ -21,6 +21,8 @@ export interface PureContext {
 export interface RunPureOptions {
   state?: ClientState;
   now?: number;
+  /** What `local.epoch` answers; a store-side counter, so it is scripted like `now`. */
+  epoch?: number;
   handlers?: Partial<Record<EffectKind, EffectHandler>>;
 }
 
@@ -43,8 +45,8 @@ export async function sha256Hex(input: string): Promise<string> {
 
 /**
  * Drive a saga with canned effect results. `state.*`, `now`, `id`, `hash`,
- * `timer.*`, `emit` and `dispatch` are handled here; every adapter effect
- * (`local.*`, `remote.*`, `ssp.*`) must have a handler or the run throws, so
+ * `timer.*`, `emit`, `dispatch` and `local.epoch` are handled here; every other
+ * adapter effect (`local.*`, `remote.*`, `ssp.*`) must have a handler or the run throws, so
  * a test can never pass by an effect silently returning `undefined`.
  */
 export async function runPure<R>(saga: Saga<R>, opts: RunPureOptions = {}): Promise<RunPureResult<R>> {
@@ -72,6 +74,8 @@ export async function runPure<R>(saga: Saga<R>, opts: RunPureOptions = {}): Prom
         throw new Error('runPure: state.wait would block; script a handler or prepare the state');
       case 'now':
         return ctx.now;
+      case 'local.epoch':
+        return opts.epoch ?? 0;
       case 'id':
         ctx.ids += 1;
         return `${effect.scope}-${ctx.ids}`;

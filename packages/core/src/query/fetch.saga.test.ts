@@ -34,6 +34,7 @@ describe('fetchRows', () => {
     const depths: number[] = [];
     const out = await runPure(fetchRows(env), {
       state: s,
+      epoch: 7,
       handlers: {
         'remote.query': (e: any, ctx) => {
           depths.push(ctx.state.queries.get('a')!.lifecycle.fetchDepth);
@@ -50,7 +51,8 @@ describe('fetchRows', () => {
     expect(out.state.versions.get('thing:1')).toBe(2);
     const exec = out.log.find((e) => e.kind === 'local.execute') as any;
     expect(exec.vars.content0).toEqual({ a: 'x', _00_rv: 2 });
-    expect(exec.epoch).toBe(0);
+    expect(exec.epoch).toBe(7);
+    expect(out.log.findIndex((e) => e.kind === 'local.epoch')).toBeLessThan(out.log.findIndex((e) => e.kind === 'all'));
     const ingest = out.log.find((e) => e.kind === 'ssp.ingest') as any;
     expect(ingest.records).toEqual([{ table: 'thing', op: 'UPDATE', id: 'thing:1', record: { id: new RecordId('thing', '1'), a: 'x', _00_rv: 2 } }]);
     expect(out.dispatched).toEqual([{ type: 'SyncOutcome', ok: true, error: undefined }]);

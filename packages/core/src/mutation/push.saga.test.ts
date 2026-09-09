@@ -27,6 +27,19 @@ const stateWith = (rows: number[], ...extra: Parameters<typeof buildState>[1][])
   buildState([buildEntry({ def: { hash: 'q', tableName: 'thing' } })], R.outboxReplace(items(...rows)), ...extra);
 
 describe('drain', () => {
+  it('re-types stored payloads from the schema before pushing (a stored record field is a string)', async () => {
+    const typedEnv = defaultEnv({ tables: [{ name: 'thing', columns: { owner: { recordId: true } } }] } as any, { outboxBatchSize: 2 });
+    let vars: any = null;
+    await runPure(drain(typedEnv), {
+      state: stateWith([1]),
+      handlers: {
+        'local.query': (e: any) => (e.sql === 'SELECT * FROM $ids' ? [[pendingRow(1, 'create', { data: { owner: 'user:u1' } })]] : []),
+        'remote.query': (e: any) => ((vars = e.vars), [ok()]),
+      },
+    });
+    expect(vars.d0_owner).toEqual(new RecordId('user', 'u1'));
+  });
+
   it('pushes batches in FIFO order, acks each accepted row, deletes its pending row, then loops', async () => {
     const pushed: string[] = [];
     const out = await runPure(drain(env), {

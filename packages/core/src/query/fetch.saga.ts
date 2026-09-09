@@ -28,7 +28,9 @@ export function* fetchRows(env: SagaEnv): Saga<void> {
       if (state.sync.fetchAttempts !== 0) yield fx.state.update(R.patchSync({ fetchAttempts: 0 }));
       return;
     }
-    const epoch = state.epoch;
+    // The engine's epoch, not a mirrored counter: it also moves on transport
+    // failover, and a stale value makes the store drop every body write.
+    const epoch = (yield fx.local.epoch()) as number;
     yield fx.state.update(R.compose(...plan.hashes.map((h) => R.applyLifecycle(h, { type: 'fetch-begin' }))));
     let failed = 0;
     try {
