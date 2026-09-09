@@ -87,9 +87,10 @@ function* commitWrite(kind: MutationEventType, tx: LocalTx, ctx: CommitCtx): Sag
     R.outboxPush({ id: ctx.mutationId, type: kind, recordId: ctx.recordId, table: ctx.table, status: 'pending', ackedAt: null, attempts: 0 })
   );
   const version = kind === 'create' ? 1 : typeof record?._00_rv === 'number' ? (record._00_rv as number) : ((ctx.before?._00_rv as number) ?? 0) + 1;
+  const circuitRecord = kind === 'delete' ? (ctx.before ?? {}) : { ...record, _00_rv: version };
+  const circuitTuple = { table: ctx.table, op: kind.toUpperCase() as 'CREATE' | 'UPDATE' | 'DELETE', id: ctx.recordId, record: circuitRecord };
   try {
-    const circuitRecord = kind === 'delete' ? (ctx.before ?? {}) : { ...record, _00_rv: version };
-    yield fx.ssp.ingest([{ table: ctx.table, op: kind.toUpperCase() as 'CREATE' | 'UPDATE' | 'DELETE', id: ctx.recordId, record: circuitRecord }]);
+    yield fx.ssp.ingest([circuitTuple]);
     if (kind === 'delete') yield fx.state.update(R.deleteVersions([ctx.recordId]));
     else yield fx.state.update(R.setVersions([[ctx.recordId, version]]));
   } catch (error) {
@@ -100,6 +101,7 @@ function* commitWrite(kind: MutationEventType, tx: LocalTx, ctx: CommitCtx): Sag
     event: { type: kind, mutation_id: parseRecordIdString(ctx.mutationId), record_id: parseRecordIdString(ctx.recordId), data: tx.vars.data, record, beforeRecord: ctx.before ?? undefined, tableName: ctx.table },
   });
   const role = (yield fx.state.read((s) => s.tabRole)) as ClientState['tabRole'];
+  if (role !== 'solo') yield fx.emit({ type: 'tabs:broadcast', message: { type: 'ingest', records: [circuitTuple] } });
   if (role === 'follower') yield fx.emit({ type: 'tabs:broadcast', message: { type: 'outbox-changed', mutationId: ctx.mutationId } });
   else yield fx.dispatch({ type: 'Drain' });
   return { mutationId: ctx.mutationId, record };
@@ -122,12 +124,15 @@ function* debouncedUpdate(
   yield fx.state.update(R.mergePendingWrite({ key, table, recordId: input.recordId, data: params, before, firstAt: existing?.firstAt ?? now }));
   yield fx.state.update(R.markTableDirty(table));
   const version = typeof record?._00_rv === 'number' ? (record._00_rv as number) : 0;
+  const tuple = { table, op: 'UPDATE' as const, id: input.recordId, record: { ...record, _00_rv: version } };
   try {
-    yield fx.ssp.ingest([{ table, op: 'UPDATE', id: input.recordId, record: { ...record, _00_rv: version } }]);
+    yield fx.ssp.ingest([tuple]);
     yield fx.state.update(R.setVersions([[input.recordId, version]]));
   } catch (error) {
     yield fx.emit({ type: 'log', level: 'error', message: 'circuit ingest failed after a local write', data: { recordId: input.recordId, error } });
   }
+  const role = (yield fx.state.read((s) => s.tabRole)) as ClientState['tabRole'];
+  if (role !== 'solo') yield fx.emit({ type: 'tabs:broadcast', message: { type: 'ingest', records: [tuple] } });
   yield fx.timer.set(`debounce:${key}`, debounceDelay(input), { type: 'FlushWrite', key });
   return { mutationId: '', record };
 }

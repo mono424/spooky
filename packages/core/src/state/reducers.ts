@@ -120,14 +120,15 @@ export const setRecords =
   (hash: QueryHash, records: ReadonlyArray<Row>, changed: boolean, materializeMs: number | null): Reducer =>
   (s) => {
     const next = withEntry(s, hash, (e) => {
-      const samples =
-        materializeMs === null
-          ? e.telemetry.materializationSamples
-          : [...e.telemetry.materializationSamples, materializeMs].slice(-TELEMETRY_SAMPLE_WINDOW);
+      const prev = e.telemetry.phaseSamples.localFetch ?? [];
       const telemetry: QueryTelemetry = {
         ...e.telemetry,
-        materializationSamples: samples,
         updateCount: changed ? e.telemetry.updateCount + 1 : e.telemetry.updateCount,
+        phaseSamples:
+          materializeMs === null
+            ? e.telemetry.phaseSamples
+            : { ...e.telemetry.phaseSamples, localFetch: [...prev, materializeMs].slice(-TELEMETRY_SAMPLE_WINDOW) },
+        phaseLast: materializeMs === null ? e.telemetry.phaseLast : { ...e.telemetry.phaseLast, localFetch: materializeMs },
       };
       return {
         ...e,
@@ -158,6 +159,19 @@ export const recordPhase =
         },
       };
     });
+
+/** SSP ingest wall time for one update (the `ssp` phase). */
+export const recordIngest =
+  (hash: QueryHash, ms: number): Reducer =>
+  (s) =>
+    withEntry(s, hash, (e) => ({
+      ...e,
+      telemetry: {
+        ...e.telemetry,
+        lastIngestLatencyMs: ms,
+        materializationSamples: [...e.telemetry.materializationSamples, ms].slice(-TELEMETRY_SAMPLE_WINDOW),
+      },
+    }));
 
 export const recordError =
   (hash: QueryHash): Reducer =>

@@ -175,6 +175,7 @@ describe('rollback', () => {
     expect(out.state.failedCount).toBe(1);
     expect(out.state.dirty.has('q')).toBe(true);
     expect(out.emitted).toContainEqual({ type: 'tabs:sendTo', tabId: 'tabz', message: expect.objectContaining({ type: 'mutation-rolled-back' }) });
+    expect(out.emitted).toContainEqual({ type: 'tabs:broadcast', message: { type: 'ingest', records: [expect.objectContaining({ op: 'DELETE' })] } });
     expect(out.emitted).toContainEqual({ type: 'tray:changed', count: 1 });
     expect(out.emitted).toContainEqual({ type: 'tabs:broadcast', message: { type: 'failed-mutations-changed', count: 1 } });
   });

@@ -69,13 +69,14 @@ describe('query reducers', () => {
     const en = s1.queries.get('a')!;
     expect(en.records).toBe(rows);
     expect(en.telemetry.updateCount).toBe(1);
-    expect(en.telemetry.materializationSamples).toEqual([12]);
+    expect(en.telemetry.phaseSamples.localFetch).toEqual([12]);
+    expect(en.telemetry.phaseLast.localFetch).toBe(12);
     expect(en.lifecycle.notified).toBe(true);
     expect(s1.dirty.has('a')).toBe(false);
     const s2 = R.setRecords('a', [{ id: 'other' }], false, null)(s1);
     expect(s2.queries.get('a')!.records).toBe(rows);
     expect(s2.queries.get('a')!.telemetry.updateCount).toBe(1);
-    expect(s2.queries.get('a')!.telemetry.materializationSamples).toEqual([12]);
+    expect(s2.queries.get('a')!.telemetry.phaseSamples.localFetch).toEqual([12]);
   });
 
   it('sample windows are capped', () => {
@@ -85,7 +86,10 @@ describe('query reducers', () => {
     expect(t.phaseSamples.localFetch).toHaveLength(100);
     expect(t.phaseLast.localFetch).toBe(104);
     for (let i = 0; i < 105; i++) s = R.setRecords('a', [], false, i)(s);
+    expect(s.queries.get('a')!.telemetry.phaseSamples.localFetch).toHaveLength(100);
+    for (let i = 0; i < 105; i++) s = R.recordIngest('a', i)(s);
     expect(s.queries.get('a')!.telemetry.materializationSamples).toHaveLength(100);
+    expect(s.queries.get('a')!.telemetry.lastIngestLatencyMs).toBe(104);
   });
 
   it('telemetry helpers', () => {

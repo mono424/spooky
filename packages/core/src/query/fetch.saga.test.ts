@@ -126,6 +126,15 @@ describe('fetchRows', () => {
     expect(ingestFail.emitted).toContainEqual(expect.objectContaining({ message: 'circuit ingest failed' }));
   });
 
+  it('a leader relays landed bodies to followers', async () => {
+    const s = { ...primed(buildState([buildEntry({ def: { hash: 'a' }, lifecycle: live, remoteArray: [['thing:1', 1]] })])), tabRole: 'leader' as const };
+    const out = await runPure(fetchRows(env), {
+      state: s,
+      handlers: { 'remote.query': () => [ok([{ id: new RecordId('thing', '1') }])], 'local.execute': () => undefined, 'ssp.ingest': () => undefined },
+    });
+    expect(out.emitted).toContainEqual({ type: 'tabs:broadcast', message: { type: 'ingest', records: [expect.objectContaining({ id: 'thing:1' })] } });
+  });
+
   it('loops until the plan is empty', async () => {
     const s = primed(buildState([buildEntry({ def: { hash: 'a' }, lifecycle: live, remoteArray: [['thing:1', 1]] })]));
     let calls = 0;

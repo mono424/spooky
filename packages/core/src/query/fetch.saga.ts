@@ -96,6 +96,7 @@ function* landChunk(
     } catch (error) {
       yield fx.emit({ type: 'log', level: 'warn', message: 'circuit ingest failed', data: { error } });
     }
+    if (state.tabRole === 'leader') yield fx.emit({ type: 'tabs:broadcast', message: { type: 'ingest', records: ingest } });
   }
   // Ids the server did not return (deleted or unreadable upstream) count as
   // known at the requested version, so the plan stops asking for them; their

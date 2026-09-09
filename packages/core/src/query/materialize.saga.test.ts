@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { runPure } from '../testing/run-pure';
 import { buildEntry, buildOutboxItem, buildState } from '../testing/build';
 import * as R from '../state/reducers';
-import { materialize } from './materialize.saga';
+import { materialize, streamUpdate } from './materialize.saga';
 
 describe('materialize', () => {
   const plan = { table: 'thing' } as any;
@@ -61,5 +61,22 @@ describe('materialize', () => {
       },
     });
     expect(gone.emitted).toEqual([]);
+  });
+});
+
+describe('streamUpdate', () => {
+  it('takes the local id-set (dirtying the query) and records ingest timings; unknown hashes are ignored', async () => {
+    const s = buildState([buildEntry({ def: { hash: 'a' } })]);
+    const out = await runPure(streamUpdate({ queryHash: 'a', localArray: [['thing:1', 1]], op: 'CREATE', materializationTimeMs: 4, storeApplyMs: 1, circuitStepMs: 2 }), { state: s });
+    const en = out.state.queries.get('a')!;
+    expect(en.localArray).toEqual([['thing:1', 1]]);
+    expect(out.state.dirty.has('a')).toBe(true);
+    expect(en.telemetry.lastIngestLatencyMs).toBe(4);
+    expect(en.telemetry.materializationSamples).toEqual([4]);
+    expect(en.telemetry.phaseLast).toEqual({ sspStoreApply: 1, sspCircuitStep: 2 });
+    const bare = await runPure(streamUpdate({ queryHash: 'a', localArray: [] }), { state: s });
+    expect(bare.state.queries.get('a')!.telemetry.lastIngestLatencyMs).toBeNull();
+    const unknown = await runPure(streamUpdate({ queryHash: 'zz', localArray: [] }), { state: s });
+    expect(unknown.log.filter((e) => e.kind === 'state.update')).toHaveLength(0);
   });
 });

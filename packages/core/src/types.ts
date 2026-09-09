@@ -80,9 +80,11 @@ export type QueryTimeToLive =
 export type PreloadRefresh = 'onUse' | 'background' | 'stale';
 
 export interface PreloadOptions {
-  /** How to refresh when the query is already cached locally. Default `onUse`. */
+  /** Abort a cold preload that is still waiting for the server. */
+  signal?: AbortSignal;
+  /** @deprecated Preload is a registered query now; a warm preload never refetches by itself. Ignored. */
   refresh?: PreloadRefresh;
-  /** For `refresh: 'stale'` — max age before a warm copy is refetched. Default `1h`. */
+  /** @deprecated Ignored. */
   staleTime?: QueryTimeToLive;
 }
 

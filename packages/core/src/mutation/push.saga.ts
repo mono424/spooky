@@ -197,6 +197,8 @@ export function* rollback(
   } catch (err) {
     yield fx.emit({ type: 'log', level: 'warn', message: 'circuit revert failed', data: { id: row.id, err } });
   }
+  const roleNow = (yield fx.state.read((s) => s.tabRole)) as ClientState['tabRole'];
+  if (roleNow !== 'solo') yield fx.emit({ type: 'tabs:broadcast', message: { type: 'ingest', records: [plan.circuit] } });
   if (plan.circuit.op === 'DELETE') yield fx.state.update(R.deleteVersions([row.recordId]));
   else if (before && typeof before._00_rv === 'number') yield fx.state.update(R.setVersions([[row.recordId, before._00_rv]]));
   yield fx.state.update(R.markTableDirty(row.tableName));

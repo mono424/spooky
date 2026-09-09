@@ -4,7 +4,7 @@ import { runPure } from '../testing/run-pure';
 import { buildEntry, buildOutboxItem, buildState } from '../testing/build';
 import * as R from '../state/reducers';
 import { defaultEnv } from './env';
-import { ackPrune, gcTick, lifecycleTick } from './lifecycle.saga';
+import { ackPrune, evictQuery, gcTick, lifecycleTick } from './lifecycle.saga';
 import type { StatementResult } from '../kernel/effects';
 
 const env = defaultEnv({ tables: [] } as any);
@@ -111,5 +111,12 @@ describe('gcTick', () => {
     expect(failing.timers.has('gc')).toBe(true);
     const nothing = await runPure(gcTick(), { state: buildState(), handlers: { 'local.query': () => [] } });
     expect(nothing.log.filter((e) => e.kind === 'ssp.ingest')).toHaveLength(0);
+  });
+});
+
+describe('evictQuery', () => {
+  it('is a no-op for unknown hashes', async () => {
+    const out = await runPure(evictQuery('zz'), { state: buildState() });
+    expect(out.emitted).toEqual([]);
   });
 });

@@ -130,3 +130,20 @@ describe('toQueryState', () => {
     expect(cold.config.lastActiveAt.getTime()).toBe(1_700_000_000_000);
   });
 });
+
+describe('phaseTimings', () => {
+  it('summarizes every phase, with nulls before the first sample', () => {
+    const cold = S.phaseTimings(e('a'));
+    expect(cold.ssp).toEqual({ lastMs: null, p50: null, p90: null, p99: null, count: 0 });
+    expect(cold.localFetch.count).toBe(0);
+    let s = buildState([e('a')]);
+    for (const ms of [5, 1, 9, 3]) s = R.recordIngest('a', ms)(s);
+    s = R.recordPhase('a', 'remoteFetch', 7)(s);
+    s = R.recordError('a')(s);
+    const t = S.phaseTimings(s.queries.get('a')!);
+    expect(t.ssp).toEqual({ lastMs: 3, p50: 5, p90: 9, p99: 9, count: 4 });
+    expect(t.remoteFetch).toEqual({ lastMs: 7, p50: 7, p90: 7, p99: 7, count: 1 });
+    expect(t.errorCount).toBe(1);
+    expect(t.registration.parseMs).toBeNull();
+  });
+});

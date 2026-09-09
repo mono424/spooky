@@ -1,4 +1,4 @@
-import type { QueryHash, QueryState, QueryStatus, RecordVersionArray } from '../types';
+import type { PhaseStat, QueryHash, QueryState, QueryStatus, QueryTimings, RecordVersionArray } from '../types';
 import type { ClientState, QueryEntry } from './client-state';
 import { deriveStatus, hasServerMembership, isAuthoritative } from './lifecycle';
 import { FETCH_CHUNK } from '../kernel/constants';
@@ -155,5 +155,30 @@ export function toQueryState(e: QueryEntry): QueryState {
     phaseSamples: Object.fromEntries(Object.entries(e.telemetry.phaseSamples).map(([k, v]) => [k, [...v]])),
     phaseLast: { ...e.telemetry.phaseLast },
     registrationTimings: e.telemetry.registrationTimings,
+  };
+}
+
+function phaseStatOf(samples: ReadonlyArray<number>, lastMs: number | null): PhaseStat {
+  if (samples.length === 0) return { lastMs, p50: null, p90: null, p99: null, count: 0 };
+  const sorted = [...samples].sort((a, b) => a - b);
+  const pick = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!;
+  return { lastMs, p50: pick(0.5), p90: pick(0.9), p99: pick(0.99), count: samples.length };
+}
+
+/** Per-query processing-time breakdown for DevTools and the MCP. */
+export function phaseTimings(e: QueryEntry): QueryTimings {
+  const t = e.telemetry;
+  const stat = (phase: string) => phaseStatOf(t.phaseSamples[phase] ?? [], t.phaseLast[phase] ?? null);
+  return {
+    ssp: phaseStatOf(t.materializationSamples, t.lastIngestLatencyMs),
+    sspStoreApply: stat('sspStoreApply'),
+    sspCircuitStep: stat('sspCircuitStep'),
+    sspTransform: stat('sspTransform'),
+    localFetch: stat('localFetch'),
+    remoteFetch: stat('remoteFetch'),
+    frontend: stat('frontend'),
+    registration: t.registrationTimings,
+    updateCount: t.updateCount,
+    errorCount: t.errorCount,
   };
 }

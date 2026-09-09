@@ -92,6 +92,7 @@ describe('write', () => {
     });
     expect(out.emitted.some((e) => e.type === 'log' && e.level === 'error')).toBe(true);
     expect(out.emitted).toContainEqual({ type: 'tabs:broadcast', message: { type: 'outbox-changed', mutationId: 'mutation-1' } });
+    expect(out.emitted).toContainEqual({ type: 'tabs:broadcast', message: { type: 'ingest', records: [expect.objectContaining({ id: 'thing:1', op: 'CREATE' })] } });
     expect(out.dispatched).toEqual([]);
     expect(out.state.outbox).toHaveLength(1);
   });
@@ -153,5 +154,10 @@ describe('write', () => {
     expect(nothing.dispatched).toEqual([]);
     const follower = await runPure(flushWrite(env, key), { state: { ...second.state, tabRole: 'follower' }, handlers: { 'local.execute': () => undefined } });
     expect(follower.emitted).toContainEqual(expect.objectContaining({ type: 'tabs:broadcast' }));
+    const leaderDebounced = await runPure(write(env, { kind: 'update', recordId: 'thing:1', data: { a: 1 }, options: { debounced: true } }), {
+      state: { ...withQuery(), tabRole: 'leader' },
+      handlers: { 'local.query': () => [], 'local.execute': () => undefined, 'ssp.ingest': () => undefined },
+    });
+    expect(leaderDebounced.emitted).toContainEqual({ type: 'tabs:broadcast', message: { type: 'ingest', records: [expect.objectContaining({ op: 'UPDATE' })] } });
   });
 });

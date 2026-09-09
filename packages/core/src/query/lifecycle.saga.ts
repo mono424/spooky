@@ -16,15 +16,7 @@ import * as sql from './sql';
 export function* lifecycleTick(env: SagaEnv): Saga<void> {
   const now = (yield fx.now()) as number;
   const state = (yield fx.state.read((s) => s)) as ClientState;
-  for (const hash of evictable(state, now)) {
-    try {
-      yield fx.ssp.unregister(hash);
-    } catch (error) {
-      yield fx.emit({ type: 'log', level: 'debug', message: 'unregister failed', data: { hash, error } });
-    }
-    yield fx.state.update(R.removeQuery(hash));
-    yield fx.emit({ type: 'query:evicted', hash });
-  }
+  for (const hash of evictable(state, now)) yield* evictQuery(hash);
   const remaining = (yield fx.state.read((s) => [...s.queries.values()].filter((e) => e.lifecycle.remote === 'registered'))) as QueryEntry[];
   if (remaining.length > 0) {
     const beat = sql.heartbeatBatch(remaining.map((e) => e.def.id));
@@ -50,6 +42,19 @@ export function* lifecycleTick(env: SagaEnv): Saga<void> {
   }
   const ttl = (yield fx.state.read((s) => shortestTtlMs(s))) as number | null;
   yield fx.timer.set('lifecycle', Math.floor((ttl ?? env.defaultTtlMs) * TTL_HEARTBEAT_FRACTION), { type: 'LifecycleTick' });
+}
+
+/** Free a query's local view and forget it. The server row expires by TTL. */
+export function* evictQuery(hash: string): Saga<void> {
+  const exists = (yield fx.state.read((s) => s.queries.has(hash))) as boolean;
+  if (!exists) return;
+  try {
+    yield fx.ssp.unregister(hash);
+  } catch (error) {
+    yield fx.emit({ type: 'log', level: 'debug', message: 'unregister failed', data: { hash, error } });
+  }
+  yield fx.state.update(R.removeQuery(hash));
+  yield fx.emit({ type: 'query:evicted', hash });
 }
 
 /** Drop acked outbox items membership never named within the grace window. */
