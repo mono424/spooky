@@ -11,8 +11,8 @@ export class ArraySyncer {
   private needsSort = false;
 
   constructor(localArray: RecordVersionArray, remoteArray: RecordVersionArray) {
-    this.remoteArray = remoteArray.toSorted((a, b) => a[0].localeCompare(b[0]));
-    this.localArray = localArray.toSorted((a, b) => a[0].localeCompare(b[0]));
+    this.remoteArray = remoteArray.toSorted((a: [string, number], b: [string, number]) => a[0].localeCompare(b[0]));
+    this.localArray = localArray.toSorted((a: [string, number], b: [string, number]) => a[0].localeCompare(b[0]));
   }
 
   /**
@@ -131,7 +131,7 @@ export function applyRecordVersionDiff(
     currentMap.set(encodeRecordId(item.id), item.version);
   }
 
-  return Array.from(currentMap).toSorted((a, b) => a[0].localeCompare(b[0]));
+  return Array.from(currentMap).toSorted((a: [string, number], b: [string, number]) => a[0].localeCompare(b[0]));
 }
 
 export function createDiffFromDbOp(

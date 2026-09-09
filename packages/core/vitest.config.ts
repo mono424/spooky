@@ -6,6 +6,10 @@ import { defineConfig } from 'vitest/config';
 //   sqlite-worker.ts                runs inside a Worker (sqlite-wasm + OPFS +
 //                                   postMessage globals); covered by the sqlite
 //                                   integration tests and the build check
+//   client/services.ts              constructs the real adapters (SurrealDB
+//                                   WASM store, socket, SharedWorker broker,
+//                                   OPFS blob cache); exercised by the example
+//                                   app and the WhitePawn A/B, not by vitest
 export default defineConfig({
   test: {
     environment: 'node',
@@ -21,6 +25,7 @@ export default defineConfig({
         'src/**/*.fixture.ts',
         'src/testing/**',
         'src/services/database/sqlite-worker.ts',
+        'src/client/services.ts',
       ],
       thresholds: {
         lines: 60,
