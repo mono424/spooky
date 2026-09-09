@@ -27,6 +27,8 @@ export default defineConfig({
         functions: 70,
         branches: 78,
         statements: 60,
+        'src/kernel/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/state/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
       },
     },
   },
