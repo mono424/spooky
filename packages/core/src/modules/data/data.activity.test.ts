@@ -74,7 +74,7 @@ describe('DataModule fetch activity', () => {
     dm.beginFetching('a');
     dm.beginFetching('a'); // overlapping poll round on the same hash
     dm.endFetching('a');
-    expect(seen).toEqual([1], 'the inner cycle is silent');
+    expect(seen).toEqual([1]); // the inner cycle is silent
     dm.endFetching('a');
     expect(seen).toEqual([1, 0]);
   });

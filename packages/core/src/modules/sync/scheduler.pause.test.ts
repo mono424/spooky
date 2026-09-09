@@ -16,28 +16,28 @@ const silentLogger = {
 } as any;
 
 function makeQueues(items: UpEvent[]) {
+  const upItems: UpEvent[] = [...items];
   const upQueue = {
-    queue: [...items],
     get size() {
-      return this.queue.length;
+      return upItems.length;
     },
     events: { subscribe: () => {} },
     loadFromDatabase: async () => {},
     async next(fn: (event: UpEvent) => Promise<void>) {
-      const event = this.queue.shift();
+      const event = upItems.shift();
       if (event) await fn(event);
     },
-  } as unknown as UpQueue & { queue: UpEvent[] };
+  } as unknown as UpQueue;
 
+  let downItems: unknown[] = [];
   const downQueue = {
-    queue: [] as unknown[],
     get size() {
-      return this.queue.length;
+      return downItems.length;
     },
     events: { subscribe: () => {} },
     async next() {},
     clear() {
-      this.queue = [];
+      downItems = [];
     },
   } as unknown as DownQueue;
 

@@ -55,7 +55,7 @@ import { LocalStoragePersistenceClient } from './services/persistence/localstora
 import { ANON_USER_ID, bucketIdForUser } from './modules/ref-tables';
 import { parseQueryParams, encodeRecordId, parseDuration } from './utils/index';
 import { cleanRecord } from './utils/parser';
-import { RecordId } from 'surrealdb';
+import { RecordId, type Surreal } from 'surrealdb';
 import { SurrealDBPersistenceClient } from './services/persistence/surrealdb';
 import { ResilientPersistenceClient } from './services/persistence/resilient';
 import { detectSharedTabsSupport } from './services/tabs/support';

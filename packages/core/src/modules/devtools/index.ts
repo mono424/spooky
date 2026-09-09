@@ -235,7 +235,7 @@ export class DevToolsService implements StreamUpdateReceiver {
         // Detailed per-phase processing-time breakdown (SSP sub-phases, local/
         // remote record fetch, frontend reconcile, registration). Flows to both
         // the DevTools panel and the MCP (which returns activeQueries verbatim).
-        timings: this.dataManager.phaseTimings(q),
+        timings: this.dataManager!.phaseTimings(q),
       });
     });
     return result;
