@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { RelationPlan, WhereNode } from '@spooky-sync/query-builder';
-import { resolveRelations, sortRows, stableKey } from './relation-resolver';
+import { looksLikeRecordId, resolveRelations, sortRows, stableKey } from './relation-resolver';
 import {
   RelationCycleError,
   type RelationFetch,
@@ -409,5 +409,59 @@ describe('resolveRelations — property: batched == naive over random trees', ()
 
       expect(batched, `seed ${seed}`).toEqual(naive);
     }
+  });
+});
+
+describe('to-one relations over a `string | record` column', () => {
+  const rel = (alias: string, fk: string): RelationPlan => ({
+    table: 'player_name',
+    alias,
+    cardinality: 'one',
+    foreignKeyField: fk,
+  });
+
+  it('keeps a legacy plain string when the alias is the foreign-key column', async () => {
+    const store = new MemStore({
+      player_name: [{ id: 'player_name:PN_1', name: 'Magnus' }],
+    });
+    const rows: Row[] = [
+      { id: 'game:1', white: 'player_name:PN_1' },
+      { id: 'game:2', white: 'Hikaru' }, // pre-normalization row: not a link
+      { id: 'game:3', white: 'player_name:PN_gone' }, // dangling link
+    ];
+    await resolveRelations(rows, [rel('white', 'white')], store);
+    expect(rows[0].white).toEqual({ id: 'player_name:PN_1', name: 'Magnus' });
+    expect(rows[1].white).toBe('Hikaru');
+    // A dangling LINK is null, like SurrealQL's `(SELECT …)[0] AS white`.
+    expect(rows[2].white).toBeNull();
+  });
+
+  it('never sends a non-record value as a correlation key', async () => {
+    const seen: unknown[][] = [];
+    const store: RowFetcher = {
+      fetchRelation: async (req) => {
+        seen.push(req.keys);
+        return [];
+      },
+    };
+    const rows: Row[] = [{ id: 'game:1', white: 'Hikaru' }, { id: 'game:2', white: 'player_name:PN_2' }];
+    await resolveRelations(rows, [rel('white', 'white')], store);
+    expect(seen).toEqual([['player_name:PN_2']]);
+  });
+
+  it('nulls a distinct alias when nothing resolves', async () => {
+    const store = new MemStore({ player_name: [] });
+    const rows: Row[] = [{ id: 'game:1', white: 'player_name:PN_gone' }];
+    await resolveRelations(rows, [rel('whiteRow', 'white')], store);
+    expect(rows[0].whiteRow).toBeNull();
+    expect(rows[0].white).toBe('player_name:PN_gone');
+  });
+
+  it('looksLikeRecordId accepts table:id strings and RecordId shapes only', () => {
+    expect(looksLikeRecordId('player_name:PN_1')).toBe(true);
+    expect(looksLikeRecordId({ tb: 'player_name', id: 'PN_1' })).toBe(true);
+    expect(looksLikeRecordId('Magnus')).toBe(false);
+    expect(looksLikeRecordId(42)).toBe(false);
+    expect(looksLikeRecordId(null)).toBe(false);
   });
 });

@@ -819,6 +819,7 @@ impl CodeGenerator {
                                         }
                                     }
                                 } else {
+                                    let mut pushed = false;
                                     if let Some(desc) = field_def.get("description") {
                                         if let Some(desc_str) = desc.as_str() {
                                             if desc_str.starts_with("Record ID of table: ") {
@@ -830,7 +831,26 @@ impl CodeGenerator {
                                                         related_table,
                                                         "one".to_string(),
                                                     ));
+                                                    pushed = true;
                                                 }
+                                            }
+                                        }
+                                    }
+                                    // A `string | record<t>` union column links to `t`
+                                    // whenever it holds a link (json_schema `x-record-ref`).
+                                    // The same to-one relationship, so `.related()` can
+                                    // join the row while the column's own type stays
+                                    // `string`.
+                                    if !pushed {
+                                        if let Some(t) =
+                                            field_def.get("x-record-ref").and_then(|v| v.as_str())
+                                        {
+                                            if known_tables.contains(t) {
+                                                table_rels.push((
+                                                    field_name.clone(),
+                                                    t.to_string(),
+                                                    "one".to_string(),
+                                                ));
                                             }
                                         }
                                     }
@@ -1407,5 +1427,40 @@ impl CodeGenerator {
         }
 
         result.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn union_record_ref_becomes_a_to_one_relationship() {
+        // The JSON schema the CLI emits for `white: string | record<player_name>`
+        // carries `x-record-ref` (see json_schema.rs). The relationships array in
+        // the generated client schema must list it, so `.related('white')` joins.
+        let json = serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "title": "Schema",
+            "type": "object",
+            "properties": { "game": {"$ref": "#/definitions/game"}, "player_name": {"$ref": "#/definitions/player_name"} },
+            "definitions": {
+                "player_name": { "type": "object", "properties": { "id": {"type": "string"}, "name": {"type": "string"} } },
+                "game": { "type": "object", "properties": {
+                    "id": {"type": "string"},
+                    "white": {"type": "string", "x-record-ref": "player_name"},
+                    "owner": {"type": "string", "description": "Record ID of table: player_name", "pattern": "^player_name:"},
+                    "ghost": {"type": "string", "x-record-ref": "nowhere"}
+                } }
+            }
+        });
+        let gen = CodeGenerator::new(OutputFormat::Typescript, false, false);
+        let out = gen.generate(&json.to_string(), "Schema").unwrap();
+        assert!(
+            out.contains("field: 'white' as const,\n      to: 'player_name' as const,\n      cardinality: 'one' as const"),
+            "union link must appear as a to-one relationship:\n{out}"
+        );
+        assert!(out.contains("field: 'owner' as const"), "plain record links still emitted");
+        assert!(!out.contains("'nowhere'"), "a ref to an unknown table is dropped");
     }
 }

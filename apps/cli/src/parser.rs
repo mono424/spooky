@@ -65,6 +65,14 @@ pub struct FieldDefinition {
     pub assert: Option<String>,
     pub value: Option<String>,
     pub is_record_id: bool,
+    /// The record table a UNION field can link to: `string | record<t>`
+    /// parses as a string column (its TypeScript type stays `string`, and
+    /// writes are not coerced) but carries this so codegen still emits the
+    /// `t` relationship and `.related()` can join the row. `None` for a plain
+    /// scalar, and for `record<t>` fields, which already say so in
+    /// `field_type`. Whitepawn's `game.white`/`game.black` are the case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_ref: Option<String>,
     pub select_permission: Option<String>,
     pub should_strip: bool, // True if field should be excluded from client
     /// `-- @opaque`: the value IS synced to the client (it stays in the client
@@ -587,6 +595,7 @@ impl SchemaParser {
                 let table_name = field_def.what.to_string();
                 let field_name = field_def.name.to_string();
 
+                let record_ref = field_def.kind.as_ref().and_then(Self::union_record_ref);
                 let field_type = if let Some(kind) = field_def.kind {
                     Self::parse_kind(kind)
                 } else {
@@ -610,6 +619,7 @@ impl SchemaParser {
                     assert: assert_clause,
                     value: value_clause,
                     is_record_id,
+                    record_ref,
                     select_permission: select_permission.clone(),
                     should_strip,
                     opaque: false,
@@ -682,6 +692,30 @@ impl SchemaParser {
         Ok(())
     }
 
+    /// For a union kind (`string | record<t>`, or `option<...>` of one), the
+    /// single record table it can link to. Unions parse to a scalar
+    /// `FieldType` (see `parse_kind`), so without this the link would be lost
+    /// and `.related()` on the field would have nothing to join.
+    fn union_record_ref(kind: &surrealdb_core::sql::Kind) -> Option<String> {
+        use surrealdb_core::sql::Kind;
+        match kind {
+            Kind::Either(kinds) => {
+                let mut records = kinds.iter().filter_map(|k| match k {
+                    Kind::Record(tables) if !tables.is_empty() => Some(tables[0].to_string()),
+                    _ => None,
+                });
+                let first = records.next()?;
+                // Two different tables would be ambiguous; say nothing.
+                if records.any(|t| t != first) {
+                    return None;
+                }
+                Some(first)
+            }
+            Kind::Option(inner) => Self::union_record_ref(inner),
+            _ => None,
+        }
+    }
+
     fn parse_kind(kind: surrealdb_core::sql::Kind) -> FieldType {
         use surrealdb_core::sql::Kind;
 
@@ -704,6 +738,14 @@ impl SchemaParser {
             }
             Kind::Option(inner) => FieldType::Option(Box::new(Self::parse_kind(*inner))),
             Kind::Any => FieldType::Any,
+            // `string | record<t>`: the column holds either, so the client
+            // type is the scalar member; the record half survives as
+            // `FieldDefinition::record_ref` (see `union_record_ref`).
+            Kind::Either(kinds) => kinds
+                .into_iter()
+                .find(|k| !matches!(k, Kind::Record(_)))
+                .map(Self::parse_kind)
+                .unwrap_or(FieldType::Any),
             _ => FieldType::Any,
         }
     }
@@ -819,6 +861,7 @@ impl SchemaParser {
                     assert: None,
                     value: None,
                     is_record_id: false,
+                    record_ref: None,
                     select_permission: None,
                     should_strip: false,
                     opaque: false,

@@ -398,6 +398,13 @@ impl JsonSchemaGenerator {
                 field_obj.insert("x-is-record-id".to_string(), Value::Bool(true));
             }
 
+            // A `string | record<t>` union: not a record column, but it links
+            // to `t` when it holds a link. Codegen turns this into the
+            // relationship that lets `.related()` join the row.
+            if let Some(t) = &field_def.record_ref {
+                field_obj.insert("x-record-ref".to_string(), Value::String(t.clone()));
+            }
+
             // Add is_datetime flag to metadata
             if matches!(field_def.field_type, FieldType::Datetime)
                 || Self::is_field_datetime(&field_def.field_type)
@@ -610,6 +617,51 @@ impl JsonSchemaGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_or_record_union_keeps_its_link_target() {
+        // whitepawn's `game.white`: a plain string during a migration window,
+        // a registry link afterwards. The column type must stay `string`
+        // (no coercion, no id pattern) but the link target has to survive so
+        // codegen emits the relationship `.related('white')` needs.
+        let schema = r#"
+DEFINE TABLE player_name SCHEMALESS;
+DEFINE FIELD name ON TABLE player_name TYPE string;
+DEFINE TABLE game SCHEMALESS;
+DEFINE FIELD white ON TABLE game TYPE string | record<player_name>;
+DEFINE FIELD owner ON TABLE game TYPE record<player_name>;
+DEFINE FIELD note ON TABLE game TYPE option<string | record<player_name>>;
+DEFINE FIELD mixed ON TABLE game TYPE record<player_name> | record<game>;
+"#;
+        let mut parser = SchemaParser::new();
+        parser.parse_file(schema).unwrap();
+        let js = JsonSchemaGenerator::new().generate(&parser);
+        let props = js
+            .definitions
+            .get("game")
+            .and_then(|d| d.get("properties"))
+            .and_then(|p| p.as_object())
+            .expect("game properties");
+
+        let white = props.get("white").unwrap();
+        assert_eq!(white.get("type").and_then(|t| t.as_str()), Some("string"));
+        assert_eq!(
+            white.get("x-record-ref").and_then(|t| t.as_str()),
+            Some("player_name"),
+            "the union's record half must be recorded: {white}"
+        );
+        assert!(white.get("pattern").is_none(), "a union is not a record column");
+
+        // `option<...>` of the same union carries it too.
+        assert_eq!(
+            props.get("note").unwrap().get("x-record-ref").and_then(|t| t.as_str()),
+            Some("player_name")
+        );
+        // A real record column already says so through its description.
+        assert!(props.get("owner").unwrap().get("x-record-ref").is_none());
+        // Two different record targets are ambiguous: no ref.
+        assert!(props.get("mixed").unwrap().get("x-record-ref").is_none());
+    }
 
     #[test]
     fn nosync_table_omitted_from_definitions_and_relations() {
