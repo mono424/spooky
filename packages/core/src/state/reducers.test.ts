@@ -211,6 +211,15 @@ describe('outbox', () => {
     expect(s1.dirty.has('a')).toBe(true);
     expect(R.outboxPruneAcked(100, 50)(s1)).toBe(s1);
   });
+  it('pending writes merge per key and clear', () => {
+    const w = { key: 'k', table: 'thing', recordId: 'thing:1', data: { a: 1 }, before: { a: 0 }, firstAt: 1 };
+    let s = R.mergePendingWrite(w)(buildState());
+    s = R.mergePendingWrite({ ...w, data: { b: 2 }, before: null, firstAt: 9 })(s);
+    expect(s.pendingWrites.get('k')).toEqual({ ...w, data: { a: 1, b: 2 } });
+    s = R.clearPendingWrite('k')(s);
+    expect(s.pendingWrites.size).toBe(0);
+    expect(R.clearPendingWrite('k')(s)).toBe(s);
+  });
   it('setFailedCount', () => {
     const s0 = buildState();
     const s1 = R.setFailedCount(2)(s0);

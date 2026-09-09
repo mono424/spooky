@@ -94,6 +94,17 @@ describe('local write transactions', () => {
   });
 });
 
+describe('debounced update transactions', () => {
+  it('local-only update and deferred outbox row', () => {
+    const local = rows.planLocalOnlyUpdateTx({ recordId: rid('thing', '1'), data: { a: 1 } });
+    expect(local.query.sql).toBe('BEGIN TRANSACTION;\nUPDATE $id SET _00_rv += 1;LET $updated = (UPDATE ONLY $id MERGE $data);RETURN {target: $updated};\nCOMMIT TRANSACTION;');
+    expect(local.query.extract([null, 1, 2, { target: 'x' }])).toEqual({ target: 'x' });
+    const deferred = rows.planDeferredOutboxRowTx({ recordId: rid('thing', '1'), mutationId: rid('_00_pending_mutations', 'm'), table: 'thing', data: { a: 1 }, before: { a: 0 }, now: 3 });
+    expect(deferred.query.sql).toBe("BEGIN TRANSACTION;\nCREATE ONLY $mid SET mutationType = 'update', recordId = $id, tableName = $table, createdAt = $createdAt, v = 2, data = $data, beforeRecord = $before;\nCOMMIT TRANSACTION;");
+    expect(rows.planDeferredOutboxRowTx({ recordId: rid('thing', '1'), mutationId: rid('_00_pending_mutations', 'm'), table: 'thing', now: 3 }).vars).toMatchObject({ data: {}, before: null });
+  });
+});
+
 describe('remoteBatch', () => {
   it('one statement per row, indexed vars, mixed types', () => {
     const { sql, vars } = rows.remoteBatch([

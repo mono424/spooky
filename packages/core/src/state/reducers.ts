@@ -2,6 +2,7 @@ import type { ConnectionState, QueryHash, RecordVersionArray, SyncHealth } from 
 import type {
   ClientState,
   OutboxItem,
+  PendingWrite,
   QueryEntry,
   QueryTelemetry,
   Row,
@@ -340,6 +341,28 @@ export const outboxPruneAcked =
     let next: ClientState = { ...s, outbox: s.outbox.filter((i) => !stale.includes(i)) };
     for (const table of new Set(stale.map((i) => i.table))) next = markTableDirty(table)(next);
     return next;
+  };
+
+/** Merge a debounced update into its pending write (first `before` wins). */
+export const mergePendingWrite =
+  (write: PendingWrite): Reducer =>
+  (s) => {
+    const prev = s.pendingWrites.get(write.key);
+    const pendingWrites = new Map(s.pendingWrites);
+    pendingWrites.set(
+      write.key,
+      prev ? { ...prev, data: { ...prev.data, ...write.data } } : write
+    );
+    return { ...s, pendingWrites };
+  };
+
+export const clearPendingWrite =
+  (key: string): Reducer =>
+  (s) => {
+    if (!s.pendingWrites.has(key)) return s;
+    const pendingWrites = new Map(s.pendingWrites);
+    pendingWrites.delete(key);
+    return { ...s, pendingWrites };
   };
 
 export const setFailedCount =

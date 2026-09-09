@@ -75,6 +75,16 @@ export interface OutboxItem {
 
 export type TabRole = 'solo' | 'leader' | 'follower';
 
+/** A debounced update accumulating locally until its flush writes the outbox row. */
+export interface PendingWrite {
+  readonly key: string;
+  readonly table: string;
+  readonly recordId: string;
+  readonly data: Readonly<Record<string, unknown>>;
+  readonly before: Readonly<Record<string, unknown>> | null;
+  readonly firstAt: number;
+}
+
 export interface SyncSlice {
   readonly health: SyncHealth;
   readonly consecutiveFailures: number;
@@ -104,6 +114,7 @@ export interface ClientState {
   /** Local body versions (`_00_rv`) by encoded record id. */
   readonly versions: ReadonlyMap<string, number>;
   readonly outbox: ReadonlyArray<OutboxItem>;
+  readonly pendingWrites: ReadonlyMap<string, PendingWrite>;
   readonly failedCount: number;
   /** Queries whose render inputs changed since their last materialization. */
   readonly dirty: ReadonlySet<QueryHash>;
@@ -145,6 +156,7 @@ export function emptyState(init: { tabId: string }): ClientState {
     membershipReread: new Map(),
     versions: new Map(),
     outbox: [],
+    pendingWrites: new Map(),
     failedCount: 0,
     dirty: new Set(),
     membershipDirty: new Set(),

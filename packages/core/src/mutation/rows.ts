@@ -182,6 +182,35 @@ export function planDeleteTx(input: WritePlanInput): LocalTx {
   };
 }
 
+/** Debounced update: bump `_00_rv` and MERGE now; the outbox row comes later. */
+export function planLocalOnlyUpdateTx(input: { recordId: RecordId<string>; data: Record<string, unknown> }): LocalTx {
+  return {
+    query: surql.seal<unknown>(
+      surql.tx([
+        surql.updateSet('id', [{ statement: '_00_rv += 1' }]),
+        surql.let('updated', surql.updateMerge('id', 'data')),
+        surql.returnObject([{ key: 'target', variable: 'updated' }]),
+      ])
+    ),
+    vars: { id: input.recordId, data: input.data },
+  };
+}
+
+/** The outbox row of a flushed debounced update, on its own. */
+export function planDeferredOutboxRowTx(input: WritePlanInput): LocalTx {
+  return {
+    query: surql.seal<unknown>(surql.tx([pendingInsert('update', true, true)])),
+    vars: {
+      id: input.recordId,
+      mid: input.mutationId,
+      table: input.table,
+      createdAt: input.now,
+      data: input.data ?? {},
+      before: input.before ?? null,
+    },
+  };
+}
+
 // ---- remote push -------------------------------------------------------------
 
 export interface RemoteBatch {
