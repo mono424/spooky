@@ -1,8 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import type { QueryPlan } from '@spooky-sync/query-builder';
 import { buildIdSetPlan, buildIdSetSurql, buildWindowMaterializationPlan } from './window-query';
-import { executeSelect, type SelectDb } from '../../services/database/sqlite-select';
-import type { Row } from '../../services/database/cache-engine';
+import { executeSelect, type SelectDb } from '../services/database/sqlite-select';
+import type { Row } from '../services/database/cache-engine';
+
+describe('buildWindowMaterializationPlan', () => {
+  it('returns null without an offset and an id-set plan with one', () => {
+    const plan: QueryPlan = { table: 't', where: [{ field: 'a', op: '=', value: 1 } as any], limit: 5 };
+    expect(buildWindowMaterializationPlan(plan, ['t:1'])).toBeNull();
+    expect(buildWindowMaterializationPlan({ ...plan, offset: 0 }, ['t:1'])).toBeNull();
+    const win = buildWindowMaterializationPlan({ ...plan, offset: 5 }, ['t:1']);
+    expect(win).toMatchObject({ ids: ['t:1'], where: undefined, limit: undefined, offset: undefined });
+  });
+});
 
 // `buildIdSetPlan` is what makes membership-authoritative rendering possible on
 // any local engine: it turns a query's plan into "these exact ids, ordered,

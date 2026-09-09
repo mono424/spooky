@@ -1,6 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import { buildWindowMaterialization } from './window-query';
 
+describe('scanner edge cases', () => {
+  it('skips escaped quotes inside strings and ignores clauses in parens', () => {
+    const q = "SELECT * FROM t WHERE a = 'it\\'s (FROM)' AND b IN (SELECT id FROM u LIMIT 1 START 1) LIMIT 5 START 5";
+    expect(buildWindowMaterialization(q)).toEqual({ query: 'SELECT * FROM $__win' });
+  });
+  it('requires whitespace inside ORDER BY and a number after START', () => {
+    expect(buildWindowMaterialization('SELECT * FROM t ORDERBY a LIMIT 5 START 5')).toEqual({ query: 'SELECT * FROM $__win' });
+    expect(buildWindowMaterialization('SELECT * FROM t LIMIT 5 START $n')).toBeNull();
+    expect(buildWindowMaterialization('SELECT * FROM t LIMIT 5 START')).toBeNull();
+  });
+  it('matches a keyword at the very start and at the end of the string', () => {
+    expect(buildWindowMaterialization('FROM t LIMIT 5 START 5')).toEqual({ query: ' FROM $__win' });
+    expect(buildWindowMaterialization('SELECT * FROM t ORDER BY a LIMIT 5 START 5 ORDER')).toEqual({
+      query: 'SELECT * FROM $__win ORDER BY a',
+    });
+  });
+});
+
 describe('buildWindowMaterialization', () => {
   it('rewrites the game-list window query (START 30) to select the id-set, keeping ORDER BY', () => {
     const surql =

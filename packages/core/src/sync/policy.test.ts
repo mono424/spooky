@@ -16,9 +16,37 @@ import {
   listRefPollDelayMs,
   LIST_REF_POLL_MAX_INTERVAL_MS,
   recordVersionArraysEqual,
-} from './utils';
-import type { RecordVersionArray, RecordVersionDiff } from '../../types';
-import { encodeRecordId } from '../../utils/index';
+} from './policy';
+import type { RecordVersionArray, RecordVersionDiff } from '../types';
+import { encodeRecordId } from '../utils/index';
+
+describe('ArraySyncer.update', () => {
+  it('planListRefPollChunks keeps duplicate hashes with equal ages stable', () => {
+    const now = 1000;
+    const chunks = planListRefPollChunks(
+      [
+        { hash: 'x', rows: 1, lastPolledAt: 0 },
+        { hash: 'x', rows: 1, lastPolledAt: 0 },
+        { hash: 'a', rows: 1, lastPolledAt: 0 },
+      ],
+      { now }
+    );
+    expect(chunks).toEqual([['a', 'x', 'x']]);
+  });
+  it('nextPollDelayMs treats a future live event as no event', () => {
+    expect(nextPollDelayMs({ now: 100, lastLiveEventAt: 200, baseIntervalMs: 500 })).toBe(500);
+  });
+  it('bumps only the matching record and re-sorts on the next diff', () => {
+    const syncer = new ArraySyncer([['t:b', 1], ['t:a', 1]], [['t:a', 2], ['t:b', 1]]);
+    syncer.update('t:a', 2);
+    expect(syncer.nextSet()).toEqual({ added: [], updated: [], removed: [] });
+    syncer.insert('t:c', 1);
+    syncer.delete('t:b');
+    const diff = syncer.nextSet();
+    expect(diff!.added.map((a) => encodeRecordId(a.id))).toEqual(['t:b']);
+    expect(diff!.removed.map((r) => encodeRecordId(r))).toEqual(['t:c']);
+  });
+});
 
 function rid(table: string, id: string): RecordId<string> {
   return new RecordId(table, id);

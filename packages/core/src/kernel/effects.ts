@@ -37,6 +37,9 @@ export type Effect =
   | { kind: 'local.query'; sql: string; vars?: Vars; epoch?: number }
   | { kind: 'local.select'; plan: QueryPlan; params?: Vars }
   | { kind: 'local.execute'; query: SealedQuery<unknown>; vars?: Vars; epoch?: number }
+  | { kind: 'local.getById'; table: string; id: unknown }
+  | { kind: 'local.upsert'; table: string; id: unknown; data: Record<string, unknown>; mode: 'replace' | 'merge' }
+  | { kind: 'local.delete'; table: string; id: unknown }
   | { kind: 'remote.query'; sql: string; vars?: Vars; timeoutMs?: number }
   | { kind: 'ssp.register'; plan: RegisterPlan }
   | { kind: 'ssp.unregister'; hash: string }
@@ -65,6 +68,15 @@ export const fx = {
       vars,
       epoch,
     }),
+    getById: (table: string, id: unknown): Effect => ({ kind: 'local.getById', table, id }),
+    upsert: (table: string, id: unknown, data: Record<string, unknown>, mode: 'replace' | 'merge'): Effect => ({
+      kind: 'local.upsert',
+      table,
+      id,
+      data,
+      mode,
+    }),
+    delete: (table: string, id: unknown): Effect => ({ kind: 'local.delete', table, id }),
   },
   remote: {
     query: (sql: string, vars?: Vars, timeoutMs?: number): Effect => ({ kind: 'remote.query', sql, vars, timeoutMs }),
