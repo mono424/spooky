@@ -7,8 +7,10 @@ import type { StreamUpdate } from '../services/stream-processor/index';
  * and `dispatch` effects from other sagas.
  */
 export type RuntimeEvent =
-  | { type: 'EnsureRegistered' }
-  | { type: 'RegisterRemote'; hash: QueryHash }
+  | { type: 'EnsureRegistered'; requireAuth?: boolean; attempt?: number }
+  | { type: 'RegisterRemote'; hash: QueryHash; retry?: boolean }
+  | { type: 'SyncOutcome'; ok: boolean; error?: unknown }
+  | { type: 'AckPrune' }
   | { type: 'ReadDirtyMembership' }
   | { type: 'ReadMembership'; hashes: QueryHash[] }
   | { type: 'FetchRows' }

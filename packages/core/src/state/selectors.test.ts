@@ -48,16 +48,21 @@ describe('needed / planFetch / settled', () => {
     const cached = buildState([e('c', { lifecycle: { phase: 'cached' }, remoteArray: [['thing:9', 1]] })]);
     expect(S.needed(cached, 'c')).toEqual([]);
   });
-  it('planFetch dedupes across queries and chunks', () => {
+  it('planFetch dedupes across queries (highest version wins), includes subquery children, chunks', () => {
     const s = buildState([
-      e('a', { lifecycle: live, remoteArray: [['thing:1', 1], ['thing:2', 1]] }),
-      e('b', { lifecycle: live, remoteArray: [['thing:2', 1], ['thing:3', 1]] }),
-      e('c', { lifecycle: live }),
+      e('a', { lifecycle: live, remoteArray: [['thing:1', 1], ['thing:2', 3]] }),
+      e('b', { lifecycle: live, remoteArray: [['thing:2', 1], ['thing:3', 1]], subqueryRemoteArray: [['child:1', 2]] }),
+      e('c', { lifecycle: live, subqueryRemoteArray: [['child:1', 1], ['child:2', 1]] }),
+      e('d', { lifecycle: { phase: 'cached' }, remoteArray: [['thing:9', 1]] }),
     ]);
     const plan = S.planFetch(s, 2);
     expect(plan.hashes).toEqual(['a', 'b']);
-    expect(plan.chunks).toEqual([['thing:1', 'thing:2'], ['thing:3']]);
+    expect(plan.chunks).toEqual([['thing:1', 'thing:2'], ['thing:3', 'child:1'], ['child:2']]);
+    expect(plan.versions.get('thing:2')).toBe(3);
+    expect(plan.versions.get('child:1')).toBe(2);
     expect(S.planFetch(buildState()).chunks).toEqual([]);
+    expect(S.neededChildren(s, 'missing')).toEqual([]);
+    expect(S.neededChildren(R.setVersions([['child:1', 2]])(s), 'b')).toEqual([]);
   });
   it('settled requires live, complete, clean, notified', () => {
     const base = e('a', { lifecycle: { ...live, notified: true }, remoteArray: [['thing:1', 1]] });

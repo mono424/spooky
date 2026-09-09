@@ -83,6 +83,7 @@ export interface SyncSlice {
   readonly pollIdleStreak: number;
   readonly lastReconnectRefetchAt: number | null;
   readonly needsResubscribe: boolean;
+  readonly fetchAttempts: number;
   readonly lanes: LaneState;
 }
 
@@ -96,6 +97,10 @@ export interface ClientState {
   readonly localReady: boolean;
   readonly primed: boolean;
   readonly queries: ReadonlyMap<QueryHash, QueryEntry>;
+  /** Hashes whose local registration is in flight (dedupes concurrent `query()` calls). */
+  readonly registering: ReadonlySet<QueryHash>;
+  /** Re-read attempts per hash while the server reports a view as `materializing`. */
+  readonly membershipReread: ReadonlyMap<QueryHash, number>;
   /** Local body versions (`_00_rv`) by encoded record id. */
   readonly versions: ReadonlyMap<string, number>;
   readonly outbox: ReadonlyArray<OutboxItem>;
@@ -136,6 +141,8 @@ export function emptyState(init: { tabId: string }): ClientState {
     localReady: false,
     primed: false,
     queries: new Map(),
+    registering: new Set(),
+    membershipReread: new Map(),
     versions: new Map(),
     outbox: [],
     failedCount: 0,
@@ -149,6 +156,7 @@ export function emptyState(init: { tabId: string }): ClientState {
       pollIdleStreak: 0,
       lastReconnectRefetchAt: null,
       needsResubscribe: false,
+      fetchAttempts: 0,
       lanes: emptyLanes(),
     },
   };

@@ -63,9 +63,12 @@ export const removeQuery =
     if (!s.queries.has(hash)) return s;
     const queries = new Map(s.queries);
     queries.delete(hash);
+    const membershipReread = new Map(s.membershipReread);
+    membershipReread.delete(hash);
     return {
       ...s,
       queries,
+      membershipReread,
       dirty: withoutAll(s.dirty, [hash]),
       membershipDirty: withoutAll(s.membershipDirty, [hash]),
     };
@@ -181,6 +184,27 @@ export const stampHeartbeat =
     let next = s;
     for (const hash of hashes) next = withEntry(next, hash, (e) => ({ ...e, lastHeartbeatAt: now }));
     return next;
+  };
+
+export const beginRegistering =
+  (hash: QueryHash): Reducer =>
+  (s) => ({ ...s, registering: addAll(s.registering, [hash]) });
+
+export const endRegistering =
+  (hash: QueryHash): Reducer =>
+  (s) =>
+    s.registering.has(hash) ? { ...s, registering: withoutAll(s.registering, [hash]) } : s;
+
+export const setMembershipReread =
+  (hash: QueryHash, attempt: number | null): Reducer =>
+  (s) => {
+    const membershipReread = new Map(s.membershipReread);
+    if (attempt === null) {
+      if (!membershipReread.delete(hash)) return s;
+    } else {
+      membershipReread.set(hash, attempt);
+    }
+    return { ...s, membershipReread };
   };
 
 // ---- subscribers -----------------------------------------------------------

@@ -123,6 +123,24 @@ describe('query reducers', () => {
   });
 });
 
+describe('registering / reread bookkeeping', () => {
+  it('tracks in-flight local registrations and reread attempts; removeQuery clears rereads', () => {
+    let s = buildState([e('a')]);
+    s = R.beginRegistering('x')(s);
+    expect(s.registering.has('x')).toBe(true);
+    s = R.endRegistering('x')(s);
+    expect(s.registering.size).toBe(0);
+    expect(R.endRegistering('x')(s)).toBe(s);
+    s = R.setMembershipReread('a', 1)(s);
+    expect(s.membershipReread.get('a')).toBe(1);
+    expect(R.setMembershipReread('zzz', null)(s)).toBe(s);
+    const cleared = R.removeQuery('a')(s);
+    expect(cleared.membershipReread.size).toBe(0);
+    s = R.setMembershipReread('a', null)(s);
+    expect(s.membershipReread.size).toBe(0);
+  });
+});
+
 describe('dirt reducers', () => {
   it('markDirty / clearDirty / markTableDirty', () => {
     const s0 = buildState([e('a', { def: { tableName: 't1' } }), e('b', { def: { tableName: 't2' } })]);

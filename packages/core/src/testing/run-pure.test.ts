@@ -38,6 +38,18 @@ describe('runPure', () => {
     expect(out.log.map((e) => e.kind)[0]).toBe('state.read');
   });
 
+  it('state.wait passes when the predicate holds and throws when it would block', async () => {
+    function* ok(): Saga<string> {
+      yield fx.state.wait((s) => s.failedCount === 0);
+      return 'passed';
+    }
+    await expect(runPure(ok())).resolves.toMatchObject({ result: 'passed' });
+    function* blocked(): Saga<void> {
+      yield fx.state.wait((s) => s.failedCount === 9);
+    }
+    await expect(runPure(blocked())).rejects.toThrow(/would block/);
+  });
+
   it('routes adapter effects to handlers and throws on unhandled ones', async () => {
     function* saga(): Saga<unknown> {
       return yield fx.remote.query('RETURN true');

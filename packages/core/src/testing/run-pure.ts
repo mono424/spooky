@@ -67,6 +67,9 @@ export async function runPure<R>(saga: Saga<R>, opts: RunPureOptions = {}): Prom
       case 'state.update':
         ctx.state = effect.fn(ctx.state);
         return ctx.state;
+      case 'state.wait':
+        if (effect.until(ctx.state)) return undefined;
+        throw new Error('runPure: state.wait would block; script a handler or prepare the state');
       case 'now':
         return ctx.now;
       case 'id':

@@ -20,6 +20,7 @@ describe('effect constructors', () => {
       [fx.timer.clear('k'), 'timer.clear'],
       [fx.state.read((s) => s.tabId), 'state.read'],
       [fx.state.update((s) => s), 'state.update'],
+      [fx.state.wait((s) => s.primed), 'state.wait'],
       [fx.now(), 'now'],
       [fx.id('mutation'), 'id'],
       [fx.hash('abc'), 'hash'],

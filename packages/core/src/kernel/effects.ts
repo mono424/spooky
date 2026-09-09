@@ -48,6 +48,7 @@ export type Effect =
   | { kind: 'timer.clear'; key: string }
   | { kind: 'state.read'; select: (s: ClientState) => unknown }
   | { kind: 'state.update'; fn: (s: ClientState) => ClientState }
+  | { kind: 'state.wait'; until: (s: ClientState) => boolean }
   | { kind: 'now' }
   | { kind: 'id'; scope: 'mutation' | 'salt' }
   | { kind: 'hash'; input: string }
@@ -93,6 +94,8 @@ export const fx = {
   state: {
     read: <T>(select: (s: ClientState) => T): Effect => ({ kind: 'state.read', select }),
     update: (fn: (s: ClientState) => ClientState): Effect => ({ kind: 'state.update', fn }),
+    /** Suspend until `until(state)` holds (checked after every state.update). */
+    wait: (until: (s: ClientState) => boolean): Effect => ({ kind: 'state.wait', until }),
   },
   now: (): Effect => ({ kind: 'now' }),
   id: (scope: 'mutation' | 'salt'): Effect => ({ kind: 'id', scope }),

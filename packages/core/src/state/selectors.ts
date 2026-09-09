@@ -54,25 +54,38 @@ export function needed(s: ClientState, hash: QueryHash): RecordVersionArray {
   return e.remoteArray.filter(([id, v]) => !deletes.has(id) && (s.versions.get(id) ?? -1) < v);
 }
 
+/** Subquery child bodies missing or stale locally (never part of `settled`). */
+export function neededChildren(s: ClientState, hash: QueryHash): RecordVersionArray {
+  const e = s.queries.get(hash);
+  if (!e || e.subqueryRemoteArray.length === 0) return [];
+  return e.subqueryRemoteArray.filter(([id, v]) => (s.versions.get(id) ?? -1) < v);
+}
+
 export interface FetchPlan {
+  /** Queries whose primary membership needs bodies (they flip to `fetching`). */
   readonly hashes: QueryHash[];
   readonly chunks: string[][];
+  /** Highest requested version per id, across every query naming it. */
+  readonly versions: ReadonlyMap<string, number>;
 }
 
 /** Cross-query, deduped, chunked list of ids to pull from the server. */
 export function planFetch(s: ClientState, chunkSize = FETCH_CHUNK): FetchPlan {
-  const ids = new Set<string>();
+  const versions = new Map<string, number>();
   const hashes: QueryHash[] = [];
+  const add = (pairs: RecordVersionArray) => {
+    for (const [id, v] of pairs) versions.set(id, Math.max(v, versions.get(id) ?? -1));
+  };
   for (const hash of s.queries.keys()) {
     const missing = needed(s, hash);
-    if (missing.length === 0) continue;
-    hashes.push(hash);
-    for (const [id] of missing) ids.add(id);
+    if (missing.length > 0) hashes.push(hash);
+    add(missing);
+    add(neededChildren(s, hash));
   }
-  const all = [...ids];
+  const all = [...versions.keys()];
   const chunks: string[][] = [];
   for (let i = 0; i < all.length; i += chunkSize) chunks.push(all.slice(i, i + chunkSize));
-  return { hashes, chunks };
+  return { hashes, chunks, versions };
 }
 
 /**
